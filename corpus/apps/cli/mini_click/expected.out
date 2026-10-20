@@ -1,0 +1,1092 @@
+== run 1: deployctl
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+
+  Deploy services and manage their configuration.
+
+  Every command talks to the deploy API of the chosen environment.
+
+Options:
+  --config FILE             Read option defaults from an INI file.
+  -v, --verbose             Say more; repeat for even more.
+  --env [dev|staging|prod]  Target environment.  [env var: DEPLOYCTL_ENV;
+                            default: dev]
+  --version                 Show the version and exit.
+  -h, --help                Show this message and exit.
+
+Commands:
+  config    Read and change remote configuration.
+  logs      Show recent log lines of SERVICES.
+  promote   Promote SERVICE from staging to prod. (DEPRECATED: Use 'release'
+            instead.)
+  release   Release VERSION of SERVICE.
+  rollback  Roll SERVICE back to an earlier release.
+  scale     Change how SERVICE scales.
+  status    Show what runs where.
+  sync      Copy service DIRS to the deploy host.
+  user      Manage deploy users.
+== run 2: deployctl --help
+exit: 0
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+
+  Deploy services and manage their configuration.
+
+  Every command talks to the deploy API of the chosen environment.
+
+Options:
+  --config FILE             Read option defaults from an INI file.
+  -v, --verbose             Say more; repeat for even more.
+  --env [dev|staging|prod]  Target environment.  [env var: DEPLOYCTL_ENV;
+                            default: dev]
+  --version                 Show the version and exit.
+  -h, --help                Show this message and exit.
+
+Commands:
+  config    Read and change remote configuration.
+  logs      Show recent log lines of SERVICES.
+  promote   Promote SERVICE from staging to prod. (DEPRECATED: Use 'release'
+            instead.)
+  release   Release VERSION of SERVICE.
+  rollback  Roll SERVICE back to an earlier release.
+  scale     Change how SERVICE scales.
+  status    Show what runs where.
+  sync      Copy service DIRS to the deploy host.
+  user      Manage deploy users.
+== run 3: deployctl -h
+exit: 0
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+
+  Deploy services and manage their configuration.
+
+  Every command talks to the deploy API of the chosen environment.
+
+Options:
+  --config FILE             Read option defaults from an INI file.
+  -v, --verbose             Say more; repeat for even more.
+  --env [dev|staging|prod]  Target environment.  [env var: DEPLOYCTL_ENV;
+                            default: dev]
+  --version                 Show the version and exit.
+  -h, --help                Show this message and exit.
+
+Commands:
+  config    Read and change remote configuration.
+  logs      Show recent log lines of SERVICES.
+  promote   Promote SERVICE from staging to prod. (DEPRECATED: Use 'release'
+            instead.)
+  release   Release VERSION of SERVICE.
+  rollback  Roll SERVICE back to an earlier release.
+  scale     Change how SERVICE scales.
+  status    Show what runs where.
+  sync      Copy service DIRS to the deploy host.
+  user      Manage deploy users.
+== run 4: deployctl --version
+exit: 0
+deployctl, version 2.7.0
+== run 5: deployctl release --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+
+  Release VERSION of SERVICE.
+
+  The release waits for every pod to pass its health check before it moves on,
+  and stops at the first failure.
+
+Options:
+  -r, --replicas INTEGER RANGE    Pods to run.  [default: 2; 1<=x<=20]
+  --timeout FLOAT RANGE           Seconds to wait for health checks.  [0<x<=600]
+  -t, --tag TEXT                  Image tag to add; can be repeated.
+  --strategy [rolling|blue-green|canary]
+                                  [default: rolling]
+  --at [%Y-%m-%d|%Y-%m-%dT%H:%M:%S|%Y-%m-%d %H:%M:%S]
+                                  Schedule the release.
+  --id UUID                       Release id to reuse.
+  --notes FILENAME                Release notes file.
+  --manifest FILE                 Service manifest.
+  --dry-run / --no-dry-run        Plan without applying.
+  -h, --help                      Show this message and exit.
+== run 6: deployctl logs --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+Usage: deployctl logs [OPTIONS] SERVICES...
+
+  Show recent log lines of SERVICES.
+
+Options:
+  -n, --lines INTEGER RANGE       Lines to show.  [x>=0]
+  -f, --follow                    Keep streaming.
+  --level [debug|info|warn|error]
+  --since [%Y-%m-%d]
+  --grep PATTERN                  Only lines matching PATTERN.
+  -h, --help                      Show this message and exit.
+== run 7: deployctl config --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+Usage: deployctl config [OPTIONS] [COMMAND] [ARGS]...
+
+  Read and change remote configuration.
+
+Options:
+  --json      Print JSON.
+  -h, --help  Show this message and exit.
+
+Commands:
+  get    Print the value of KEY.
+  set    Set KEY to VALUE.
+  unset  Remove KEYS.
+== run 8: deployctl config set --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='set'
+Usage: deployctl config set [OPTIONS] KEY VALUE
+
+  Set KEY to VALUE.
+
+Options:
+  -h, --help  Show this message and exit.
+== run 9: deployctl scale --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='scale'
+Usage: deployctl scale [OPTIONS] SERVICE
+
+  Change how SERVICE scales.
+
+Options:
+  --set KEY N          Set a resource limit.
+  --window INTEGER...  Autoscale window in minutes.
+  --min INTEGER RANGE  [default: 1; x>=0]
+  --max INTEGER RANGE  [default: 10; 1<=x<=100]
+  --ratio FLOAT RANGE  [default: 0.8; 0<x<1]
+  -h, --help           Show this message and exit.
+== run 10: deployctl user --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Usage: deployctl user [OPTIONS] COMMAND [ARGS]...
+
+  Manage deploy users.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  create  Create user NAME.
+  invite  Send an invitation.
+== run 11: deployctl sync --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='sync'
+Usage: deployctl sync [OPTIONS] DIRS...
+
+  Copy service DIRS to the deploy host.
+
+Options:
+  --dest DIRECTORY  [default: data/out]
+  -h, --help        Show this message and exit.
+== run 12: deployctl promote --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='promote'
+Usage: deployctl promote [OPTIONS] SERVICE
+
+  Promote SERVICE from staging to prod. (DEPRECATED: Use 'release' instead.)
+
+Options:
+  -h, --help  Show this message and exit.
+== run 13: deployctl rollback --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='rollback'
+Usage: deployctl rollback [OPTIONS] SERVICE
+
+  Roll SERVICE back to an earlier release.
+
+Options:
+  --to VERSION  Version to go back to (default: the previous one).
+  --yes         Confirm the action without prompting.
+  -h, --help    Show this message and exit.
+== run 14: deployctl status --help
+exit: 0
+deployctl: verbose=0, env='dev', invoked='status'
+Usage: deployctl status [OPTIONS]
+
+  Show what runs where.
+
+Options:
+  --format [table|json]  Output format.
+  --legacy-color         Old colour scheme. (DEPRECATED)
+  -h, --help             Show this message and exit.
+== run 15: deployctl release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 16: deployctl -v -v --env prod release api 1.4.2 --replicas 6
+exit: 0
+deployctl: verbose=2, env='prod', invoked='release'
+release: service='api', version='1.4.2', replicas=6, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='prod'
+replicas from COMMANDLINE, tag from DEFAULT
+== run 17: deployctl -vvv release api 1.4.2 -r3 --tag a --tag b -t c
+exit: 0
+deployctl: verbose=3, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=3, timeout=30.0, tag=('a', 'b', 'c'), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from COMMANDLINE, tag from COMMANDLINE
+== run 18: deployctl release api 1.4.2 --replicas=21
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '-r' / '--replicas': 21 is not in the range 1<=x<=20.
+== run 19: deployctl release api 1.4.2 --replicas 0
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '-r' / '--replicas': 0 is not in the range 1<=x<=20.
+== run 20: deployctl release api 1.4.2 --replicas three
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '-r' / '--replicas': 'three' is not a valid integer range.
+== run 21: deployctl release api 1.4.2 --replicas  7
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=7, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from COMMANDLINE, tag from DEFAULT
+== run 22: deployctl release api 1.4.2 --replicas 1_0
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=10, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from COMMANDLINE, tag from DEFAULT
+== run 23: deployctl release api 1.4.2 --timeout 2.5
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=2.5, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 24: deployctl release api 1.4.2 --timeout 0
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--timeout': 0.0 is not in the range 0<x<=600.
+== run 25: deployctl release api 1.4.2 --timeout 600.5
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--timeout': 600.5 is not in the range 0<x<=600.
+== run 26: deployctl release api 1.4.2 --timeout 1e2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=100.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 27: deployctl release api 1.4.2 --timeout abc
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--timeout': 'abc' is not a valid float range.
+== run 28: deployctl release api 1.4.2 --strategy BLUE-GREEN
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='blue-green', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 29: deployctl release api 1.4.2 --strategy yolo
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--strategy': 'yolo' is not one of 'rolling', 'blue-green', 'canary'.
+== run 30: deployctl release api 1.4.2 --strategy
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Error: Option '--strategy' requires an argument.
+== run 31: deployctl release api 1.4.2 --at 2026-03-01
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=datetime(2026-03-01 00:00:00), id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 32: deployctl release api 1.4.2 --at 2026-03-01T09:30:00
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=datetime(2026-03-01 09:30:00), id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 33: deployctl release api 1.4.2 --at 2026-03-01 9:05:07
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=datetime(2026-03-01 09:05:07), id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 34: deployctl release api 1.4.2 --at 2026-02-30
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--at': '2026-02-30' does not match the formats '%Y-%m-%d', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'.
+== run 35: deployctl release api 1.4.2 --at tomorrow
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--at': 'tomorrow' does not match the formats '%Y-%m-%d', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'.
+== run 36: deployctl release api 1.4.2 --id {12345678-1234-5678-1234-567812345678}
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=UUID(12345678-1234-5678-1234-567812345678), dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 37: deployctl release api 1.4.2 --id urn:uuid:ABCDEF00-1234-5678-9ABC-DEF012345678
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=UUID(abcdef00-1234-5678-9abc-def012345678), dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 38: deployctl release api 1.4.2 --id 1234
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--id': '1234' is not a valid UUID.
+== run 39: deployctl release api 1.4.2 --notes data/notes/1.4.2.txt
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+notes: 2 lines, first 'Fix the retry loop in the client.'
+replicas from DEFAULT, tag from DEFAULT
+== run 40: deployctl release api 1.4.2 --notes data/notes/9.9.9.txt
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--notes': 'data/notes/9.9.9.txt': No such file or directory
+== run 41: deployctl release api 1.4.2 --manifest data/manifests/api.yml
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+manifest: 5 lines
+replicas from DEFAULT, tag from DEFAULT
+== run 42: deployctl release api 1.4.2 --manifest data/manifests
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--manifest': File 'data/manifests' is a directory.
+== run 43: deployctl release api 1.4.2 --manifest data/manifests/db.yml
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--manifest': File 'data/manifests/db.yml' does not exist.
+== run 44: deployctl release api 1.4.2 --dry-run
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=True, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 45: deployctl release api 1.4.2 --no-dry-run
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 46: deployctl release api
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Missing argument 'VERSION'.
+== run 47: deployctl release
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Missing argument 'SERVICE'.
+== run 48: deployctl release api 1.4.2 extra
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Got unexpected extra argument (extra)
+== run 49: deployctl release api 1.4.2 more extras
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Got unexpected extra arguments (more extras)
+== run 50: deployctl release api 1.4.2 --replica 2
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: No such option '--replica'. Did you mean '--replicas'?
+== run 51: deployctl release api 1.4.2 --stratgy canary
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: No such option '--stratgy'. (Did you mean one of: '--at', '--strategy', '--tag'?)
+== run 52: deployctl release api 1.4.2 --zzz
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: No such option '--zzz'.
+== run 53: deployctl release api 1.4.2 -x
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: No such option '-x'.
+== run 54: deployctl release api 1.4.2 --dry-run=yes
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Error: Option '--dry-run' does not take a value.
+== run 55: deployctl release -- -api 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='-api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 56: deployctl release api --replicas 2 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from COMMANDLINE, tag from DEFAULT
+== run 57: deployctl release api 1.4.2 --replicas
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Error: Option '--replicas' requires an argument.
+== run 58: deployctl relase api
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+Try 'deployctl --help' for help.
+
+Error: No such command 'relase'. Did you mean 'release'?
+== run 59: deployctl rel api
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+Try 'deployctl --help' for help.
+
+Error: No such command 'rel'. Did you mean 'release'?
+== run 60: deployctl --env qa release api 1.4.2
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+Try 'deployctl --help' for help.
+
+Error: Invalid value for '--env': 'qa' is not one of 'dev', 'staging', 'prod'.
+== run 61: deployctl --env PROD release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='prod', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='prod'
+replicas from DEFAULT, tag from DEFAULT
+== run 62: deployctl --bogus release
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+Try 'deployctl --help' for help.
+
+Error: No such option '--bogus'. Did you mean '--verbose'?
+== run 63: deployctl release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='prod', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='prod'
+replicas from DEFAULT, tag from DEFAULT
+== run 64: deployctl release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=9, timeout=30.0, tag=('x', 'y', 'z'), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from ENVIRONMENT, tag from ENVIRONMENT
+== run 65: deployctl --env dev release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 66: deployctl release api 1.4.2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=(), strategy='rolling', at=None, id=None, dry_run=False, env='dev'
+replicas from DEFAULT, tag from DEFAULT
+== run 67: deployctl release api 1.4.2
+exit: 2
+deployctl: verbose=0, env='dev', invoked='release'
+Usage: deployctl release [OPTIONS] SERVICE VERSION
+Try 'deployctl release --help' for help.
+
+Error: Invalid value for '--dry-run': 'maybe' is not a valid boolean. Recognized values: , 0, 1, f, false, n, no, off, on, t, true, y, yes
+== run 68: deployctl --config data/deployctl.ini release api 1.4.2
+exit: 0
+deployctl: verbose=1, env='staging', invoked='release'
+release: service='api', version='1.4.2', replicas=4, timeout=30.0, tag=('blue', 'green'), strategy='canary', at=None, id=None, dry_run=False, env='staging'
+replicas from DEFAULT_MAP, tag from DEFAULT_MAP
+== run 69: deployctl --config data/deployctl.ini release api 1.4.2 -r 2 --strategy rolling
+exit: 0
+deployctl: verbose=1, env='staging', invoked='release'
+release: service='api', version='1.4.2', replicas=2, timeout=30.0, tag=('blue', 'green'), strategy='rolling', at=None, id=None, dry_run=False, env='staging'
+replicas from COMMANDLINE, tag from DEFAULT_MAP
+== run 70: deployctl --config data/deployctl.ini logs api
+exit: 0
+deployctl: verbose=1, env='staging', invoked='logs'
+logs: services=('api',), lines=25, follow=False, level=(), since=None, grep=()
+== run 71: deployctl --config data/missing.ini logs api
+exit: 2
+Usage: deployctl [OPTIONS] COMMAND [ARGS]...
+Try 'deployctl --help' for help.
+
+Error: Invalid value for '--config': cannot read 'data/missing.ini'
+== run 72: deployctl --config data/deployctl.ini --env prod status
+exit: 0
+deployctl: verbose=1, env='prod', invoked='status'
+status: fmt='table', wide=False, legacy_color=False, env='prod', env_source='COMMANDLINE'
+== run 73: deployctl logs api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=100, follow=False, level=(), since=None, grep=()
+== run 74: deployctl logs api worker -n 5 --follow
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api', 'worker'), lines=5, follow=True, level=(), since=None, grep=()
+== run 75: deployctl logs -n5 -f api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=5, follow=True, level=(), since=None, grep=()
+== run 76: deployctl logs -fn 5 api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=5, follow=True, level=(), since=None, grep=()
+== run 77: deployctl logs --level warn --level error api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=100, follow=False, level=('warn', 'error'), since=None, grep=()
+== run 78: deployctl logs --level fatal api
+exit: 2
+deployctl: verbose=0, env='dev', invoked='logs'
+Usage: deployctl logs [OPTIONS] SERVICES...
+Try 'deployctl logs --help' for help.
+
+Error: Invalid value for '--level': 'fatal' is not one of 'debug', 'info', 'warn', 'error'.
+== run 79: deployctl logs --since 2026-03-01 api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=100, follow=False, level=(), since=datetime(2026-03-01 00:00:00), grep=()
+== run 80: deployctl logs
+exit: 2
+deployctl: verbose=0, env='dev', invoked='logs'
+Usage: deployctl logs [OPTIONS] SERVICES...
+Try 'deployctl logs --help' for help.
+
+Error: Missing argument 'SERVICES...'.
+== run 81: deployctl logs -n -1 api
+exit: 2
+deployctl: verbose=0, env='dev', invoked='logs'
+Usage: deployctl logs [OPTIONS] SERVICES...
+Try 'deployctl logs --help' for help.
+
+Error: Invalid value for '-n' / '--lines': -1 is not in the range x>=0.
+== run 82: deployctl logs --grep timeout --grep=retry api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='logs'
+logs: services=('api',), lines=100, follow=False, level=(), since=None, grep=('timeout', 'retry')
+== run 83: deployctl rollback api --yes
+exit: 0
+deployctl: verbose=0, env='dev', invoked='rollback'
+rollback: service='api', target=None, env='dev'
+== run 84: deployctl rollback api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='rollback'
+Roll back the service? [y/N]: y
+rollback: service='api', target=None, env='dev'
+== run 85: deployctl rollback api
+exit: 1
+deployctl: verbose=0, env='dev', invoked='rollback'
+Roll back the service? [y/N]: n
+Aborted!
+== run 86: deployctl rollback api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='rollback'
+Roll back the service? [y/N]: maybe
+Error: invalid input
+Roll back the service? [y/N]: yes
+rollback: service='api', target=None, env='dev'
+== run 87: deployctl rollback api
+exit: 1
+deployctl: verbose=0, env='dev', invoked='rollback'
+Aborted!
+Roll back the service? [y/N]: 
+<no newline>
+== run 88: deployctl rollback api
+exit: 1
+deployctl: verbose=0, env='dev', invoked='rollback'
+Aborted!
+Roll back the service? [y/N]: 
+<no newline>
+== run 89: deployctl rollback api --to 1.3.9 --yes
+exit: 0
+deployctl: verbose=0, env='dev', invoked='rollback'
+rollback: service='api', target='1.3.9', env='dev'
+== run 90: deployctl scale api --set cpu 2 --set memory 512
+exit: 0
+deployctl: verbose=0, env='dev', invoked='scale'
+scale: service='api', settings=(('cpu', 2), ('memory', 512)), window=None, min=1, max=10, ratio=0.8
+== run 91: deployctl scale api --set cpu
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Error: Option '--set' requires 2 arguments.
+== run 92: deployctl scale api --set cpu lots
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Usage: deployctl scale [OPTIONS] SERVICE
+Try 'deployctl scale --help' for help.
+
+Error: Invalid value for '--set': 'lots' is not a valid integer.
+== run 93: deployctl scale api --window 10 20
+exit: 0
+deployctl: verbose=0, env='dev', invoked='scale'
+scale: service='api', settings=(), window=(10, 20), min=1, max=10, ratio=0.8
+== run 94: deployctl scale api --window 10
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Error: Option '--window' requires 2 arguments.
+== run 95: deployctl scale api --min -5
+exit: 0
+deployctl: verbose=0, env='dev', invoked='scale'
+scale: service='api', settings=(), window=None, min=0, max=10, ratio=0.8
+== run 96: deployctl scale api --min 50 --max 500
+exit: 0
+deployctl: verbose=0, env='dev', invoked='scale'
+scale: service='api', settings=(), window=None, min=50, max=100, ratio=0.8
+== run 97: deployctl scale api --ratio 1.5
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Usage: deployctl scale [OPTIONS] SERVICE
+Try 'deployctl scale --help' for help.
+
+Error: Invalid value for '--ratio': 1.5 is not in the range 0<x<1.
+== run 98: deployctl scale api --ratio 0
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Usage: deployctl scale [OPTIONS] SERVICE
+Try 'deployctl scale --help' for help.
+
+Error: Invalid value for '--ratio': 0.0 is not in the range 0<x<1.
+== run 99: deployctl scale api --ratio 1
+exit: 2
+deployctl: verbose=0, env='dev', invoked='scale'
+Usage: deployctl scale [OPTIONS] SERVICE
+Try 'deployctl scale --help' for help.
+
+Error: Invalid value for '--ratio': 1.0 is not in the range 0<x<1.
+== run 100: deployctl config
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: listing all keys
+config: as_json=False, invoked=None
+== run 101: deployctl config get region
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='get'
+config get: key='region'
+== run 102: deployctl config set region eu-west-1
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='set'
+config set: key='region', value='eu-west-1'
+== run 103: deployctl config set region
+exit: 2
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='set'
+Usage: deployctl config set [OPTIONS] KEY VALUE
+Try 'deployctl config set --help' for help.
+
+Error: Missing argument 'VALUE'.
+== run 104: deployctl config unset region zone rack
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='unset'
+config unset: keys=('region', 'zone', 'rack')
+== run 105: deployctl config unset
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=False, invoked='unset'
+config unset: keys=()
+== run 106: deployctl config lst
+exit: 2
+deployctl: verbose=0, env='dev', invoked='config'
+Usage: deployctl config [OPTIONS] [COMMAND] [ARGS]...
+Try 'deployctl config --help' for help.
+
+Error: No such command 'lst'. (Did you mean one of: 'list', 'set'?)
+== run 107: deployctl config --json get region
+exit: 0
+deployctl: verbose=0, env='dev', invoked='config'
+config: as_json=True, invoked='get'
+config get: key='region'
+== run 108: deployctl user create ada
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Password: 
+Repeat for confirmation: 
+user create: name='ada', role='viewer', password_len=6
+== run 109: deployctl user create ada
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Password: 
+Repeat for confirmation: 
+Error: The two entered values do not match.
+Password: 
+Repeat for confirmation: 
+user create: name='ada', role='viewer', password_len=6
+== run 110: deployctl user create ada --role admin
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Password: 
+Repeat for confirmation: 
+user create: name='ada', role='admin', password_len=2
+== run 111: deployctl user create
+exit: 2
+deployctl: verbose=0, env='dev', invoked='user'
+Usage: deployctl user create [OPTIONS] NAME
+Try 'deployctl user create --help' for help.
+
+Error: Missing argument 'NAME'.
+== run 112: deployctl user create
+exit: 2
+deployctl: verbose=0, env='dev', invoked='user'
+Usage: deployctl user create [OPTIONS] NAME
+Try 'deployctl user create --help' for help.
+
+Error: Missing argument 'NAME'.
+== run 113: deployctl user create ada --role root
+exit: 2
+deployctl: verbose=0, env='dev', invoked='user'
+Usage: deployctl user create [OPTIONS] NAME
+Try 'deployctl user create --help' for help.
+
+Error: Invalid value for '--role': 'root' is not one of 'viewer', 'deployer', 'admin'.
+== run 114: deployctl user create ada
+exit: 1
+deployctl: verbose=0, env='dev', invoked='user'
+Password: 
+
+Aborted!
+== run 115: deployctl user invite
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Email address: grace@example.org
+Days [7]: 5
+user invite: email='grace@example.org', days=5
+== run 116: deployctl user invite
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+Email address: grace@example.org
+Days [7]: abc
+Error: 'abc' is not a valid integer range.
+Days [7]: 50
+Error: 50 is not in the range 1<=x<=30.
+Days [7]: 3
+user invite: email='grace@example.org', days=3
+== run 117: deployctl user invite --email x@example.org --days 2
+exit: 0
+deployctl: verbose=0, env='dev', invoked='user'
+user invite: email='x@example.org', days=2
+== run 118: deployctl user invite --email
+exit: 2
+deployctl: verbose=0, env='dev', invoked='user'
+Error: Option '--email' requires an argument.
+== run 119: deployctl sync data/services/api data/services/worker
+exit: 0
+deployctl: verbose=0, env='dev', invoked='sync'
+sync: dirs=('data/services/api', 'data/services/worker'), dest='data/out'
+data/services/api: version 1.4.1
+data/services/worker: version 0.9.0
+== run 120: deployctl sync data/services/README
+exit: 2
+deployctl: verbose=0, env='dev', invoked='sync'
+Usage: deployctl sync [OPTIONS] DIRS...
+Try 'deployctl sync --help' for help.
+
+Error: Invalid value for 'DIRS...': Directory 'data/services/README' is a file.
+== run 121: deployctl sync data/services/db
+exit: 2
+deployctl: verbose=0, env='dev', invoked='sync'
+Usage: deployctl sync [OPTIONS] DIRS...
+Try 'deployctl sync --help' for help.
+
+Error: Invalid value for 'DIRS...': Directory 'data/services/db' does not exist.
+== run 122: deployctl sync
+exit: 2
+deployctl: verbose=0, env='dev', invoked='sync'
+Usage: deployctl sync [OPTIONS] DIRS...
+Try 'deployctl sync --help' for help.
+
+Error: Missing argument 'DIRS...'.
+== run 123: deployctl sync --dest data/services data/services/api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='sync'
+sync: dirs=('data/services/api',), dest='data/services'
+data/services/api: version 1.4.1
+== run 124: deployctl sync --dest data/services/README data/services/api
+exit: 2
+deployctl: verbose=0, env='dev', invoked='sync'
+Usage: deployctl sync [OPTIONS] DIRS...
+Try 'deployctl sync --help' for help.
+
+Error: Invalid value for '--dest': Directory 'data/services/README' is a file.
+== run 125: deployctl debug-dump
+exit: 0
+deployctl: verbose=0, env='dev', invoked='debug-dump'
+debug-dump: verbose=0
+== run 126: deployctl promote api
+exit: 0
+deployctl: verbose=0, env='dev', invoked='promote'
+DeprecationWarning: The command 'promote' is deprecated. Use 'release' instead.
+promote: service='api'
+== run 127: deployctl status --format json
+exit: 0
+deployctl: verbose=0, env='dev', invoked='status'
+status: fmt='json', wide=False, legacy_color=False, env='dev', env_source='DEFAULT'
+== run 128: deployctl status --wide
+exit: 0
+deployctl: verbose=0, env='dev', invoked='status'
+status: fmt='table', wide=True, legacy_color=False, env='dev', env_source='DEFAULT'
+== run 129: deployctl status --legacy-color
+exit: 0
+deployctl: verbose=0, env='dev', invoked='status'
+DeprecationWarning: The option 'legacy_color' is deprecated.
+status: fmt='table', wide=False, legacy_color=True, env='dev', env_source='DEFAULT'
+== run 130: pipeline --help
+exit: 0
+Usage: pipeline [OPTIONS] [COMMAND1] [ARGS]... [COMMAND2 [ARGS]...]...
+
+  Run build steps in order.
+
+Options:
+  -j, --jobs INTEGER  Parallel jobs.
+  --help              Show this message and exit.
+
+Commands:
+  build    Compile the project.
+  publish  Upload the artifacts.
+  test     Run the test suite.
+== run 131: pipeline build test publish
+exit: 0
+pipeline: jobs=1, invoked='*'
+build: target='x86'
+test: shard=1
+publish: channel='stable'
+pipeline done: ['build:x86', 'test:1', 'publish:stable'] with 1 job(s)
+== run 132: pipeline build --target arm64 test --shard 2 publish --channel beta
+exit: 0
+pipeline: jobs=1, invoked='*'
+build: target='arm64'
+test: shard=2
+publish: channel='beta'
+pipeline done: ['build:arm64', 'test:2', 'publish:beta'] with 1 job(s)
+== run 133: pipeline --jobs 4 build build --target x86
+exit: 0
+pipeline: jobs=4, invoked='*'
+build: target='x86'
+build: target='x86'
+pipeline done: ['build:x86', 'build:x86'] with 4 job(s)
+== run 134: pipeline test --shard 9 build
+exit: 2
+pipeline: jobs=1, invoked='*'
+Usage: pipeline test [OPTIONS]
+Try 'pipeline test --help' for help.
+
+Error: Invalid value for '--shard': 9 is not in the range 1<=x<=8.
+== run 135: pipeline build deploy
+exit: 2
+pipeline: jobs=1, invoked='*'
+Usage: pipeline [OPTIONS] [COMMAND1] [ARGS]... [COMMAND2 [ARGS]...]...
+Try 'pipeline --help' for help.
+
+Error: No such command 'deploy'.
+== run 136: pipeline build test --help
+exit: 0
+pipeline: jobs=1, invoked='*'
+Usage: pipeline test [OPTIONS]
+
+  Run the test suite.
+
+Options:
+  --shard INTEGER RANGE  [1<=x<=8]
+  --help                 Show this message and exit.
+== run 137: pipeline
+exit: 0
+pipeline: jobs=1, invoked=None
+pipeline done: [] with 1 job(s)
+== run 138: pipeline --jobs 2
+exit: 0
+pipeline: jobs=2, invoked=None
+pipeline done: [] with 2 job(s)
+== run 139: pipeline publish --channel nightly
+exit: 2
+pipeline: jobs=1, invoked='*'
+Usage: pipeline publish [OPTIONS]
+Try 'pipeline publish --help' for help.
+
+Error: Invalid value for '--channel': 'nightly' is not one of 'stable', 'beta'.
+== run 140: greet --help
+exit: 0
+Usage: greet [OPTIONS] [NAMES]...
+
+  Greet NAMES.
+
+Options:
+  --greeting TEXT         Word to greet with.  [default: Hello]
+  --shout / --no-shout    Shout it.  [default: no-shout]
+  --upper                 Upper-case the names.
+  --lower                 Lower-case the names.
+  --plain                 Leave the names alone.  [default: plain]
+  --times INTEGER RANGE   Repeat count.  [env var: GREET_TIMES; default: 1;
+                          0<=x<=10]
+  --pos <FLOAT FLOAT>...  Where to stand.  [default: 0.0, 0.0]
+  --lang [en|fr|de]       [env var: GREET_LANG; default: en]
+  --sep TEXT              Between names.  [default: , ]
+  -V, --version           Show the version and exit.
+  --help                  Show this message and exit.
+== run 141: greet Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello Ada
+== run 142: greet Ada Grace --shout
+exit: 0
+greet: names=('Ada', 'Grace'), greeting='Hello', shout=True, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+HELLO ADA, GRACE!
+== run 143: greet --Shout ADA
+exit: 0
+greet: names=('ADA',), greeting='Hello', shout=True, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+HELLO ADA!
+== run 144: greet --GREETING Hi Ada
+exit: 0
+greet: names=('Ada',), greeting='Hi', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hi Ada
+== run 145: greet --upper Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='upper', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello ADA
+== run 146: greet --lower --upper Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='upper', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello ADA
+== run 147: greet --plain Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello Ada
+== run 148: greet --times 3 Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=3, pos=(0.0, 0.0), lang='en', sep=', '
+Hello Ada
+Hello Ada
+Hello Ada
+== run 149: greet --times 11 Ada
+exit: 2
+Usage: greet [OPTIONS] [NAMES]...
+Try 'greet --help' for help.
+
+Error: Invalid value for '--times': 11 is not in the range 0<=x<=10.
+== run 150: greet --times -3 Ada
+exit: 2
+Usage: greet [OPTIONS] [NAMES]...
+Try 'greet --help' for help.
+
+Error: Invalid value for '--times': -3 is not in the range 0<=x<=10.
+== run 151: greet --pos 1.5 -2 Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(1.5, -2.0), lang='en', sep=', '
+Hello Ada
+== run 152: greet --pos 1.5 Ada
+exit: 2
+Usage: greet [OPTIONS] [NAMES]...
+Try 'greet --help' for help.
+
+Error: Invalid value for '--pos': 'Ada' is not a valid float.
+== run 153: greet --lang fr Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='fr', sep=', '
+Bonjour Ada
+== run 154: greet Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='de', sep=', '
+Hallo Ada
+== run 155: greet Ada
+exit: 0
+greet: names=('Ada',), greeting='Hello', shout=True, case='plain', times=2, pos=(0.0, 0.0), lang='en', sep=', '
+HELLO ADA!
+HELLO ADA!
+== run 156: greet Ada
+exit: 2
+Usage: greet [OPTIONS] [NAMES]...
+Try 'greet --help' for help.
+
+Error: Invalid value for '--shout': 'perhaps' is not a valid boolean. Recognized values: , 0, 1, f, false, n, no, off, on, t, true, y, yes
+== run 157: greet --version
+exit: 0
+greet 0.3
+== run 158: greet
+exit: 0
+greet: names=(), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello nobody
+== run 159: greet -- --Ada
+exit: 0
+greet: names=('--Ada',), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=', '
+Hello --Ada
+== run 160: greet --sep  Ada Grace
+exit: 0
+greet: names=('Ada', 'Grace'), greeting='Hello', shout=False, case='plain', times=1, pos=(0.0, 0.0), lang='en', sep=''
+Hello AdaGrace
+== run 161: wrap --help
+exit: 0
+Usage: wrap [OPTIONS] [DESIGN]
+
+  Print a design on a shirt.
+
+  This paragraph is long enough that the help formatter has to wrap it over
+  several lines when the content width is limited to sixty columns.
+
+  Sizes:
+    S   small
+    XL  extra large
+
+  Only the first paragraph of this text is used for the short help.
+
+Positional arguments:
+  [DESIGN]  The design file; defaults to the logo.
+
+Options:
+  --size [S|M|L|XL]               The size of the shirt to print the long design
+                                  on, chosen from the four sizes the printer can
+                                  handle without rotating the design.
+                                  [required]
+  -c, --colour, --color TEXT      Ink.  [default: (black, or the brand colour)]
+  --really-long-option-name-for-testing
+                                  An option whose name is wider than the column.
+  -n, --count                     Copies.
+  --help                          Show this message and exit.
+== run 162: wrap --size M
+exit: 0
+wrap: size='M', old_name=None, colour='black', count=0, design='logo'
+== run 163: wrap --old-name x
+exit: 2
+Usage: wrap [OPTIONS] [DESIGN]
+Try 'wrap --help' for help.
+
+Error: Missing option '--size'. Choose from:
+	S,
+	M,
+	L,
+	XL
+== run 164: wrap --size
+exit: 2
+Error: Option '--size' requires an argument.

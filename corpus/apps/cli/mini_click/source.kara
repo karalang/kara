@@ -1,0 +1,5463 @@
+// mini_click: click 8.5.0 (BSD), the command-line framework, ported from
+// its parser.py, core.py, types.py, formatting.py, exceptions.py and the
+// parts of termui.py and testing.py a test run goes through.
+//
+// Four tools are built from click's pieces the way its decorators would
+// build them: `deployctl`, a deploy client with nested groups, a config
+// file read into the default map, environment variables, prompts and
+// path checks; `pipeline`, a chained group with a result callback;
+// `greet`, a single command with flag values, token normalization and
+// auto env vars; and `wrap`, a command whose help text exercises the
+// formatter. main() writes the files the tools read into data/, then
+// runs every line of data/runs.txt as click's CliRunner would: stdout
+// and stderr interleaved, prompts answered from the run's input, and the
+// exit code printed before the output.
+
+// ------------------------------------------------------------ strings
+
+fn chars_of(s: Str) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn from_chars(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn sv(v: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in v.iter() {
+        out.push(s.to_string());
+    }
+    out
+}
+
+fn has(v: ref Vec[String], s: Str) -> bool {
+    for x in v.iter() {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn join(v: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(v[i]);
+    }
+    out
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push(' ');
+    }
+    out
+}
+
+fn clen(s: Str) -> i64 {
+    s.chars().count()
+}
+
+// s[a..b] by character
+fn csub(s: Str, a: i64, b: i64) -> String {
+    let v = chars_of(s);
+    let hi = if b > v.len() { v.len() } else { b };
+    if a >= hi {
+        return String.new();
+    }
+    from_chars(v[a..hi].to_vec())
+}
+
+fn lstrip_spaces(s: Str) -> String {
+    let v = chars_of(s);
+    let mut i = 0;
+    while i < v.len() and v[i] == ' ' {
+        i += 1;
+    }
+    from_chars(v[i..].to_vec())
+}
+
+fn rstrip_char(s: Str, c: char) -> String {
+    let v = chars_of(s);
+    let mut n = v.len();
+    while n > 0 and v[n - 1] == c {
+        n -= 1;
+    }
+    from_chars(v[0..n].to_vec())
+}
+
+fn py_strip(s: Str) -> String {
+    let v = chars_of(s);
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and py_space(v[a]) {
+        a += 1;
+    }
+    while b > a and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    from_chars(v[a..b].to_vec())
+}
+
+fn py_lstrip(s: Str) -> String {
+    let v = chars_of(s);
+    let mut a = 0;
+    while a < v.len() and py_space(v[a]) {
+        a += 1;
+    }
+    from_chars(v[a..].to_vec())
+}
+
+// str.split(sep) for a one-character separator
+fn split_c(s: Str, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split() with no argument
+fn split_ws(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in py_split(chars_of(s)).iter() {
+        out.push(from_chars(w));
+    }
+    out
+}
+
+// str.partition(c): the part before the first c, and the rest after it
+fn split_once(s: Str, c: char) -> Option[(String, String)] {
+    let v = chars_of(s);
+    for i in 0..v.len() {
+        if v[i] == c {
+            return Some((from_chars(v[0..i].to_vec()), from_chars(v[i + 1..].to_vec())));
+        }
+    }
+    None
+}
+
+// str.splitlines() for text with \n line ends only
+fn lines_of(s: Str) -> Vec[String] {
+    let mut out = split_c(s, '\n');
+    if out.len() > 0 and out[out.len() - 1].len() == 0 {
+        out.pop();
+    }
+    out
+}
+
+fn upper_ascii(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(c.to_ascii_uppercase());
+    }
+    out
+}
+
+fn lower_ascii(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+fn replace_char(s: Str, a: char, b: char) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == a { b } else { c });
+    }
+    out
+}
+
+fn is_identifier(s: Str) -> bool {
+    let v = chars_of(s);
+    if v.len() == 0 {
+        return false;
+    }
+    if not (v[0].is_alphabetic() or v[0] == '_') {
+        return false;
+    }
+    for c in v.iter() {
+        if not (c.is_alphanumeric() or *c == '_') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_alnum_char(c: char) -> bool {
+    c.is_alphanumeric()
+}
+
+// Python's repr of a str
+fn py_repr(s: Str) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let q = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if (c as i64) < 32 or (c as i64) == 127 {
+            out.push_str(f"\\x{hex2(c as i64)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn hex2(n: i64) -> String {
+    let digits = chars_of("0123456789abcdef");
+    let mut out = String.new();
+    out.push(digits[n / 16]);
+    out.push(digits[n % 16]);
+    out
+}
+
+// inspect.cleandoc
+fn cleandoc(doc: Str) -> String {
+    let mut lines = split_c(expand_tabs8(doc), '\n');
+    let mut margin = -1;
+    for i in 1..lines.len() {
+        let content = clen(lstrip_spaces(lines[i]));
+        if content > 0 {
+            let indent = clen(lines[i]) - content;
+            if margin < 0 or indent < margin {
+                margin = indent;
+            }
+        }
+    }
+    if lines.len() > 0 {
+        lines[0] = lstrip_spaces(lines[0]);
+    }
+    if margin >= 0 {
+        for i in 1..lines.len() {
+            lines[i] = csub(lines[i], margin, clen(lines[i]));
+        }
+    }
+    while lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    while lines.len() > 0 and lines[0].len() == 0 {
+        lines.remove(0);
+    }
+    join(lines, "\n")
+}
+
+// str.expandtabs()
+fn expand_tabs8(s: Str) -> String {
+    let mut out = String.new();
+    let mut col = 0;
+    for c in s.chars() {
+        if c == '\t' {
+            let k = 8 - col % 8;
+            for _ in 0..k {
+                out.push(' ');
+            }
+            col += k;
+        } else if c == '\n' or c == '\r' {
+            out.push(c);
+            col = 0;
+        } else {
+            out.push(c);
+            col += 1;
+        }
+    }
+    out
+}
+
+// int() of a str: surrounding whitespace, a sign, digits with single
+// underscores between them.
+fn py_int(s: Str) -> Option[i64] {
+    let v = chars_of(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    if i >= v.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_us = true;
+    while i < v.len() {
+        let c = v[i];
+        if c == '_' {
+            if prev_us {
+                return None;
+            }
+            prev_us = true;
+        } else if c >= '0' and c <= '9' {
+            n = n * 10 + (c as i64 - 48);
+            prev_us = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if prev_us {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+// float() of a str: whitespace around it, underscores only between
+// digits, and inf / nan spelled any way.
+fn py_float(s: Str) -> Option[f64] {
+    let t = py_strip(s);
+    let v = chars_of(t);
+    let mut clean = String.new();
+    for i in 0..v.len() {
+        if v[i] == '_' {
+            if i == 0 or i + 1 >= v.len() or not v[i - 1].is_ascii_digit() or not v[i + 1].is_ascii_digit() {
+                return None;
+            }
+        } else {
+            clean.push(v[i]);
+        }
+    }
+    let low = lower_ascii(clean);
+    let body = if low.starts_with("+") or low.starts_with("-") { csub(low, 1, clen(low)) } else { low.clone() };
+    if body == "inf" or body == "infinity" or body == "nan" {
+        let x = if body == "nan" { 0.0 / 0.0 } else { 1.0 / 0.0 };
+        return Some(if low.starts_with("-") { -x } else { x });
+    }
+    // digits, one point, an exponent: nothing else gets past float()
+    let b = chars_of(body);
+    let mut i = 0;
+    let mut digits = 0;
+    while i < b.len() and b[i].is_ascii_digit() {
+        i += 1;
+        digits += 1;
+    }
+    if i < b.len() and b[i] == '.' {
+        i += 1;
+        while i < b.len() and b[i].is_ascii_digit() {
+            i += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+    if i < b.len() and b[i] == 'e' {
+        i += 1;
+        if i < b.len() and (b[i] == '+' or b[i] == '-') {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() and b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            return None;
+        }
+    }
+    if i != b.len() {
+        return None;
+    }
+    match f64.parse(clean) {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ textwrap
+// TextWrapper from mini_textwrap (Python 3.13 Lib/textwrap.py); click
+// overrides _handle_long_word below.
+
+// textwrap's _whitespace: the only characters its regexes treat as space.
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\u{b}' or c == '\u{c}' or c == '\r'
+}
+
+// str.isspace, which str.strip and str.split use: Unicode White_Space plus
+// the four ASCII separators U+001C..U+001F.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+// The regex class \w.
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+// textwrap's `letter`, [^\d\W]: a word character that is not a digit.
+fn is_letter(c: char) -> bool {
+    is_word(c) and not c.is_ascii_digit()
+}
+
+// textwrap's `word_punct`, [\w!"'&.,?].
+fn is_word_punct(c: char) -> bool {
+    is_word(c) or c == '!' or c == '"' or c == '\'' or c == '&' or c == '.' or c == ',' or c == '?'
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn is_blank(v: ref Vec[char]) -> bool {
+    v.iter().all(|c| py_space(*c))
+}
+
+fn lstrip(v: ref Vec[char]) -> Vec[char] {
+    let mut i = 0;
+    while i < v.len() and py_space(v[i]) {
+        i += 1;
+    }
+    v[i..].to_vec()
+}
+
+fn rstrip(v: ref Vec[char]) -> Vec[char] {
+    let mut n = v.len();
+    while n > 0 and py_space(v[n - 1]) {
+        n -= 1;
+    }
+    v[0..n].to_vec()
+}
+
+fn concat(parts: ref Vec[Vec[char]]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for p in parts.iter() {
+        for c in p.iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn total_len(parts: ref Vec[Vec[char]]) -> i64 {
+    let mut n = 0;
+    for p in parts.iter() {
+        n += p.len();
+    }
+    n
+}
+
+// str.split() with no argument: runs of whitespace separate the words.
+fn py_split(v: ref Vec[char]) -> Vec[Vec[char]] {
+    let mut words: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in v.iter() {
+        if py_space(*c) {
+            if not cur.is_empty() {
+                words.push(cur);
+                cur = Vec.new();
+            }
+        } else {
+            cur.push(*c);
+        }
+    }
+    if not cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+// str.split(sep) for a one-character separator: always at least one piece.
+fn split_on(v: ref Vec[char], sep: char) -> Vec[Vec[char]] {
+    let mut pieces: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in v.iter() {
+        if *c == sep {
+            pieces.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_on(pieces: ref Vec[Vec[char]], sep: char) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for i in 0..pieces.len() {
+        if i > 0 {
+            out.push(sep);
+        }
+        for c in pieces[i].iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn starts_with(v: ref Vec[char], prefix: ref Vec[char]) -> bool {
+    if prefix.len() > v.len() {
+        return false;
+    }
+    for i in 0..prefix.len() {
+        if v[i] != prefix[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ TextWrapper
+
+struct Wrapper {
+    width: i64,
+    initial_indent: Vec[char],
+    subsequent_indent: Vec[char],
+    expand_tabs: bool,
+    tabsize: i64,
+    replace_whitespace: bool,
+    fix_sentence_endings: bool,
+    break_long_words: bool,
+    break_on_hyphens: bool,
+    drop_whitespace: bool,
+    max_lines: Option[i64],
+    placeholder: Vec[char],
+}
+
+impl Wrapper {
+    fn new(width: i64) -> Wrapper {
+        Wrapper {
+            width: width,
+            initial_indent: Vec.new(),
+            subsequent_indent: Vec.new(),
+            expand_tabs: true,
+            tabsize: 8,
+            replace_whitespace: true,
+            fix_sentence_endings: false,
+            break_long_words: true,
+            break_on_hyphens: true,
+            drop_whitespace: true,
+            max_lines: None,
+            placeholder: chars(" [...]"),
+        }
+    }
+
+    // _munge_whitespace: str.expandtabs, then every _whitespace character
+    // becomes a space.
+    fn munge(ref self, t: ref Vec[char]) -> Vec[char] {
+        let mut out: Vec[char] = Vec.new();
+        if self.expand_tabs {
+            let mut col = 0;
+            for c in t.iter() {
+                if *c == '\t' {
+                    if self.tabsize > 0 {
+                        let incr = self.tabsize - col % self.tabsize;
+                        for _ in 0..incr {
+                            out.push(' ');
+                        }
+                        col += incr;
+                    }
+                } else if *c == '\n' or *c == '\r' {
+                    out.push(*c);
+                    col = 0;
+                } else {
+                    out.push(*c);
+                    col += 1;
+                }
+            }
+        } else {
+            out = t.clone();
+        }
+        if self.replace_whitespace {
+            for i in 0..out.len() {
+                if is_ws(out[i]) {
+                    out[i] = ' ';
+                }
+            }
+        }
+        out
+    }
+
+    // _split: wordsep_re (or wordsep_simple_re) splits the text into
+    // chunks that tile it.
+    fn split(ref self, t: ref Vec[char]) -> Vec[Vec[char]] {
+        let n = t.len();
+        let mut chunks: Vec[Vec[char]] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            let mut end = i;
+            if is_ws(t[i]) {
+                while end < n and is_ws(t[end]) {
+                    end += 1;
+                }
+            } else if not self.break_on_hyphens {
+                while end < n and not is_ws(t[end]) {
+                    end += 1;
+                }
+            } else {
+                end = match em_dash_at(t, i) {
+                    Some(e) => e,
+                    None => word_end(t, i),
+                };
+            }
+            chunks.push(t[i..end].to_vec());
+            i = end;
+        }
+        chunks
+    }
+
+    // _fix_sentence_endings
+    fn fix_endings(ref self, chunks: mut ref Vec[Vec[char]]) {
+        let mut i = 0;
+        while i + 1 < chunks.len() {
+            if chunks[i + 1] == vec![' '] and sentence_end(chunks[i]) {
+                chunks[i + 1] = vec![' ', ' '];
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // click's TextWrapper._handle_long_word: cut the chunk after
+    // space_left visible characters, with no look for a hyphen.
+    fn handle_long_word(ref self, rev: mut ref Vec[Vec[char]], cur_line: mut ref Vec[Vec[char]], cur_len: i64, width: i64) {
+        let space_left = if width - cur_len < 1 { 1 } else { width - cur_len };
+        if self.break_long_words {
+            let last = rev.len() - 1;
+            let chunk = rev[last].clone();
+            let end = if space_left > chunk.len() { chunk.len() } else { space_left };
+            cur_line.push(chunk[0..end].to_vec());
+            rev[last] = chunk[end..].to_vec();
+        } else if cur_line.is_empty() {
+            cur_line.push(rev.pop().unwrap());
+        }
+    }
+
+    // _wrap_chunks
+    fn wrap_chunks(ref self, chunks: own Vec[Vec[char]]) -> Result[Vec[Vec[char]], String] {
+        let mut lines: Vec[Vec[char]] = Vec.new();
+        if self.width <= 0 {
+            return Err(f"invalid width {self.width} (must be > 0)");
+        }
+        if let Some(ml) = self.max_lines {
+            let indent = if ml > 1 { self.subsequent_indent.clone() } else { self.initial_indent.clone() };
+            if indent.len() + lstrip(self.placeholder).len() > self.width {
+                return Err("placeholder too large for max width".to_string());
+            }
+        }
+        let mut rev = chunks;
+        rev.reverse();
+        while not rev.is_empty() {
+            let mut cur_line: Vec[Vec[char]] = Vec.new();
+            let mut cur_len = 0;
+            let indent = if lines.is_empty() { self.initial_indent.clone() } else { self.subsequent_indent.clone() };
+            let width = self.width - indent.len();
+            if self.drop_whitespace and is_blank(rev[rev.len() - 1]) and not lines.is_empty() {
+                rev.pop();
+            }
+            while not rev.is_empty() {
+                let l = rev[rev.len() - 1].len();
+                if cur_len + l <= width {
+                    cur_line.push(rev.pop().unwrap());
+                    cur_len += l;
+                } else {
+                    break;
+                }
+            }
+            if not rev.is_empty() and rev[rev.len() - 1].len() > width {
+                self.handle_long_word(mut rev, mut cur_line, cur_len, width);
+                cur_len = total_len(cur_line);
+            }
+            if self.drop_whitespace and not cur_line.is_empty() and is_blank(cur_line[cur_line.len() - 1]) {
+                cur_len -= cur_line[cur_line.len() - 1].len();
+                cur_line.pop();
+            }
+            if cur_line.is_empty() {
+                continue;
+            }
+            let fits = match self.max_lines {
+                None => true,
+                Some(ml) => {
+                    lines.len() + 1 < ml
+                        or ((rev.is_empty() or (self.drop_whitespace and rev.len() == 1 and is_blank(rev[0]))) and cur_len <= width)
+                }
+            };
+            if fits {
+                let mut line = indent.clone();
+                for c in concat(cur_line).iter() {
+                    line.push(*c);
+                }
+                lines.push(line);
+                continue;
+            }
+            // Truncate with the placeholder, and stop.
+            let mut placed = false;
+            while not cur_line.is_empty() {
+                if not is_blank(cur_line[cur_line.len() - 1]) and cur_len + self.placeholder.len() <= width {
+                    cur_line.push(self.placeholder.clone());
+                    let mut line = indent.clone();
+                    for c in concat(cur_line).iter() {
+                        line.push(*c);
+                    }
+                    lines.push(line);
+                    placed = true;
+                    break;
+                }
+                cur_len -= cur_line[cur_line.len() - 1].len();
+                cur_line.pop();
+            }
+            if not placed {
+                let mut done = false;
+                if not lines.is_empty() {
+                    let last = lines.len() - 1;
+                    let prev_line = rstrip(lines[last]);
+                    if prev_line.len() + self.placeholder.len() <= self.width {
+                        let mut line = prev_line;
+                        for c in self.placeholder.iter() {
+                            line.push(*c);
+                        }
+                        lines[last] = line;
+                        done = true;
+                    }
+                }
+                if not done {
+                    let mut line = indent.clone();
+                    for c in lstrip(self.placeholder).iter() {
+                        line.push(*c);
+                    }
+                    lines.push(line);
+                }
+            }
+            break;
+        }
+        Ok(lines)
+    }
+
+    fn wrap(ref self, t: ref Vec[char]) -> Result[Vec[Vec[char]], String] {
+        let mut chunks = self.split(self.munge(t));
+        if self.fix_sentence_endings {
+            self.fix_endings(mut chunks);
+        }
+        self.wrap_chunks(chunks)
+    }
+
+    fn fill(ref self, t: ref Vec[char]) -> Result[Vec[char], String] {
+        match self.wrap(t) {
+            Ok(lines) => Ok(join_on(lines, '\n')),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// The em-dash alternative of wordsep_re, (?<=word_punct) -{2,} (?=\w),
+// tried at i: the end of the dash run.
+fn em_dash_at(t: ref Vec[char], i: i64) -> Option[i64] {
+    if i == 0 or not is_word_punct(t[i - 1]) {
+        return None;
+    }
+    let mut k = i;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    if k - i >= 2 and k < t.len() and is_word(t[k]) {
+        Some(k)
+    } else {
+        None
+    }
+}
+
+// (?=-{2,}\w) at j.
+fn dashes_then_word(t: ref Vec[char], j: i64) -> bool {
+    let mut k = j;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    k - j >= 2 and k < t.len() and is_word(t[k])
+}
+
+// The word alternative of wordsep_re, tried at i (a non-space): the lazy
+// \S+? grows one character at a time until one of its three endings
+// matches.
+fn word_end(t: ref Vec[char], i: i64) -> i64 {
+    let n = t.len();
+    let mut j = i + 1;
+    loop {
+        // A hyphen inside a compound word: -(?:(?<=lt{2}-)|(?<=lt-lt-))(?=lt-?lt)
+        if j < n and t[j] == '-' {
+            let behind = (j >= 2 and is_letter(t[j - 2]) and is_letter(t[j - 1]))
+                or (j >= 3 and is_letter(t[j - 3]) and t[j - 2] == '-' and is_letter(t[j - 1]));
+            let ahead = j + 1 < n and is_letter(t[j + 1])
+                and ((j + 2 < n and is_letter(t[j + 2])) or (j + 3 < n and t[j + 2] == '-' and is_letter(t[j + 3])));
+            if behind and ahead {
+                return j + 1;
+            }
+        }
+        // The end of the word: (?=ws|\Z)
+        if j == n or is_ws(t[j]) {
+            return j;
+        }
+        // An em-dash follows: (?<=word_punct)(?=-{2,}\w)
+        if is_word_punct(t[j - 1]) and dashes_then_word(t, j) {
+            return j;
+        }
+        j += 1;
+    }
+}
+
+// sentence_end_re, [a-z][\.\!\?][\"\']?\Z, searched in a chunk.
+fn sentence_end(c: ref Vec[char]) -> bool {
+    let mut n = c.len();
+    if n > 0 and (c[n - 1] == '"' or c[n - 1] == '\'') {
+        n -= 1;
+    }
+    n >= 2 and c[n - 2] >= 'a' and c[n - 2] <= 'z' and (c[n - 1] == '.' or c[n - 1] == '!' or c[n - 1] == '?')
+}
+
+
+
+// ------------------------------------------------------------ difflib
+// SequenceMatcher and get_close_matches from mini_difflib.
+
+#[derive(Clone)]
+struct Match {
+    a: i64,
+    b: i64,
+    size: i64,
+}
+
+#[derive(Clone)]
+struct Opcode {
+    tag: String,
+    i1: i64,
+    i2: i64,
+    j1: i64,
+    j2: i64,
+}
+
+struct Matcher[T] {
+    a: Vec[T],
+    b: Vec[T],
+    b2j: Map[T, Vec[i64]],
+    bjunk: Set[T],
+    bpopular: Set[T],
+    autojunk: bool,
+}
+
+// B-2026-10-18-12: a generic function cannot be passed as a value on the
+// MIR surfaces, so there is one `no_junk` for each element type.
+fn no_char_junk(c: ref char) -> bool {
+    false
+}
+
+fn no_line_junk(line: ref String) -> bool {
+    false
+}
+
+impl[T: Eq + Hash + Clone] Matcher[T] {
+    // __chain_b: where each element of b occurs, less the junk elements and,
+    // when b has 200 or more elements, the popular ones (more than 1% + 1).
+    fn new(a: own Vec[T], b: own Vec[T], isjunk: Fn(T) -> bool, autojunk: bool) -> Matcher[T] {
+        let mut b2j: Map[T, Vec[i64]] = Map.new();
+        for i in 0..b.len() {
+            let elt = b[i].clone();
+            // B-2026-10-12-3: there is no `Map.get_mut`; `entry` does it.
+            b2j.entry(elt).or_insert(Vec.new()).push(i);
+        }
+        let mut junk: Set[T] = Set.new();
+        for elt in b2j.keys() {
+            if isjunk(elt) {
+                junk.insert(elt.clone());
+            }
+        }
+        for elt in junk.iter() {
+            b2j.remove(elt);
+        }
+        let mut popular: Set[T] = Set.new();
+        let n = b.len();
+        if autojunk and n >= 200 {
+            let ntest = n / 100 + 1;
+            for (elt, idxs) in b2j.iter() {
+                if idxs.len() > ntest {
+                    popular.insert(elt.clone());
+                }
+            }
+            for elt in popular.iter() {
+                b2j.remove(elt);
+            }
+        }
+        Matcher { a: a, b: b, b2j: b2j, bjunk: junk, bpopular: popular, autojunk: autojunk }
+    }
+
+    fn find_longest_match(ref self, alo: i64, ahi: i64, blo: i64, bhi: i64) -> Match {
+        let mut besti = alo;
+        let mut bestj = blo;
+        let mut bestsize: i64 = 0;
+        let mut j2len: Map[i64, i64] = Map.new();
+        for i in alo..ahi {
+            let mut newj2len: Map[i64, i64] = Map.new();
+            if let Some(js) = self.b2j.get(self.a[i]) {
+                for j in js.iter() {
+                    let j = *j;
+                    if j < blo {
+                        continue;
+                    }
+                    if j >= bhi {
+                        break;
+                    }
+                    let k = j2len.get(j - 1).unwrap_or(0) + 1;
+                    newj2len.insert(j, k);
+                    if k > bestsize {
+                        besti = i - k + 1;
+                        bestj = j - k + 1;
+                        bestsize = k;
+                    }
+                }
+            }
+            j2len = newj2len;
+        }
+        // Extend the match with non-junk equal elements on each side, then
+        // with junk ones, so a run of junk next to a match joins it.
+        while besti > alo and bestj > blo and not self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and not self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        while besti > alo and bestj > blo and self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        Match { a: besti, b: bestj, size: bestsize }
+    }
+
+    fn matching_blocks(ref self) -> Vec[Match] {
+        let la = self.a.len();
+        let lb = self.b.len();
+        let mut queue: Vec[(i64, i64, i64, i64)] = vec![(0, la, 0, lb)];
+        let mut blocks: Vec[Match] = Vec.new();
+        while let Some((alo, ahi, blo, bhi)) = queue.pop() {
+            let m = self.find_longest_match(alo, ahi, blo, bhi);
+            if m.size > 0 {
+                if alo < m.a and blo < m.b {
+                    queue.push((alo, m.a, blo, m.b));
+                }
+                if m.a + m.size < ahi and m.b + m.size < bhi {
+                    queue.push((m.a + m.size, ahi, m.b + m.size, bhi));
+                }
+                blocks.push(m);
+            }
+        }
+        blocks.sort_by(|x, y| (x.a, x.b, x.size).cmp((y.a, y.b, y.size)));
+        // Join blocks that touch.
+        let mut out: Vec[Match] = Vec.new();
+        let mut cur = Match { a: 0, b: 0, size: 0 };
+        for m in blocks.iter() {
+            if cur.a + cur.size == m.a and cur.b + cur.size == m.b {
+                cur.size += m.size;
+            } else {
+                if cur.size > 0 {
+                    out.push(cur.clone());
+                }
+                cur = m.clone();
+            }
+        }
+        if cur.size > 0 {
+            out.push(cur);
+        }
+        out.push(Match { a: la, b: lb, size: 0 });
+        out
+    }
+
+    fn opcodes(ref self) -> Vec[Opcode] {
+        let mut i: i64 = 0;
+        let mut j: i64 = 0;
+        let mut out: Vec[Opcode] = Vec.new();
+        for m in self.matching_blocks() {
+            let tag = if i < m.a and j < m.b {
+                "replace"
+            } else if i < m.a {
+                "delete"
+            } else if j < m.b {
+                "insert"
+            } else {
+                ""
+            };
+            if tag != "" {
+                out.push(Opcode { tag: tag.to_string(), i1: i, i2: m.a, j1: j, j2: m.b });
+            }
+            i = m.a + m.size;
+            j = m.b + m.size;
+            if m.size > 0 {
+                out.push(Opcode { tag: "equal".to_string(), i1: m.a, i2: i, j1: m.b, j2: j });
+            }
+        }
+        out
+    }
+
+    // get_grouped_opcodes: hunks with up to n lines of context each side.
+    fn grouped_opcodes(ref self, n: i64) -> Vec[Vec[Opcode]] {
+        let mut codes = self.opcodes();
+        if codes.is_empty() {
+            codes.push(Opcode { tag: "equal".to_string(), i1: 0, i2: 1, j1: 0, j2: 1 });
+        }
+        if codes[0].tag == "equal" {
+            let c = codes[0].clone();
+            codes[0] = Opcode { tag: c.tag, i1: max(c.i1, c.i2 - n), i2: c.i2, j1: max(c.j1, c.j2 - n), j2: c.j2 };
+        }
+        let last = codes.len() - 1;
+        if codes[last].tag == "equal" {
+            let c = codes[last].clone();
+            codes[last] = Opcode { tag: c.tag, i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) };
+        }
+        let nn = n + n;
+        let mut groups: Vec[Vec[Opcode]] = Vec.new();
+        let mut group: Vec[Opcode] = Vec.new();
+        for c in codes {
+            let mut i1 = c.i1;
+            let mut j1 = c.j1;
+            if c.tag == "equal" and c.i2 - c.i1 > nn {
+                group.push(Opcode { tag: c.tag.clone(), i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) });
+                groups.push(group);
+                group = Vec.new();
+                i1 = max(c.i1, c.i2 - n);
+                j1 = max(c.j1, c.j2 - n);
+            }
+            group.push(Opcode { tag: c.tag.clone(), i1: i1, i2: c.i2, j1: j1, j2: c.j2 });
+        }
+        if not group.is_empty() and not (group.len() == 1 and group[0].tag == "equal") {
+            groups.push(group);
+        }
+        groups
+    }
+
+    fn ratio(ref self) -> f64 {
+        let mut matches: i64 = 0;
+        for m in self.matching_blocks() {
+            matches += m.size;
+        }
+        calculate_ratio(matches, self.a.len() + self.b.len())
+    }
+
+    fn quick_ratio(ref self) -> f64 {
+        let mut fullbcount: Map[T, i64] = Map.new();
+        for elt in self.b.iter() {
+            let n = fullbcount.get(elt).unwrap_or(0);
+            fullbcount.insert(elt.clone(), n + 1);
+        }
+        let mut avail: Map[T, i64] = Map.new();
+        let mut matches: i64 = 0;
+        for elt in self.a.iter() {
+            let numb = match avail.get(elt) {
+                Some(n) => *n,
+                None => fullbcount.get(elt).unwrap_or(0),
+            };
+            avail.insert(elt.clone(), numb - 1);
+            if numb > 0 {
+                matches += 1;
+            }
+        }
+        calculate_ratio(matches, self.a.len() + self.b.len())
+    }
+
+    fn real_quick_ratio(ref self) -> f64 {
+        let la = self.a.len();
+        let lb = self.b.len();
+        calculate_ratio(min(la, lb), la + lb)
+    }
+}
+
+fn calculate_ratio(matches: i64, length: i64) -> f64 {
+    if length > 0 {
+        2.0 * matches as f64 / length as f64
+    } else {
+        1.0
+    }
+}
+
+// ------------------------------------------------------------ helpers
+
+fn close_matches(word: ref String, possibilities: ref Vec[String], n: i64, cutoff: f64) -> Result[Vec[String], String] {
+    if not (n > 0) {
+        return Err(f"n must be > 0: {n}");
+    }
+    if not (0.0 <= cutoff and cutoff <= 1.0) {
+        return Err(f"cutoff must be in [0.0, 1.0]: {cutoff}");
+    }
+    let mut result: Vec[(f64, String)] = Vec.new();
+    for x in possibilities.iter() {
+        let s = Matcher.new(chars(x), chars(word), no_char_junk, true);
+        if s.real_quick_ratio() >= cutoff and s.quick_ratio() >= cutoff and s.ratio() >= cutoff {
+            result.push((s.ratio(), x.clone()));
+        }
+    }
+    // heapq.nlargest on (score, word) pairs.
+    result.sort_by(|p, q| {
+        if p.0 != q.0 {
+            if p.0 > q.0 { Ordering.Less } else { Ordering.Greater }
+        } else {
+            q.1.cmp(p.1)
+        }
+    });
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..min(n, result.len()) {
+        out.push(result[k].1.clone());
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ Differ
+
+
+// ------------------------------------------------------------ values
+
+// A Python value as click handles it. Unset and FlagNeeds are click's two
+// sentinels; Nil is None.
+#[derive(Clone)]
+enum Val {
+    Unset,
+    FlagNeeds,
+    Nil,
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Tup(Vec[Val]),
+    List(Vec[Val]),
+    // year, month, day, hour, minute, second
+    Dt(i64, i64, i64, i64, i64, i64),
+    Uuid(String),
+    // an opened text file: its name and contents
+    File(String, String),
+}
+
+fn is_unset(v: ref Val) -> bool {
+    match v {
+        Val.Unset => true,
+        _ => false,
+    }
+}
+
+fn is_nil(v: ref Val) -> bool {
+    match v {
+        Val.Nil => true,
+        _ => false,
+    }
+}
+
+fn is_flag_needs(v: ref Val) -> bool {
+    match v {
+        Val.FlagNeeds => true,
+        _ => false,
+    }
+}
+
+fn is_empty_tuple(v: ref Val) -> bool {
+    match v {
+        Val.Tup(items) => items.len() == 0,
+        _ => false,
+    }
+}
+
+fn vstr(s: Str) -> Val {
+    Val.Str(s.to_string())
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+// The notation the callbacks print values in (oracle.py's r()).
+fn r(v: ref Val) -> String {
+    match v {
+        Val.Unset => "Sentinel.UNSET".to_string(),
+        Val.FlagNeeds => "Sentinel.FLAG_NEEDS_VALUE".to_string(),
+        Val.Nil => "None".to_string(),
+        Val.Str(s) => py_repr(s),
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => f"{x}",
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Tup(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(r(x));
+            }
+            if parts.len() == 1 { f"({parts[0]},)" } else { f"({join(parts, ", ")})" }
+        }
+        Val.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(r(x));
+            }
+            f"[{join(parts, ", ")}]"
+        }
+        Val.Dt(y, mo, d, h, mi, s) => f"datetime({y}-{pad2(*mo)}-{pad2(*d)} {pad2(*h)}:{pad2(*mi)}:{pad2(*s)})",
+        Val.Uuid(u) => f"UUID({u})",
+        Val.File(name, _) => f"<file {name}>",
+    }
+}
+
+// str() of a value, as the help text's default display uses it
+fn py_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => r(v),
+    }
+}
+
+fn val_eq(a: ref Val, b: ref Val) -> bool {
+    match (a, b) {
+        (Val.Unset, Val.Unset) => true,
+        (Val.FlagNeeds, Val.FlagNeeds) => true,
+        (Val.Nil, Val.Nil) => true,
+        (Val.Str(x), Val.Str(y)) => x == y,
+        (Val.Int(x), Val.Int(y)) => *x == *y,
+        (Val.Float(x), Val.Float(y)) => *x == *y,
+        (Val.Bool(x), Val.Bool(y)) => *x == *y,
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ parameter types
+
+#[derive(Clone)]
+struct Bound {
+    has_min: bool,
+    has_max: bool,
+    min_i: i64,
+    max_i: i64,
+    min_f: f64,
+    max_f: f64,
+    // the bounds as Python prints them (an int bound of a FloatRange
+    // stays an int)
+    min_s: String,
+    max_s: String,
+    min_open: bool,
+    max_open: bool,
+    clamp: bool,
+}
+
+#[derive(Clone)]
+enum PType {
+    Unprocessed,
+    Text,
+    Int,
+    Float,
+    Boolean,
+    Uuid,
+    // choices, case sensitive
+    Choice(Vec[String], bool),
+    IntRange(Bound),
+    FloatRange(Bound),
+    DateTime(Vec[String]),
+    FileT,
+    // exists, file_okay, dir_okay
+    PathT(bool, bool, bool),
+    TupleT(Vec[PType]),
+}
+
+fn no_bound() -> Bound {
+    Bound { has_min: false, has_max: false, min_i: 0, max_i: 0, min_f: 0.0, max_f: 0.0, min_s: String.new(), max_s: String.new(), min_open: false, max_open: false, clamp: false }
+}
+
+fn int_range(min: Option[i64], max: Option[i64], clamp: bool) -> PType {
+    let mut b = no_bound();
+    if let Some(m) = min {
+        b.has_min = true;
+        b.min_i = m;
+        b.min_f = m as f64;
+        b.min_s = f"{m}";
+    }
+    if let Some(m) = max {
+        b.has_max = true;
+        b.max_i = m;
+        b.max_f = m as f64;
+        b.max_s = f"{m}";
+    }
+    b.clamp = clamp;
+    PType.IntRange(b)
+}
+
+// FloatRange with int bounds written in the source, the way the tools
+// declare theirs: FloatRange(0, 600, min_open=True)
+fn float_range(min: Option[i64], max: Option[i64], min_open: bool, max_open: bool) -> PType {
+    let mut b = no_bound();
+    if let Some(m) = min {
+        b.has_min = true;
+        b.min_i = m;
+        b.min_f = m as f64;
+        b.min_s = f"{m}";
+    }
+    if let Some(m) = max {
+        b.has_max = true;
+        b.max_i = m;
+        b.max_f = m as f64;
+        b.max_s = f"{m}";
+    }
+    b.min_open = min_open;
+    b.max_open = max_open;
+    PType.FloatRange(b)
+}
+
+fn choice(c: Vec[Str], case_sensitive: bool) -> PType {
+    PType.Choice(sv(c), case_sensitive)
+}
+
+fn datetime_type() -> PType {
+    PType.DateTime(sv(vec!["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]))
+}
+
+fn path_type(exists: bool, file_okay: bool, dir_okay: bool) -> PType {
+    PType.PathT(exists, file_okay, dir_okay)
+}
+
+fn type_name(t: ref PType) -> String {
+    match t {
+        PType.Unprocessed => "text".to_string(),
+        PType.Text => "text".to_string(),
+        PType.Int => "integer".to_string(),
+        PType.Float => "float".to_string(),
+        PType.Boolean => "boolean".to_string(),
+        PType.Uuid => "uuid".to_string(),
+        PType.Choice(_, _) => "choice".to_string(),
+        PType.IntRange(_) => "integer range".to_string(),
+        PType.FloatRange(_) => "float range".to_string(),
+        PType.DateTime(_) => "datetime".to_string(),
+        PType.FileT => "filename".to_string(),
+        PType.PathT(_, file_okay, dir_okay) => {
+            if *file_okay and not *dir_okay {
+                "file".to_string()
+            } else if *dir_okay and not *file_okay {
+                "directory".to_string()
+            } else {
+                "path".to_string()
+            }
+        }
+        PType.TupleT(types) => {
+            let mut names: Vec[String] = Vec.new();
+            for t in types.iter() {
+                names.push(type_name(t));
+            }
+            f"<{join(names, " ")}>"
+        }
+    }
+}
+
+fn is_composite(t: ref PType) -> bool {
+    match t {
+        PType.TupleT(_) => true,
+        _ => false,
+    }
+}
+
+fn arity(t: ref PType) -> i64 {
+    match t {
+        PType.TupleT(types) => types.len(),
+        _ => 1,
+    }
+}
+
+fn is_bool_type(t: ref PType) -> bool {
+    match t {
+        PType.Boolean => true,
+        _ => false,
+    }
+}
+
+fn is_range(t: ref PType) -> bool {
+    match t {
+        PType.IntRange(_) => true,
+        PType.FloatRange(_) => true,
+        _ => false,
+    }
+}
+
+fn split_envvar_value(t: ref PType, rv: Str) -> Vec[Val] {
+    let mut out: Vec[Val] = Vec.new();
+    let pieces = match t {
+        // File and Path split on os.pathsep
+        PType.FileT => split_c(rv, ':'),
+        PType.PathT(_, _, _) => split_c(rv, ':'),
+        _ => split_ws(rv),
+    };
+    for p in pieces.iter() {
+        out.push(Val.Str(p.clone()));
+    }
+    out
+}
+
+// ------------------------------------------------------------ parameters
+
+#[derive(Clone)]
+struct Param {
+    is_opt: bool,
+    name: String,
+    opts: Vec[String],
+    secondary: Vec[String],
+    ty: PType,
+    required: bool,
+    nargs: i64,
+    multiple: bool,
+    default: Val,
+    default_explicit: bool,
+    eager: bool,
+    metavar: Option[String],
+    envvar: Vec[String],
+    expose: bool,
+    // None, or Some("") for deprecated=True, or the message
+    deprecated: Option[String],
+    // Option only
+    prompt: Option[String],
+    confirm_prompt: bool,
+    prompt_required: bool,
+    hide_input: bool,
+    hidden: bool,
+    is_flag: bool,
+    flag_needs_value: bool,
+    flag_value: Val,
+    count: bool,
+    autoenv: bool,
+    help: Option[String],
+    // Unset, Bool or Str
+    show_default: Val,
+    show_choices: bool,
+    show_envvar: bool,
+    // "" for none, "help", "version", "confirm" or "config"
+    callback: String,
+    cb_args: Vec[String],
+}
+
+fn blank_param(is_opt: bool) -> Param {
+    Param {
+        is_opt: is_opt,
+        name: String.new(),
+        opts: Vec.new(),
+        secondary: Vec.new(),
+        ty: PType.Text,
+        required: false,
+        nargs: 1,
+        multiple: false,
+        default: Val.Unset,
+        default_explicit: false,
+        eager: false,
+        metavar: None,
+        envvar: Vec.new(),
+        expose: true,
+        deprecated: None,
+        prompt: None,
+        confirm_prompt: false,
+        prompt_required: true,
+        hide_input: false,
+        hidden: false,
+        is_flag: false,
+        flag_needs_value: false,
+        flag_value: Val.Unset,
+        count: false,
+        autoenv: true,
+        help: None,
+        show_default: Val.Unset,
+        show_choices: true,
+        show_envvar: false,
+        callback: String.new(),
+        cb_args: Vec.new(),
+    }
+}
+
+// The keyword arguments of click.option / click.argument. A field left at
+// its Unset / None value means the keyword was not passed.
+#[derive(Clone)]
+struct Decl {
+    decls: Vec[String],
+    ty: Option[PType],
+    required: Option[bool],
+    default: Val,
+    nargs: Option[i64],
+    multiple: bool,
+    metavar: Option[String],
+    envvar: Vec[String],
+    expose: bool,
+    eager: bool,
+    deprecated: Option[String],
+    show_default: Val,
+    prompt: Val,
+    confirm_prompt: bool,
+    hide_input: bool,
+    is_flag: Option[bool],
+    flag_value: Val,
+    count: bool,
+    help: Option[String],
+    hidden: bool,
+    show_envvar: bool,
+    callback: String,
+    cb_args: Vec[String],
+}
+
+fn decl(d: Vec[Str]) -> Decl {
+    Decl {
+        decls: sv(d),
+        ty: None,
+        required: None,
+        default: Val.Unset,
+        nargs: None,
+        multiple: false,
+        metavar: None,
+        envvar: Vec.new(),
+        expose: true,
+        eager: false,
+        deprecated: None,
+        show_default: Val.Unset,
+        prompt: Val.Bool(false),
+        confirm_prompt: false,
+        hide_input: false,
+        is_flag: None,
+        flag_value: Val.Unset,
+        count: false,
+        help: None,
+        hidden: false,
+        show_envvar: false,
+        callback: String.new(),
+        cb_args: Vec.new(),
+    }
+}
+
+// _split_opt
+fn split_opt(opt: Str) -> (String, String) {
+    let v = chars_of(opt);
+    if v.len() == 0 {
+        return (String.new(), String.new());
+    }
+    let first = v[0];
+    if is_alnum_char(first) {
+        return (String.new(), opt.to_string());
+    }
+    if v.len() >= 2 and v[1] == first {
+        return (from_chars(v[0..2].to_vec()), from_chars(v[2..].to_vec()));
+    }
+    (first.to_string(), from_chars(v[1..].to_vec()))
+}
+
+// types._guess_type + convert_type for a parameter declared without type=
+fn guess_type(default: ref Val) -> PType {
+    match default {
+        Val.Int(_) => PType.Int,
+        Val.Float(_) => PType.Float,
+        Val.Bool(_) => PType.Boolean,
+        Val.Tup(items) => {
+            if items.len() == 0 {
+                PType.Text
+            } else {
+                match items[0] {
+                    Val.Int(_) => PType.Int,
+                    Val.Float(_) => PType.Float,
+                    Val.Bool(_) => PType.Boolean,
+                    _ => PType.Text,
+                }
+            }
+        }
+        _ => PType.Text,
+    }
+}
+
+// Parameter.__init__'s common part
+fn init_param(p: mut ref Param, d: ref Decl) {
+    p.ty = match d.ty {
+        Some(t) => t.clone(),
+        None => guess_type(d.default),
+    };
+    p.nargs = match d.nargs {
+        Some(n) => n,
+        None => if is_composite(p.ty) { arity(p.ty) } else { 1 },
+    };
+    p.multiple = d.multiple;
+    p.expose = d.expose;
+    p.default = d.default.clone();
+    p.default_explicit = not is_unset(d.default);
+    p.eager = d.eager;
+    p.metavar = d.metavar.clone();
+    p.envvar = d.envvar.clone();
+    p.deprecated = d.deprecated.clone();
+    p.callback = d.callback.clone();
+    p.cb_args = d.cb_args.clone();
+}
+
+fn deprecated_label(dep: ref String) -> String {
+    if dep.len() > 0 { f"(DEPRECATED: {dep})" } else { "(DEPRECATED)".to_string() }
+}
+
+fn deprecated_suffix(dep: ref String) -> String {
+    if dep.len() > 0 { f" {dep}" } else { String.new() }
+}
+
+// click.Option(...)
+fn make_option(d: Decl) -> Param {
+    let mut p = blank_param(true);
+    // Option._parse_decls
+    let mut name: Option[String] = None;
+    let mut possible: Vec[(String, String)] = Vec.new();
+    for dc in d.decls.iter() {
+        if is_identifier(dc) {
+            name = Some(dc.clone());
+        } else {
+            let split_ch = if dc.starts_with("/") { ';' } else { '/' };
+            match split_once(dc, split_ch) {
+                Some((first, second)) => {
+                    let first = rstrip_char(first, ' ');
+                    if first.len() > 0 {
+                        possible.push(split_opt(first));
+                        p.opts.push(first.clone());
+                    }
+                    let second = lstrip_spaces(second);
+                    if second.len() > 0 {
+                        p.secondary.push(second.clone());
+                    }
+                }
+                None => {
+                    possible.push(split_opt(dc));
+                    p.opts.push(dc.clone());
+                }
+            }
+        }
+    }
+    if name.is_none() and possible.len() > 0 {
+        // possible_names.sort(key=lambda x: -len(x[0])), a stable sort
+        let mut best = 0;
+        for i in 1..possible.len() {
+            if possible[i].0.len() > possible[best].0.len() {
+                best = i;
+            }
+        }
+        let n = lower_ascii(replace_char(possible[best].1, '-', '_'));
+        if is_identifier(n) {
+            name = Some(n);
+        }
+    }
+    p.name = name.unwrap_or(String.new());
+    let help = match d.help {
+        Some(h) => if h.len() > 0 { Some(cleandoc(h)) } else { None },
+        None => None,
+    };
+    init_param(mut p, d);
+    p.prompt = match d.prompt {
+        Val.Bool(true) => {
+            let t = replace_char(p.name, '_', ' ');
+            Some(capitalize(t))
+        }
+        Val.Str(s) => Some(s.clone()),
+        _ => None,
+    };
+    p.help = help;
+    if let Some(dep) = d.deprecated {
+        let label = deprecated_label(dep);
+        p.help = match p.help {
+            Some(h) => Some(f"{h} {label}"),
+            None => Some(label),
+        };
+    }
+    p.confirm_prompt = d.confirm_prompt;
+    p.hide_input = d.hide_input;
+    p.hidden = d.hidden;
+    // _infer_flag_kind
+    let needs_value = p.prompt.is_some() and not p.prompt_required;
+    let (is_flag, fnv) = match d.is_flag {
+        None => {
+            if not is_unset(d.flag_value) {
+                (true, needs_value)
+            } else if needs_value {
+                (false, needs_value)
+            } else if p.secondary.len() > 0 {
+                (true, needs_value)
+            } else {
+                (false, needs_value)
+            }
+        }
+        Some(f) => {
+            if not f and not needs_value {
+                (false, not is_unset(d.flag_value) or is_unset(p.default))
+            } else {
+                (f, needs_value)
+            }
+        }
+    };
+    p.is_flag = is_flag;
+    p.flag_needs_value = fnv;
+    // _pick_type
+    if d.ty.is_none() {
+        if d.count {
+            p.ty = int_range(Some(0), None, false);
+        } else if is_flag {
+            p.ty = match d.flag_value {
+                Val.Unset => PType.Boolean,
+                Val.Bool(_) => PType.Boolean,
+                _ => guess_type(d.flag_value),
+            };
+        }
+    }
+    p.flag_value = d.flag_value.clone();
+    p.count = d.count;
+    if d.count and is_unset(p.default) {
+        p.default = Val.Int(0);
+    }
+    p.show_default = d.show_default.clone();
+    p.show_envvar = d.show_envvar;
+    p
+}
+
+fn capitalize(s: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for c in s.chars() {
+        if first {
+            out.push(c.to_ascii_uppercase());
+            first = false;
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+// click.Argument(...)
+fn make_argument(d: Decl) -> Param {
+    let mut p = blank_param(false);
+    let required = match d.required {
+        Some(r) => r,
+        None => {
+            if is_unset(d.default) {
+                d.nargs.unwrap_or(1) > 0
+            } else {
+                false
+            }
+        }
+    };
+    let mut help = match d.help {
+        Some(h) => if h.len() > 0 { Some(cleandoc(h)) } else { None },
+        None => None,
+    };
+    if let Some(dep) = d.deprecated {
+        let label = deprecated_label(dep);
+        help = match help {
+            Some(h) => Some(f"{h} {label}"),
+            None => Some(label),
+        };
+    }
+    let arg = d.decls[0].clone();
+    p.name = lower_ascii(replace_char(arg, '-', '_'));
+    p.opts = vec![arg];
+    init_param(mut p, d);
+    p.required = required;
+    p.help = help;
+    p
+}
+
+fn opt_required(d: ref Decl) -> bool {
+    d.required.unwrap_or(false)
+}
+
+fn option(d: Decl) -> Param {
+    let req = opt_required(d);
+    let mut p = make_option(d);
+    p.required = req;
+    p
+}
+
+fn is_bool_flag(p: ref Param) -> bool {
+    p.is_flag and is_bool_type(p.ty)
+}
+
+fn flag_activation_value(p: ref Param) -> Val {
+    if is_unset(p.flag_value) {
+        if p.is_flag { Val.Bool(true) } else { Val.Nil }
+    } else {
+        p.flag_value.clone()
+    }
+}
+
+fn human_name(p: ref Param) -> String {
+    if p.is_opt {
+        p.name.clone()
+    } else {
+        match p.metavar {
+            Some(m) => m.clone(),
+            None => upper_ascii(p.name),
+        }
+    }
+}
+
+fn param_type_name(p: ref Param) -> String {
+    if p.is_opt { "option".to_string() } else { "argument".to_string() }
+}
+
+// ------------------------------------------------------------ exceptions
+
+#[derive(Clone)]
+struct Exc {
+    // usage, bad_param, missing, no_such_option, no_such_command,
+    // bad_option, bad_argument, no_args_help, exit, abort
+    kind: String,
+    message: String,
+    ctx: i64,
+    param: Option[Param],
+    param_hint: Option[String],
+    possibilities: Vec[String],
+    code: i64,
+}
+
+fn exc(kind: Str, message: Str, ctx: i64) -> Exc {
+    let code = if kind == "exit" or kind == "abort" { 0 } else { 2 };
+    Exc { kind: kind.to_string(), message: message.to_string(), ctx: ctx, param: None, param_hint: None, possibilities: Vec.new(), code: code }
+}
+
+fn usage_error(message: Str, ctx: i64) -> Exc {
+    exc("usage", message, ctx)
+}
+
+fn bad_parameter(message: Str) -> Exc {
+    exc("bad_param", message, -1)
+}
+
+fn exit_exc(code: i64) -> Exc {
+    let mut e = exc("exit", "", -1);
+    e.code = code;
+    e
+}
+
+fn is_usage_kind(e: ref Exc) -> bool {
+    e.kind != "exit" and e.kind != "abort"
+}
+
+fn is_bad_param_kind(e: ref Exc) -> bool {
+    e.kind == "bad_param" or e.kind == "missing"
+}
+
+// _format_possibilities
+fn format_possibilities(p: ref Vec[String]) -> String {
+    let mut sorted = p.clone();
+    sorted.sort();
+    let mut parts: Vec[String] = Vec.new();
+    for x in sorted.iter() {
+        parts.push(py_repr(x));
+    }
+    let s = join(parts, ", ");
+    if sorted.len() == 1 { f"Did you mean {s}?" } else { f"(Did you mean one of: {s}?)" }
+}
+
+// difflib.get_close_matches(word, possibilities) with n=3, cutoff=0.6
+fn close(word: ref String, possibilities: ref Vec[String]) -> Vec[String] {
+    match close_matches(word, possibilities, 3, 0.6) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    }
+}
+
+// ------------------------------------------------------------ commands
+
+#[derive(Clone)]
+struct Settings {
+    help_names: Option[Vec[String]],
+    autoenv: Option[String],
+    // token_normalize_func=str.lower
+    lower_tokens: bool,
+    show_default: Option[bool],
+    max_content_width: Option[i64],
+}
+
+fn no_settings() -> Settings {
+    Settings { help_names: None, autoenv: None, lower_tokens: false, show_default: None, max_content_width: None }
+}
+
+#[derive(Clone)]
+struct Cmd {
+    name: String,
+    // which callback invoke runs
+    cb: String,
+    is_group: bool,
+    params: Vec[Param],
+    help: Option[String],
+    epilog: Option[String],
+    short_help: Option[String],
+    options_metavar: String,
+    add_help: bool,
+    help_param: Option[Param],
+    no_args_is_help: bool,
+    hidden: bool,
+    deprecated: Option[String],
+    settings: Settings,
+    // Group: name -> command index, in the order they were added
+    subs: Vec[(String, i64)],
+    invoke_without: bool,
+    sub_metavar: String,
+    chain: bool,
+    result_cb: bool,
+    allow_extra_args: bool,
+    allow_interspersed: bool,
+    ignore_unknown: bool,
+}
+
+fn command(name: Str, help: Str) -> Cmd {
+    Cmd {
+        name: name.to_string(),
+        cb: name.to_string(),
+        is_group: false,
+        params: Vec.new(),
+        help: if help.len() > 0 { Some(help.to_string()) } else { None },
+        epilog: None,
+        short_help: None,
+        options_metavar: "[OPTIONS]".to_string(),
+        add_help: true,
+        help_param: None,
+        no_args_is_help: false,
+        hidden: false,
+        deprecated: None,
+        settings: no_settings(),
+        subs: Vec.new(),
+        invoke_without: false,
+        sub_metavar: String.new(),
+        chain: false,
+        result_cb: false,
+        allow_extra_args: false,
+        allow_interspersed: true,
+        ignore_unknown: false,
+    }
+}
+
+// click.Group(...): call after setting invoke_without and chain
+fn finish_group(c: mut ref Cmd) {
+    c.is_group = true;
+    c.allow_extra_args = true;
+    c.allow_interspersed = false;
+    c.no_args_is_help = not c.invoke_without;
+    c.sub_metavar = if c.chain {
+        if c.invoke_without {
+            "[COMMAND1] [ARGS]... [COMMAND2 [ARGS]...]...".to_string()
+        } else {
+            "COMMAND1 [ARGS]... [COMMAND2 [ARGS]...]...".to_string()
+        }
+    } else if c.invoke_without {
+        "[COMMAND] [ARGS]...".to_string()
+    } else {
+        "COMMAND [ARGS]...".to_string()
+    };
+}
+
+// @click.option decorators run bottom-up and the command reverses them,
+// so the params end up in source order; the tools add them in that order.
+fn add(c: mut ref Cmd, p: own Param) {
+    c.params.push(p);
+}
+
+// ------------------------------------------------------------ default maps
+
+#[derive(Clone)]
+enum DMap {
+    Leaf(Val),
+    Node(Vec[(String, DMap)]),
+}
+
+fn dmap_get(m: ref DMap, key: Str) -> Option[DMap] {
+    match m {
+        DMap.Node(items) => {
+            for (k, v) in items.iter() {
+                if k == key {
+                    return Some(v.clone());
+                }
+            }
+            None
+        }
+        DMap.Leaf(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ contexts
+
+#[derive(Clone)]
+struct Ctx {
+    cmd: i64,
+    parent: i64,
+    info_name: String,
+    // params in insertion order
+    params: Vec[(String, Val)],
+    args: Vec[String],
+    protected_args: Vec[String],
+    opt_prefixes: Vec[String],
+    // ctx.obj of the tools: a few named values
+    obj: Vec[(String, Val)],
+    default_map: Option[DMap],
+    invoked_subcommand: Option[String],
+    allow_extra_args: bool,
+    allow_interspersed: bool,
+    ignore_unknown: bool,
+    help_names: Vec[String],
+    lower_tokens: bool,
+    resilient: bool,
+    autoenv: Option[String],
+    show_default: Option[bool],
+    // ParameterSource values: 1 PROMPT, 2 COMMANDLINE, 3 ENVIRONMENT,
+    // 4 DEFAULT_MAP, 5 DEFAULT
+    sources: Vec[(String, i64)],
+    default_explicit: Vec[(String, bool)],
+}
+
+fn source_name(s: i64) -> String {
+    if s == 1 {
+        "PROMPT".to_string()
+    } else if s == 2 {
+        "COMMANDLINE".to_string()
+    } else if s == 3 {
+        "ENVIRONMENT".to_string()
+    } else if s == 4 {
+        "DEFAULT_MAP".to_string()
+    } else {
+        "DEFAULT".to_string()
+    }
+}
+
+fn pget(items: ref Vec[(String, Val)], k: Str) -> Option[Val] {
+    for (a, b) in items.iter() {
+        if a == k {
+            return Some(b.clone());
+        }
+    }
+    None
+}
+
+fn pset(items: mut ref Vec[(String, Val)], k: Str, v: own Val) {
+    for i in 0..items.len() {
+        if items[i].0 == k {
+            items[i] = (k.to_string(), v);
+            return;
+        }
+    }
+    items.push((k.to_string(), v));
+}
+
+fn sget(items: ref Vec[(String, i64)], k: Str) -> i64 {
+    for (a, b) in items.iter() {
+        if a == k {
+            return *b;
+        }
+    }
+    0
+}
+
+fn sset(items: mut ref Vec[(String, i64)], k: Str, v: i64) {
+    for i in 0..items.len() {
+        if items[i].0 == k {
+            items[i] = (k.to_string(), v);
+            return;
+        }
+    }
+    items.push((k.to_string(), v));
+}
+
+fn bget(items: ref Vec[(String, bool)], k: Str) -> bool {
+    for (a, b) in items.iter() {
+        if a == k {
+            return *b;
+        }
+    }
+    false
+}
+
+fn bset(items: mut ref Vec[(String, bool)], k: Str, v: bool) {
+    for i in 0..items.len() {
+        if items[i].0 == k {
+            items[i] = (k.to_string(), v);
+            return;
+        }
+    }
+    items.push((k.to_string(), v));
+}
+
+// ------------------------------------------------------------ the session
+
+// Everything one CliRunner.invoke touches: the command tree, the
+// contexts made so far, the environment, the scripted input, and the
+// output as the runner's StreamMixer collects it.
+struct App {
+    cmds: Vec[Cmd],
+    ctxs: Vec[Ctx],
+    env: Vec[(String, String)],
+    input: Vec[String],
+    input_pos: i64,
+    out: String,
+    // stdout written but not yet flushed
+    pending: String,
+}
+
+impl App {
+    fn echo(mut ref self, s: Str) {
+        self.pending.push_str(s);
+        self.pending.push('\n');
+        self.flush();
+    }
+
+    fn echo_err(mut ref self, s: Str) {
+        self.out.push_str(s);
+        self.out.push('\n');
+    }
+
+    fn flush(mut ref self) {
+        let p = self.pending.clone();
+        self.out.push_str(p);
+        self.pending = String.new();
+    }
+
+    fn getenv(ref self, k: Str) -> Option[String] {
+        for (a, b) in self.env.iter() {
+            if a == k {
+                return Some(b.clone());
+            }
+        }
+        None
+    }
+
+    // CliRunner's visible_input: the prompt goes out unflushed, and the
+    // answer is echoed after it.
+    fn visible_input(mut ref self, prompt: Str) -> Option[String] {
+        self.pending.push_str(prompt);
+        if self.input_pos >= self.input.len() {
+            return None;
+        }
+        let v = self.input[self.input_pos].clone();
+        self.input_pos += 1;
+        self.pending.push_str(v);
+        self.pending.push('\n');
+        self.flush();
+        Some(v)
+    }
+
+    // hidden_input: the prompt and a newline, flushed, and no echo
+    fn hidden_input(mut ref self, prompt: Str) -> Option[String] {
+        self.pending.push_str(prompt);
+        self.pending.push('\n');
+        self.flush();
+        if self.input_pos >= self.input.len() {
+            return None;
+        }
+        let v = self.input[self.input_pos].clone();
+        self.input_pos += 1;
+        Some(v)
+    }
+
+    // Context.__init__
+    fn new_ctx(mut ref self, cmd: i64, parent: i64, info_name: Str, extra_allow_extra: Option[bool], extra_interspersed: Option[bool]) -> i64 {
+        let c = self.cmds[cmd].clone();
+        let st = c.settings.clone();
+        let mut opt_prefixes: Vec[String] = Vec.new();
+        let mut obj: Vec[(String, Val)] = Vec.new();
+        let mut default_map: Option[DMap] = None;
+        let mut help_names = sv(vec!["--help"]);
+        let mut lower = st.lower_tokens;
+        let mut show_default = st.show_default;
+        let mut autoenv: Option[String] = None;
+        if parent >= 0 {
+            let p = self.ctxs[parent].clone();
+            opt_prefixes = p.opt_prefixes.clone();
+            obj = p.obj.clone();
+            if let Some(dm) = p.default_map {
+                default_map = dmap_get(dm, info_name);
+            }
+            help_names = p.help_names.clone();
+            if not lower {
+                lower = p.lower_tokens;
+            }
+            if show_default.is_none() {
+                show_default = p.show_default;
+            }
+            if st.autoenv.is_none() {
+                if let Some(pa) = p.autoenv {
+                    autoenv = Some(f"{pa}_{upper_ascii(info_name)}");
+                }
+            }
+        }
+        if let Some(h) = st.help_names {
+            help_names = h.clone();
+        }
+        if let Some(a) = st.autoenv {
+            autoenv = Some(upper_ascii(a));
+        }
+        if let Some(a) = autoenv {
+            autoenv = Some(replace_char(a, '-', '_'));
+        }
+        let ctx = Ctx {
+            cmd: cmd,
+            parent: parent,
+            info_name: info_name.to_string(),
+            params: Vec.new(),
+            args: Vec.new(),
+            protected_args: Vec.new(),
+            opt_prefixes: opt_prefixes,
+            obj: obj,
+            default_map: default_map,
+            invoked_subcommand: None,
+            allow_extra_args: extra_allow_extra.unwrap_or(c.allow_extra_args),
+            allow_interspersed: extra_interspersed.unwrap_or(c.allow_interspersed),
+            ignore_unknown: c.ignore_unknown,
+            help_names: help_names,
+            lower_tokens: lower,
+            resilient: false,
+            autoenv: autoenv,
+            show_default: show_default,
+            sources: Vec.new(),
+            default_explicit: Vec.new(),
+        };
+        self.ctxs.push(ctx);
+        self.ctxs.len() - 1
+    }
+
+    fn norm(ref self, ctx: i64, s: Str) -> String {
+        if ctx >= 0 and self.ctxs[ctx].lower_tokens { lower_ascii(s) } else { s.to_string() }
+    }
+
+    // _normalize_opt
+    fn normalize_opt(ref self, ctx: i64, opt: Str) -> String {
+        if ctx < 0 or not self.ctxs[ctx].lower_tokens {
+            return opt.to_string();
+        }
+        let (prefix, rest) = split_opt(opt);
+        f"{prefix}{lower_ascii(rest)}"
+    }
+
+    fn default_map_has(ref self, ctx: i64, name: Str) -> bool {
+        match self.ctxs[ctx].default_map {
+            Some(dm) => dmap_get(dm, name).is_some(),
+            None => false,
+        }
+    }
+
+    fn lookup_default(ref self, ctx: i64, name: Str) -> Option[Val] {
+        match self.ctxs[ctx].default_map {
+            Some(dm) => match dmap_get(dm, name) {
+                Some(DMap.Leaf(v)) => Some(v.clone()),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    fn command_path(ref self, ctx: i64) -> String {
+        let c = self.ctxs[ctx].clone();
+        let mut rv = c.info_name.clone();
+        if c.parent >= 0 {
+            let mut pieces: Vec[String] = vec![self.command_path(c.parent)];
+            let pcmd = self.ctxs[c.parent].cmd;
+            for p in self.get_params_ro(pcmd).iter() {
+                for piece in self.usage_pieces(ctx, p).iter() {
+                    pieces.push(piece.clone());
+                }
+            }
+            rv = f"{join(pieces, " ")} {rv}";
+        }
+        lstrip_spaces(rv)
+    }
+
+    fn find_root(ref self, ctx: i64) -> i64 {
+        let mut n = ctx;
+        while self.ctxs[n].parent >= 0 {
+            n = self.ctxs[n].parent;
+        }
+        n
+    }
+
+    // Command.get_help_option_names
+    fn help_option_names(ref self, cmd: i64, ctx: i64) -> Vec[String] {
+        let mut names: Vec[String] = Vec.new();
+        for n in self.ctxs[ctx].help_names.iter() {
+            if not has(names, n) {
+                names.push(n.clone());
+            }
+        }
+        for p in self.cmds[cmd].params.iter() {
+            let mut keep: Vec[String] = Vec.new();
+            for n in names.iter() {
+                if not has(p.opts, n) and not has(p.secondary, n) {
+                    keep.push(n.clone());
+                }
+            }
+            names = keep;
+        }
+        names
+    }
+
+    // Command.get_help_option, made once per command
+    fn ensure_help_option(mut ref self, cmd: i64, ctx: i64) {
+        let names = self.help_option_names(cmd, ctx);
+        if names.len() == 0 or not self.cmds[cmd].add_help {
+            return;
+        }
+        if self.cmds[cmd].help_param.is_none() {
+            let mut ds: Vec[Str] = Vec.new();
+            let mut d = decl(ds);
+            d.decls = names.clone();
+            d.decls.push("_click_default_help".to_string());
+            d.is_flag = Some(true);
+            d.expose = false;
+            d.eager = true;
+            d.help = Some("Show this message and exit.".to_string());
+            d.callback = "help".to_string();
+            let p = option(d);
+            self.cmds[cmd].help_param = Some(p);
+        }
+    }
+
+    fn has_help_option(ref self, cmd: i64, ctx: i64) -> bool {
+        self.help_option_names(cmd, ctx).len() > 0 and self.cmds[cmd].add_help
+    }
+
+    // get_params: the declared params plus the help option
+    fn get_params(mut ref self, cmd: i64, ctx: i64) -> Vec[Param] {
+        self.ensure_help_option(cmd, ctx);
+        self.get_params_ro(cmd)
+    }
+
+    fn get_params_ro(ref self, cmd: i64) -> Vec[Param] {
+        let mut ps = self.cmds[cmd].params.clone();
+        if self.cmds[cmd].add_help {
+            if let Some(h) = self.cmds[cmd].help_param {
+                ps.push(h.clone());
+            }
+        }
+        ps
+    }
+
+    fn list_commands(ref self, cmd: i64) -> Vec[String] {
+        let mut names: Vec[String] = Vec.new();
+        for (n, _) in self.cmds[cmd].subs.iter() {
+            names.push(n.clone());
+        }
+        names.sort();
+        names
+    }
+
+    fn get_command(ref self, cmd: i64, name: Str) -> i64 {
+        for (n, i) in self.cmds[cmd].subs.iter() {
+            if n == name {
+                return *i;
+            }
+        }
+        -1
+    }
+}
+
+impl App {
+    fn usage_pieces(ref self, ctx: i64, p: ref Param) -> Vec[String] {
+        if p.is_opt { Vec.new() } else { vec![self.arg_metavar(ctx, p)] }
+    }
+}
+// ------------------------------------------------------------ the parser
+
+// One option as parser.py's _Option sees it. `pidx` is the parameter's
+// index in the command's get_params list.
+#[derive(Clone)]
+struct POpt {
+    pidx: i64,
+    dest: String,
+    // store, store_const, append, append_const, count
+    action: String,
+    nargs: i64,
+    konst: Val,
+    flag_needs: bool,
+}
+
+#[derive(Clone)]
+struct PArg {
+    pidx: i64,
+    dest: String,
+    nargs: i64,
+}
+
+struct PState {
+    opts: Vec[(String, Val)],
+    largs: Vec[String],
+    rargs: Vec[String],
+    order: Vec[i64],
+}
+
+struct OptParser {
+    lower: bool,
+    interspersed: bool,
+    ignore_unknown: bool,
+    // option name -> index into popts, in the order they were added
+    short_opt: Vec[(String, i64)],
+    long_opt: Vec[(String, i64)],
+    popts: Vec[POpt],
+    prefixes: Vec[String],
+    args: Vec[PArg],
+}
+
+fn norm_opt(lower: bool, opt: Str) -> String {
+    if not lower {
+        return opt.to_string();
+    }
+    let (prefix, rest) = split_opt(opt);
+    f"{prefix}{lower_ascii(rest)}"
+}
+
+fn takes_value(o: ref POpt) -> bool {
+    o.action == "store" or o.action == "append"
+}
+
+fn lookup_opt(m: ref Vec[(String, i64)], k: Str) -> i64 {
+    for (a, b) in m.iter() {
+        if a == k {
+            return *b;
+        }
+    }
+    -1
+}
+
+fn map_set(m: mut ref Vec[(String, i64)], k: Str, v: i64) {
+    for i in 0..m.len() {
+        if m[i].0 == k {
+            m[i] = (k.to_string(), v);
+            return;
+        }
+    }
+    m.push((k.to_string(), v));
+}
+
+fn bad_option_usage(message: Str) -> Exc {
+    exc("bad_option", message, -1)
+}
+
+fn no_such_option(name: Str, possibilities: ref Vec[String], ctx: i64) -> Exc {
+    let mut e = exc("no_such_option", f"No such option {py_repr(name)}.", ctx);
+    if possibilities.len() > 0 {
+        e.possibilities = close(name.to_string(), possibilities);
+    }
+    e
+}
+
+impl OptParser {
+    fn new(lower: bool, interspersed: bool, ignore_unknown: bool) -> OptParser {
+        OptParser {
+            lower: lower,
+            interspersed: interspersed,
+            ignore_unknown: ignore_unknown,
+            short_opt: Vec.new(),
+            long_opt: Vec.new(),
+            popts: Vec.new(),
+            prefixes: sv(vec!["-", "--"]),
+            args: Vec.new(),
+        }
+    }
+
+    fn add_prefix(mut ref self, p: Str) {
+        if not has(self.prefixes, p) {
+            self.prefixes.push(p.to_string());
+        }
+    }
+
+    fn add_option(mut ref self, pidx: i64, opts: ref Vec[String], dest: Str, action: Str, nargs: i64, konst: own Val, flag_needs: bool) {
+        let o = POpt { pidx: pidx, dest: dest.to_string(), action: action.to_string(), nargs: nargs, konst: konst, flag_needs: flag_needs };
+        self.popts.push(o);
+        let idx = self.popts.len() - 1;
+        for raw in opts.iter() {
+            let opt = norm_opt(self.lower, raw);
+            let (prefix, value) = split_opt(opt);
+            self.add_prefix(csub(prefix, 0, 1));
+            if clen(prefix) == 1 and clen(value) == 1 {
+                map_set(mut self.short_opt, opt, idx);
+            } else {
+                self.add_prefix(prefix);
+                map_set(mut self.long_opt, opt, idx);
+            }
+        }
+    }
+
+    fn add_argument(mut ref self, pidx: i64, dest: Str, nargs: i64) {
+        self.args.push(PArg { pidx: pidx, dest: dest.to_string(), nargs: nargs });
+    }
+
+    fn long_names(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for (k, _) in self.long_opt.iter() {
+            out.push(k.clone());
+        }
+        out
+    }
+
+    fn parse_args(ref self, args: own Vec[String], ctx: i64) -> Result[PState, Exc] {
+        let mut state = PState { opts: Vec.new(), largs: Vec.new(), rargs: args, order: Vec.new() };
+        self.process_args_for_options(mut state, ctx)?;
+        self.process_args_for_args(mut state)?;
+        Ok(state)
+    }
+
+    fn process_args_for_args(ref self, state: mut ref PState) -> Result[(), Exc] {
+        let mut all = state.largs.clone();
+        for a in state.rargs.iter() {
+            all.push(a.clone());
+        }
+        let mut spec: Vec[i64] = Vec.new();
+        for a in self.args.iter() {
+            spec.push(a.nargs);
+        }
+        let (pargs, rest) = unpack_args(all, spec);
+        for i in 0..self.args.len() {
+            let a = self.args[i].clone();
+            let mut value = pargs[i].clone();
+            if a.nargs > 1 {
+                if let Val.Tup(items) = value.clone() {
+                    let mut holes = 0;
+                    for x in items.iter() {
+                        if is_unset(x) {
+                            holes += 1;
+                        }
+                    }
+                    if holes == items.len() {
+                        value = Val.Unset;
+                    } else if holes != 0 {
+                        return Err(exc("bad_argument", f"Argument {py_repr(a.dest)} takes {a.nargs} values.", -1));
+                    }
+                }
+            }
+            if is_empty_tuple(value) {
+                value = Val.Unset;
+            }
+            pset(mut state.opts, a.dest, value);
+            state.order.push(a.pidx);
+        }
+        state.largs = rest;
+        state.rargs = Vec.new();
+        Ok(())
+    }
+
+    fn process_args_for_options(ref self, state: mut ref PState, ctx: i64) -> Result[(), Exc] {
+        while state.rargs.len() > 0 {
+            let arg = state.rargs.remove(0);
+            if arg == "--" {
+                return Ok(());
+            } else if has(self.prefixes, csub(arg, 0, 1)) and clen(arg) > 1 {
+                self.process_opts(arg, state, ctx)?;
+            } else if self.interspersed {
+                state.largs.push(arg);
+            } else {
+                state.rargs.insert(0, arg);
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    fn process(ref self, oi: i64, value: own Val, state: mut ref PState) {
+        let o = self.popts[oi].clone();
+        if o.action == "store" {
+            pset(mut state.opts, o.dest, value);
+        } else if o.action == "store_const" {
+            pset(mut state.opts, o.dest, o.konst.clone());
+        } else if o.action == "append" or o.action == "append_const" {
+            let v = if o.action == "append" { value } else { o.konst.clone() };
+            let mut items = match pget(state.opts, o.dest) {
+                Some(Val.List(xs)) => xs.clone(),
+                _ => Vec.new(),
+            };
+            items.push(v);
+            pset(mut state.opts, o.dest, Val.List(items));
+        } else {
+            let n = match pget(state.opts, o.dest) {
+                Some(Val.Int(k)) => k,
+                _ => 0,
+            };
+            pset(mut state.opts, o.dest, Val.Int(n + 1));
+        }
+        state.order.push(o.pidx);
+    }
+
+    fn match_long_opt(ref self, opt: Str, explicit: Option[String], state: mut ref PState, ctx: i64) -> Result[(), Exc] {
+        let oi = lookup_opt(self.long_opt, opt);
+        if oi < 0 {
+            return Err(no_such_option(opt, self.long_names(), ctx));
+        }
+        let o = self.popts[oi].clone();
+        let mut value = Val.Unset;
+        if takes_value(o) {
+            if let Some(ev) = explicit {
+                state.rargs.insert(0, ev.clone());
+            }
+            value = self.get_value_from_state(opt, o, state)?;
+        } else if explicit.is_some() {
+            return Err(bad_option_usage(f"Option {py_repr(opt)} does not take a value."));
+        }
+        self.process(oi, value, state);
+        Ok(())
+    }
+
+    fn match_short_opt(ref self, arg: Str, state: mut ref PState, ctx: i64) -> Result[(), Exc] {
+        let v = chars_of(arg);
+        let prefix = v[0];
+        let mut i = 1;
+        let mut unknown: Vec[char] = Vec.new();
+        for k in 1..v.len() {
+            let ch = v[k];
+            let opt = norm_opt(self.lower, f"{prefix}{ch}");
+            let oi = lookup_opt(self.short_opt, opt);
+            i += 1;
+            if oi < 0 {
+                if self.ignore_unknown {
+                    unknown.push(ch);
+                    continue;
+                }
+                let none: Vec[String] = Vec.new();
+                return Err(no_such_option(opt, none, ctx));
+            }
+            let o = self.popts[oi].clone();
+            let mut stop = false;
+            let mut value = Val.Unset;
+            if takes_value(o) {
+                if i < v.len() {
+                    state.rargs.insert(0, from_chars(v[i..].to_vec()));
+                    stop = true;
+                }
+                value = self.get_value_from_state(opt, o, state)?;
+            }
+            self.process(oi, value, state);
+            if stop {
+                break;
+            }
+        }
+        if self.ignore_unknown and unknown.len() > 0 {
+            state.largs.push(f"{prefix}{from_chars(unknown)}");
+        }
+        Ok(())
+    }
+
+    fn get_value_from_state(ref self, name: Str, o: ref POpt, state: mut ref PState) -> Result[Val, Exc] {
+        let nargs = o.nargs;
+        if state.rargs.len() < nargs {
+            if o.flag_needs {
+                return Ok(Val.FlagNeeds);
+            }
+            if nargs == 1 {
+                return Err(bad_option_usage(f"Option {py_repr(name)} requires an argument."));
+            }
+            return Err(bad_option_usage(f"Option {py_repr(name)} requires {nargs} arguments."));
+        }
+        if nargs == 1 {
+            let next = state.rargs[0].clone();
+            if o.flag_needs and has(self.prefixes, csub(next, 0, 1)) and clen(next) > 1 {
+                return Ok(Val.FlagNeeds);
+            }
+            return Ok(Val.Str(state.rargs.remove(0)));
+        }
+        let mut items: Vec[Val] = Vec.new();
+        for _ in 0..nargs {
+            items.push(Val.Str(state.rargs.remove(0)));
+        }
+        Ok(Val.Tup(items))
+    }
+
+    fn process_opts(ref self, arg: Str, state: mut ref PState, ctx: i64) -> Result[(), Exc] {
+        let (long_opt, explicit) = match split_once(arg, '=') {
+            Some((a, b)) => (a, Some(b)),
+            None => (arg.to_string(), None),
+        };
+        let norm = norm_opt(self.lower, long_opt);
+        match self.match_long_opt(norm, explicit, state, ctx) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if e.kind != "no_such_option" {
+                    return Err(e);
+                }
+                if not has(self.prefixes, csub(arg, 0, 2)) {
+                    return self.match_short_opt(arg, state, ctx);
+                }
+                if not self.ignore_unknown {
+                    return Err(e);
+                }
+                state.largs.push(arg.to_string());
+                Ok(())
+            }
+        }
+    }
+}
+
+// parser._unpack_args: hand the positional values to the arguments by
+// their nargs, at most one of which is -1.
+fn unpack_args(args: own Vec[String], spec: own Vec[i64]) -> (Vec[Val], Vec[String]) {
+    let mut a = args;
+    let mut s = spec;
+    let mut rv: Vec[Val] = Vec.new();
+    let mut spos: i64 = -1;
+    while s.len() > 0 {
+        let nargs = if spos < 0 { s.remove(0) } else { s.pop().unwrap() };
+        if nargs == 1 {
+            rv.push(fetch(mut a, spos));
+        } else if nargs > 1 {
+            let mut x: Vec[Val] = Vec.new();
+            for _ in 0..nargs {
+                x.push(fetch(mut a, spos));
+            }
+            if spos >= 0 {
+                x.reverse();
+            }
+            rv.push(Val.Tup(x));
+        } else if nargs < 0 {
+            spos = rv.len();
+            rv.push(Val.Unset);
+        }
+    }
+    if spos >= 0 {
+        let mut items: Vec[Val] = Vec.new();
+        for x in a.iter() {
+            items.push(Val.Str(x.clone()));
+        }
+        rv[spos] = Val.Tup(items);
+        a = Vec.new();
+        let mut tail = rv[spos + 1..].to_vec();
+        tail.reverse();
+        let mut head = rv[0..spos + 1].to_vec();
+        for t in tail.iter() {
+            head.push(t.clone());
+        }
+        rv = head;
+    }
+    (rv, a)
+}
+
+fn fetch(c: mut ref Vec[String], spos: i64) -> Val {
+    if c.len() == 0 {
+        return Val.Unset;
+    }
+    if spos < 0 { Val.Str(c.remove(0)) } else { Val.Str(c.pop().unwrap()) }
+}
+// ------------------------------------------------------------ conversion
+
+fn describe_range(b: ref Bound) -> String {
+    if not b.has_min {
+        let op = if b.max_open { "<" } else { "<=" };
+        return f"x{op}{b.max_s}";
+    }
+    if not b.has_max {
+        let op = if b.min_open { ">" } else { ">=" };
+        return f"x{op}{b.min_s}";
+    }
+    let lop = if b.min_open { "<" } else { "<=" };
+    let rop = if b.max_open { "<" } else { "<=" };
+    f"{b.min_s}{lop}x{rop}{b.max_s}"
+}
+
+fn range_bound(t: ref PType) -> Option[Bound] {
+    match t {
+        PType.IntRange(b) => Some(b.clone()),
+        PType.FloatRange(b) => Some(b.clone()),
+        _ => None,
+    }
+}
+
+fn to_int(v: ref Val) -> Option[i64] {
+    match v {
+        Val.Int(n) => Some(*n),
+        Val.Bool(b) => Some(if *b { 1 } else { 0 }),
+        Val.Float(x) => Some(*x as i64),
+        Val.Str(s) => py_int(s),
+        _ => None,
+    }
+}
+
+fn to_float(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Float(x) => Some(*x),
+        Val.Int(n) => Some(*n as f64),
+        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Str(s) => py_float(s),
+        _ => None,
+    }
+}
+
+fn bool_states() -> Vec[(String, bool)] {
+    let mut out: Vec[(String, bool)] = Vec.new();
+    out.push(("1".to_string(), true));
+    out.push(("0".to_string(), false));
+    out.push(("yes".to_string(), true));
+    out.push(("no".to_string(), false));
+    out.push(("true".to_string(), true));
+    out.push(("false".to_string(), false));
+    out.push(("on".to_string(), true));
+    out.push(("off".to_string(), false));
+    out.push(("t".to_string(), true));
+    out.push(("f".to_string(), false));
+    out.push(("y".to_string(), true));
+    out.push(("n".to_string(), false));
+    out.push((String.new(), false));
+    out
+}
+
+// BoolParamType.str_to_bool
+fn str_to_bool(v: ref Val) -> Option[bool] {
+    match v {
+        Val.Bool(b) => Some(*b),
+        Val.Str(s) => {
+            let k = lower_ascii(py_strip(s));
+            for (name, b) in bool_states().iter() {
+                if *name == k {
+                    return Some(*b);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn bool_states_list() -> String {
+    let mut names: Vec[String] = Vec.new();
+    for (n, _) in bool_states().iter() {
+        names.push(n.clone());
+    }
+    names.sort();
+    join(names, ", ")
+}
+
+// ------------------------------------------------------------ strptime
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        let leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0;
+        return if leap { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn digit(c: char) -> i64 {
+    c as i64 - 48
+}
+
+// The widths a %-directive may take at s[i..], in the order the
+// alternation of _strptime's regex tries them.
+fn field_options(code: char, s: ref Vec[char], i: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let d0 = i < s.len() and s[i].is_ascii_digit();
+    let d1 = i + 1 < s.len() and s[i + 1].is_ascii_digit();
+    let two = if d0 and d1 { digit(s[i]) * 10 + digit(s[i + 1]) } else { -1 };
+    let one = if d0 { digit(s[i]) } else { -1 };
+    if code == 'Y' {
+        if i + 4 <= s.len() and d0 and d1 and s[i + 2].is_ascii_digit() and s[i + 3].is_ascii_digit() {
+            out.push((4, two * 100 + digit(s[i + 2]) * 10 + digit(s[i + 3])));
+        }
+    } else if code == 'm' {
+        if two >= 10 and two <= 12 {
+            out.push((2, two));
+        }
+        if two >= 1 and two <= 9 and s[i] == '0' {
+            out.push((2, two));
+        }
+        if one >= 1 {
+            out.push((1, one));
+        }
+    } else if code == 'd' {
+        if two == 30 or two == 31 {
+            out.push((2, two));
+        }
+        if two >= 10 and two <= 29 {
+            out.push((2, two));
+        }
+        if two >= 1 and two <= 9 and s[i] == '0' {
+            out.push((2, two));
+        }
+        if one >= 1 {
+            out.push((1, one));
+        }
+        if i + 1 < s.len() and s[i] == ' ' and s[i + 1].is_ascii_digit() and s[i + 1] != '0' {
+            out.push((2, digit(s[i + 1])));
+        }
+    } else if code == 'H' {
+        if two >= 20 and two <= 23 {
+            out.push((2, two));
+        }
+        if two >= 0 and two <= 19 {
+            out.push((2, two));
+        }
+        if one >= 0 {
+            out.push((1, one));
+        }
+    } else if code == 'M' {
+        if two >= 0 and two <= 59 {
+            out.push((2, two));
+        }
+        if one >= 0 {
+            out.push((1, one));
+        }
+    } else if code == 'S' {
+        if two == 60 or two == 61 {
+            out.push((2, two));
+        }
+        if two >= 0 and two <= 59 {
+            out.push((2, two));
+        }
+        if one >= 0 {
+            out.push((1, one));
+        }
+    }
+    out
+}
+
+fn field_slot(code: char) -> i64 {
+    if code == 'Y' {
+        0
+    } else if code == 'm' {
+        1
+    } else if code == 'd' {
+        2
+    } else if code == 'H' {
+        3
+    } else if code == 'M' {
+        4
+    } else {
+        5
+    }
+}
+
+fn match_fmt(s: ref Vec[char], si: i64, f: ref Vec[char], fi: i64, fields: mut ref Vec[i64]) -> bool {
+    if fi >= f.len() {
+        return si == s.len();
+    }
+    if f[fi] == '%' and fi + 1 < f.len() {
+        let code = f[fi + 1];
+        for (w, n) in field_options(code, s, si).iter() {
+            let slot = field_slot(code);
+            let old = fields[slot];
+            fields[slot] = *n;
+            if match_fmt(s, si + *w, f, fi + 2, mut fields) {
+                return true;
+            }
+            fields[slot] = old;
+        }
+        return false;
+    }
+    if py_space(f[fi]) {
+        // whitespace in the format matches a run of whitespace
+        let mut j = si;
+        while j < s.len() and py_space(s[j]) {
+            j += 1;
+        }
+        if j == si {
+            return false;
+        }
+        return match_fmt(s, j, f, fi + 1, mut fields);
+    }
+    if si < s.len() and s[si].to_ascii_lowercase() == f[fi].to_ascii_lowercase() {
+        return match_fmt(s, si + 1, f, fi + 1, mut fields);
+    }
+    false
+}
+
+// datetime.strptime for the directives the tools use
+fn strptime(value: Str, fmt: Str) -> Option[Val] {
+    let s = chars_of(value);
+    let f = chars_of(fmt);
+    let mut fields: Vec[i64] = vec![1900, 1, 1, 0, 0, 0];
+    if not match_fmt(s, 0, f, 0, mut fields) {
+        return None;
+    }
+    if fields[2] > days_in_month(fields[0], fields[1]) or fields[5] > 59 {
+        return None;
+    }
+    Some(Val.Dt(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5]))
+}
+
+// uuid.UUID(hex)
+fn parse_uuid(s: Str) -> Option[String] {
+    let mut h = s.replace("urn:", "").replace("uuid:", "");
+    let v = chars_of(h);
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and (v[a] == '{' or v[a] == '}') {
+        a += 1;
+    }
+    while b > a and (v[b - 1] == '{' or v[b - 1] == '}') {
+        b -= 1;
+    }
+    h = from_chars(v[a..b].to_vec()).replace("-", "");
+    if clen(h) != 32 {
+        return None;
+    }
+    let mut hex = String.new();
+    for c in h.chars() {
+        if not c.is_ascii_hexdigit() {
+            return None;
+        }
+        hex.push(c.to_ascii_lowercase());
+    }
+    Some(f"{csub(hex, 0, 8)}-{csub(hex, 8, 12)}-{csub(hex, 12, 16)}-{csub(hex, 16, 20)}-{csub(hex, 20, 32)}")
+}
+
+fn title_case(s: Str) -> String {
+    capitalize(s)
+}
+
+fn path_kind(p: Str) -> i64 {
+    // 0 missing, 1 file, 2 directory, 3 other
+    match fs.metadata(p.to_string()) {
+        Ok(m) => if m.is_dir { 2 } else if m.is_file { 1 } else { 3 },
+        Err(_) => 0,
+    }
+}
+
+impl App {
+    // Choice.normalize_choice
+    fn normalize_choice(ref self, ctx: i64, choice: Str, case_sensitive: bool) -> String {
+        let mut v = self.norm(ctx, choice);
+        if not case_sensitive {
+            v = lower_ascii(v);
+        }
+        v
+    }
+
+    fn choice_values(ref self, ctx: i64, choices: ref Vec[String], cs: bool) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for c in choices.iter() {
+            out.push(self.normalize_choice(ctx, c, cs));
+        }
+        out
+    }
+
+    // ParamType.__call__ / convert. Failures carry the message only; the
+    // caller fills in the context and parameter as augment_usage_errors
+    // does.
+    fn convert(ref self, ctx: i64, ty: ref PType, v: ref Val) -> Result[Val, Exc] {
+        if is_nil(v) {
+            return Ok(Val.Nil);
+        }
+        match ty {
+            PType.Unprocessed => Ok(v.clone()),
+            PType.Text => Ok(Val.Str(py_str(v))),
+            PType.Int => match to_int(v) {
+                Some(n) => Ok(Val.Int(n)),
+                None => Err(bad_parameter(f"{r(v)} is not a valid integer.")),
+            },
+            PType.Float => match to_float(v) {
+                Some(x) => Ok(Val.Float(x)),
+                None => Err(bad_parameter(f"{r(v)} is not a valid float.")),
+            },
+            PType.IntRange(b) => {
+                let n = match to_int(v) {
+                    Some(n) => n,
+                    None => return Err(bad_parameter(f"{r(v)} is not a valid integer range.")),
+                };
+                let lt_min = b.has_min and (if b.min_open { n <= b.min_i } else { n < b.min_i });
+                let gt_max = b.has_max and (if b.max_open { n >= b.max_i } else { n > b.max_i });
+                if b.clamp {
+                    if lt_min {
+                        return Ok(Val.Int(if b.min_open { b.min_i + 1 } else { b.min_i }));
+                    }
+                    if gt_max {
+                        return Ok(Val.Int(if b.max_open { b.max_i - 1 } else { b.max_i }));
+                    }
+                }
+                if lt_min or gt_max {
+                    return Err(bad_parameter(f"{n} is not in the range {describe_range(b)}."));
+                }
+                Ok(Val.Int(n))
+            }
+            PType.FloatRange(b) => {
+                let x = match to_float(v) {
+                    Some(x) => x,
+                    None => return Err(bad_parameter(f"{r(v)} is not a valid float range.")),
+                };
+                let lt_min = b.has_min and (if b.min_open { x <= b.min_f } else { x < b.min_f });
+                let gt_max = b.has_max and (if b.max_open { x >= b.max_f } else { x > b.max_f });
+                if lt_min or gt_max {
+                    return Err(bad_parameter(f"{x} is not in the range {describe_range(b)}."));
+                }
+                Ok(Val.Float(x))
+            }
+            PType.Boolean => match str_to_bool(v) {
+                Some(b) => Ok(Val.Bool(b)),
+                None => Err(bad_parameter(f"{r(v)} is not a valid boolean. Recognized values: {bool_states_list()}")),
+            },
+            PType.Uuid => match v {
+                Val.Uuid(_) => Ok(v.clone()),
+                _ => {
+                    let s = py_strip(py_str(v));
+                    match parse_uuid(s) {
+                        Some(u) => Ok(Val.Uuid(u)),
+                        None => Err(bad_parameter(f"{py_repr(s)} is not a valid UUID.")),
+                    }
+                }
+            },
+            PType.Choice(choices, cs) => {
+                let normed = self.normalize_choice(ctx, py_str(v), *cs);
+                let values = self.choice_values(ctx, choices, *cs);
+                for i in 0..choices.len() {
+                    if values[i] == normed {
+                        return Ok(Val.Str(choices[i].clone()));
+                    }
+                }
+                let mut quoted: Vec[String] = Vec.new();
+                for c in values.iter() {
+                    quoted.push(py_repr(c));
+                }
+                let s = join(quoted, ", ");
+                if choices.len() == 1 {
+                    Err(bad_parameter(f"{r(v)} is not {s}."))
+                } else {
+                    Err(bad_parameter(f"{r(v)} is not one of {s}."))
+                }
+            }
+            PType.DateTime(formats) => match v {
+                Val.Dt(_, _, _, _, _, _) => Ok(v.clone()),
+                _ => {
+                    let s = py_str(v);
+                    for f in formats.iter() {
+                        if let Some(d) = strptime(s, f) {
+                            return Ok(d);
+                        }
+                    }
+                    let mut quoted: Vec[String] = Vec.new();
+                    for f in formats.iter() {
+                        quoted.push(py_repr(f));
+                    }
+                    let fs_str = join(quoted, ", ");
+                    if formats.len() == 1 {
+                        Err(bad_parameter(f"{r(v)} does not match the format {fs_str}."))
+                    } else {
+                        Err(bad_parameter(f"{r(v)} does not match the formats {fs_str}."))
+                    }
+                }
+            },
+            PType.FileT => match v {
+                Val.File(_, _) => Ok(v.clone()),
+                _ => {
+                    let name = py_str(v);
+                    let kind = path_kind(name);
+                    if kind == 0 {
+                        return Err(bad_parameter(f"'{name}': No such file or directory"));
+                    }
+                    if kind == 2 {
+                        return Err(bad_parameter(f"'{name}': Is a directory"));
+                    }
+                    match fs.read_to_string(name.clone()) {
+                        Ok(text) => Ok(Val.File(name, text)),
+                        Err(_) => Err(bad_parameter(f"'{name}': Permission denied")),
+                    }
+                }
+            },
+            PType.PathT(exists, file_okay, dir_okay) => {
+                let name = py_str(v);
+                let label = title_case(type_name(ty));
+                let kind = path_kind(name);
+                if kind == 0 {
+                    if not *exists {
+                        return Ok(Val.Str(name));
+                    }
+                    return Err(bad_parameter(f"{label} {py_repr(name)} does not exist."));
+                }
+                if not *file_okay and kind == 1 {
+                    return Err(bad_parameter(f"{label} {py_repr(name)} is a file."));
+                }
+                if not *dir_okay and kind == 2 {
+                    return Err(bad_parameter(f"{label} {py_repr(name)} is a directory."));
+                }
+                Ok(Val.Str(name))
+            }
+            PType.TupleT(types) => {
+                let items = match v {
+                    Val.Tup(xs) => xs.clone(),
+                    Val.List(xs) => xs.clone(),
+                    _ => vec![v.clone()],
+                };
+                if items.len() != types.len() {
+                    let w = if items.len() == 1 { "was" } else { "were" };
+                    return Err(bad_parameter(f"{types.len()} values are required, but {items.len()} {w} given."));
+                }
+                let mut out: Vec[Val] = Vec.new();
+                for i in 0..items.len() {
+                    out.push(self.convert(ctx, types[i], items[i])?);
+                }
+                Ok(Val.Tup(out))
+            }
+        }
+    }
+
+    // ParamType.get_metavar
+    fn type_metavar(ref self, ctx: i64, p: ref Param) -> Option[String] {
+        match p.ty {
+            PType.Choice(choices, cs) => {
+                let s = join(self.choice_values(ctx, choices, *cs), "|");
+                if p.required and not p.is_opt {
+                    let mut out = String.new();
+                    out.push('{');
+                    out.push_str(s);
+                    out.push('}');
+                    Some(out)
+                } else {
+                    Some(f"[{s}]")
+                }
+            }
+            PType.DateTime(formats) => Some(f"[{join(formats, "|")}]"),
+            _ => None,
+        }
+    }
+
+    // Parameter.make_metavar / Argument.make_metavar
+    fn make_metavar(ref self, ctx: i64, p: ref Param) -> String {
+        if not p.is_opt {
+            return self.arg_metavar(ctx, p);
+        }
+        if let Some(m) = p.metavar {
+            return m.clone();
+        }
+        let mut mv = match self.type_metavar(ctx, p) {
+            Some(m) => m,
+            None => upper_ascii(type_name(p.ty)),
+        };
+        if p.nargs != 1 {
+            mv.push_str("...");
+        }
+        mv
+    }
+
+    fn arg_metavar(ref self, ctx: i64, p: ref Param) -> String {
+        if let Some(m) = p.metavar {
+            return m.clone();
+        }
+        let mut var = match self.type_metavar(ctx, p) {
+            Some(m) => if m.len() > 0 { m } else { upper_ascii(p.name) },
+            None => upper_ascii(p.name),
+        };
+        let bracketed = var.starts_with("[") and var.ends_with("]");
+        if p.deprecated.is_some() {
+            var.push('!');
+        }
+        if not p.required and not bracketed {
+            var = f"[{var}]";
+        }
+        if p.nargs != 1 {
+            var.push_str("...");
+        }
+        var
+    }
+
+    // Parameter.get_error_hint
+    fn error_hint(ref self, ctx: i64, p: ref Param) -> String {
+        if not p.is_opt {
+            if ctx >= 0 {
+                return f"'{self.arg_metavar(ctx, p)}'";
+            }
+            return f"'{human_name(p)}'";
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for o in p.opts.iter() {
+            parts.push(f"'{o}'");
+        }
+        if parts.len() == 0 {
+            parts.push(f"'{human_name(p)}'");
+        }
+        let mut out = join(parts, " / ");
+        if p.show_envvar and p.envvar.len() > 0 {
+            out.push_str(f" (env var: '{p.envvar[0]}')");
+        }
+        out
+    }
+
+    // ParamType.get_missing_message
+    fn missing_message(ref self, ctx: i64, p: ref Param) -> String {
+        match p.ty {
+            PType.Choice(choices, cs) => f"Choose from:\n\t{join(self.choice_values(ctx, choices, *cs), ",\n\t")}",
+            _ => String.new(),
+        }
+    }
+
+    // ClickException.format_message for each kind
+    fn format_message(ref self, e: ref Exc) -> String {
+        if e.kind == "bad_param" {
+            let hint = match e.param_hint {
+                Some(h) => Some(h.clone()),
+                None => match e.param {
+                    Some(p) => Some(self.error_hint(e.ctx, p)),
+                    None => None,
+                },
+            };
+            return match hint {
+                Some(h) => f"Invalid value for {h}: {e.message}",
+                None => f"Invalid value: {e.message}",
+            };
+        }
+        if e.kind == "missing" {
+            let mut hint = String.new();
+            let mut ptype = String.new();
+            let mut msg = e.message.clone();
+            if let Some(p) = e.param {
+                hint = f" {self.error_hint(e.ctx, p)}";
+                ptype = param_type_name(p);
+                let extra = self.missing_message(e.ctx, p);
+                if extra.len() > 0 {
+                    msg = if msg.len() > 0 { f"{msg}. {extra}" } else { extra };
+                }
+            }
+            let msg = if msg.len() > 0 { f" {msg}" } else { String.new() };
+            let missing = if ptype == "argument" { "Missing argument" } else { "Missing option" };
+            return f"{missing}{hint}.{msg}";
+        }
+        if (e.kind == "no_such_option" or e.kind == "no_such_command") and e.possibilities.len() > 0 {
+            return f"{e.message} {format_possibilities(e.possibilities)}";
+        }
+        e.message.clone()
+    }
+}
+// ------------------------------------------------------------ core
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Bool(b) => *b,
+        Val.Nil => false,
+        Val.Unset => false,
+        Val.Int(n) => *n != 0,
+        Val.Str(s) => s.len() > 0,
+        Val.Tup(xs) => xs.len() > 0,
+        Val.List(xs) => xs.len() > 0,
+        _ => true,
+    }
+}
+
+// Option._resolve_lazy_default
+fn resolve_lazy(p: ref Param, v: ref Val) -> Val {
+    if p.is_opt and is_unset(v) and p.is_flag {
+        if p.multiple and not p.required and p.prompt.is_none() {
+            return Val.Tup(Vec.new());
+        }
+        if is_bool_flag(p) and not p.required {
+            return Val.Bool(false);
+        }
+    }
+    if p.is_opt and p.is_flag and not is_bool_flag(p) {
+        if let Val.Bool(true) = v {
+            return flag_activation_value(p);
+        }
+    }
+    v.clone()
+}
+
+fn iter_items(v: ref Val) -> Option[Vec[Val]] {
+    match v {
+        Val.Tup(xs) => Some(xs.clone()),
+        Val.List(xs) => Some(xs.clone()),
+        _ => None,
+    }
+}
+
+// iter_params_for_processing: eager parameters first, then by where the
+// command line first named them; a stable sort on the declaration order.
+fn processing_order(order: ref Vec[i64], params: ref Vec[Param]) -> Vec[i64] {
+    let big = 1000000;
+    let mut keys: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..params.len() {
+        let mut idx = big;
+        for k in 0..order.len() {
+            if order[k] == i {
+                idx = k;
+                break;
+            }
+        }
+        let eager_key = if params[i].eager { 0 } else { 1 };
+        keys.push((eager_key, idx, i));
+    }
+    keys.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for (_, _, i) in keys.iter() {
+        out.push(*i);
+    }
+    out
+}
+
+fn with_ctx(e: own Exc, ctx: i64) -> Exc {
+    let mut e = e;
+    if e.ctx < 0 {
+        e.ctx = ctx;
+    }
+    e
+}
+
+// augment_usage_errors(ctx, param)
+fn augment(e: own Exc, ctx: i64, p: ref Param) -> Exc {
+    if not is_usage_kind(e) {
+        return e;
+    }
+    let mut e = with_ctx(e, ctx);
+    if is_bad_param_kind(e) and e.param.is_none() {
+        e.param = Some(p.clone());
+    }
+    e
+}
+
+fn missing_param(ctx: i64, p: ref Param) -> Exc {
+    let mut e = exc("missing", "", ctx);
+    e.param = Some(p.clone());
+    e
+}
+
+impl App {
+    fn ctx_cmd(ref self, ctx: i64) -> i64 {
+        self.ctxs[ctx].cmd
+    }
+
+    // Command.make_context
+    fn make_context(mut ref self, cmd: i64, info_name: Str, args: own Vec[String], parent: i64, extra_allow_extra: Option[bool], extra_interspersed: Option[bool]) -> Result[i64, Exc] {
+        let ctx = self.new_ctx(cmd, parent, info_name, extra_allow_extra, extra_interspersed);
+        self.ensure_help_option(cmd, ctx);
+        self.parse_args(ctx, args)?;
+        Ok(ctx)
+    }
+
+    fn make_parser(ref self, ctx: i64, params: ref Vec[Param]) -> OptParser {
+        let c = self.ctxs[ctx].clone();
+        let mut parser = OptParser.new(c.lower_tokens, c.allow_interspersed, c.ignore_unknown);
+        for i in 0..params.len() {
+            let p = params[i].clone();
+            if p.is_opt {
+                let mut action = if p.multiple { "append".to_string() } else if p.count { "count".to_string() } else { "store".to_string() };
+                if p.is_flag {
+                    action = f"{action}_const";
+                    if is_bool_flag(p) and p.secondary.len() > 0 {
+                        parser.add_option(i, p.opts, p.name, action, 1, Val.Bool(true), p.flag_needs_value);
+                        parser.add_option(i, p.secondary, p.name, action, 1, Val.Bool(false), p.flag_needs_value);
+                    } else {
+                        parser.add_option(i, p.opts, p.name, action, 1, flag_activation_value(p), p.flag_needs_value);
+                    }
+                } else {
+                    parser.add_option(i, p.opts, p.name, action, p.nargs, Val.Nil, p.flag_needs_value);
+                }
+            } else {
+                parser.add_argument(i, p.name, p.nargs);
+            }
+        }
+        parser
+    }
+
+    // Command.parse_args, with Group.parse_args's split of the rest
+    fn parse_args(mut ref self, ctx: i64, args: own Vec[String]) -> Result[Vec[String], Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        if args.len() == 0 and self.cmds[cmd].no_args_is_help and not self.ctxs[ctx].resilient {
+            let help = self.get_help(ctx);
+            return Err(exc("no_args_help", help, ctx));
+        }
+        let params = self.get_params_ro(cmd);
+        let parser = self.make_parser(ctx, params);
+        let state = parser.parse_args(args, ctx)?;
+        for pi in processing_order(state.order, params).iter() {
+            self.handle_parse_result(ctx, params[*pi], state.opts)?;
+        }
+        let n = self.ctxs[ctx].params.len();
+        for i in 0..n {
+            if is_unset(self.ctxs[ctx].params[i].1) {
+                let k = self.ctxs[ctx].params[i].0.clone();
+                self.ctxs[ctx].params[i] = (k, Val.Nil);
+            }
+        }
+        let rest = state.largs.clone();
+        if rest.len() > 0 and not self.ctxs[ctx].allow_extra_args and not self.ctxs[ctx].resilient {
+            let word = if rest.len() == 1 { "argument" } else { "arguments" };
+            return Err(usage_error(f"Got unexpected extra {word} ({join(rest, " ")})", ctx));
+        }
+        self.ctxs[ctx].args = rest.clone();
+        if self.cmds[cmd].is_group {
+            if self.cmds[cmd].chain {
+                self.ctxs[ctx].protected_args = rest;
+                self.ctxs[ctx].args = Vec.new();
+            } else if rest.len() > 0 {
+                self.ctxs[ctx].protected_args = rest[0..1].to_vec();
+                self.ctxs[ctx].args = rest[1..].to_vec();
+            }
+        }
+        Ok(self.ctxs[ctx].args.clone())
+    }
+
+    // Parameter.handle_parse_result
+    fn handle_parse_result(mut ref self, ctx: i64, p: ref Param, opts: ref Vec[(String, Val)]) -> Result[(), Exc] {
+        let existing_value = pget(self.ctxs[ctx].params, p.name);
+        let existing_source = sget(self.ctxs[ctx].sources, p.name);
+        let existing_explicit = bget(self.ctxs[ctx].default_explicit, p.name);
+        let (value, source) = match self.consume_and_process(ctx, p, opts) {
+            Ok(vs) => vs,
+            Err(e) => return Err(augment(e, ctx, p)),
+        };
+        let slot_empty = match existing_value {
+            Some(v) => is_unset(v),
+            None => true,
+        };
+        let more_explicit = existing_source > 0 and source < existing_source;
+        let same_source = existing_source > 0 and source == existing_source;
+        let downgrade = same_source and source == 5 and existing_explicit and not p.default_explicit;
+        let winner = slot_empty or more_explicit or (same_source and not downgrade);
+        if winner {
+            if p.expose {
+                pset(mut self.ctxs[ctx].params, p.name, value);
+                bset(mut self.ctxs[ctx].default_explicit, p.name, p.default_explicit);
+            }
+        } else if existing_source > 0 {
+            sset(mut self.ctxs[ctx].sources, p.name, existing_source);
+        }
+        Ok(())
+    }
+
+    fn consume_and_process(mut ref self, ctx: i64, p: ref Param, opts: ref Vec[(String, Val)]) -> Result[(Val, i64), Exc] {
+        let (value, source) = self.consume_value(ctx, p, opts)?;
+        sset(mut self.ctxs[ctx].sources, p.name, source);
+        if let Some(dep) = p.deprecated {
+            if not is_unset(value) and source < 4 {
+                self.echo_err(f"DeprecationWarning: The {param_type_name(p)} {py_repr(human_name(p))} is deprecated.{deprecated_suffix(dep)}");
+            }
+        }
+        let v = self.process_value(ctx, p, value)?;
+        Ok((v, source))
+    }
+
+    fn resolve_envvar(ref self, ctx: i64, p: ref Param) -> Option[String] {
+        for e in p.envvar.iter() {
+            if let Some(v) = self.getenv(e) {
+                if v.len() > 0 {
+                    return Some(v);
+                }
+            }
+        }
+        if p.is_opt and p.autoenv and p.name.len() > 0 {
+            if let Some(prefix) = self.ctxs[ctx].autoenv {
+                if let Some(v) = self.getenv(f"{prefix}_{upper_ascii(p.name)}") {
+                    if v.len() > 0 {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn value_from_envvar(ref self, ctx: i64, p: ref Param) -> Option[Val] {
+        let rv = self.resolve_envvar(ctx, p)?;
+        if not p.is_opt {
+            if p.nargs != 1 {
+                return Some(Val.List(split_envvar_value(p.ty, rv)));
+            }
+            return Some(Val.Str(rv));
+        }
+        if p.is_flag and not is_bool_flag(p) {
+            if rv == py_str(p.flag_value) {
+                return Some(p.flag_value.clone());
+            }
+            return match str_to_bool(Val.Str(rv)) {
+                Some(true) => Some(p.flag_value.clone()),
+                Some(false) => Some(Val.Bool(false)),
+                None => None,
+            };
+        }
+        let depth = (if p.nargs != 1 { 1 } else { 0 }) + (if p.multiple { 1 } else { 0 });
+        if depth > 0 {
+            let multi = split_envvar_value(p.ty, rv);
+            if p.multiple and p.nargs != 1 {
+                let mut batches: Vec[Val] = Vec.new();
+                let mut k = 0;
+                while k + p.nargs <= multi.len() {
+                    batches.push(Val.Tup(multi[k..k + p.nargs].to_vec()));
+                    k += p.nargs;
+                }
+                return Some(Val.List(batches));
+            }
+            return Some(Val.List(multi));
+        }
+        Some(Val.Str(rv))
+    }
+
+    // Parameter.get_default / Option.get_default
+    fn get_default(ref self, ctx: i64, p: ref Param) -> Val {
+        let raw = match self.lookup_default(ctx, p.name) {
+            Some(v) => v,
+            None => p.default.clone(),
+        };
+        resolve_lazy(p, raw)
+    }
+
+    // Parameter.consume_value / Option.consume_value
+    fn consume_value(mut ref self, ctx: i64, p: ref Param, opts: ref Vec[(String, Val)]) -> Result[(Val, i64), Exc] {
+        let mut value = match pget(opts, p.name) {
+            Some(v) => v,
+            None => Val.Unset,
+        };
+        let mut source = if is_unset(value) { 5 } else { 2 };
+        if is_unset(value) {
+            if let Some(ev) = self.value_from_envvar(ctx, p) {
+                value = ev;
+                source = 3;
+            }
+        }
+        if is_unset(value) {
+            if let Some(dv) = self.lookup_default(ctx, p.name) {
+                value = dv;
+                source = 4;
+                if p.nargs != 1 {
+                    if let Val.Str(s) = value.clone() {
+                        value = Val.List(split_envvar_value(p.ty, s));
+                    }
+                }
+            }
+        }
+        if is_unset(value) {
+            let dv = self.get_default(ctx, p);
+            if not is_unset(dv) {
+                value = dv;
+                source = 5;
+            }
+        }
+        if not p.is_opt {
+            return Ok((value, source));
+        }
+        if is_flag_needs(value) {
+            if p.prompt.is_some() and not self.ctxs[ctx].resilient {
+                let v = self.prompt_for_value(ctx, p)?;
+                return Ok((v, 1));
+            }
+            return Ok((flag_activation_value(p), 2));
+        }
+        if p.multiple and not is_unset(value) and source < 4 {
+            if let Some(items) = iter_items(value) {
+                let mut any = false;
+                for x in items.iter() {
+                    if is_flag_needs(x) {
+                        any = true;
+                    }
+                }
+                if any {
+                    let mut out: Vec[Val] = Vec.new();
+                    for x in items.iter() {
+                        out.push(if is_flag_needs(x) { flag_activation_value(p) } else { x.clone() });
+                    }
+                    return Ok((Val.List(out), 2));
+                }
+            }
+        }
+        if (is_unset(value) or source >= 4) and p.prompt.is_some() and (p.required or p.prompt_required) and not self.ctxs[ctx].resilient {
+            let v = self.prompt_for_value(ctx, p)?;
+            return Ok((v, 1));
+        }
+        Ok((value, source))
+    }
+
+    fn convert_one(ref self, ctx: i64, p: ref Param, v: ref Val) -> Result[Val, Exc] {
+        if p.nargs == 1 or is_composite(p.ty) {
+            return self.convert(ctx, p.ty, v);
+        }
+        let items = match iter_items(v) {
+            Some(xs) => xs,
+            None => return Err(bad_parameter("Value must be an iterable.")),
+        };
+        if p.nargs != -1 and items.len() != p.nargs {
+            if items.len() == 1 {
+                return Err(bad_parameter(f"Takes {p.nargs} values but 1 was given."));
+            }
+            return Err(bad_parameter(f"Takes {p.nargs} values but {items.len()} were given."));
+        }
+        let mut out: Vec[Val] = Vec.new();
+        for x in items.iter() {
+            out.push(self.convert(ctx, p.ty, x)?);
+        }
+        Ok(Val.Tup(out))
+    }
+
+    // Parameter.type_cast_value
+    fn type_cast_value(ref self, ctx: i64, p: ref Param, v: ref Val) -> Result[Val, Exc] {
+        if is_nil(v) {
+            if p.multiple or p.nargs == -1 {
+                return Ok(Val.Tup(Vec.new()));
+            }
+            return Ok(Val.Nil);
+        }
+        if p.multiple {
+            let items = match iter_items(v) {
+                Some(xs) => xs,
+                None => return Err(bad_parameter("Value must be an iterable.")),
+            };
+            let mut out: Vec[Val] = Vec.new();
+            for x in items.iter() {
+                out.push(self.convert_one(ctx, p, x)?);
+            }
+            return Ok(Val.Tup(out));
+        }
+        self.convert_one(ctx, p, v)
+    }
+
+    fn value_is_missing(ref self, p: ref Param, v: ref Val) -> bool {
+        if is_unset(v) {
+            return true;
+        }
+        (p.nargs != 1 or p.multiple) and is_empty_tuple(v)
+    }
+
+    // Parameter.process_value / Option.process_value
+    fn process_value(mut ref self, ctx: i64, p: ref Param, value: own Val) -> Result[Val, Exc] {
+        let mut value = value;
+        if p.is_opt and p.is_flag and not p.required and is_bool_flag(p) and is_unset(value) {
+            value = Val.Bool(false);
+            if p.callback.len() > 0 {
+                value = self.param_callback(ctx, p, value)?;
+            }
+            return Ok(value);
+        }
+        if is_unset(value) {
+            if p.multiple or p.nargs == -1 {
+                value = Val.Tup(Vec.new());
+            }
+        } else {
+            value = self.type_cast_value(ctx, p, value)?;
+        }
+        if p.required and self.value_is_missing(p, value) {
+            return Err(missing_param(ctx, p));
+        }
+        if p.callback.len() > 0 {
+            if is_unset(value) {
+                value = Val.Nil;
+            }
+            value = self.param_callback(ctx, p, value)?;
+        }
+        Ok(value)
+    }
+
+    // the callbacks click's decorators attach to parameters
+    fn param_callback(mut ref self, ctx: i64, p: ref Param, value: own Val) -> Result[Val, Exc] {
+        if p.callback == "help" {
+            if truthy(value) and not self.ctxs[ctx].resilient {
+                let h = self.get_help(ctx);
+                self.echo(h);
+                return Err(exit_exc(0));
+            }
+            return Ok(value);
+        }
+        if p.callback == "version" {
+            if not truthy(value) or self.ctxs[ctx].resilient {
+                return Ok(value);
+            }
+            let version = p.cb_args[0].clone();
+            let prog = if p.cb_args[1].len() > 0 { p.cb_args[1].clone() } else { self.ctxs[self.find_root(ctx)].info_name.clone() };
+            let message = if p.cb_args[2].len() > 0 { p.cb_args[2].clone() } else { "%(prog)s, version %(version)s".to_string() };
+            self.echo(message.replace("%(prog)s", prog).replace("%(version)s", version));
+            return Err(exit_exc(0));
+        }
+        if p.callback == "confirm" {
+            if not truthy(value) {
+                return Err(exc("abort", "", -1));
+            }
+            return Ok(value);
+        }
+        if p.callback == "config" {
+            return self.load_config(ctx, value);
+        }
+        Ok(value)
+    }
+
+    // oracle.py's load_config: an INI file whose sections become the
+    // default map, [tool.cmd] nested under cmd.
+    fn load_config(mut ref self, ctx: i64, value: own Val) -> Result[Val, Exc] {
+        let path = match value {
+            Val.Nil => return Ok(Val.Nil),
+            Val.Str(s) => s.clone(),
+            _ => py_str(value),
+        };
+        let text = match fs.read_to_string(path.clone()) {
+            Ok(t) => t,
+            Err(_) => return Err(bad_parameter(f"cannot read {py_repr(path)}")),
+        };
+        let mut root: Vec[(String, DMap)] = Vec.new();
+        let mut section: Vec[String] = Vec.new();
+        let mut in_section = false;
+        for raw in lines_of(text).iter() {
+            let line = py_strip(raw);
+            if line.len() == 0 or line.starts_with("#") or line.starts_with(";") {
+                continue;
+            }
+            if line.starts_with("[") and line.ends_with("]") {
+                let name = csub(line, 1, clen(line) - 1);
+                let parts = split_c(name, '.');
+                section = parts[1..].to_vec();
+                in_section = true;
+                continue;
+            }
+            if not in_section {
+                continue;
+            }
+            let (k, v) = match split_once(line, '=') {
+                Some((a, b)) => (lower_ascii(py_strip(a)), py_strip(b)),
+                None => continue,
+            };
+            let leaf = if k == "tag" {
+                let mut items: Vec[Val] = Vec.new();
+                for w in split_ws(v).iter() {
+                    items.push(Val.Str(w.clone()));
+                }
+                Val.List(items)
+            } else {
+                Val.Str(v)
+            };
+            dmap_put(mut root, section, k, leaf);
+        }
+        self.ctxs[ctx].default_map = Some(DMap.Node(root));
+        Ok(Val.Str(path))
+    }
+
+    // Option.prompt_for_value
+    fn prompt_for_value(mut ref self, ctx: i64, p: ref Param) -> Result[Val, Exc] {
+        let default = self.get_default(ctx, p);
+        let text = p.prompt.clone().unwrap_or(String.new());
+        if is_bool_flag(p) {
+            let d = if is_unset(default) or is_nil(default) { None } else { Some(truthy(default)) };
+            let b = self.confirm(text, d)?;
+            return Ok(Val.Bool(b));
+        }
+        let d = if is_unset(default) { Val.Nil } else { default };
+        self.prompt(ctx, p, text, d)
+    }
+
+    // termui.prompt with value_proc = process_value
+    fn prompt(mut ref self, ctx: i64, p: ref Param, text: Str, default: own Val) -> Result[Val, Exc] {
+        let show_default = if is_unset(p.show_default) { Val.Bool(true) } else { p.show_default.clone() };
+        let prompt_text = build_prompt(text, show_default, default, p.show_choices, p.ty);
+        let confirm_text = "Repeat for confirmation: ".to_string();
+        loop {
+            let mut value = Val.Nil;
+            let mut typed = String.new();
+            loop {
+                let s = self.read_prompt(prompt_text, p.hide_input)?;
+                if s.len() > 0 {
+                    typed = s.clone();
+                    value = Val.Str(s);
+                    break;
+                } else if not is_nil(default) {
+                    value = default.clone();
+                    break;
+                }
+            }
+            let result = match self.process_value(ctx, p, value) {
+                Ok(v) => v,
+                Err(e) => {
+                    if is_usage_kind(e) {
+                        self.echo(f"Error: {e.message}");
+                        continue;
+                    }
+                    return Err(e);
+                }
+            };
+            if not p.confirm_prompt {
+                return Ok(result);
+            }
+            let mut value2 = String.new();
+            loop {
+                value2 = self.read_prompt(confirm_text, p.hide_input)?;
+                if value2.len() > 0 or (typed.len() == 0 and value2.len() == 0) {
+                    break;
+                }
+            }
+            if typed == value2 {
+                return Ok(result);
+            }
+            self.echo("Error: The two entered values do not match.");
+        }
+    }
+
+    fn read_prompt(mut ref self, text: Str, hide: bool) -> Result[String, Exc] {
+        let got = if hide { self.hidden_input(text) } else { self.visible_input(text) };
+        match got {
+            Some(s) => Ok(s),
+            None => {
+                if hide {
+                    self.echo("");
+                }
+                Err(exc("abort", "", -1))
+            }
+        }
+    }
+
+    // termui.confirm
+    fn confirm(mut ref self, text: Str, default: Option[bool]) -> Result[bool, Exc] {
+        let hint = match default {
+            None => "y/n",
+            Some(true) => "Y/n",
+            Some(false) => "y/N",
+        };
+        let prompt = f"{text} [{hint}]: ";
+        loop {
+            let value = match self.visible_input(prompt) {
+                Some(s) => py_strip(lower_ascii(s)),
+                None => return Err(exc("abort", "", -1)),
+            };
+            if value == "y" or value == "yes" {
+                return Ok(true);
+            }
+            if value == "n" or value == "no" {
+                return Ok(false);
+            }
+            if value.len() == 0 {
+                if let Some(d) = default {
+                    return Ok(d);
+                }
+            }
+            self.echo("Error: invalid input");
+        }
+    }
+
+    // Command.invoke / Group.invoke, by the kind of command
+    fn invoke(mut ref self, ctx: i64) -> Result[Val, Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        if self.cmds[cmd].is_group {
+            return self.invoke_group(ctx);
+        }
+        self.invoke_command(ctx)
+    }
+
+    fn invoke_command(mut ref self, ctx: i64) -> Result[Val, Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        if let Some(dep) = self.cmds[cmd].deprecated.clone() {
+            let name = self.cmds[cmd].name.clone();
+            self.echo_err(f"DeprecationWarning: The command {py_repr(name)} is deprecated.{deprecated_suffix(dep)}");
+        }
+        match self.callback(ctx) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(with_ctx(e, ctx)),
+        }
+    }
+
+    fn process_result(mut ref self, ctx: i64, value: own Val) -> Result[Val, Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        if self.cmds[cmd].result_cb {
+            return self.result_callback(ctx, value);
+        }
+        Ok(value)
+    }
+
+    fn invoke_group(mut ref self, ctx: i64) -> Result[Val, Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        let chain = self.cmds[cmd].chain;
+        if self.ctxs[ctx].protected_args.len() == 0 {
+            if self.cmds[cmd].invoke_without {
+                let rv = self.invoke_command(ctx)?;
+                let v = if chain { Val.List(Vec.new()) } else { rv };
+                return self.process_result(ctx, v);
+            }
+            return Err(usage_error("Missing command.", ctx));
+        }
+        let mut args = self.ctxs[ctx].protected_args.clone();
+        for a in self.ctxs[ctx].args.iter() {
+            args.push(a.clone());
+        }
+        self.ctxs[ctx].args = Vec.new();
+        self.ctxs[ctx].protected_args = Vec.new();
+        if not chain {
+            let (name, sub, rest) = self.resolve_command(ctx, args)?;
+            self.ctxs[ctx].invoked_subcommand = Some(name.clone());
+            self.invoke_command(ctx)?;
+            let sub_ctx = self.make_context(sub, name, rest, ctx, None, None)?;
+            let rv = self.invoke(sub_ctx)?;
+            return self.process_result(ctx, rv);
+        }
+        self.ctxs[ctx].invoked_subcommand = if args.len() > 0 { Some("*".to_string()) } else { None };
+        self.invoke_command(ctx)?;
+        let mut contexts: Vec[i64] = Vec.new();
+        while args.len() > 0 {
+            let (name, sub, rest) = self.resolve_command(ctx, args)?;
+            let sub_ctx = self.make_context(sub, name, rest, ctx, Some(true), Some(false))?;
+            contexts.push(sub_ctx);
+            args = self.ctxs[sub_ctx].args.clone();
+            self.ctxs[sub_ctx].args = Vec.new();
+        }
+        let mut rv: Vec[Val] = Vec.new();
+        for sc in contexts.iter() {
+            rv.push(self.invoke(*sc)?);
+        }
+        self.process_result(ctx, Val.List(rv))
+    }
+
+    // Group.resolve_command
+    fn resolve_command(mut ref self, ctx: i64, args: ref Vec[String]) -> Result[(String, i64, Vec[String]), Exc] {
+        let cmd = self.ctx_cmd(ctx);
+        let mut name = args[0].clone();
+        let mut sub = self.get_command(cmd, name);
+        if sub < 0 and self.ctxs[ctx].lower_tokens {
+            name = lower_ascii(name);
+            sub = self.get_command(cmd, name);
+        }
+        if sub < 0 and not self.ctxs[ctx].resilient {
+            if split_opt(name).0.len() > 0 {
+                self.parse_args(ctx, args.clone())?;
+            }
+            let mut names: Vec[String] = Vec.new();
+            for (n, _) in self.cmds[cmd].subs.iter() {
+                names.push(n.clone());
+            }
+            let mut e = exc("no_such_command", f"No such command {py_repr(name)}.", ctx);
+            e.possibilities = close(name, names);
+            return Err(e);
+        }
+        Ok((name, sub, args[1..].to_vec()))
+    }
+
+    // UsageError.show and its subclasses' overrides
+    fn show_exc(mut ref self, e: ref Exc) {
+        if e.kind == "no_args_help" {
+            self.echo_err(e.message);
+            return;
+        }
+        let mut hint = String.new();
+        if e.ctx >= 0 {
+            let cmd = self.ctx_cmd(e.ctx);
+            if self.has_help_option(cmd, e.ctx) {
+                let names = self.help_option_names(cmd, e.ctx);
+                let mut longest = names[0].clone();
+                for n in names.iter() {
+                    if clen(n) > clen(longest) {
+                        longest = n.clone();
+                    }
+                }
+                hint = f"Try '{self.command_path(e.ctx)} {longest}' for help.\n";
+            }
+            let usage = self.get_usage(e.ctx);
+            self.echo_err(f"{usage}\n{hint}");
+        }
+        let msg = self.format_message(e);
+        self.echo_err(f"Error: {msg}");
+    }
+
+    // Command.main in standalone mode: the exit code
+    fn main(mut ref self, root: i64, prog: Str, args: own Vec[String]) -> i64 {
+        let e = match self.make_context(root, prog, args, -1, None, None) {
+            Ok(ctx) => match self.invoke(ctx) {
+                Ok(_) => exit_exc(0),
+                Err(e) => e,
+            },
+            Err(e) => e,
+        };
+        if e.kind == "exit" {
+            return e.code;
+        }
+        if e.kind == "abort" {
+            self.echo_err("Aborted!");
+            return 1;
+        }
+        self.show_exc(e);
+        e.code
+    }
+}
+
+fn dmap_put(root: mut ref Vec[(String, DMap)], path: ref Vec[String], key: Str, leaf: own Val) {
+    if path.len() == 0 {
+        for i in 0..root.len() {
+            if root[i].0 == key {
+                root[i] = (key.to_string(), DMap.Leaf(leaf));
+                return;
+            }
+        }
+        root.push((key.to_string(), DMap.Leaf(leaf)));
+        return;
+    }
+    let head = path[0].clone();
+    let rest = path[1..].to_vec();
+    for i in 0..root.len() {
+        if root[i].0 == head {
+            let mut items = match root[i].1.clone() {
+                DMap.Node(xs) => xs,
+                DMap.Leaf(_) => Vec.new(),
+            };
+            dmap_put(mut items, rest, key, leaf);
+            root[i] = (head, DMap.Node(items));
+            return;
+        }
+    }
+    let mut items: Vec[(String, DMap)] = Vec.new();
+    dmap_put(mut items, rest, key, leaf);
+    root.push((head, DMap.Node(items)));
+}
+
+// termui._build_prompt
+fn build_prompt(text: Str, show_default: ref Val, default: ref Val, show_choices: bool, ty: ref PType) -> String {
+    let mut p = text.to_string();
+    if show_choices {
+        if let PType.Choice(choices, _) = ty {
+            p.push_str(f" ({join(choices, ", ")})");
+        }
+    }
+    match show_default {
+        Val.Str(s) => p.push_str(f" [({s})]"),
+        Val.Bool(true) => {
+            if not is_nil(default) {
+                p.push_str(f" [{py_str(default)}]");
+            }
+        }
+        _ => {}
+    }
+    p.push_str(": ");
+    p
+}
+// ------------------------------------------------------------ help
+
+// formatting.wrap_text
+fn wrap_text(text: Str, width: i64, initial: Str, subsequent: Str, preserve: bool) -> String {
+    let t = expand_tabs8(text);
+    let mut w = Wrapper.new(width);
+    w.initial_indent = chars_of(initial);
+    w.subsequent_indent = chars_of(subsequent);
+    w.replace_whitespace = false;
+    if not preserve {
+        return from_chars(w.fill(chars_of(t)).unwrap());
+    }
+    // (indent, raw, text) per paragraph
+    let mut paras: Vec[(i64, bool, String)] = Vec.new();
+    let mut buf: Vec[String] = Vec.new();
+    let mut indent: i64 = -1;
+    for raw in lines_of(t).iter() {
+        if raw.len() == 0 {
+            flush_par(mut paras, mut buf, indent);
+            indent = -1;
+        } else {
+            let mut line = raw.clone();
+            if indent < 0 {
+                let orig = clen(line);
+                line = py_lstrip(line);
+                indent = orig - clen(line);
+            }
+            buf.push(line);
+        }
+    }
+    flush_par(mut paras, mut buf, indent);
+    let mut rv: Vec[String] = Vec.new();
+    for (ind, raw, body) in paras.iter() {
+        let mut w2 = Wrapper.new(width);
+        w2.replace_whitespace = false;
+        w2.initial_indent = chars_of(f"{initial}{spaces(*ind)}");
+        w2.subsequent_indent = chars_of(f"{subsequent}{spaces(*ind)}");
+        if *raw {
+            let mut lines: Vec[String] = Vec.new();
+            let parts = lines_of(body);
+            for k in 0..parts.len() {
+                let pre = if k == 0 { from_chars(w2.initial_indent) } else { from_chars(w2.subsequent_indent) };
+                lines.push(f"{pre}{parts[k]}");
+            }
+            rv.push(join(lines, "\n"));
+        } else {
+            rv.push(from_chars(w2.fill(chars_of(body)).unwrap()));
+        }
+    }
+    join(rv, "\n\n")
+}
+
+fn backspace() -> String {
+    "\u{8}".to_string()
+}
+
+fn flush_par(paras: mut ref Vec[(i64, bool, String)], buf: mut ref Vec[String], indent: i64) {
+    if buf.len() == 0 {
+        return;
+    }
+    let ind = if indent < 0 { 0 } else { indent };
+    if py_strip(buf[0]) == backspace() {
+        let rest = buf[1..].to_vec();
+        paras.push((ind, true, join(rest, "\n")));
+    } else {
+        paras.push((ind, false, join(buf, " ")));
+    }
+    buf.clear();
+}
+
+struct Formatter {
+    width: i64,
+    indent: i64,
+    buf: String,
+}
+
+impl Formatter {
+    fn new() -> Formatter {
+        // CliRunner pins FORCED_WIDTH to 80
+        Formatter { width: 80, indent: 0, buf: String.new() }
+    }
+
+    fn write(mut ref self, s: Str) {
+        self.buf.push_str(s);
+    }
+
+    fn write_usage(mut ref self, prog: Str, args: Str) {
+        let prefix = "Usage: ";
+        let usage_prefix = f"{spaces(self.indent - clen(prefix))}{prefix}{prog} ";
+        let text_width = self.width - self.indent;
+        if args.len() == 0 {
+            self.write(rstrip_char(usage_prefix, ' '));
+            self.write("\n");
+            return;
+        }
+        if text_width >= clen(usage_prefix) + 20 {
+            let ind = spaces(clen(usage_prefix));
+            self.write(wrap_text(args, text_width, usage_prefix, ind, false));
+        } else {
+            self.write(usage_prefix);
+            self.write("\n");
+            let n = if self.indent > clen(prefix) { self.indent } else { clen(prefix) };
+            let ind = spaces(n + 4);
+            self.write(wrap_text(args, text_width, ind, ind, false));
+        }
+        self.write("\n");
+    }
+
+    fn write_heading(mut ref self, heading: Str) {
+        self.write(f"{spaces(self.indent)}{heading}:\n");
+    }
+
+    fn write_paragraph(mut ref self) {
+        if self.buf.len() > 0 {
+            self.write("\n");
+        }
+    }
+
+    fn write_text(mut ref self, text: Str) {
+        let ind = spaces(self.indent);
+        self.write(wrap_text(text, self.width, ind, ind, true));
+        self.write("\n");
+    }
+
+    fn write_dl(mut ref self, rows: ref Vec[(String, String)]) {
+        let mut w0 = 0;
+        for (a, _) in rows.iter() {
+            if clen(a) > w0 {
+                w0 = clen(a);
+            }
+        }
+        let first_col = (if w0 < 30 { w0 } else { 30 }) + 2;
+        for (first, second) in rows.iter() {
+            self.write(f"{spaces(self.indent)}{first}");
+            if second.len() == 0 {
+                self.write("\n");
+                continue;
+            }
+            if clen(first) <= first_col - 2 {
+                self.write(spaces(first_col - clen(first)));
+            } else {
+                self.write("\n");
+                self.write(spaces(first_col + self.indent));
+            }
+            let tw = if self.width - first_col - 2 > 10 { self.width - first_col - 2 } else { 10 };
+            let wrapped = wrap_text(second, tw, "", "", true);
+            let lines = lines_of(wrapped);
+            if lines.len() > 0 {
+                self.write(f"{lines[0]}\n");
+                for k in 1..lines.len() {
+                    self.write(f"{spaces(first_col + self.indent)}{lines[k]}\n");
+                }
+            } else {
+                self.write("\n");
+            }
+        }
+    }
+
+    fn section(mut ref self, name: Str, rows: ref Vec[(String, String)]) {
+        self.write_paragraph();
+        self.write_heading(name);
+        self.indent += 2;
+        self.write_dl(rows);
+        self.indent -= 2;
+    }
+}
+
+// formatting.join_options: the options sorted by prefix length
+fn join_options(opts: ref Vec[String]) -> (String, bool) {
+    let mut keyed: Vec[(i64, i64, String)] = Vec.new();
+    let mut slash = false;
+    for i in 0..opts.len() {
+        let (prefix, _) = split_opt(opts[i]);
+        if prefix == "/" {
+            slash = true;
+        }
+        keyed.push((clen(prefix), i, opts[i].clone()));
+    }
+    keyed.sort();
+    let mut names: Vec[String] = Vec.new();
+    for (_, _, o) in keyed.iter() {
+        names.push(o.clone());
+    }
+    (join(names, ", "), slash)
+}
+
+// utils._make_default_short_help
+fn make_default_short_help(help: Str, max_length: i64) -> String {
+    let mut text = help.to_string();
+    if let Some(i) = text.find("\n\n") {
+        text = csub(text, 0, i);
+    }
+    let mut words = split_ws(text);
+    if words.len() == 0 {
+        return String.new();
+    }
+    if words[0] == backspace() {
+        words.remove(0);
+    }
+    let mut total = 0;
+    let last = words.len() - 1;
+    let mut stop = -1;
+    for i in 0..words.len() {
+        total += clen(words[i]) + (if i > 0 { 1 } else { 0 });
+        if total > max_length {
+            stop = i;
+            break;
+        }
+        if words[i].ends_with(".") {
+            return join(words[0..i + 1].to_vec(), " ");
+        }
+        if total == max_length and i != last {
+            stop = i;
+            break;
+        }
+    }
+    if stop < 0 {
+        return join(words, " ");
+    }
+    let mut i = stop;
+    total += 3;
+    while i > 0 {
+        total -= clen(words[i]) + (if i > 0 { 1 } else { 0 });
+        if total <= max_length {
+            break;
+        }
+        i -= 1;
+    }
+    f"{join(words[0..i].to_vec(), " ")}..."
+}
+
+impl App {
+    fn collect_usage_pieces(ref self, ctx: i64) -> Vec[String] {
+        let cmd = self.ctx_cmd(ctx);
+        let c = self.cmds[cmd].clone();
+        let mut rv: Vec[String] = Vec.new();
+        if c.options_metavar.len() > 0 {
+            rv.push(c.options_metavar.clone());
+        }
+        for p in self.get_params_ro(cmd).iter() {
+            for piece in self.usage_pieces(ctx, p).iter() {
+                rv.push(piece.clone());
+            }
+        }
+        if c.is_group {
+            rv.push(c.sub_metavar.clone());
+        }
+        rv
+    }
+
+    fn format_usage(ref self, ctx: i64, f: mut ref Formatter) {
+        let pieces = self.collect_usage_pieces(ctx);
+        f.write_usage(self.command_path(ctx), join(pieces, " "));
+    }
+
+    fn get_usage(ref self, ctx: i64) -> String {
+        let mut f = Formatter.new();
+        self.format_usage(ctx, mut f);
+        rstrip_char(f.buf, '\n')
+    }
+
+    fn get_help(ref self, ctx: i64) -> String {
+        let mut f = Formatter.new();
+        self.format_help(ctx, mut f);
+        rstrip_char(f.buf, '\n')
+    }
+
+    fn short_help(ref self, cmd: i64, limit: i64) -> String {
+        let c = self.cmds[cmd].clone();
+        let mut text = match c.short_help {
+            Some(s) => cleandoc(s),
+            None => match c.help {
+                Some(h) => make_default_short_help(h, limit),
+                None => String.new(),
+            },
+        };
+        if let Some(dep) = c.deprecated {
+            text = f"{text} {deprecated_label(dep)}";
+        }
+        py_strip(text)
+    }
+
+    fn format_help(ref self, ctx: i64, f: mut ref Formatter) {
+        let cmd = self.ctx_cmd(ctx);
+        let c = self.cmds[cmd].clone();
+        self.format_usage(ctx, f);
+        // format_help_text
+        let mut text = match c.help {
+            Some(h) => {
+                let t = cleandoc(h);
+                match t.find("\u{c}") {
+                    Some(i) => csub(t, 0, i),
+                    None => t,
+                }
+            }
+            None => String.new(),
+        };
+        if let Some(dep) = c.deprecated {
+            let label = deprecated_label(dep);
+            text = if text.len() > 0 { f"{text} {label}" } else { label };
+        }
+        if text.len() > 0 {
+            f.write_paragraph();
+            f.indent += 2;
+            f.write_text(text);
+            f.indent -= 2;
+        }
+        let params = self.get_params_ro(cmd);
+        let mut args: Vec[(String, String)] = Vec.new();
+        let mut opts: Vec[(String, String)] = Vec.new();
+        for p in params.iter() {
+            if let Some(rec) = self.help_record(ctx, p) {
+                if p.is_opt {
+                    opts.push(rec);
+                } else {
+                    args.push(rec);
+                }
+            }
+        }
+        if args.len() > 0 {
+            f.section("Positional arguments", args);
+        }
+        if opts.len() > 0 {
+            f.section("Options", opts);
+        }
+        if c.is_group {
+            let mut shown: Vec[(String, i64)] = Vec.new();
+            for name in self.list_commands(cmd).iter() {
+                let sub = self.get_command(cmd, name);
+                if sub < 0 or self.cmds[sub].hidden {
+                    continue;
+                }
+                shown.push((name.clone(), sub));
+            }
+            if shown.len() > 0 {
+                let mut longest = 0;
+                for (n, _) in shown.iter() {
+                    if clen(n) > longest {
+                        longest = clen(n);
+                    }
+                }
+                let limit = f.width - 6 - longest;
+                let mut rows: Vec[(String, String)] = Vec.new();
+                for (n, sub) in shown.iter() {
+                    rows.push((n.clone(), self.short_help(*sub, limit)));
+                }
+                f.section("Commands", rows);
+            }
+        }
+    }
+
+    fn help_record(ref self, ctx: i64, p: ref Param) -> Option[(String, String)] {
+        if not p.is_opt {
+            return match p.help {
+                Some(h) => Some((self.arg_metavar(ctx, p), h.clone())),
+                None => None,
+            };
+        }
+        if p.hidden {
+            return None;
+        }
+        let mut slash = false;
+        let mut rv: Vec[String] = Vec.new();
+        let (a, s1) = join_options(p.opts);
+        slash = slash or s1;
+        let mut first = a;
+        if not p.is_flag and not p.count {
+            first = f"{first} {self.make_metavar(ctx, p)}";
+        }
+        rv.push(first);
+        if p.secondary.len() > 0 {
+            let (b, s2) = join_options(p.secondary);
+            slash = slash or s2;
+            let mut second = b;
+            if not p.is_flag and not p.count {
+                second = f"{second} {self.make_metavar(ctx, p)}";
+            }
+            rv.push(second);
+        }
+        let mut help = p.help.clone().unwrap_or(String.new());
+        let extra = self.help_extra(ctx, p);
+        if extra.len() > 0 {
+            let s = join(extra, "; ");
+            help = if help.len() > 0 { f"{help}  [{s}]" } else { f"[{s}]" };
+        }
+        let sep = if slash { "; " } else { " / " };
+        Some((join(rv, sep), help))
+    }
+
+    // Option.get_help_extra, as the list of bracketed items
+    fn help_extra(ref self, ctx: i64, p: ref Param) -> Vec[String] {
+        let mut items: Vec[String] = Vec.new();
+        if p.show_envvar {
+            let mut vars = p.envvar.clone();
+            if vars.len() == 0 and p.autoenv and p.name.len() > 0 {
+                if let Some(prefix) = self.ctxs[ctx].autoenv {
+                    vars.push(f"{prefix}_{upper_ascii(p.name)}");
+                }
+            }
+            if vars.len() > 0 {
+                items.push(f"env var: {join(vars, ", ")}");
+            }
+        }
+        let dv = self.get_default(ctx, p);
+        let mut show = false;
+        let mut show_is_str = false;
+        match p.show_default {
+            Val.Str(_) => {
+                show = true;
+                show_is_str = true;
+            }
+            Val.Bool(b) => show = b,
+            _ => {
+                if let Some(b) = self.ctxs[ctx].show_default {
+                    show = b;
+                }
+            }
+        }
+        if show_is_str or (show and not is_nil(dv) and not is_unset(dv)) {
+            let ds = if show_is_str {
+                f"({py_str(p.show_default)})"
+            } else if let Some(xs) = iter_items(dv) {
+                let mut parts: Vec[String] = Vec.new();
+                for x in xs.iter() {
+                    parts.push(py_str(x));
+                }
+                join(parts, ", ")
+            } else if is_bool_flag(p) and p.secondary.len() > 0 {
+                let name = if truthy(dv) { p.opts[0].clone() } else { p.secondary[0].clone() };
+                split_opt(name).1
+            } else if is_bool_flag(p) and not truthy(dv) {
+                String.new()
+            } else if py_str(dv).len() == 0 {
+                "\"\"".to_string()
+            } else {
+                py_str(dv)
+            };
+            if ds.len() > 0 {
+                items.push(f"default: {ds}");
+            }
+        }
+        if let Some(b) = range_bound(p.ty) {
+            let count_default = p.count and b.has_min and b.min_i == 0 and not b.has_max;
+            if not count_default {
+                let s = describe_range(b);
+                if s.len() > 0 {
+                    items.push(s);
+                }
+            }
+        }
+        if p.required {
+            items.push("required".to_string());
+        }
+        items
+    }
+}
+// ------------------------------------------------------------ the tools
+
+fn version_option(decls: Vec[Str], version: Str, prog_name: Str, message: Str) -> Param {
+    let mut d = decl(decls);
+    d.is_flag = Some(true);
+    d.expose = false;
+    d.eager = true;
+    d.help = Some("Show the version and exit.".to_string());
+    d.callback = "version".to_string();
+    d.cb_args = sv(vec![version, prog_name, message]);
+    option(d)
+}
+
+fn arg(name: Str) -> Param {
+    make_argument(decl(vec![name]))
+}
+
+fn help_of(d: mut ref Decl, h: Str) {
+    d.help = Some(h.to_string());
+}
+
+// Adds cmd as a subcommand of group under its name.
+fn attach(cmds: mut ref Vec[Cmd], group: i64, cmd: own Cmd) -> i64 {
+    let name = cmd.name.clone();
+    cmds.push(cmd);
+    let idx = cmds.len() - 1;
+    cmds[group].subs.push((name, idx));
+    idx
+}
+
+fn build_deployctl() -> Vec[Cmd] {
+    let mut cmds: Vec[Cmd] = Vec.new();
+    let mut root = command("deployctl", "Deploy services and manage their configuration.\n\nEvery command talks to the deploy API of the chosen environment.\n");
+    root.settings.help_names = Some(sv(vec!["-h", "--help"]));
+    root.settings.autoenv = Some("DEPLOYCTL".to_string());
+    let mut d = decl(vec!["--config"]);
+    d.ty = Some(path_type(false, true, false));
+    d.callback = "config".to_string();
+    d.eager = true;
+    d.expose = false;
+    help_of(mut d, "Read option defaults from an INI file.");
+    add(mut root, option(d));
+    let mut d = decl(vec!["-v", "--verbose"]);
+    d.count = true;
+    help_of(mut d, "Say more; repeat for even more.");
+    add(mut root, option(d));
+    let mut d = decl(vec!["--env"]);
+    d.ty = Some(choice(vec!["dev", "staging", "prod"], false));
+    d.default = vstr("dev");
+    d.show_default = Val.Bool(true);
+    d.show_envvar = true;
+    help_of(mut d, "Target environment.");
+    add(mut root, option(d));
+    add(mut root, version_option(vec!["--version"], "2.7.0", "deployctl", ""));
+    finish_group(mut root);
+    cmds.push(root);
+
+    // release
+    let mut c = command("release", "Release VERSION of SERVICE.\n\nThe release waits for every pod to pass its health check before it\nmoves on, and stops at the first failure.\n");
+    add(mut c, arg("service"));
+    add(mut c, arg("version"));
+    let mut d = decl(vec!["-r", "--replicas"]);
+    d.ty = Some(int_range(Some(1), Some(20), false));
+    d.default = Val.Int(2);
+    d.show_default = Val.Bool(true);
+    help_of(mut d, "Pods to run.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--timeout"]);
+    d.ty = Some(float_range(Some(0), Some(600), true, false));
+    d.default = Val.Float(30.0);
+    help_of(mut d, "Seconds to wait for health checks.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["-t", "--tag"]);
+    d.multiple = true;
+    help_of(mut d, "Image tag to add; can be repeated.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--strategy"]);
+    d.ty = Some(choice(vec!["rolling", "blue-green", "canary"], false));
+    d.default = vstr("rolling");
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    let mut d = decl(vec!["--at"]);
+    d.ty = Some(datetime_type());
+    help_of(mut d, "Schedule the release.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--id", "release_id"]);
+    d.ty = Some(PType.Uuid);
+    help_of(mut d, "Release id to reuse.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--notes"]);
+    d.ty = Some(PType.FileT);
+    help_of(mut d, "Release notes file.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--manifest"]);
+    d.ty = Some(path_type(true, true, false));
+    help_of(mut d, "Service manifest.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--dry-run/--no-dry-run"]);
+    d.default = Val.Bool(false);
+    help_of(mut d, "Plan without applying.");
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+
+    // logs
+    let mut c = command("logs", "Show recent log lines of SERVICES.");
+    let mut d = decl(vec!["services"]);
+    d.nargs = Some(-1);
+    d.required = Some(true);
+    add(mut c, make_argument(d));
+    let mut d = decl(vec!["-n", "--lines"]);
+    d.ty = Some(int_range(Some(0), None, false));
+    d.default = Val.Int(100);
+    help_of(mut d, "Lines to show.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["-f", "--follow"]);
+    d.is_flag = Some(true);
+    help_of(mut d, "Keep streaming.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--level"]);
+    d.ty = Some(choice(vec!["debug", "info", "warn", "error"], true));
+    d.multiple = true;
+    add(mut c, option(d));
+    let mut d = decl(vec!["--since"]);
+    d.ty = Some(PType.DateTime(sv(vec!["%Y-%m-%d"])));
+    add(mut c, option(d));
+    let mut d = decl(vec!["--grep"]);
+    d.multiple = true;
+    d.metavar = Some("PATTERN".to_string());
+    help_of(mut d, "Only lines matching PATTERN.");
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+
+    // rollback
+    let mut c = command("rollback", "Roll SERVICE back to an earlier release.");
+    add(mut c, arg("service"));
+    let mut d = decl(vec!["--to", "target"]);
+    d.metavar = Some("VERSION".to_string());
+    help_of(mut d, "Version to go back to (default: the previous one).");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--yes"]);
+    d.is_flag = Some(true);
+    d.callback = "confirm".to_string();
+    d.expose = false;
+    d.prompt = vstr("Roll back the service?");
+    help_of(mut d, "Confirm the action without prompting.");
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+
+    // scale
+    let mut c = command("scale", "Change how SERVICE scales.");
+    add(mut c, arg("service"));
+    let mut d = decl(vec!["--set", "settings"]);
+    d.ty = Some(PType.TupleT(vec![PType.Text, PType.Int]));
+    d.multiple = true;
+    d.metavar = Some("KEY N".to_string());
+    help_of(mut d, "Set a resource limit.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--window"]);
+    d.nargs = Some(2);
+    d.ty = Some(PType.Int);
+    help_of(mut d, "Autoscale window in minutes.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--min", "min_"]);
+    d.ty = Some(int_range(Some(0), None, true));
+    d.default = Val.Int(1);
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    let mut d = decl(vec!["--max", "max_"]);
+    d.ty = Some(int_range(Some(1), Some(100), true));
+    d.default = Val.Int(10);
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    let mut d = decl(vec!["--ratio"]);
+    d.ty = Some(float_range(Some(0), Some(1), true, true));
+    d.default = Val.Float(0.8);
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+
+    // config and its subcommands
+    let mut c = command("config", "Read and change remote configuration.");
+    let mut d = decl(vec!["--json", "as_json"]);
+    d.is_flag = Some(true);
+    help_of(mut d, "Print JSON.");
+    add(mut c, option(d));
+    c.invoke_without = true;
+    finish_group(mut c);
+    let config = attach(mut cmds, 0, c);
+    let mut c = command("get", "Print the value of KEY.");
+    c.cb = "config get".to_string();
+    add(mut c, arg("key"));
+    attach(mut cmds, config, c);
+    let mut c = command("set", "Set KEY to VALUE.");
+    c.cb = "config set".to_string();
+    add(mut c, arg("key"));
+    add(mut c, arg("value"));
+    attach(mut cmds, config, c);
+    let mut c = command("unset", "Remove KEYS.");
+    c.cb = "config unset".to_string();
+    let mut d = decl(vec!["keys"]);
+    d.nargs = Some(-1);
+    add(mut c, make_argument(d));
+    attach(mut cmds, config, c);
+    let mut c = command("list", "");
+    c.cb = "config list".to_string();
+    c.hidden = true;
+    attach(mut cmds, config, c);
+
+    // user and its subcommands
+    let mut c = command("user", "Manage deploy users.");
+    finish_group(mut c);
+    let user = attach(mut cmds, 0, c);
+    let mut c = command("create", "Create user NAME.");
+    c.cb = "user create".to_string();
+    add(mut c, arg("name"));
+    let mut d = decl(vec!["--role"]);
+    d.ty = Some(choice(vec!["viewer", "deployer", "admin"], true));
+    d.default = vstr("viewer");
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    let mut d = decl(vec!["--password"]);
+    d.prompt = Val.Bool(true);
+    d.confirm_prompt = true;
+    d.hide_input = true;
+    add(mut c, option(d));
+    attach(mut cmds, user, c);
+    let mut c = command("invite", "Send an invitation.");
+    c.cb = "user invite".to_string();
+    let mut d = decl(vec!["--email"]);
+    d.prompt = vstr("Email address");
+    help_of(mut d, "Who to invite.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--days"]);
+    d.prompt = Val.Bool(true);
+    d.ty = Some(int_range(Some(1), Some(30), false));
+    d.default = Val.Int(7);
+    help_of(mut d, "Days the invite stays valid.");
+    add(mut c, option(d));
+    attach(mut cmds, user, c);
+
+    // sync
+    let mut c = command("sync", "Copy service DIRS to the deploy host.");
+    let mut d = decl(vec!["dirs"]);
+    d.nargs = Some(-1);
+    d.required = Some(true);
+    d.ty = Some(path_type(true, false, true));
+    add(mut c, make_argument(d));
+    let mut d = decl(vec!["--dest"]);
+    d.ty = Some(path_type(false, false, true));
+    d.default = vstr("data/out");
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+
+    let mut c = command("debug-dump", "");
+    c.hidden = true;
+    attach(mut cmds, 0, c);
+
+    let mut c = command("promote", "Promote SERVICE from staging to prod.");
+    c.deprecated = Some("Use 'release' instead.".to_string());
+    add(mut c, arg("service"));
+    attach(mut cmds, 0, c);
+
+    let mut c = command("status", "Show what runs where.");
+    let mut d = decl(vec!["--format", "fmt"]);
+    d.ty = Some(choice(vec!["table", "json"], true));
+    d.default = vstr("table");
+    help_of(mut d, "Output format.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--wide"]);
+    d.is_flag = Some(true);
+    d.hidden = true;
+    add(mut c, option(d));
+    let mut d = decl(vec!["--legacy-color"]);
+    d.is_flag = Some(true);
+    d.deprecated = Some(String.new());
+    help_of(mut d, "Old colour scheme.");
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+    cmds
+}
+
+fn build_pipeline() -> Vec[Cmd] {
+    let mut cmds: Vec[Cmd] = Vec.new();
+    let mut root = command("pipeline", "Run build steps in order.");
+    let mut d = decl(vec!["-j", "--jobs"]);
+    d.ty = Some(PType.Int);
+    d.default = Val.Int(1);
+    help_of(mut d, "Parallel jobs.");
+    add(mut root, option(d));
+    root.chain = true;
+    root.invoke_without = true;
+    root.result_cb = true;
+    finish_group(mut root);
+    cmds.push(root);
+    let mut c = command("build", "Compile the project.");
+    let mut d = decl(vec!["--target"]);
+    d.default = vstr("x86");
+    d.show_default = Val.Bool(true);
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+    let mut c = command("test", "Run the test suite.");
+    let mut d = decl(vec!["--shard"]);
+    d.ty = Some(int_range(Some(1), Some(8), false));
+    d.default = Val.Int(1);
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+    let mut c = command("publish", "Upload the artifacts.");
+    let mut d = decl(vec!["--channel"]);
+    d.ty = Some(choice(vec!["stable", "beta"], true));
+    d.default = vstr("stable");
+    add(mut c, option(d));
+    attach(mut cmds, 0, c);
+    cmds
+}
+
+fn build_greet() -> Vec[Cmd] {
+    let mut c = command("greet", "Greet NAMES.");
+    c.settings.lower_tokens = true;
+    c.settings.show_default = Some(true);
+    c.settings.autoenv = Some("GREET".to_string());
+    let mut d = decl(vec!["names"]);
+    d.nargs = Some(-1);
+    add(mut c, make_argument(d));
+    let mut d = decl(vec!["--greeting"]);
+    d.default = vstr("Hello");
+    help_of(mut d, "Word to greet with.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--shout/--no-shout"]);
+    d.default = Val.Bool(false);
+    help_of(mut d, "Shout it.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--upper", "case"]);
+    d.flag_value = vstr("upper");
+    help_of(mut d, "Upper-case the names.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--lower", "case"]);
+    d.flag_value = vstr("lower");
+    help_of(mut d, "Lower-case the names.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--plain", "case"]);
+    d.flag_value = vstr("plain");
+    d.default = Val.Bool(true);
+    help_of(mut d, "Leave the names alone.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--times"]);
+    d.ty = Some(int_range(Some(0), Some(10), false));
+    d.default = Val.Int(1);
+    d.show_envvar = true;
+    help_of(mut d, "Repeat count.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--pos"]);
+    d.ty = Some(PType.TupleT(vec![PType.Float, PType.Float]));
+    d.default = Val.Tup(vec![Val.Float(0.0), Val.Float(0.0)]);
+    help_of(mut d, "Where to stand.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--lang"]);
+    d.ty = Some(choice(vec!["en", "fr", "de"], true));
+    d.default = vstr("en");
+    d.show_envvar = true;
+    d.envvar = sv(vec!["GREET_LANG"]);
+    add(mut c, option(d));
+    let mut d = decl(vec!["--sep"]);
+    d.default = vstr(", ");
+    help_of(mut d, "Between names.");
+    add(mut c, option(d));
+    add(mut c, version_option(vec!["-V", "--version"], "0.3", "", "%(prog)s %(version)s"));
+    vec![c]
+}
+
+fn build_wrap() -> Vec[Cmd] {
+    let bs = backspace();
+    let doc = f"Print a design on a shirt.\n\nThis paragraph is long enough that the help formatter has to wrap it\nover several lines when the content width is limited to sixty columns.\n\n{bs}\nSizes:\n  S   small\n  XL  extra large\n\nOnly the first paragraph of this text is used for the short help.\n";
+    let mut c = command("wrap", doc);
+    c.settings.max_content_width = Some(60);
+    let mut d = decl(vec!["--size"]);
+    d.ty = Some(choice(vec!["S", "M", "L", "XL"], true));
+    d.required = Some(true);
+    help_of(mut d, "The size of the shirt to print the long design on, chosen from the four sizes the printer can handle without rotating the design.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--old-name"]);
+    d.hidden = true;
+    add(mut c, option(d));
+    let mut d = decl(vec!["--colour", "--color", "-c"]);
+    d.default = vstr("black");
+    d.show_default = vstr("black, or the brand colour");
+    help_of(mut d, "Ink.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--really-long-option-name-for-testing"]);
+    d.is_flag = Some(true);
+    help_of(mut d, "An option whose name is wider than the column.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["--count", "-n"]);
+    d.count = true;
+    help_of(mut d, "Copies.");
+    add(mut c, option(d));
+    let mut d = decl(vec!["design"]);
+    d.required = Some(false);
+    d.default = vstr("logo");
+    help_of(mut d, "The design file; defaults to the logo.");
+    add(mut c, make_argument(d));
+    vec![c]
+}
+
+fn build_tool(name: Str) -> Vec[Cmd] {
+    if name == "deployctl" {
+        build_deployctl()
+    } else if name == "pipeline" {
+        build_pipeline()
+    } else if name == "greet" {
+        build_greet()
+    } else {
+        build_wrap()
+    }
+}
+
+// ------------------------------------------------------------ callbacks
+
+fn show_line(label: Str, kw: ref Vec[(String, Val)]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for (k, v) in kw.iter() {
+        parts.push(f"{k}={r(v)}");
+    }
+    f"{label}: {join(parts, ", ")}"
+}
+
+fn kv(k: Str, v: ref Val) -> (String, Val) {
+    (k.to_string(), v.clone())
+}
+
+fn opt_val(v: ref Option[String]) -> Val {
+    match v {
+        Some(s) => Val.Str(s.clone()),
+        None => Val.Nil,
+    }
+}
+
+impl App {
+    fn param(ref self, ctx: i64, k: Str) -> Val {
+        pget(self.ctxs[ctx].params, k).unwrap_or(Val.Nil)
+    }
+
+    fn obj(ref self, ctx: i64, k: Str) -> Val {
+        pget(self.ctxs[ctx].obj, k).unwrap_or(Val.Nil)
+    }
+
+    fn show(mut ref self, label: Str, kw: ref Vec[(String, Val)]) {
+        let line = show_line(label, kw);
+        self.echo(line);
+    }
+
+    fn source_of(ref self, ctx: i64, k: Str) -> String {
+        source_name(sget(self.ctxs[ctx].sources, k))
+    }
+
+    // the decorated functions of oracle.py, by command
+    fn callback(mut ref self, ctx: i64) -> Result[Val, Exc] {
+        let cb = self.cmds[self.ctx_cmd(ctx)].cb.clone();
+        if cb == "deployctl" {
+            let verbose = self.param(ctx, "verbose");
+            let env = self.param(ctx, "env");
+            self.ctxs[ctx].obj = vec![kv("verbose", verbose), kv("env", env)];
+            let invoked = opt_val(self.ctxs[ctx].invoked_subcommand);
+            self.show("deployctl", vec![kv("verbose", verbose), kv("env", env), kv("invoked", invoked)]);
+        } else if cb == "release" {
+            let mut kw: Vec[(String, Val)] = Vec.new();
+            for k in vec!["service", "version", "replicas", "timeout", "tag", "strategy", "at"].iter() {
+                kw.push(kv(*k, self.param(ctx, *k)));
+            }
+            kw.push(kv("id", self.param(ctx, "release_id")));
+            kw.push(kv("dry_run", self.param(ctx, "dry_run")));
+            kw.push(kv("env", self.obj(ctx, "env")));
+            self.show("release", kw);
+            if let Val.File(_, text) = self.param(ctx, "notes") {
+                let lines = lines_of(text);
+                self.echo(f"notes: {lines.len()} lines, first {py_repr(lines[0])}");
+            }
+            if let Val.Str(path) = self.param(ctx, "manifest") {
+                let text = fs.read_to_string(path.clone()).unwrap_or(String.new());
+                self.echo(f"manifest: {lines_of(text).len()} lines");
+            }
+            let src = self.source_of(ctx, "replicas");
+            let tag_src = self.source_of(ctx, "tag");
+            self.echo(f"replicas from {src}, tag from {tag_src}");
+        } else if cb == "logs" {
+            let mut kw: Vec[(String, Val)] = Vec.new();
+            for k in vec!["services", "lines", "follow", "level", "since", "grep"].iter() {
+                kw.push(kv(*k, self.param(ctx, *k)));
+            }
+            self.show("logs", kw);
+        } else if cb == "rollback" {
+            let kw = vec![kv("service", self.param(ctx, "service")), kv("target", self.param(ctx, "target")), kv("env", self.obj(ctx, "env"))];
+            self.show("rollback", kw);
+        } else if cb == "scale" {
+            let kw = vec![
+                kv("service", self.param(ctx, "service")),
+                kv("settings", self.param(ctx, "settings")),
+                kv("window", self.param(ctx, "window")),
+                kv("min", self.param(ctx, "min_")),
+                kv("max", self.param(ctx, "max_")),
+                kv("ratio", self.param(ctx, "ratio")),
+            ];
+            self.show("scale", kw);
+        } else if cb == "config" {
+            if self.ctxs[ctx].invoked_subcommand.is_none() {
+                self.echo("config: listing all keys");
+            }
+            let invoked = opt_val(self.ctxs[ctx].invoked_subcommand);
+            self.show("config", vec![kv("as_json", self.param(ctx, "as_json")), kv("invoked", invoked)]);
+        } else if cb == "config get" {
+            self.show("config get", vec![kv("key", self.param(ctx, "key"))]);
+        } else if cb == "config set" {
+            self.show("config set", vec![kv("key", self.param(ctx, "key")), kv("value", self.param(ctx, "value"))]);
+        } else if cb == "config unset" {
+            self.show("config unset", vec![kv("keys", self.param(ctx, "keys"))]);
+        } else if cb == "config list" {
+            let none: Vec[(String, Val)] = Vec.new();
+            self.show("config list", none);
+        } else if cb == "user create" {
+            let pw = py_str(self.param(ctx, "password"));
+            let kw = vec![kv("name", self.param(ctx, "name")), kv("role", self.param(ctx, "role")), kv("password_len", Val.Int(clen(pw)))];
+            self.show("user create", kw);
+        } else if cb == "user invite" {
+            self.show("user invite", vec![kv("email", self.param(ctx, "email")), kv("days", self.param(ctx, "days"))]);
+        } else if cb == "sync" {
+            let dirs = self.param(ctx, "dirs");
+            self.show("sync", vec![kv("dirs", dirs), kv("dest", self.param(ctx, "dest"))]);
+            for d in iter_items(dirs).unwrap_or(Vec.new()).iter() {
+                let dir = py_str(d);
+                let text = fs.read_to_string(f"{dir}/VERSION").unwrap_or(String.new());
+                self.echo(f"{dir}: version {py_strip(text)}");
+            }
+        } else if cb == "debug-dump" {
+            self.show("debug-dump", vec![kv("verbose", self.obj(ctx, "verbose"))]);
+        } else if cb == "promote" {
+            self.show("promote", vec![kv("service", self.param(ctx, "service"))]);
+        } else if cb == "status" {
+            let parent = self.ctxs[ctx].parent;
+            let env_source = Val.Str(self.source_of(parent, "env"));
+            let kw = vec![
+                kv("fmt", self.param(ctx, "fmt")),
+                kv("wide", self.param(ctx, "wide")),
+                kv("legacy_color", self.param(ctx, "legacy_color")),
+                kv("env", self.obj(ctx, "env")),
+                kv("env_source", env_source),
+            ];
+            self.show("status", kw);
+        } else if cb == "pipeline" {
+            let invoked = opt_val(self.ctxs[ctx].invoked_subcommand);
+            self.show("pipeline", vec![kv("jobs", self.param(ctx, "jobs")), kv("invoked", invoked)]);
+        } else if cb == "build" {
+            let target = self.param(ctx, "target");
+            self.show("build", vec![kv("target", target)]);
+            return Ok(Val.Str(f"build:{py_str(target)}"));
+        } else if cb == "test" {
+            let shard = self.param(ctx, "shard");
+            self.show("test", vec![kv("shard", shard)]);
+            return Ok(Val.Str(f"test:{py_str(shard)}"));
+        } else if cb == "publish" {
+            let channel = self.param(ctx, "channel");
+            self.show("publish", vec![kv("channel", channel)]);
+            return Ok(Val.Str(f"publish:{py_str(channel)}"));
+        } else if cb == "greet" {
+            self.greet(ctx);
+        } else if cb == "wrap" {
+            let mut kw: Vec[(String, Val)] = Vec.new();
+            for k in vec!["size", "old_name", "colour", "count", "design"].iter() {
+                kw.push(kv(*k, self.param(ctx, *k)));
+            }
+            self.show("wrap", kw);
+        }
+        Ok(Val.Nil)
+    }
+
+    fn greet(mut ref self, ctx: i64) {
+        let mut kw: Vec[(String, Val)] = Vec.new();
+        for k in vec!["names", "greeting", "shout", "case", "times", "pos", "lang", "sep"].iter() {
+            kw.push(kv(*k, self.param(ctx, *k)));
+        }
+        self.show("greet", kw);
+        let lang = py_str(self.param(ctx, "lang"));
+        let word = if lang == "fr" { "Bonjour".to_string() } else if lang == "de" { "Hallo".to_string() } else { py_str(self.param(ctx, "greeting")) };
+        let case = py_str(self.param(ctx, "case"));
+        let sep = py_str(self.param(ctx, "sep"));
+        let shout = truthy(self.param(ctx, "shout"));
+        let times = to_int(self.param(ctx, "times")).unwrap_or(0);
+        let names = iter_items(self.param(ctx, "names")).unwrap_or(Vec.new());
+        for _ in 0..times {
+            let mut shown: Vec[String] = Vec.new();
+            for n in names.iter() {
+                let s = py_str(n);
+                shown.push(if case == "upper" { upper_ascii(s) } else if case == "lower" { lower_ascii(s) } else { s });
+            }
+            let joined = join(shown, sep);
+            let body = if joined.len() > 0 { joined } else { "nobody".to_string() };
+            let line = f"{word} {body}";
+            if shout {
+                self.echo(f"{upper_ascii(line)}!");
+            } else {
+                self.echo(line);
+            }
+        }
+    }
+
+    fn result_callback(mut ref self, ctx: i64, value: own Val) -> Result[Val, Exc] {
+        let jobs = self.param(ctx, "jobs");
+        self.echo(f"pipeline done: {r(value)} with {py_str(jobs)} job(s)");
+        Ok(Val.Nil)
+    }
+}
+
+// ------------------------------------------------------------ main
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts = split_c(path, '/');
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(err) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {err}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files().iter() {
+        make_parent(file.path)?;
+        let p = f"data/{file.path}";
+        if fs.write(p.clone(), file.body.clone()).is_err() {
+            return Err(f"cannot write {p}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(err) = write_data() {
+        println(err);
+        return;
+    }
+    let runs = fs.read_to_string("data/runs.txt".to_string()).unwrap();
+    let mut n = 0;
+    for line in lines_of(runs).iter() {
+        n += 1;
+        let fields = split_c(line, '\t');
+        let tool = fields[0].clone();
+        let mut env: Vec[(String, String)] = Vec.new();
+        if fields[1] != "-" {
+            for item in split_c(fields[1], ';').iter() {
+                if let Some((k, v)) = split_once(item, '=') {
+                    env.push((k, v));
+                }
+            }
+        }
+        let input: Vec[String] = if fields[2] == "-" or fields[2].len() == 0 { Vec.new() } else { split_c(fields[2], '|') };
+        let args = fields[3..].to_vec();
+        println(rstrip_char(f"== run {n}: {tool} {join(args, " ")}", ' '));
+        let mut app = App { cmds: build_tool(tool), ctxs: Vec.new(), env: env, input: input, input_pos: 0, out: String.new(), pending: String.new() };
+        let code = app.main(0, tool, args);
+        app.flush();
+        println(f"exit: {code}");
+        let out = app.out.clone();
+        if out.len() == 0 or out.ends_with("\n") {
+            print(out);
+        } else {
+            print(f"{out}\n<no newline>\n");
+        }
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[deployctl]\n");
+    t.push_str("env = staging\n");
+    t.push_str("verbose = 1\n");
+    t.push_str("\n");
+    t.push_str("[deployctl.release]\n");
+    t.push_str("replicas = 4\n");
+    t.push_str("strategy = canary\n");
+    t.push_str("tag = blue green\n");
+    t.push_str("\n");
+    t.push_str("[deployctl.logs]\n");
+    t.push_str("lines = 25\n");
+    v.push(DataFile { path: "deployctl.ini".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("service: api\n");
+    t.push_str("image: registry.local/api\n");
+    t.push_str("port: 8080\n");
+    t.push_str("replicas: 3\n");
+    t.push_str("health: /healthz\n");
+    v.push(DataFile { path: "manifests/api.yml".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("service: worker\n");
+    t.push_str("image: registry.local/worker\n");
+    t.push_str("queue: jobs\n");
+    v.push(DataFile { path: "manifests/worker.yml".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Fix the retry loop in the client.\n");
+    t.push_str("Raise the default timeout to 30 seconds.\n");
+    v.push(DataFile { path: "notes/1.4.2.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("deployctl\t-\t-\n");
+    t.push_str("deployctl\t-\t-\t--help\n");
+    t.push_str("deployctl\t-\t-\t-h\n");
+    t.push_str("deployctl\t-\t-\t--version\n");
+    t.push_str("deployctl\t-\t-\trelease\t--help\n");
+    t.push_str("deployctl\t-\t-\tlogs\t--help\n");
+    t.push_str("deployctl\t-\t-\tconfig\t--help\n");
+    t.push_str("deployctl\t-\t-\tconfig\tset\t--help\n");
+    t.push_str("deployctl\t-\t-\tscale\t--help\n");
+    t.push_str("deployctl\t-\t-\tuser\t--help\n");
+    t.push_str("deployctl\t-\t-\tsync\t--help\n");
+    t.push_str("deployctl\t-\t-\tpromote\t--help\n");
+    t.push_str("deployctl\t-\t-\trollback\t--help\n");
+    t.push_str("deployctl\t-\t-\tstatus\t--help\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\t-v\t-v\t--env\tprod\trelease\tapi\t1.4.2\t--replicas\t6\n");
+    t.push_str("deployctl\t-\t-\t-vvv\trelease\tapi\t1.4.2\t-r3\t--tag\ta\t--tag\tb\t-t\tc\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas=21\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas\t0\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas\tthree\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas\t 7 \n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas\t1_0\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--timeout\t2.5\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--timeout\t0\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--timeout\t600.5\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--timeout\t1e2\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--timeout\tabc\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--strategy\tBLUE-GREEN\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--strategy\tyolo\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--strategy\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--at\t2026-03-01\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--at\t2026-03-01T09:30:00\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--at\t2026-03-01 9:05:07\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--at\t2026-02-30\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--at\ttomorrow\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--id\t{12345678-1234-5678-1234-567812345678}\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--id\turn:uuid:ABCDEF00-1234-5678-9ABC-DEF012345678\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--id\t1234\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--notes\tdata/notes/1.4.2.txt\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--notes\tdata/notes/9.9.9.txt\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--manifest\tdata/manifests/api.yml\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--manifest\tdata/manifests\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--manifest\tdata/manifests/db.yml\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--dry-run\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--no-dry-run\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\n");
+    t.push_str("deployctl\t-\t-\trelease\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\textra\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\tmore\textras\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replica\t2\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--stratgy\tcanary\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--zzz\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t-x\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--dry-run=yes\n");
+    t.push_str("deployctl\t-\t-\trelease\t--\t-api\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t--replicas\t2\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\trelease\tapi\t1.4.2\t--replicas\n");
+    t.push_str("deployctl\t-\t-\trelase\tapi\n");
+    t.push_str("deployctl\t-\t-\trel\tapi\n");
+    t.push_str("deployctl\t-\t-\t--env\tqa\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\t--env\tPROD\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\t--bogus\trelease\n");
+    t.push_str("deployctl\tDEPLOYCTL_ENV=prod\t-\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\tDEPLOYCTL_RELEASE_REPLICAS=9;DEPLOYCTL_RELEASE_TAG=x y  z\t-\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\tDEPLOYCTL_ENV=prod\t-\t--env\tdev\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\tDEPLOYCTL_RELEASE_DRY_RUN=no\t-\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\tDEPLOYCTL_RELEASE_DRY_RUN=maybe\t-\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\t--config\tdata/deployctl.ini\trelease\tapi\t1.4.2\n");
+    t.push_str("deployctl\t-\t-\t--config\tdata/deployctl.ini\trelease\tapi\t1.4.2\t-r\t2\t--strategy\trolling\n");
+    t.push_str("deployctl\t-\t-\t--config\tdata/deployctl.ini\tlogs\tapi\n");
+    t.push_str("deployctl\t-\t-\t--config\tdata/missing.ini\tlogs\tapi\n");
+    t.push_str("deployctl\t-\t-\t--config\tdata/deployctl.ini\t--env\tprod\tstatus\n");
+    t.push_str("deployctl\t-\t-\tlogs\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\tapi\tworker\t-n\t5\t--follow\n");
+    t.push_str("deployctl\t-\t-\tlogs\t-n5\t-f\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\t-fn\t5\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\t--level\twarn\t--level\terror\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\t--level\tfatal\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\t--since\t2026-03-01\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\n");
+    t.push_str("deployctl\t-\t-\tlogs\t-n\t-1\tapi\n");
+    t.push_str("deployctl\t-\t-\tlogs\t--grep\ttimeout\t--grep=retry\tapi\n");
+    t.push_str("deployctl\t-\t-\trollback\tapi\t--yes\n");
+    t.push_str("deployctl\t-\ty\trollback\tapi\n");
+    t.push_str("deployctl\t-\tn\trollback\tapi\n");
+    t.push_str("deployctl\t-\tmaybe|yes\trollback\tapi\n");
+    t.push_str("deployctl\t-\t\trollback\tapi\n");
+    t.push_str("deployctl\t-\t-\trollback\tapi\n");
+    t.push_str("deployctl\t-\t-\trollback\tapi\t--to\t1.3.9\t--yes\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--set\tcpu\t2\t--set\tmemory\t512\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--set\tcpu\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--set\tcpu\tlots\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--window\t10\t20\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--window\t10\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--min\t-5\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--min\t50\t--max\t500\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--ratio\t1.5\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--ratio\t0\n");
+    t.push_str("deployctl\t-\t-\tscale\tapi\t--ratio\t1\n");
+    t.push_str("deployctl\t-\t-\tconfig\n");
+    t.push_str("deployctl\t-\t-\tconfig\tget\tregion\n");
+    t.push_str("deployctl\t-\t-\tconfig\tset\tregion\teu-west-1\n");
+    t.push_str("deployctl\t-\t-\tconfig\tset\tregion\n");
+    t.push_str("deployctl\t-\t-\tconfig\tunset\tregion\tzone\track\n");
+    t.push_str("deployctl\t-\t-\tconfig\tunset\n");
+    t.push_str("deployctl\t-\t-\tconfig\tlst\n");
+    t.push_str("deployctl\t-\t-\tconfig\t--json\tget\tregion\n");
+    t.push_str("deployctl\t-\ts3cret|s3cret\tuser\tcreate\tada\n");
+    t.push_str("deployctl\t-\ts3cret|other|s3cret|s3cret\tuser\tcreate\tada\n");
+    t.push_str("deployctl\t-\tpw|pw\tuser\tcreate\tada\t--role\tadmin\n");
+    t.push_str("deployctl\t-\tada|pw|pw\tuser\tcreate\n");
+    t.push_str("deployctl\t-\t|ada|pw|pw\tuser\tcreate\n");
+    t.push_str("deployctl\t-\tpw|pw\tuser\tcreate\tada\t--role\troot\n");
+    t.push_str("deployctl\t-\t\tuser\tcreate\tada\n");
+    t.push_str("deployctl\t-\tgrace@example.org|5\tuser\tinvite\n");
+    t.push_str("deployctl\t-\tgrace@example.org|abc|50|3\tuser\tinvite\n");
+    t.push_str("deployctl\t-\t-\tuser\tinvite\t--email\tx@example.org\t--days\t2\n");
+    t.push_str("deployctl\t-\ty@example.org|\tuser\tinvite\t--email\n");
+    t.push_str("deployctl\t-\t-\tsync\tdata/services/api\tdata/services/worker\n");
+    t.push_str("deployctl\t-\t-\tsync\tdata/services/README\n");
+    t.push_str("deployctl\t-\t-\tsync\tdata/services/db\n");
+    t.push_str("deployctl\t-\t-\tsync\n");
+    t.push_str("deployctl\t-\t-\tsync\t--dest\tdata/services\tdata/services/api\n");
+    t.push_str("deployctl\t-\t-\tsync\t--dest\tdata/services/README\tdata/services/api\n");
+    t.push_str("deployctl\t-\t-\tdebug-dump\n");
+    t.push_str("deployctl\t-\t-\tpromote\tapi\n");
+    t.push_str("deployctl\t-\t-\tstatus\t--format\tjson\n");
+    t.push_str("deployctl\t-\t-\tstatus\t--wide\n");
+    t.push_str("deployctl\t-\t-\tstatus\t--legacy-color\n");
+    t.push_str("pipeline\t-\t-\t--help\n");
+    t.push_str("pipeline\t-\t-\tbuild\ttest\tpublish\n");
+    t.push_str("pipeline\t-\t-\tbuild\t--target\tarm64\ttest\t--shard\t2\tpublish\t--channel\tbeta\n");
+    t.push_str("pipeline\t-\t-\t--jobs\t4\tbuild\tbuild\t--target\tx86\n");
+    t.push_str("pipeline\t-\t-\ttest\t--shard\t9\tbuild\n");
+    t.push_str("pipeline\t-\t-\tbuild\tdeploy\n");
+    t.push_str("pipeline\t-\t-\tbuild\ttest\t--help\n");
+    t.push_str("pipeline\t-\t-\n");
+    t.push_str("pipeline\t-\t-\t--jobs\t2\n");
+    t.push_str("pipeline\t-\t-\tpublish\t--channel\tnightly\n");
+    t.push_str("greet\t-\t-\t--help\n");
+    t.push_str("greet\t-\t-\tAda\n");
+    t.push_str("greet\t-\t-\tAda\tGrace\t--shout\n");
+    t.push_str("greet\t-\t-\t--Shout\tADA\n");
+    t.push_str("greet\t-\t-\t--GREETING\tHi\tAda\n");
+    t.push_str("greet\t-\t-\t--upper\tAda\n");
+    t.push_str("greet\t-\t-\t--lower\t--upper\tAda\n");
+    t.push_str("greet\t-\t-\t--plain\tAda\n");
+    t.push_str("greet\t-\t-\t--times\t3\tAda\n");
+    t.push_str("greet\t-\t-\t--times\t11\tAda\n");
+    t.push_str("greet\t-\t-\t--times\t-3\tAda\n");
+    t.push_str("greet\t-\t-\t--pos\t1.5\t-2\tAda\n");
+    t.push_str("greet\t-\t-\t--pos\t1.5\tAda\n");
+    t.push_str("greet\t-\t-\t--lang\tfr\tAda\n");
+    t.push_str("greet\tGREET_LANG=de\t-\tAda\n");
+    t.push_str("greet\tGREET_TIMES=2;GREET_SHOUT=1\t-\tAda\n");
+    t.push_str("greet\tGREET_SHOUT=perhaps\t-\tAda\n");
+    t.push_str("greet\t-\t-\t--version\n");
+    t.push_str("greet\t-\t-\n");
+    t.push_str("greet\t-\t-\t--\t--Ada\n");
+    t.push_str("greet\t-\t-\t--sep\t\tAda\tGrace\n");
+    t.push_str("wrap\t-\t-\t--help\n");
+    t.push_str("wrap\t-\t-\t--size\tM\n");
+    t.push_str("wrap\t-\t-\t--old-name\tx\n");
+    t.push_str("wrap\t-\t-\t--size\n");
+    v.push(DataFile { path: "runs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("One directory per service.\n");
+    v.push(DataFile { path: "services/README".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1.4.1\n");
+    v.push(DataFile { path: "services/api/VERSION".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("0.9.0\n");
+    v.push(DataFile { path: "services/worker/VERSION".to_string(), body: t });
+}
