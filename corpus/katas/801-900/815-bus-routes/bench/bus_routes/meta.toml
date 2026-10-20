@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/815-bus-routes/bench/bus_routes.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "lib:set", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "7633c3040"
+extracted_src = "a66fd7a2"
+model_rev = "583cfb0d"
+model_src = "a66fd7a2"

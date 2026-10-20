@@ -1,0 +1,143 @@
+// LeetCode 815 — Bus Routes, a graph of buses.
+//
+// Sort each route, and link two buses when their routes share a stop, by
+// walking both sorted routes side by side. Then a search over the graph
+// of buses, from those whose route holds the source, finds the fewest
+// buses to one whose route holds the target, each such test a binary
+// search of a sorted route. O(b^2 * l) time for b buses of up to l stops
+// each, and O(b^2) space for the links.
+
+fn num_buses_to_destination(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let n = routes.len();
+    let mut sorted: Vec[Vec[i64]] = Vec.new();
+    for route in routes.iter() {
+        let mut copy = route.clone();
+        copy.sort();
+        sorted.push(copy);
+    }
+    let mut links: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        links.push(Vec.new());
+    }
+    for a in 0..n {
+        for b in a + 1..n {
+            if share_a_stop(sorted[a], sorted[b]) {
+                links[a].push(b);
+                links[b].push(a);
+            }
+        }
+    }
+    let mut buses = Vec.filled(n, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for bus in 0..n {
+        if sorted[bus].binary_search(source).is_ok() {
+            buses[bus] = 1;
+            queue.push_back(bus);
+        }
+    }
+    while let Some(bus) = queue.pop_front() {
+        if sorted[bus].binary_search(target).is_ok() {
+            return buses[bus];
+        }
+        for next in links[bus].iter() {
+            if buses[*next] == 0 {
+                buses[*next] = buses[bus] + 1;
+                queue.push_back(*next);
+            }
+        }
+    }
+    -1
+}
+
+// Whether two sorted routes share a stop.
+fn share_a_stop(a: Vec[i64], b: Vec[i64]) -> bool {
+    let mut (i, j) = (0, 0);
+    while i < a.len() and j < b.len() {
+        if a[i] == b[j] {
+            return true;
+        }
+        if a[i] < b[j] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n routes of 1 to `longest` distinct stops each, from 0 to stops - 1.
+fn random_routes(seed: mut ref i64, n: i64, longest: i64, stops: i64) -> Vec[Vec[i64]] {
+    let mut routes: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let len = 1 + next_random(mut seed) % longest;
+        let mut on: Set[i64] = Set.new();
+        let mut route: Vec[i64] = Vec.new();
+        while route.len() < len and route.len() < stops {
+            let stop = next_random(mut seed) % stops;
+            if on.insert(stop) {
+                route.push(stop);
+            }
+        }
+        routes.push(route);
+    }
+    routes
+}
+
+fn show(routes: Vec[Vec[i64]], source: i64, target: i64) {
+    let text = f"{routes}";
+    let answer = num_buses_to_destination(routes, source, target);
+    println(f"routes = {text}, {source} to {target} -> {answer}");
+}
+
+fn main() {
+    show(vec![vec![1, 2, 7], vec![3, 6, 7]], 1, 6);
+    show(vec![vec![7, 12], vec![4, 5, 15], vec![6], vec![15, 19], vec![9, 12, 13]], 15, 12);
+    show(vec![vec![1, 2, 3]], 2, 2);
+    show(vec![vec![1, 2, 3]], 9, 9);
+    show(vec![vec![1, 2, 3]], 9, 2);
+    show(vec![vec![1, 2, 3]], 1, 3);
+    show(vec![vec![1, 2], vec![2, 3], vec![3, 4], vec![4, 5], vec![1, 5]], 1, 4);
+    show(vec![vec![0, 1, 2, 3, 4, 5], vec![5, 6], vec![2, 6]], 0, 6);
+    show(vec![vec![1, 2], vec![3, 4]], 1, 4);
+    // LeetCode's largest: 500 routes of 1 to 400 stops below a million,
+    // about 100,000 in all, the source on the first and the target on the
+    // last; and 500 routes of 200 stops in a chain, each sharing its last
+    // stop with the next one's first.
+    let mut seed = 815;
+    let routes = random_routes(mut seed, 500, 400, 1000000);
+    let (source, target) = (routes[0][0], routes[499][routes[499].len() - 1]);
+    let answer = num_buses_to_destination(routes, source, target);
+    println(f"500 random routes, {source} to {target} -> {answer}");
+    let mut chain: Vec[Vec[i64]] = Vec.new();
+    for i in 0..500 {
+        let mut route: Vec[i64] = Vec.new();
+        for j in 0..200 {
+            route.push(if j == 199 { (i + 1) * 1000 } else { i * 1000 + j * 5 });
+        }
+        chain.push(route);
+    }
+    println(f"a chain of 500 routes -> {num_buses_to_destination(chain, 0, 499990)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let stops = 2 + next_random(mut seed) % 25;
+        let routes = random_routes(mut seed, n, 6, stops);
+        let source = next_random(mut seed) % (stops + 2);
+        let target = next_random(mut seed) % (stops + 2);
+        let answer = num_buses_to_destination(routes, source, target);
+        total += answer;
+        check = (check * 131 + answer + 2) % 1000000007;
+    }
+    println(f"300 random rounds of 1 to 10 routes: total {total}, checksum {check}");
+}

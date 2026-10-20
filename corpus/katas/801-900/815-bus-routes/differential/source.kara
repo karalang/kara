@@ -1,0 +1,403 @@
+// LeetCode #815: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random bus routes,
+// against the fewest buses found by sweeping every route until nothing
+// changes.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_buses_to_destination_star(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let mut buses_at: Map[i64, Vec[i64]] = Map.new();
+    for (bus, route) in routes.iter().enumerate() {
+        for stop in route.iter() {
+            buses_at.entry(*stop).or_insert(Vec.new()).push(bus);
+        }
+    }
+    let Some(first) = buses_at.get(source) else {
+        return -1;
+    };
+    let mut taken = Vec.filled(routes.len(), false);
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    for bus in first.iter() {
+        taken[*bus] = true;
+        queue.push_back((*bus, 1));
+    }
+    let mut seen: Set[i64] = Set.new();
+    while let Some((bus, count)) = queue.pop_front() {
+        for stop in routes[bus].iter() {
+            if *stop == target {
+                return count;
+            }
+            if not seen.insert(*stop) {
+                continue;
+            }
+            for next in buses_at.get(*stop).unwrap().iter() {
+                if not taken[*next] {
+                    taken[*next] = true;
+                    queue.push_back((*next, count + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- stops arm ------------------------------------------------------
+
+fn num_buses_to_destination_stops(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let mut buses_at: Map[i64, Vec[i64]] = Map.new();
+    for (bus, route) in routes.iter().enumerate() {
+        for stop in route.iter() {
+            buses_at.entry(*stop).or_insert(Vec.new()).push(bus);
+        }
+    }
+    let mut boarded = Vec.filled(routes.len(), false);
+    let mut seen: Set[i64] = Set.new();
+    seen.insert(source);
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((source, 0));
+    while let Some((stop, buses)) = queue.pop_front() {
+        let Some(here) = buses_at.get(stop) else {
+            continue;
+        };
+        for bus in here.iter() {
+            if boarded[*bus] {
+                continue;
+            }
+            boarded[*bus] = true;
+            for next in routes[*bus].iter() {
+                if *next == target {
+                    return buses + 1;
+                }
+                if seen.insert(*next) {
+                    queue.push_back((*next, buses + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- graph arm ------------------------------------------------------
+
+fn num_buses_to_destination_graph(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let n = routes.len();
+    let mut sorted: Vec[Vec[i64]] = Vec.new();
+    for route in routes.iter() {
+        let mut copy = route.clone();
+        copy.sort();
+        sorted.push(copy);
+    }
+    let mut links: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        links.push(Vec.new());
+    }
+    for a in 0..n {
+        for b in a + 1..n {
+            if share_a_stop_graph(sorted[a], sorted[b]) {
+                links[a].push(b);
+                links[b].push(a);
+            }
+        }
+    }
+    let mut buses = Vec.filled(n, 0);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for bus in 0..n {
+        if sorted[bus].binary_search(source).is_ok() {
+            buses[bus] = 1;
+            queue.push_back(bus);
+        }
+    }
+    while let Some(bus) = queue.pop_front() {
+        if sorted[bus].binary_search(target).is_ok() {
+            return buses[bus];
+        }
+        for next in links[bus].iter() {
+            if buses[*next] == 0 {
+                buses[*next] = buses[bus] + 1;
+                queue.push_back(*next);
+            }
+        }
+    }
+    -1
+}
+
+// Whether two sorted routes share a stop.
+fn share_a_stop_graph(a: Vec[i64], b: Vec[i64]) -> bool {
+    let mut (i, j) = (0, 0);
+    while i < a.len() and j < b.len() {
+        if a[i] == b[j] {
+            return true;
+        }
+        if a[i] < b[j] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    false
+}
+
+// ---- two-ended arm --------------------------------------------------
+
+fn num_buses_to_destination_meet(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let n = routes.len();
+    let mut buses_at: Map[i64, Vec[i64]] = Map.new();
+    for (bus, route) in routes.iter().enumerate() {
+        for stop in route.iter() {
+            buses_at.entry(*stop).or_insert(Vec.new()).push(bus);
+        }
+    }
+    let (Some(from_source), Some(from_target)) = (buses_at.get(source), buses_at.get(target)) else {
+        return -1;
+    };
+    // depth[side][bus]: buses from that side's end, 0 for not reached.
+    let mut depth = vec![Vec.filled(n, 0), Vec.filled(n, 0)];
+    let mut frontier: Vec[Vec[i64]] = vec![Vec.new(), Vec.new()];
+    let mut seen: Vec[Set[i64]] = vec![Set.new(), Set.new()];
+    for bus in from_source.iter() {
+        depth[0][*bus] = 1;
+        frontier[0].push(*bus);
+    }
+    for bus in from_target.iter() {
+        if depth[0][*bus] > 0 {
+            return 1;
+        }
+        depth[1][*bus] = 1;
+        frontier[1].push(*bus);
+    }
+    while not frontier[0].is_empty() and not frontier[1].is_empty() {
+        let side = if frontier[0].len() <= frontier[1].len() { 0 } else { 1 };
+        let other = 1 - side;
+        let mut next_level: Vec[i64] = Vec.new();
+        let mut best = -1;
+        for bus in frontier[side].iter() {
+            for stop in routes[*bus].iter() {
+                if not seen[side].insert(*stop) {
+                    continue;
+                }
+                for next in buses_at.get(*stop).unwrap().iter() {
+                    if depth[side][*next] > 0 {
+                        continue;
+                    }
+                    depth[side][*next] = depth[side][*bus] + 1;
+                    next_level.push(*next);
+                    if depth[other][*next] > 0 {
+                        let ride = depth[side][*next] + depth[other][*next] - 1;
+                        if best < 0 or ride < best {
+                            best = ride;
+                        }
+                    }
+                }
+            }
+        }
+        if best > 0 {
+            return best;
+        }
+        frontier[side] = next_level;
+    }
+    -1
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The statement played out over stops: `fewest[s]` is the fewest buses
+// found so far to stop s, -1 for none. Any bus whose route holds a
+// reached stop carries a rider to every stop on its route for one bus
+// more, so sweep every route until a sweep changes nothing.
+fn fewest_by_definition(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    let mut fewest: Map[i64, i64] = Map.new();
+    fewest.insert(source, 0);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for route in routes.iter() {
+            let mut best = -1;
+            for stop in route.iter() {
+                if let Some(d) = fewest.get(*stop) {
+                    if best < 0 or *d < best {
+                        best = *d;
+                    }
+                }
+            }
+            if best < 0 {
+                continue;
+            }
+            for stop in route.iter() {
+                let better = match fewest.get(*stop) {
+                    Some(d) => best + 1 < *d,
+                    None => true,
+                };
+                if better {
+                    fewest.insert(*stop, best + 1);
+                    changed = true;
+                }
+            }
+        }
+    }
+    match fewest.get(target) {
+        Some(d) => *d,
+        None => -1,
+    }
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if which == 0 {
+        num_buses_to_destination_star(routes, source, target)
+    } else if which == 1 {
+        num_buses_to_destination_stops(routes, source, target)
+    } else if which == 2 {
+        num_buses_to_destination_graph(routes, source, target)
+    } else {
+        num_buses_to_destination_meet(routes, source, target)
+    }
+}
+
+// up to `longest` distinct stops below `stops`, at least one.
+fn random_route(seed: mut ref i64, longest: i64, stops: i64) -> Vec[i64] {
+    let len = 1 + next_random(mut seed) % longest;
+    let mut route: Vec[i64] = Vec.new();
+    while route.len() < len and route.len() < stops {
+        let stop = next_random(mut seed) % stops;
+        if not route.contains(stop) {
+            route.push(stop);
+        }
+    }
+    route
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8150;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut unreachable = 0;
+    let mut longest_ride = 0;
+    for case in 0..cases {
+        // kind 0: 1 to 8 routes of 1 to 5 stops among up to 16; kind 1:
+        // a chain, each route sharing a stop with the one before, so that
+        // rides are long; kind 2: 1 to 10 routes of 1 or 2 stops among
+        // up to 30, so that most pairs are cut off; kind 3: routes of up
+        // to 8 stops among up to 9, so that most rides take a bus or two.
+        let kind = case % 4;
+        let mut routes: Vec[Vec[i64]] = Vec.new();
+        let mut stops = 0;
+        if kind == 0 {
+            stops = 2 + next_random(mut seed) % 15;
+            for _ in 0..1 + next_random(mut seed) % 8 {
+                routes.push(random_route(mut seed, 5, stops));
+            }
+        } else if kind == 1 {
+            let n = 1 + next_random(mut seed) % 10;
+            stops = 3 * n + 2;
+            for i in 0..n {
+                let mut route = vec![3 * i];
+                for _ in 0..next_random(mut seed) % 3 {
+                    let stop = 3 * i + 1 + next_random(mut seed) % 2;
+                    if not route.contains(stop) {
+                        route.push(stop);
+                    }
+                }
+                route.push(3 * i + 3);
+                if next_random(mut seed) % 2 == 0 {
+                    route.reverse();
+                }
+                routes.push(route);
+            }
+            // shuffle the buses
+            for i in 0..n {
+                let j = i + next_random(mut seed) % (n - i);
+                routes.swap(i, j);
+            }
+        } else if kind == 2 {
+            stops = 2 + next_random(mut seed) % 29;
+            for _ in 0..1 + next_random(mut seed) % 10 {
+                routes.push(random_route(mut seed, 2, stops));
+            }
+        } else {
+            stops = 2 + next_random(mut seed) % 8;
+            for _ in 0..1 + next_random(mut seed) % 6 {
+                routes.push(random_route(mut seed, 8, stops));
+            }
+        }
+        // The ends: one time in four a stop that may be on no route, else
+        // a stop on a random route.
+        let mut ends: Vec[i64] = Vec.new();
+        for _ in 0..2 {
+            if next_random(mut seed) % 4 == 0 {
+                ends.push(next_random(mut seed) % (stops + 2));
+            } else {
+                let route = ref routes[next_random(mut seed) % routes.len()];
+                ends.push(route[next_random(mut seed) % route.len()]);
+            }
+        }
+        let (source, target) = (ends[0], ends[1]);
+        let want = fewest_by_definition(routes, source, target);
+        if want < 0 {
+            unreachable += 1;
+        }
+        if want > longest_ride {
+            longest_ride = want;
+        }
+        // The buses in reverse order, each route walked backwards.
+        let mut reversed: Vec[Vec[i64]] = Vec.new();
+        for route in routes.iter().rev() {
+            let mut back = route.clone();
+            back.reverse();
+            reversed.push(back);
+        }
+        // Every stop s renamed 3 s + 1.
+        let mut renamed: Vec[Vec[i64]] = Vec.new();
+        for route in routes.iter() {
+            let mut moved: Vec[i64] = Vec.new();
+            for stop in route.iter() {
+                moved.push(3 * *stop + 1);
+            }
+            renamed.push(moved);
+        }
+        for which in 0..arms {
+            // 1: the statement's answer.
+            // 2: the same with the buses and their routes reversed.
+            // 3: the same from the target back to the source.
+            // 4: the same with every stop renamed.
+            let ok = [
+                arm(which, routes.clone(), source, target) == want,
+                arm(which, reversed.clone(), source, target) == want,
+                arm(which, routes.clone(), target, source) == want,
+                arm(which, renamed.clone(), 3 * source + 1, 3 * target + 1) == want,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({unreachable} with no ride, the longest ride {longest_ride} buses), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, stops {fails[1]}, graph {fails[2]}, meet {fails[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, back {by_property[2]}, renamed {by_property[3]}");
+}

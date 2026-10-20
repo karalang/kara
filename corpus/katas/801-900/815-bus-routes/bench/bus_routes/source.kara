@@ -1,0 +1,100 @@
+// Benchmark for #815: Bus Routes -- the ★ arm (breadth-first search over
+// buses).
+//
+// Riding one bus reaches every stop on its route, so the question is how
+// few buses link a bus through the source to a bus through the target,
+// two buses linked when they share a stop. Index the buses by stop, then
+// search outward from the buses at the source, one bus more at each
+// level: the first bus whose route holds the target answers. Each bus
+// and each stop is expanded once, so O(total stops) time.
+
+fn num_buses_to_destination(routes: Vec[Vec[i64]], source: i64, target: i64) -> i64 {
+    if source == target {
+        return 0;
+    }
+    let mut buses_at: Map[i64, Vec[i64]] = Map.new();
+    for (bus, route) in routes.iter().enumerate() {
+        for stop in route.iter() {
+            buses_at.entry(*stop).or_insert(Vec.new()).push(bus);
+        }
+    }
+    let Some(first) = buses_at.get(source) else {
+        return -1;
+    };
+    let mut taken = Vec.filled(routes.len(), false);
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    for bus in first.iter() {
+        taken[*bus] = true;
+        queue.push_back((*bus, 1));
+    }
+    let mut seen: Set[i64] = Set.new();
+    while let Some((bus, count)) = queue.pop_front() {
+        for stop in routes[bus].iter() {
+            if *stop == target {
+                return count;
+            }
+            if not seen.insert(*stop) {
+                continue;
+            }
+            for next in buses_at.get(*stop).unwrap().iter() {
+                if not taken[*next] {
+                    taken[*next] = true;
+                    queue.push_back((*next, count + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 cities of 100 bus routes, each of 1 to 200 distinct stops among
+    // 20,000, drawn once. Each round asks the next city for the fewest
+    // buses between two stops, each picked on a random route, or one time
+    // in eight among all 20,000 and likely on none.
+    let count = 64;
+    let rounds = 4000;
+    let mut seed: i64 = 815;
+    let mut cities: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..count {
+        let mut routes: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..100 {
+            let len = 1 + next_random(mut seed) % 200;
+            let mut on: Set[i64] = Set.new();
+            let mut route: Vec[i64] = Vec.new();
+            while route.len() < len {
+                let stop = next_random(mut seed) % 20000;
+                if on.insert(stop) {
+                    route.push(stop);
+                }
+            }
+            routes.push(route);
+        }
+        cities.push(routes);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let mut ends: Vec[i64] = Vec.new();
+        for _ in 0..2 {
+            if next_random(mut seed) % 8 == 0 {
+                ends.push(next_random(mut seed) % 20000);
+            } else {
+                let route = ref cities[g][next_random(mut seed) % 100];
+                ends.push(route[next_random(mut seed) % route.len()]);
+            }
+        }
+        let answer = num_buses_to_destination(cities[g], ends[0], ends[1]);
+        total += answer;
+        checksum = (checksum * 31 + answer + 2) % 1000000007;
+    }
+    println(f"{rounds} rounds of 100 routes: total {total}, checksum {checksum}");
+}

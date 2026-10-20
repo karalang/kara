@@ -1,0 +1,12 @@
+routes = [[1, 2, 7], [3, 6, 7]], 1 to 6 -> 2
+routes = [[7, 12], [4, 5, 15], [6], [15, 19], [9, 12, 13]], 15 to 12 -> -1
+routes = [[1, 2, 3]], 2 to 2 -> 0
+routes = [[1, 2, 3]], 9 to 9 -> 0
+routes = [[1, 2, 3]], 9 to 2 -> -1
+routes = [[1, 2, 3]], 1 to 3 -> 1
+routes = [[1, 2], [2, 3], [3, 4], [4, 5], [1, 5]], 1 to 4 -> 2
+routes = [[0, 1, 2, 3, 4, 5], [5, 6], [2, 6]], 0 to 6 -> 2
+routes = [[1, 2], [3, 4]], 1 to 4 -> -1
+500 random routes, 30597 to 7494 -> 2
+a chain of 500 routes -> 500
+300 random rounds of 1 to 10 routes: total -79, checksum 755159750
