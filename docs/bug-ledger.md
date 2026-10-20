@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 748 |
-| run-vs-build | 608 |
+| run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 298 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2971 |
-| interp | 989 |
-| typecheck | 511 |
+| codegen | 2972 |
+| interp | 990 |
+| typecheck | 512 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -163,7 +163,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-43 | 2026-10-19 | ownership+typecheck | medium | §5.7's 'where a view may not go' is not enforced: a view stored in a shared field, sent through a channel, or captured by a closure stored in a struct or a shared field is accepted by `karac check` and both MIR backends (when the origin outlives it); §5.8's instance check is also absent from check | — |
 | B-2026-10-19-46 | 2026-10-19 | ownership+effect+interp+codegen | medium | SOUNDNESS: a plain `shared` handle enters `par` branches with no E_NOT_CROSS_TASK on `karac check` or either MIR backend, including a branch that counts it into an `own` parameter while a sibling writes its `mut` field | — |
 | B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
-| B-2026-10-19-54 | 2026-10-19 | interp+codegen | medium | On both MIR backends `?` in one `par` branch skips the later sibling branch: `par { fail(1)?, work()? }` never runs `work()` | — |
 | B-2026-10-19-57 | 2026-10-19 | interp+codegen | medium | The MIR pipeline (`karac build --mir`, `__mir-run`, `__mir-llvm-run`) accepts programs `karac check` refuses, because it does not run those rules itself: `mut ref self` on a shared type, `mut ref name` from an immutable scrutinee, an impl mode stronger than its trait's, a generic call checked with the impl's modes, `mut ref` of a non-`let mut` place, `own ||` capture prefixes, a MutFn passed for Fn, and free `spawn` | — |
 | B-2026-10-19-58 | 2026-10-19 | interp+codegen | medium | A generic `shared struct Slot[T] { mut items: Vec[T] }` does not lower on MIR: `put(s, 5)` then `s.items.len()` on a `Slot[i64]` is refused with 'an expression whose type does not lower (Type(UnknownParam("T"))) is not lowered yet'; `karac check` passes | — |
 | B-2026-10-19-59 | 2026-10-19 | resolver+typecheck+runtime | medium | `#[panic_handler]` is not implemented: `karac check` and both MIR backends reject it as an unknown attribute and `PanicInfo` as an undefined type | — |
@@ -181,6 +180,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-14 | 2026-10-20 | codegen | low | mir-llvm takes no §6.2 borrow flag inside a coroutine's resume body, so a conflicting access through another handle while a coroutine holds a loan across a yield runs on mir-llvm and panics on mir-interp | — |
 | B-2026-10-20-15 | 2026-10-20 | typecheck | medium | `karac check` accepts storing an owned `String` into a `let mut` copy of a `for` item (`for s in v { let mut t = s; t = "z".to_string(); }`), and both MIR backends then stop with "invalid MIR: assigning String to _N of type ref String"; the same shape through a bare parameter gets the right diagnostic | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
+| B-2026-10-20-17 | 2026-10-20 | typecheck+interp+codegen | low | `karac check` accepts the statement form `par { let a = f(); let b = g(); }` with `a` and `b` used after the block, which core semantics §11.1 does not have (branches are comma-separated expressions); both MIR backends then refuse it in the move check because the bindings drop at the statement's `;` | — |
 
 ### Relocated
 
@@ -4252,6 +4252,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-51 | interp+codegen | medium | On both MIR backends an argument moved through a trait bound into an impl that borrows it drops at the end of the generic function, not at the end of… | 0a4c6cfe4b |
 | B-2026-10-19-52 | interp+codegen | medium | On both MIR backends a `let .. | d03c6bc122 |
 | B-2026-10-19-53 | interp+codegen | medium | On both MIR backends a nested index read `v[p(1)][p(0)]` evaluates the outer index `p(0)` before the inner one `p(1)`; the same place as an assignmen… | c1cd8dba18 |
+| B-2026-10-19-54 | interp+codegen | medium | On both MIR backends `?` in one `par` branch skips the later sibling branch: `par { fail(1)?, work()? }` never runs `work()` | 90a6d47bc5 |
 | B-2026-10-19-55 | codegen | medium | `__mir-llvm-run` has no §6.2 runtime borrow flag: iterating `src.items` while pushing to `dst.items`, where `src` and `dst` are the same shared objec… | 1a04b0f88d |
 | B-2026-10-19-56 | interp | low | `__mir-run` reports a channel deadlock as a run error with exit 3 instead of a panic with exit 101 (`__mir-llvm-run` exits 101) | 39c49483ba |
 | B-2026-10-19-60 | parser | low | The empty-map literal `[:]` does not parse: `let mut m: Map[String, String] = [:];` is E0002 'Expected expression, found Colon' on every surface | 3818051dfc |
