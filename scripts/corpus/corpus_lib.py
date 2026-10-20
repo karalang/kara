@@ -106,8 +106,10 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
                 r = execute(["./source"], tmpd, env, timeout, driver)
             else:
                 r = execute([karac, *spec["run"], "source.kara"], tmpd, env, timeout, driver)
+                # A deadlock is a panic (core semantics §10.1) whose record
+                # reads `error: deadlock: ...`, not a refusal.
                 if r.returncode != 0 and REFUSAL.search(r.stderr) and b"panicked" not in r.stderr \
-                        and b"runtime error" not in r.stderr:
+                        and b"runtime error" not in r.stderr and b"error: deadlock:" not in r.stderr:
                     return {"status": "refused", "exit": r.returncode, "stdout": r.stdout,
                             "stderr": r.stderr, "secs": time.monotonic() - start}
         except subprocess.TimeoutExpired as t:

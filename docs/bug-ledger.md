@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 751 |
 | run-vs-build | 609 |
-| leak | 604 |
+| leak | 605 |
 | double-free | 427 |
 | missing-feature | 304 |
 | codegen-gap | 278 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2978 |
+| codegen | 2979 |
 | interp | 1000 |
 | typecheck | 521 |
 | ownership | 124 |
 | other | 122 |
+| runtime | 82 |
 | cli | 82 |
-| runtime | 81 |
 | parser | 76 |
 | autopar | 59 |
 | resolver | 48 |
@@ -167,7 +167,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
 | B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
-| B-2026-10-20-20 | 2026-10-20 | typecheck+interp+codegen | low | Floats have no `is_nan`, `is_infinite`, `is_finite` or `is_sign_negative`, so data-cleaning code has to write `x != x` and compare against `1.0 / 0.0` | — |
 | B-2026-10-20-22 | 2026-10-20 | typecheck | low | `String.find` takes a `char` (design.md's own example is `s.find(' ')`), but `rfind`, `contains` and `starts_with` refuse one (CORRECTION 2026-10-20: `rfind` too, so `s.rfind('/')` fails while `s.find('/')` works) with a type error, and `split` refuses one with a fix-it to the string literal; so `"02468".contains(c)`, the usual digit or class test, has to be written `contains(f"{c}")` | — |
 | B-2026-10-20-31 | 2026-10-20 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitialized ('discriminant of a value that is not an initialized enum'); the same value bound with `let` first, or an `Option[i64]`, works | — |
 | B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
@@ -176,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 | B-2026-10-20-37 | 2026-10-20 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that span's id | — |
+| B-2026-10-20-38 | 2026-10-20 | codegen+runtime | low | `karac __mir-llvm-asan` reports a 40-byte leak when a deadlock panic ends the process while a spawned task's coroutine frame is live (corpus mir_tasks/mir_tasks_report_a_deadlock), though a panic runs no Drop by design | — |
 
 ### Relocated
 
@@ -4280,6 +4280,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-17 | typecheck+interp+codegen | low | `karac check` accepts the statement form `par { let a = f(); let b = g(); }` with `a` and `b` used after the block, which core semantics §11.1 does n… | 7170dbd61c |
 | B-2026-10-20-18 | typecheck | medium | `iter.fold(Vec.new(), \|acc: Vec[i64], x\| ...)` is refused (`expected 'Vec[?T1]', found 'Vec[i64]'`): the element type of a `Vec.new()` passed as fold… | 18685fefd3 |
 | B-2026-10-20-19 | interp+codegen | low | MIR builder: a function item stored in a generic struct's `Fn(V) -> K` field at V = i64 is erased twice, to `Fn(i64) -> i64` and then to `Fn(ref i64)… | e97d43b5df |
+| B-2026-10-20-20 | typecheck+interp+codegen | low | Floats have no `is_nan`, `is_infinite`, `is_finite` or `is_sign_negative`, so data-cleaning code has to write `x != x` and compare against `1.0 / 0.0` | 4b4dd7e606 |
 | B-2026-10-20-21 | interp+codegen | medium | MIR builder: `*key` inside a closure, where `key` is a captured `ref String` (a parameter or a `for` item), passes `karac check` but fails MIR valida… | e97d43b5df |
 | B-2026-10-20-23 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` sto… | 02a249ca7c |
 | B-2026-10-20-24 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) =… | d9bd46cacb |
