@@ -10157,3 +10157,45 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-20-1: an `if` or `match` local with a branch that leaves
+/// (`return`) still owns what its other branches make.
+#[test]
+fn a_branch_made_local_with_a_leaving_branch_cannot_be_stored_into_a_borrow() {
+    rejected_then_fixed_by(
+        "match-with-return-into-ref-local",
+        r#"fn f(s: String, n: i64) -> i64 {
+    let t = match n {
+        0 => "zero".to_string(),
+        1 => { "one".to_string() }
+        _ => return -1,
+    };
+    let mut out = s;
+    out = t;
+    out.len()
+}
+
+fn main() {
+    println(f"{f("ab".to_string(), 0)}");
+}
+"#,
+        "`out` is a `ref String` (it was bound to a borrow), so it cannot take `t` by value; write `out = ref t`",
+        "out = ref t;",
+    );
+    rejected_then_fixed_by(
+        "if-with-return-into-ref-local",
+        r#"fn f(s: String, c: bool) -> i64 {
+    let t = if c { "xyz".to_string() } else { return 0; };
+    let mut out = s;
+    out = t;
+    out.len()
+}
+
+fn main() {
+    println(f"{f("ab".to_string(), true)} {f("ab".to_string(), false)}");
+}
+"#,
+        "`out` is a `ref String` (it was bound to a borrow), so it cannot take `t` by value; write `out = ref t`",
+        "out = ref t;",
+    );
+}

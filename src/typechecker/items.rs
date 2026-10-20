@@ -8726,21 +8726,31 @@ impl<'a> super::TypeChecker<'a> {
     fn is_fresh_owned_value(value: &Expr) -> bool {
         // An `if` or `match` whose every branch makes a fresh value makes
         // one; a branch that names a binding (a view of a borrowed
-        // scrutinee, perhaps) does not (B-2026-10-19-24).
-        let block_fresh = |b: &Block| {
-            b.final_expr
-                .as_deref()
-                .is_some_and(Self::is_fresh_owned_value)
+        // scrutinee, perhaps) does not (B-2026-10-19-24). A branch that
+        // leaves (`return`, `break`, `continue`) makes no value, so it does
+        // not count against the others (B-2026-10-20-1).
+        let leaves = |e: &Expr| {
+            matches!(
+                &e.kind,
+                ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue { .. }
+            )
+        };
+        let branch = |e: &Expr| leaves(e) || Self::is_fresh_owned_value(e);
+        let block_fresh = |b: &Block| match b.final_expr.as_deref() {
+            Some(e) => branch(e),
+            None => {
+                matches!(b.stmts.last(), Some(s) if matches!(&s.kind, StmtKind::Expr(e) if leaves(e)))
+            }
         };
         match &value.kind {
             ExprKind::If {
                 then_block,
                 else_branch: Some(e),
                 ..
-            } => return block_fresh(then_block) && Self::is_fresh_owned_value(e),
+            } => return block_fresh(then_block) && branch(e),
             ExprKind::Block(b) => return block_fresh(b),
             ExprKind::Match { arms, .. } => {
-                return !arms.is_empty() && arms.iter().all(|a| Self::is_fresh_owned_value(&a.body))
+                return !arms.is_empty() && arms.iter().all(|a| branch(&a.body))
             }
             _ => {}
         }
