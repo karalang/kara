@@ -1,0 +1,103 @@
+// LeetCode 811 — Subdomain Visit Count, with iterators.
+//
+// Each entry becomes its count and the list of its subdomains, the
+// domain and every tail after a dot; `flat_map` pairs each subdomain
+// with the count, a fold adds them into a map, and a `map` writes the
+// lines.
+fn subdomain_visits(cpdomains: Vec[String]) -> Vec[String] {
+    let counts = cpdomains
+        .iter()
+        .flat_map(|entry| subdomains(entry).into_iter())
+        .fold(Map.new(), |acc: Map[String, i64], pair| {
+            let mut acc = acc;
+            *acc.entry(pair.0).or_insert(0) += pair.1;
+            acc
+        });
+    counts.iter().map(|(domain, total)| f"{total} {domain}").collect()
+}
+
+fn subdomains(entry: String) -> Vec[(String, i64)] {
+    let (count, domain) = entry.split_once(" ").unwrap();
+    let n = i64.parse(count).unwrap();
+    let parts: Vec[Str] = domain.split(".").collect();
+    (0..parts.len()).map(|i| (parts[i..parts.len()].join("."), n)).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: Vec[Str]) -> Vec[String] {
+    words.iter().map(|w| w.to_string()).collect()
+}
+
+// The answer in any order, sorted for printing.
+fn sorted_visits(cpdomains: Vec[String]) -> Vec[String] {
+    let mut out = subdomain_visits(cpdomains);
+    out.sort();
+    out
+}
+
+fn show(cpdomains: Vec[Str]) {
+    let list = strings(cpdomains);
+    println(f"cpdomains = {list} -> {sorted_visits(list)}");
+}
+
+// A count and a checksum of a sorted answer, each line's count and length
+// folded in.
+fn summary(lines: Vec[String]) -> (i64, i64) {
+    let mut check = 0;
+    for line in lines.iter() {
+        let space = line.find(" ").unwrap();
+        let n = i64.parse(line[0..space]).unwrap();
+        check = (check * 131 + n + line.len()) % 1000000007;
+    }
+    (lines.len(), check)
+}
+
+// A domain of 2 or 3 parts, each part from `width` choices of names.
+fn random_domain(seed: mut ref i64, width: i64) -> String {
+    let tops = ["com", "org", "net", "io"];
+    let middles = ["leetcode", "google", "yahoo", "wiki", "kara"];
+    let lefts = ["mail", "discuss", "www", "api", "m", "docs"];
+    let top = ref tops[next_random(mut seed) % width.min(4)];
+    let middle = ref middles[next_random(mut seed) % width.min(5)];
+    if next_random(mut seed) % 3 == 0 {
+        f"{middle}.{top}"
+    } else {
+        f"{lefts[next_random(mut seed) % width.min(6)]}.{middle}.{top}"
+    }
+}
+
+fn main() {
+    show(vec!["9001 discuss.leetcode.com"]);
+    show(vec!["900 google.mail.com", "50 yahoo.com", "1 intel.mail.com", "5 wiki.org"]);
+    show(vec!["1 a.b.c", "2 b.c", "3 d.c"]);
+    show(vec!["10000 x.y", "10000 x.y"]);
+    show(vec!["7 a.com", "3 b.com"]);
+    show(vec!["1 a.com", "1 com.a"]);
+    // LeetCode's largest: 100 entries of three parts, counts up to 10000.
+    let mut seed = 811;
+    let mut big: Vec[String] = Vec.new();
+    for i in 0..100 {
+        let n = 1 + (i * 7919 + 13) % 10000;
+        big.push(f"{n} {random_domain(mut seed, 6)}");
+    }
+    let (lines, check) = summary(sorted_visits(big));
+    println(f"100 entries -> {lines} domains, checksum {check}");
+    let mut total = 0;
+    let mut all = 0;
+    for r in 0..300 {
+        let mut entries: Vec[String] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 10 {
+            entries.push(f"{1 + next_random(mut seed) % 50} {random_domain(mut seed, 3)}");
+        }
+        let (lines, check) = summary(sorted_visits(entries));
+        total += lines;
+        all = (all * 131 + check + r) % 1000000007;
+    }
+    println(f"300 random rounds of 1 to 10 entries: {total} domains, checksum {all}");
+}

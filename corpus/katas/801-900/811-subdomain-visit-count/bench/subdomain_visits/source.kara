@@ -1,0 +1,85 @@
+// LeetCode 811 — Subdomain Visit Count, a map from domain to visits.
+//
+// Each entry "count a.b.c" adds its count to a.b.c, b.c and c: count it
+// under the whole domain, then cut the domain after its first dot and
+// count it again, until no dot is left. Write each domain and its total
+// as "total domain". O(total length of the entries).
+fn subdomain_visits(cpdomains: Vec[String]) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    for entry in cpdomains.iter() {
+        let space = entry.find(" ").unwrap();
+        let n = i64.parse(entry[0..space]).unwrap();
+        let mut domain = entry[space + 1..entry.len()];
+        loop {
+            *counts.entry(domain.to_string()).or_insert(0) += n;
+            match domain.find(".") {
+                Some(dot) => domain = domain[dot + 1..domain.len()],
+                None => break,
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for (domain, total) in counts {
+        out.push(f"{total} {domain}");
+    }
+    out
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A domain of 2 or 3 parts: a left part one time in three, then a middle
+// part and a top part.
+fn random_domain(seed: mut ref i64) -> String {
+    let tops = ["com", "org", "net", "io"];
+    let middles = ["leetcode", "google", "yahoo", "wiki", "kara"];
+    let lefts = ["mail", "discuss", "www", "api", "m", "docs"];
+    let top = ref tops[next_random(mut seed) % 4];
+    let middle = ref middles[next_random(mut seed) % 5];
+    if next_random(mut seed) % 3 == 0 {
+        f"{middle}.{top}"
+    } else {
+        f"{lefts[next_random(mut seed) % 6]}.{middle}.{top}"
+    }
+}
+
+fn main() {
+    // 64 lists of 100 entries are made once. Each round writes a new count
+    // into one entry of the next list and counts that list's visits; the
+    // answer's lines, in whatever order they come, are folded into a sum.
+    let mut seed = 811;
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    let mut domains: Vec[Vec[String]] = Vec.new();
+    for _ in 0..64 {
+        let mut list: Vec[String] = Vec.new();
+        let mut doms: Vec[String] = Vec.new();
+        for _ in 0..100 {
+            let d = random_domain(mut seed);
+            list.push(f"{1 + next_random(mut seed) % 10000} {d}");
+            doms.push(d);
+        }
+        lists.push(list);
+        domains.push(doms);
+    }
+    let rounds = 100000;
+    let mut lines = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let k = r % 64;
+        let i = r / 64 % 100;
+        lists[k][i] = f"{1 + next_random(mut seed) % 10000} {domains[k][i]}";
+        let out = subdomain_visits(lists[k]);
+        let mut sum = 0;
+        for line in out.iter() {
+            let space = line.find(" ").unwrap();
+            sum += i64.parse(line[0..space]).unwrap() * 7 + line.len();
+        }
+        lines += out.len();
+        check = (check * 131 + sum) % 1000000007;
+    }
+    println(f"{rounds} rounds of 100 entries: {lines} lines, checksum {check}");
+}

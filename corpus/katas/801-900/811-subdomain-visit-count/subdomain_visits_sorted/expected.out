@@ -1,0 +1,8 @@
+cpdomains = [9001 discuss.leetcode.com] -> [9001 com, 9001 discuss.leetcode.com, 9001 leetcode.com]
+cpdomains = [900 google.mail.com, 50 yahoo.com, 1 intel.mail.com, 5 wiki.org] -> [1 intel.mail.com, 5 org, 5 wiki.org, 50 yahoo.com, 900 google.mail.com, 901 mail.com, 951 com]
+cpdomains = [1 a.b.c, 2 b.c, 3 d.c] -> [1 a.b.c, 3 b.c, 3 d.c, 6 c]
+cpdomains = [10000 x.y, 10000 x.y] -> [20000 x.y, 20000 y]
+cpdomains = [7 a.com, 3 b.com] -> [10 com, 3 b.com, 7 a.com]
+cpdomains = [1 a.com, 1 com.a] -> [1 a, 1 a.com, 1 com, 1 com.a]
+100 entries -> 71 domains, checksum 341234855
+300 random rounds of 1 to 10 entries: 2949 domains, checksum 528885470

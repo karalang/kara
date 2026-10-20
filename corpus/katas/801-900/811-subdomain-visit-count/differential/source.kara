@@ -1,0 +1,269 @@
+// LeetCode #811: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random entries,
+// against the visits counted straight from the statement.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn subdomain_visits_star(cpdomains: Vec[String]) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    for entry in cpdomains.iter() {
+        let space = entry.find(" ").unwrap();
+        let n = i64.parse(entry[0..space]).unwrap();
+        let mut domain = entry[space + 1..entry.len()];
+        loop {
+            *counts.entry(domain.to_string()).or_insert(0) += n;
+            match domain.find(".") {
+                Some(dot) => domain = domain[dot + 1..domain.len()],
+                None => break,
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for (domain, total) in counts {
+        out.push(f"{total} {domain}");
+    }
+    out
+}
+
+// ---- sorted-map arm -------------------------------------------------
+
+fn subdomain_visits_sorted(cpdomains: Vec[String]) -> Vec[String] {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    for entry in cpdomains.iter() {
+        let fields: Vec[Str] = entry.split(" ").collect();
+        let n = i64.parse(fields[0]).unwrap();
+        let parts: Vec[Str] = fields[1].split(".").collect();
+        let mut domain = String.new();
+        let mut i = parts.len() - 1;
+        while i >= 0 {
+            domain = if domain.len() == 0 { parts[i].to_string() } else { f"{parts[i]}.{domain}" };
+            *counts.entry(domain.clone()).or_insert(0) += n;
+            i -= 1;
+        }
+    }
+    counts.iter().map(|(domain, total)| f"{total} {domain}").collect()
+}
+
+// ---- sort-and-merge arm ---------------------------------------------
+
+fn subdomain_visits_merge(cpdomains: Vec[String]) -> Vec[String] {
+    let mut pairs: Vec[(String, i64)] = Vec.new();
+    for entry in cpdomains.iter() {
+        let space = entry.find(" ").unwrap();
+        let n = i64.parse(entry[0..space]).unwrap();
+        let mut at = space + 1;
+        let bytes = entry.bytes();
+        pairs.push((entry[at..entry.len()].to_string(), n));
+        while at < entry.len() {
+            if bytes[at] == b'.' {
+                pairs.push((entry[at + 1..entry.len()].to_string(), n));
+            }
+            at += 1;
+        }
+    }
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < pairs.len() {
+        let mut total = 0;
+        let mut j = i;
+        while j < pairs.len() and pairs[j].0 == pairs[i].0 {
+            total += pairs[j].1;
+            j += 1;
+        }
+        out.push(f"{total} {pairs[i].0}");
+        i = j;
+    }
+    out
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn subdomain_visits_iter(cpdomains: Vec[String]) -> Vec[String] {
+    let counts = cpdomains
+        .iter()
+        .flat_map(|entry| subdomains_iter(entry).into_iter())
+        .fold(Map.new(), |acc: Map[String, i64], pair| {
+            let mut acc = acc;
+            *acc.entry(pair.0).or_insert(0) += pair.1;
+            acc
+        });
+    counts.iter().map(|(domain, total)| f"{total} {domain}").collect()
+}
+
+fn subdomains_iter(entry: String) -> Vec[(String, i64)] {
+    let (count, domain) = entry.split_once(" ").unwrap();
+    let n = i64.parse(count).unwrap();
+    let parts: Vec[Str] = domain.split(".").collect();
+    (0..parts.len()).map(|i| (parts[i..parts.len()].join("."), n)).collect()
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The visits to `d`, straight from the statement: the counts of every entry
+// whose domain is `d` or ends in "." followed by `d`.
+fn visits_of(entries: Vec[(i64, String)], d: String) -> i64 {
+    let tail = f".{d}";
+    let mut total = 0;
+    for e in entries.iter() {
+        let dom = ref e.1;
+        if *dom == d {
+            total += e.0;
+        } else if dom.len() > tail.len() and dom[dom.len() - tail.len()..dom.len()].to_string() == tail {
+            total += e.0;
+        }
+    }
+    total
+}
+
+// Every domain the statement names: each entry's domain and every part of
+// it after a dot.
+fn all_domains(entries: Vec[(i64, String)]) -> SortedSet[String] {
+    let mut out: SortedSet[String] = SortedSet.new();
+    for e in entries.iter() {
+        let dom = ref e.1;
+        out.insert(dom.clone());
+        for i in 0..dom.len() {
+            if dom[i..i + 1].to_string() == "." {
+                out.insert(dom[i + 1..dom.len()].to_string());
+            }
+        }
+    }
+    out
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, cpdomains: Vec[String]) -> Vec[String] {
+    if which == 0 {
+        subdomain_visits_star(cpdomains)
+    } else if which == 1 {
+        subdomain_visits_sorted(cpdomains)
+    } else if which == 2 {
+        subdomain_visits_merge(cpdomains)
+    } else {
+        subdomain_visits_iter(cpdomains)
+    }
+}
+
+fn random_part(seed: mut ref i64, width: i64) -> String {
+    let names = ["a", "b", "c", "com", "org", "mail", "x", "ab"];
+    names[next_random(mut seed) % width].to_string()
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8110;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut lines_seen = 0;
+    for case in 0..cases {
+        // kind 0: 1 to 8 entries over 3 names, so that domains repeat and
+        // share suffixes; kind 1: over 8 names, mostly distinct; kind 2:
+        // one domain repeated, so that counts add; kind 3: names that are
+        // suffixes of each other ("b" and "ab"), so that a suffix test on
+        // characters rather than parts would miscount.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 8;
+        let width = if kind == 1 { 8 } else if kind == 3 { 2 } else { 3 };
+        let mut entries: Vec[(i64, String)] = Vec.new();
+        let mut first = String.new();
+        for i in 0..n {
+            let count = 1 + next_random(mut seed) % 10000;
+            let parts = 2 + next_random(mut seed) % 2;
+            let mut dom = String.new();
+            for p in 0..parts {
+                let name = if kind == 3 {
+                    if next_random(mut seed) % 2 == 0 { "b".to_string() } else { "ab".to_string() }
+                } else {
+                    random_part(mut seed, width)
+                };
+                dom = if p == 0 { name } else { f"{dom}.{name}" };
+            }
+            if kind == 2 {
+                if i == 0 {
+                    first = dom.clone();
+                } else if next_random(mut seed) % 4 != 0 {
+                    dom = first.clone();
+                }
+            }
+            entries.push((count, dom));
+        }
+        let cpdomains: Vec[String] = entries.iter().map(|e| f"{e.0} {e.1}").collect();
+        let want = all_domains(entries);
+        let mut weight = 0;
+        for e in entries.iter() {
+            let mut dots = 0;
+            for i in 0..e.1.len() {
+                if e.1[i..i + 1].to_string() == "." {
+                    dots += 1;
+                }
+            }
+            weight += e.0 * (dots + 1);
+        }
+        for which in 0..arms {
+            let out = arm(which, cpdomains.clone());
+            if which == 0 {
+                lines_seen += out.len();
+            }
+            // 0: each line is a positive count, a space and a domain.
+            // 1: the domains are exactly the ones the entries name, once each.
+            // 2: each count is the definition's count for its domain.
+            // 3: the counts add up to each entry's count times its parts.
+            let mut ok = [true, true, true, true];
+            let mut got: SortedSet[String] = SortedSet.new();
+            let mut sum = 0;
+            for line in out.iter() {
+                match line.find(" ") {
+                    Some(space) => {
+                        let n = i64.parse(line[0..space]).unwrap_or(0);
+                        let dom = line[space + 1..line.len()].to_string();
+                        if n <= 0 or dom.len() == 0 {
+                            ok[0] = false;
+                        }
+                        if got.contains(dom) {
+                            ok[1] = false;
+                        }
+                        if n != visits_of(entries, dom) {
+                            ok[2] = false;
+                        }
+                        sum += n;
+                        got.insert(dom);
+                    }
+                    None => ok[0] = false,
+                }
+            }
+            if got.len() != want.len() or out.len() != want.len() {
+                ok[1] = false;
+            } else {
+                for d in want.iter() {
+                    if not got.contains(d.clone()) {
+                        ok[1] = false;
+                    }
+                }
+            }
+            if sum != weight {
+                ok[3] = false;
+            }
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({lines_seen} lines), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, sorted {fails[1]}, merge {fails[2]}, iter {fails[3]}");
+    println(f"by property: well-formed {by_property[0]}, domains {by_property[1]}, counts {by_property[2]}, total {by_property[3]}");
+}
