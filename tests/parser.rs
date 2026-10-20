@@ -16792,3 +16792,51 @@ fn ref_before_a_shorthand_struct_field_parses_as_the_long_form() {
     assert_eq!(a.program.mut_ref_binding_spans.len(), 1);
     assert_eq!(b.program.mut_ref_binding_spans.len(), 1);
 }
+
+/// Rust's `[T; N]` gets one error naming `Array[T, N]` and a fix that writes
+/// it, and parses as that type so nothing cascades; `[T]` names `Slice[T]`
+/// (B-2026-10-20-27).
+#[test]
+fn rust_array_type_is_rewritten_to_array_and_reported_once() {
+    let src = "const NAMES: [Str; 2] = [\"a\", \"b\"];\n\
+               fn main() {\n\
+               let a: [i64; 3] = [1, 2, 3];\n\
+               let b: [u8; LEN + 1] = [0u8; 3];\n\
+               println(a[0]);\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(
+        result.errors.len(),
+        3,
+        "one per site; got: {:?}",
+        result.errors
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.message.contains("`Array[T, N]`")),
+        "{:?}",
+        result.errors
+    );
+    let mut edits: Vec<_> = result.fix_diffs.values().flatten().cloned().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut repaired = src.to_string();
+    for e in edits {
+        repaired.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    for want in [
+        "const NAMES: Array[Str, 2] =",
+        "let a: Array[i64, 3] =",
+        "let b: Array[u8, LEN + 1] =",
+    ] {
+        assert!(repaired.contains(want), "missing {want:?} in:\n{repaired}");
+    }
+    let reparsed = karac::parse(&repaired);
+    assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+
+    let slice = karac::parse("fn f(xs: ref [i64]) -> i64 { 0 }");
+    assert_eq!(slice.errors.len(), 1, "{:?}", slice.errors);
+    assert!(slice.errors[0].message.contains("`Slice[T]`"));
+    assert!(slice.fix_diffs.is_empty());
+}

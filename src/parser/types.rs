@@ -578,6 +578,75 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // Rust's `[T; N]` and `[T]` (B-2026-10-20-27). Kāra spells them
+            // `Array[T, N]` and `Slice[T]`; the array form carries a
+            // machine-applicable fix, and either way the type parses as
+            // the Kāra one so nothing cascades.
+            Token::LeftBracket => {
+                let open = self.current_span();
+                self.advance();
+                let elem = self.parse_type()?;
+                if self.check(&Token::Semicolon) {
+                    let semi = self.current_span();
+                    self.advance();
+                    let len = if matches!(self.peek_token_ref(), Token::Identifier { .. })
+                        && matches!(self.peek_token_ref_at(1), Token::RightBracket)
+                    {
+                        GenericArg::Type(self.parse_type()?)
+                    } else {
+                        GenericArg::Const(self.parse_expression()?)
+                    };
+                    self.expect(&Token::RightBracket)?;
+                    self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
+                        message: "`[T; N]` is Rust's array type -- in Kāra a fixed-size \
+                                  array is `Array[T, N]`"
+                            .to_string(),
+                        span: open,
+                    });
+                    self.fix_diffs.insert(
+                        crate::resolver::SpanKey::from_span(&open),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: open.offset,
+                                length: open.length,
+                                replacement: "Array[".to_string(),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: semi.offset,
+                                length: semi.length,
+                                replacement: ",".to_string(),
+                            },
+                        ],
+                    );
+                    let span = self.span_from(&start);
+                    return Some(TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec!["Array".to_string()],
+                            generic_args: Some(vec![GenericArg::Type(elem), len]),
+                            span,
+                        }),
+                        span,
+                    });
+                }
+                self.expect(&Token::RightBracket)?;
+                self.errors.push(super::ParseError {
+                    kind: crate::parser::ParseErrorKind::Syntax,
+                    message: "`[T]` is Rust's slice type -- in Kāra a view of a run of \
+                              elements is `Slice[T]`, and an owned, growable one is `Vec[T]`"
+                        .to_string(),
+                    span: open,
+                });
+                let span = self.span_from(&start);
+                Some(TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec!["Slice".to_string()],
+                        generic_args: Some(vec![GenericArg::Type(elem)]),
+                        span,
+                    }),
+                    span,
+                })
+            }
             _ => {
                 self.error(&format!("Expected type, found {:?}", self.peek_token()));
                 None
