@@ -1,0 +1,1016 @@
+== mbox: read the inbox
+  opened in
+  len 8
+  keys [0, 1, 2, 3, 4, 5, 6, 7]
+  0: 'Deploy window moved to Thursday' | mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags=''
+  1: 'Café budget Q4' | mboxMessage from='ravi@example.com Tue Oct 20 02:35:44 2026' flags='ROA'
+  2: 'Nightly build #4412 failed' | mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags='O'
+  3: 'How to rotate the logs' | mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags=''
+  4: '-' | mboxMessage from='the shell, run:' flags=''
+  5: 'Re: lunch?' | mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  6: 'Invoice 2026-10 for ops' | mboxMessage from='billing@vendor.example Fri Oct 23 07:00:00 2026' flags=''
+  7: 'Q2 retro notes' | mboxMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+  mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags=''
+  unixfrom 'From ana.lima@example.org Mon Oct 19 12:30:02 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags='O'
+  unixfrom 'From ci@builds.example.net Wed Oct 21 02:10:00 2026'
+  headers [('From', 'CI Bot <ci@builds.example.net>'), ('To', 'ops@example.net'), ('Subject', 'Nightly build #4412 failed'), ('Date', 'Wed, 21 Oct 2026 02:10:00 GMT'), ('Message-ID', '<build-4412@builds.example.net>'), ('Status', 'O'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="=_b4412"')]
+  parts ['multipart/mixed', 'text/plain', 'text/csv']
+  mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags=''
+  unixfrom 'From mei@example.net Wed Oct 21 18:47:19 2026'
+  headers [('From', 'Mei Chen <mei@example.net>'), ('To', 'ops@example.net'), ('Subject', 'How to rotate the logs'), ('Date', 'Wed, 21 Oct 2026 11:47:19 -0700'), ('Message-ID', '<logs-howto@example.net>')]
+  body 'Steps for the new log host:\n'
+  mboxMessage from='the shell, run:' flags=''
+  unixfrom 'From the shell, run:'
+  headers []
+  body '    logrotate -f /etc/logrotate.conf\n\nand check /var/log/app.\n'
+  mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  unixfrom 'From ravi@example.com Thu Oct 22 06:31:00 2026'
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'mei@example.net'), ('Subject', 'Re: lunch?'), ('Date', 'Thu, 22 Oct 2026 12:01:00 +0530'), ('Message-ID', '<lunch-2@example.com>'), ('In-Reply-To', '<lunch-1@example.net>'), ('Status', 'R')]
+  body 'Sure, 1pm works.\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | 'Status: RO\n'
+    | 'X-Status: A\n'
+    | '\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+    | 'From ravi@example.com Tue Oct 20 02:35:44 2026\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | 'Status: RO\n'
+    | 'X-Status: A\n'
+    | '\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+    | 'From: CI Bot <ci@builds.example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Nightly build #4412 failed\n'
+    | 'Date: Wed, 21 Oct 2026 02:10:00 GMT\n'
+    | 'Message-ID: <build-4412@builds.example.net>\n'
+    | 'Status: O\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed; boundary="=_b4412"\n'
+    | '\n'
+    | 'This is a multi-part message in MIME format.\n'
+    | '--=_b4412\n'
+    | 'Content-Type: text/plain; charset=us-ascii\n'
+    | '\n'
+    | '3 tests failed on linux-arm64.\n'
+    | '\n'
+    | '--=_b4412\n'
+    | 'Content-Type: text/csv; name="failures.csv"\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | 'Content-Disposition: attachment; filename="failures.csv"\n'
+    | '\n'
+    | 'dGVzdCxzZWNvbmRzCmh0dHBfa2VlcGFsaXZlLDEyLjQKdGxzX3Jlc3VtZSwwLjgK\n'
+    | '\n'
+    | '--=_b4412--\n'
+    | 'From the shell, run:\n'
+    | '\n'
+    | '    logrotate -f /etc/logrotate.conf\n'
+    | '\n'
+    | 'and check /var/log/app.\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Q2 retro notes\n'
+    | 'Date: Thu, 02 Jul 2026 16:00:00 +0200\n'
+    | 'Message-ID: <retro-q2@example.org>\n'
+    | 'Status: RO\n'
+    | '\n'
+    | 'Notes from the Q2 retro are in the wiki.\n'
+  error: KeyError: 'No message with key: 9'
+  has 7 True
+  has 12 False
+    0 Mon Oct 19 12:30:02 2026  ana.lima@example.org         Deploy window moved to Thursday
+    1 Tue Oct 20 02:35:44 2026  ravi@example.com             Café budget Q4
+    2 Wed Oct 21 02:10:00 2026  ci@builds.example.net        Nightly build #4412 failed
+    3 Wed Oct 21 18:47:19 2026  mei@example.net              How to rotate the logs
+    4 -                               -
+    5 Thu Oct 22 06:31:00 2026  ravi@example.com             Re: lunch?
+    6 Fri Oct 23 07:00:00 2026  billing@vendor.example       Invoice 2026-10 for ops
+    7 Thu Jul  2 14:00:00 2026  ana.lima@example.org         Q2 retro notes
+== mbox: mark read and rewrite
+  opened in
+  0 now mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags='R'
+  0 now mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags='RO'
+  1 now mboxMessage from='ravi@example.com Tue Oct 20 02:35:44 2026' flags='RO'
+  6 now mboxMessage from='billing@vendor.example Fri Oct 23 07:00:00 2026' flags='RFAx'
+  2 now mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags=''
+  5 now mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  removed 4
+  error: KeyError: 'No message with key: 4'
+  discarded 4
+  flushed in
+  keys [0, 1, 2, 3, 5, 6, 7]
+    | 'From ana.lima@example.org Mon Oct 19 12:30:02 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | 'Status: RO\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | '\n'
+    | 'From ravi@example.com Tue Oct 20 02:35:44 2026\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | 'Status: RO\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+    | '\n'
+    | 'From ci@builds.example.net Wed Oct 21 02:10:00 2026\n'
+    | 'From: CI Bot <ci@builds.example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Nightly build #4412 failed\n'
+    | 'Date: Wed, 21 Oct 2026 02:10:00 GMT\n'
+    | 'Message-ID: <build-4412@builds.example.net>\n'
+    | 'Status: \n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed; boundary="=_b4412"\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'This is a multi-part message in MIME format.\n'
+    | '--=_b4412\n'
+    | 'Content-Type: text/plain; charset=us-ascii\n'
+    | '\n'
+    | '3 tests failed on linux-arm64.\n'
+    | '\n'
+    | '--=_b4412\n'
+    | 'Content-Type: text/csv; name="failures.csv"\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | 'Content-Disposition: attachment; filename="failures.csv"\n'
+    | '\n'
+    | 'dGVzdCxzZWNvbmRzCmh0dHBfa2VlcGFsaXZlLDEyLjQKdGxzX3Jlc3VtZSwwLjgK\n'
+    | '\n'
+    | '--=_b4412--\n'
+    | '\n'
+    | 'From mei@example.net Wed Oct 21 18:47:19 2026\n'
+    | 'From: Mei Chen <mei@example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: How to rotate the logs\n'
+    | 'Date: Wed, 21 Oct 2026 11:47:19 -0700\n'
+    | 'Message-ID: <logs-howto@example.net>\n'
+    | '\n'
+    | 'Steps for the new log host:\n'
+    | '\n'
+    | 'From ravi@example.com Thu Oct 22 06:31:00 2026\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: mei@example.net\n'
+    | 'Subject: Re: lunch?\n'
+    | 'Date: Thu, 22 Oct 2026 12:01:00 +0530\n'
+    | 'Message-ID: <lunch-2@example.com>\n'
+    | 'In-Reply-To: <lunch-1@example.net>\n'
+    | 'Status: R\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Sure, 1pm works.\n'
+    | '\n'
+    | 'From billing@vendor.example Fri Oct 23 07:00:00 2026\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | 'Status: R\n'
+    | 'X-Status: FAx\n'
+    | '\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+    | '\n'
+    | 'From ana.lima@example.org Thu Jul  2 14:00:00 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Q2 retro notes\n'
+    | 'Date: Thu, 02 Jul 2026 16:00:00 +0200\n'
+    | 'Message-ID: <retro-q2@example.org>\n'
+    | 'Status: RO\n'
+    | '\n'
+    | 'Notes from the Q2 retro are in the wiki.\n'
+    | '\n'
+  closed in
+  opened again
+  0: 'Deploy window moved to Thursday' | mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags='RO'
+  1: 'Café budget Q4' | mboxMessage from='ravi@example.com Tue Oct 20 02:35:44 2026' flags='RO'
+  2: 'Nightly build #4412 failed' | mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags=''
+  3: 'How to rotate the logs' | mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags=''
+  4: 'Re: lunch?' | mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  5: 'Invoice 2026-10 for ops' | mboxMessage from='billing@vendor.example Fri Oct 23 07:00:00 2026' flags='RFAx'
+  6: 'Q2 retro notes' | mboxMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+== mbox: deliver raw messages
+  opened in
+  added 8
+  added 9
+  replaced 3
+  keys [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    | 'From alerts@monitor.example Sat Oct 24 03:12:09 2026\n'
+    | 'From: Monitor <alerts@monitor.example>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Disk 91% on db-2\n'
+    | 'Date: Sat, 24 Oct 2026 03:12:09 +0000\n'
+    | 'Message-ID: <alert-77@monitor.example>\n'
+    | '\n'
+    | 'db-2:/var is 91% full.\n'
+    | '>From here it grows 2% a day.\n'
+    | 'From nobody Sun Oct 25 00:00:00 2026\n'
+    | 'Subject: no blank line\n'
+    | 'X-Note: headers only\n'
+  closed in
+  opened again
+  keys [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  0: 'Deploy window moved to Thursday' | mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags=''
+  1: 'Café budget Q4' | mboxMessage from='ravi@example.com Tue Oct 20 02:35:44 2026' flags='ROA'
+  2: 'Nightly build #4412 failed' | mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags='O'
+  3: 'Disk 91% on db-2' | mboxMessage from='alerts@monitor.example Sat Oct 24 03:12:09 2026' flags=''
+  4: '-' | mboxMessage from='the shell, run:' flags=''
+  5: 'Re: lunch?' | mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  6: 'Invoice 2026-10 for ops' | mboxMessage from='billing@vendor.example Fri Oct 23 07:00:00 2026' flags=''
+  7: 'Q2 retro notes' | mboxMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+  8: 'Disk 91% on db-2' | mboxMessage from='alerts@monitor.example Sat Oct 24 03:12:09 2026' flags=''
+  9: 'no blank line' | mboxMessage from='nobody Sun Oct 25 00:00:00 2026' flags=''
+  mboxMessage from='alerts@monitor.example Sat Oct 24 03:12:09 2026' flags=''
+  unixfrom 'From alerts@monitor.example Sat Oct 24 03:12:09 2026'
+  headers [('From', 'Monitor <alerts@monitor.example>'), ('To', 'ops@example.net'), ('Subject', 'Disk 91% on db-2'), ('Date', 'Sat, 24 Oct 2026 03:12:09 +0000'), ('Message-ID', '<alert-77@monitor.example>')]
+  body 'db-2:/var is 91% full.\n>From here it grows 2% a day.\n'
+  mboxMessage from='nobody Sun Oct 25 00:00:00 2026' flags=''
+  unixfrom 'From nobody Sun Oct 25 00:00:00 2026'
+  headers [('Subject', 'no blank line'), ('X-Note', 'headers only')]
+  body ''
+== mmdf: read the archive
+  opened ar
+  len 3
+  0: 'On-call rota for June' | MMDFMessage from='mei@example.net Mon Jun  1 16:30:00 2026' flags=''
+  1: 'Nightly build #3100 passed' | MMDFMessage from='n-Path: <ci@builds.example.net>' flags=''
+  2: 'Q2 retro notes' | MMDFMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+  MMDFMessage from='n-Path: <ci@builds.example.net>' flags=''
+  unixfrom 'Return-Path: <ci@builds.example.net>'
+  headers [('From', 'CI Bot <ci@builds.example.net>'), ('To', 'ops@example.net'), ('Subject', 'Nightly build #3100 passed'), ('Date', 'Sun, 15 Mar 2026 02:10:00 GMT'), ('Message-ID', '<build-3100@builds.example.net>')]
+  body 'All 812 tests passed.\n'
+    | 'Return-Path: <ci@builds.example.net>\n'
+    | 'From: CI Bot <ci@builds.example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Nightly build #3100 passed\n'
+    | 'Date: Sun, 15 Mar 2026 02:10:00 GMT\n'
+    | 'Message-ID: <build-3100@builds.example.net>\n'
+    | '\n'
+    | 'All 812 tests passed.\n'
+  MMDFMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+  unixfrom 'From ana.lima@example.org Thu Jul  2 14:00:00 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Q2 retro notes'), ('Date', 'Thu, 02 Jul 2026 16:00:00 +0200'), ('Message-ID', '<retro-q2@example.org>'), ('Status', 'RO')]
+  body 'Notes from the Q2 retro are in the wiki.\n'
+    | 'From mei@example.net Mon Jun  1 16:30:00 2026\n'
+    | 'From: Mei Chen <mei@example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: On-call rota for June\n'
+    | 'Date: Mon, 1 Jun 2026 09:30:00 -0700\n'
+    | 'Message-ID: <rota-june@example.net>\n'
+    | '\n'
+    | 'Rota attached in the wiki, swap requests by Friday.\n'
+== mmdf: archive old mail from the inbox
+  opened in
+  opened ar
+  archived 0 as 3: Deploy window moved to Thursday
+  archived 1 as 4: Café budget Q4
+  archived 7 as 5: Q2 retro notes
+  flushed in
+  flushed ar
+  keys [2, 3, 4, 5, 6]
+  keys [0, 1, 2, 3, 4, 5]
+    | '\x01\x01\x01\x01\n'
+    | 'From mei@example.net Mon Jun  1 16:30:00 2026\n'
+    | 'From: Mei Chen <mei@example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: On-call rota for June\n'
+    | 'Date: Mon, 1 Jun 2026 09:30:00 -0700\n'
+    | 'Message-ID: <rota-june@example.net>\n'
+    | '\n'
+    | 'Rota attached in the wiki, swap requests by Friday.\n'
+    | '\n'
+    | '\x01\x01\x01\x01\n'
+    | '\x01\x01\x01\x01\n'
+    | 'Return-Path: <ci@builds.example.net>\n'
+    | 'From: CI Bot <ci@builds.example.net>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Nightly build #3100 passed\n'
+    | 'Date: Sun, 15 Mar 2026 02:10:00 GMT\n'
+    | 'Message-ID: <build-3100@builds.example.net>\n'
+    | '\n'
+    | 'All 812 tests passed.\n'
+    | '\n'
+    | '\x01\x01\x01\x01\n'
+    | '\x01\x01\x01\x01\n'
+    | 'From ana.lima@example.org Thu Jul  2 14:00:00 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Q2 retro notes\n'
+    | 'Date: Thu, 02 Jul 2026 16:00:00 +0200\n'
+    | 'Message-ID: <retro-q2@example.org>\n'
+    | 'Status: RO\n'
+    | '\n'
+    | 'Notes from the Q2 retro are in the wiki.\n'
+    | '\x01\x01\x01\x01\n'
+    | 'From ana.lima@example.org Mon Oct 19 12:30:02 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | 'Status: \n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | '\n'
+    | '\x01\x01\x01\x01\n'
+    | '\x01\x01\x01\x01\n'
+    | 'From ravi@example.com Tue Oct 20 02:35:44 2026\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | 'Status: RO\n'
+    | 'X-Status: A\n'
+    | '\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+    | '\n'
+    | '\x01\x01\x01\x01\n'
+    | '\x01\x01\x01\x01\n'
+    | 'From ana.lima@example.org Thu Jul  2 14:00:00 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Q2 retro notes\n'
+    | 'Date: Thu, 02 Jul 2026 16:00:00 +0200\n'
+    | 'Message-ID: <retro-q2@example.org>\n'
+    | 'Status: RO\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Notes from the Q2 retro are in the wiki.\n'
+    | '\n'
+    | '\x01\x01\x01\x01\n'
+  2: 'Nightly build #4412 failed' | mboxMessage from='ci@builds.example.net Wed Oct 21 02:10:00 2026' flags='O'
+  3: 'How to rotate the logs' | mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags=''
+  4: '-' | mboxMessage from='the shell, run:' flags=''
+  5: 'Re: lunch?' | mboxMessage from='ravi@example.com Thu Oct 22 06:31:00 2026' flags='R'
+  6: 'Invoice 2026-10 for ops' | mboxMessage from='billing@vendor.example Fri Oct 23 07:00:00 2026' flags=''
+== babyl: read the Rmail file
+  opened rm
+  len 3
+  labels [b'answered', b'billing', b'deleted', b'unseen']
+  0: 'Deploy window moved to Thursday' | BabylMessage labels=[b'unseen'] visible=[('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('From', 'Ana Lima <ana.lima@example.org>'), ('Subject', 'Deploy window moved to Thursday')]
+  1: 'Invoice 2026-10 for ops' | BabylMessage labels=[b'billing'] visible=[('From', 'billing@vendor.example'), ('To', 'ops@example.net'), ('Subject', 'Invoice 2026-10 for ops'), ('Date', 'Fri, 23 Oct 2026 07:00:00 +0000'), ('Message-ID', '<inv-2026-10@vendor.example>')]
+  2: 'Q2 retro notes' | BabylMessage labels=[b'answered', b'deleted'] visible=[]
+  BabylMessage labels=[b'unseen'] visible=[('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('From', 'Ana Lima <ana.lima@example.org>'), ('Subject', 'Deploy window moved to Thursday')]
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | '\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+  BabylMessage labels=[b'answered', b'deleted'] visible=[]
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Q2 retro notes'), ('Date', 'Thu, 02 Jul 2026 16:00:00 +0200'), ('Message-ID', '<retro-q2@example.org>'), ('Status', 'RO')]
+  body 'Notes from the Q2 retro are in the wiki.\n'
+== babyl: a labelled file cannot be rewritten
+  opened rm
+  error: AttributeError: 'bytes' object has no attribute 'encode'
+  removed 2
+  error: AttributeError: 'bytes' object has no attribute 'encode'
+  keys [0, 1]
+    | 'BABYL OPTIONS:\n'
+    | 'Version: 5\n'
+    | 'Labels:billing\n'
+    | '\x1f\x0c\n'
+    | '1, unseen,,\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | '\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | '\n'
+    | '\x1f\x0c\n'
+    | '1,, billing,\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+    | '\n'
+    | '\x1f\x0c\n'
+    | '1, answered, deleted,,\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Q2 retro notes\n'
+    | 'Date: Thu, 02 Jul 2026 16:00:00 +0200\n'
+    | 'Message-ID: <retro-q2@example.org>\n'
+    | 'Status: RO\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | '\n'
+    | 'Notes from the Q2 retro are in the wiki.\n'
+    | '\n'
+    | '\x1f'
+== babyl: a new Rmail file
+  opened in
+  opened nb
+  added 0
+  BabylMessage labels=['unseen'] visible=[]
+  unixfrom 'From ana.lima@example.org Mon Oct 19 12:30:02 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  added 1
+  BabylMessage labels=['answered'] visible=[]
+  unixfrom 'From ravi@example.com Tue Oct 20 02:35:44 2026'
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  added 2
+  BabylMessage labels=['unseen'] visible=[]
+  unixfrom 'From billing@vendor.example Fri Oct 23 07:00:00 2026'
+  headers [('From', 'billing@vendor.example'), ('To', 'ops@example.net'), ('Subject', 'Invoice 2026-10 for ops'), ('Date', 'Fri, 23 Oct 2026 07:00:00 +0000'), ('Message-ID', '<inv-2026-10@vendor.example>')]
+  body 'Amount due: 1,250.00 EUR\nDue date: 2026-11-15\n'
+    | 'BABYL OPTIONS:\n'
+    | 'Version: 5\n'
+    | 'Labels:\n'
+    | '\x1f\x0c\n'
+    | '1, unseen,,\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | '\n'
+    | '\x1f\x0c\n'
+    | '1, answered,,\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+    | '\n'
+    | '\x1f\x0c\n'
+    | '1, unseen,,\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+    | '\n'
+    | '\x1f'
+  error: AssertionError: 
+  error: AssertionError: 
+  0 now BabylMessage labels=[] visible=[]
+  removed 1
+  flushed nb
+    | 'BABYL OPTIONS:\n'
+    | 'Version: 5\n'
+    | 'Labels:\n'
+    | '\x1f\x0c\n'
+    | '1,,\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+    | '\n'
+    | '\x1f\x0c\n'
+    | '1, unseen,,\n'
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | '*** EOOH ***\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+    | '\n'
+    | '\x1f'
+  labels []
+  closed nb
+  opened again
+  labels [b'unseen']
+  0: 'Deploy window moved to Thursday' | BabylMessage labels=[] visible=[]
+  error: AssertionError: 
+  error: KeyError: 'No message with key: 2'
+== mh: read the inbox
+  opened mh
+  keys [1, 2, 3, 5]
+  len 4
+  sequences {'unseen': [2, 3, 5], 'flagged': [1], 'replied': [3]}
+  1: 'Deploy window moved to Thursday' | MHMessage sequences=['flagged']
+  2: 'Café budget Q4' | MHMessage sequences=['unseen']
+  3: 'How to rotate the logs' | MHMessage sequences=['unseen', 'replied']
+  5: 'Re: lunch?' | MHMessage sequences=['unseen']
+  MHMessage sequences=['unseen', 'replied']
+  unixfrom None
+  headers [('From', 'Mei Chen <mei@example.net>'), ('To', 'ops@example.net'), ('Subject', 'How to rotate the logs'), ('Date', 'Wed, 21 Oct 2026 11:47:19 -0700'), ('Message-ID', '<logs-howto@example.net>')]
+  body 'Steps for the new log host:\n\nFrom the shell, run:\n\n    logrotate -f /etc/logrotate.conf\n\nand check /var/log/app.\n'
+    | 'From: "Ravi K." <ravi@example.com>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: =?utf-8?q?Caf=C3=A9_budget_Q4?=\n'
+    | 'Date: Tue, 20 Oct 2026 08:05:44 +0530\n'
+    | 'Message-ID: <cafe-q4@example.com>\n'
+    | 'Status: RO\n'
+    | 'X-Status: A\n'
+    | '\n'
+    | 'Budget for the team cafe is attached in the shared drive.\n'
+  error: KeyError: 'No message with key: 4'
+  has 5 True
+  has 4 False
+  opened root
+  folders ['bad', 'drafts', 'empty', 'imported', 'inbox']
+  keys []
+== mh: sequences and pack
+  opened mh
+  1 now MHMessage sequences=['flagged', 'unseen']
+  2 now MHMessage sequences=[]
+  5 now MHMessage sequences=['unseen', 'urgent']
+  sequences {'unseen': [1, 3, 5], 'flagged': [1], 'replied': [3], 'urgent': [5]}
+    | 'unseen: 1 3 5\n'
+    | 'flagged: 1\n'
+    | 'replied: 3\n'
+    | 'urgent: 5\n'
+  sequences set
+    | 'unseen: 1-3 5\n'
+    | 'flagged: 3\n'
+    | 'replied: 2-3 5\n'
+  packed
+  keys [1, 2, 3, 4]
+  sequences {'unseen': [1, 2, 3, 4], 'flagged': [3], 'replied': [2, 3, 4]}
+    | 'unseen: 1-4\n'
+    | 'flagged: 3\n'
+    | 'replied: 2-4\n'
+  added 5
+  removed 2
+  error: KeyError: 'No message with key: 2'
+  discarded 2
+  keys [1, 3, 4, 5]
+    .mh_sequences
+    1
+    3
+    4
+    5
+    notes.txt
+== mh: odd folders
+  opened root
+  opened imp
+  keys [1, 4, 7]
+  error: KeyError: 'No message with key: 7'
+  sequences {'unseen': [4, 7]}
+  error: FileNotFoundError: [Errno 2] No such file or directory: '<data>/work/11/MH/imported/7' -> '<data>/work/11/MH/imported/3'
+    .mh_sequences
+    007
+    1
+    2
+  opened b
+  keys [1]
+  error: FormatError: Invalid sequence specification: seen 1
+  error: FormatError: Invalid sequence specification: seen 1
+    | 'From: billing@vendor.example\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Invoice 2026-10 for ops\n'
+    | 'Date: Fri, 23 Oct 2026 07:00:00 +0000\n'
+    | 'Message-ID: <inv-2026-10@vendor.example>\n'
+    | '\n'
+    | 'Amount due: 1,250.00 EUR\n'
+    | 'Due date: 2026-11-15\n'
+  error: NoSuchMailboxError: <data>/work/11/MH/nope
+  error: NotEmptyError: Folder not empty: <data>/work/11/MH
+  removed folder drafts
+  opened l
+  added 1
+  sequences {}
+  folders ['bad', 'empty', 'imported', 'inbox', 'lists']
+    .mh_profile
+    bad/
+    bad/.mh_sequences
+    bad/1
+    empty/
+    empty/.keep
+    imported/
+    imported/.mh_sequences
+    imported/007
+    imported/1
+    imported/2
+    inbox/
+    inbox/.mh_sequences
+    inbox/1
+    inbox/2
+    inbox/3
+    inbox/5
+    inbox/notes.txt
+    lists/
+    lists/.mh_sequences
+    lists/1
+== maildir: read
+  opened md
+  len 5
+  keys ['1760870000.M100P200Q1.mx1', '1760870100.M101P200Q2.mx1', '1760870200.M102P200Q3.mx1', '1760870300.M103P200Q4.mx1', '1760870400.M104P200Q5.mx1']
+  '1760870000.M100P200Q1.mx1': 'Deploy window moved to Thursday' | MaildirMessage subdir='cur' info='2,S' flags='S'
+  '1760870100.M101P200Q2.mx1': 'Café budget Q4' | MaildirMessage subdir='cur' info='2,FRS' flags='FRS'
+  '1760870200.M102P200Q3.mx1': 'Q2 retro notes' | MaildirMessage subdir='cur' info='2,ST' flags='ST'
+  '1760870300.M103P200Q4.mx1': 'Nightly build #4412 failed' | MaildirMessage subdir='new' info='' flags=''
+  '1760870400.M104P200Q5.mx1': 'Invoice 2026-10 for ops' | MaildirMessage subdir='new' info='2,' flags=''
+  MaildirMessage subdir='cur' info='2,FRS' flags='FRS'
+  unixfrom None
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>'), ('Status', 'RO'), ('X-Status', 'A')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  info '2,FRS' flags 'FRS'
+  info '' flags ''
+  info '2,' flags ''
+  error: KeyError: 'No message with key: nope'
+  has 1760870500.M105P200Q6.mx1 False
+  has 1760870000.M100P200Q1.mx1 True
+  folders ['Archive', 'Lists', 'Lists.python', 'Old', 'Trash']
+  opened l
+  keys ['1760870600.M106P200Q7.mx1']
+  opened lp
+  '1760870700.M107P200Q8.mx1': 'Nightly build #3100 passed' | MaildirMessage subdir='new' info='' flags=''
+  error: NoSuchMailboxError: <data>/work/12/Maildir/.Nope
+== maildir: flags and folders
+  opened md
+  add_flag done
+  remove_flag done
+  set_flags done
+  remove_flag done
+  add_flag done
+  info set
+  info '' flags ''
+  '1760870100.M101P200Q2.mx1' now MaildirMessage subdir='cur' info='2,T' flags='T'
+  '1760870300.M103P200Q4.mx1' now MaildirMessage subdir='new' info='2,' flags=''
+  removed 1760870200.M102P200Q3.mx1
+  error: KeyError: 'No message with key: 1760870200.M102P200Q3.mx1'
+  discarded 1760870200.M102P200Q3.mx1
+    .Archive/
+    .Archive/.uidvalidity
+    .Archive/cur/
+    .Archive/cur/.keep
+    .Archive/new/
+    .Archive/new/.keep
+    .Archive/tmp/
+    .Archive/tmp/.keep
+    .Lists.python/
+    .Lists.python/cur/
+    .Lists.python/cur/.keep
+    .Lists.python/maildirfolder
+    .Lists.python/new/
+    .Lists.python/new/1760870700.M107P200Q8.mx1
+    .Lists.python/tmp/
+    .Lists.python/tmp/.keep
+    .Lists/
+    .Lists/cur/
+    .Lists/cur/1760870600.M106P200Q7.mx1:2,S
+    .Lists/maildirfolder
+    .Lists/new/
+    .Lists/new/.keep
+    .Lists/tmp/
+    .Lists/tmp/.keep
+    .Old/
+    .Old/attic/
+    .Old/attic/.keep
+    .Old/cur/
+    .Old/cur/.keep
+    .Old/new/
+    .Old/new/.keep
+    .Old/tmp/
+    .Old/tmp/.keep
+    .Trash/
+    .Trash/cur/
+    .Trash/cur/.keep
+    .Trash/new/
+    .Trash/new/1760870800.M108P200Q9.mx1
+    .Trash/tmp/
+    .Trash/tmp/.keep
+    courierimapkeywords/
+    courierimapkeywords/.keep
+    cur/
+    cur/.keep
+    cur/1760870000.M100P200Q1.mx1:2,FRS
+    cur/1760870100.M101P200Q2.mx1:2,T
+    new/
+    new/1760870300.M103P200Q4.mx1:2,
+    new/1760870400.M104P200Q5.mx1
+    tmp/
+    tmp/1760870500.M105P200Q6.mx1
+  '1760870000.M100P200Q1.mx1': 'Deploy window moved to Thursday' | MaildirMessage subdir='cur' info='2,FRS' flags='FRS'
+  '1760870100.M101P200Q2.mx1': 'Café budget Q4' | MaildirMessage subdir='cur' info='2,T' flags='T'
+  '1760870300.M103P200Q4.mx1': 'Nightly build #4412 failed' | MaildirMessage subdir='new' info='2,' flags=''
+  '1760870400.M104P200Q5.mx1': 'Invoice 2026-10 for ops' | MaildirMessage subdir='new' info='' flags=''
+  error: NotEmptyError: Folder contains message(s): Trash
+  error: NotEmptyError: Folder contains subdirectory 'Old': attic
+  removed folder Archive
+  opened p
+  folders ['Lists', 'Lists.python', 'Old', 'Projects', 'Trash']
+  added <new>
+  len 1
+  p: 1 unread of 1
+  total 1
+== convert between formats
+  opened in
+  opened mh
+  opened md
+  opened rm
+  MaildirMessage subdir='cur' info='2,RS' flags='RS'
+  unixfrom 'From ravi@example.com Tue Oct 20 02:35:44 2026'
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  MHMessage sequences=['unseen']
+  unixfrom 'From ana.lima@example.org Mon Oct 19 12:30:02 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  BabylMessage labels=['answered'] visible=[]
+  unixfrom 'From ravi@example.com Tue Oct 20 02:35:44 2026'
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  MaildirMessage subdir='cur' info='' flags=''
+  unixfrom 'From ci@builds.example.net Wed Oct 21 02:10:00 2026'
+  headers [('From', 'CI Bot <ci@builds.example.net>'), ('To', 'ops@example.net'), ('Subject', 'Nightly build #4412 failed'), ('Date', 'Wed, 21 Oct 2026 02:10:00 GMT'), ('Message-ID', '<build-4412@builds.example.net>'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="=_b4412"')]
+  parts ['multipart/mixed', 'text/plain', 'text/csv']
+  MMDFMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags=''
+  unixfrom 'From mei@example.net Wed Oct 21 18:47:19 2026'
+  headers [('From', 'Mei Chen <mei@example.net>'), ('To', 'ops@example.net'), ('Subject', 'How to rotate the logs'), ('Date', 'Wed, 21 Oct 2026 11:47:19 -0700'), ('Message-ID', '<logs-howto@example.net>'), ('Status', ''), ('X-Status', '')]
+  body 'Steps for the new log host:\n'
+  Message
+  unixfrom 'From ana.lima@example.org Mon Oct 19 12:30:02 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags='OA'
+  unixfrom None
+  headers [('From', 'Mei Chen <mei@example.net>'), ('To', 'ops@example.net'), ('Subject', 'How to rotate the logs'), ('Date', 'Wed, 21 Oct 2026 11:47:19 -0700'), ('Message-ID', '<logs-howto@example.net>'), ('Status', 'O'), ('X-Status', 'A')]
+  body 'Steps for the new log host:\n\nFrom the shell, run:\n\n    logrotate -f /etc/logrotate.conf\n\nand check /var/log/app.\n'
+  MaildirMessage subdir='cur' info='2,FS' flags='FS'
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  BabylMessage labels=['unseen'] visible=[]
+  unixfrom None
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>'), ('Status', 'RO'), ('X-Status', 'A')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  mboxMessage from='ravi@example.com Tue Oct 20 02:35:44 2026' flags='ROFA'
+  unixfrom None
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>'), ('Status', 'RO'), ('X-Status', 'FA')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  MHMessage sequences=[]
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Q2 retro notes'), ('Date', 'Thu, 02 Jul 2026 16:00:00 +0200'), ('Message-ID', '<retro-q2@example.org>'), ('Status', 'RO')]
+  body 'Notes from the Q2 retro are in the wiki.\n'
+  BabylMessage labels=['unseen'] visible=[]
+  unixfrom None
+  headers [('From', 'CI Bot <ci@builds.example.net>'), ('To', 'ops@example.net'), ('Subject', 'Nightly build #4412 failed'), ('Date', 'Wed, 21 Oct 2026 02:10:00 GMT'), ('Message-ID', '<build-4412@builds.example.net>'), ('Status', 'O'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="=_b4412"')]
+  parts ['multipart/mixed', 'text/plain', 'text/csv']
+  MaildirMessage subdir='cur' info='2,S' flags='S'
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  mboxMessage from='ana.lima@example.org Thu Jul  2 14:00:00 2026' flags='RO'
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Q2 retro notes'), ('Date', 'Thu, 02 Jul 2026 16:00:00 +0200'), ('Message-ID', '<retro-q2@example.org>'), ('Status', 'RO'), ('X-Status', '')]
+  body 'Notes from the Q2 retro are in the wiki.\n'
+  error: TypeError: label must be a string: <class 'bytes'>
+  MHMessage sequences=[]
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+== move the inbox into MH
+  opened in
+  opened dst
+  added 6
+  MHMessage sequences=['unseen']
+  unixfrom 'From ana.lima@example.org Mon Oct 19 12:30:02 2026'
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  added 7
+  MHMessage sequences=['replied']
+  unixfrom 'From ravi@example.com Tue Oct 20 02:35:44 2026'
+  headers [('From', '"Ravi K." <ravi@example.com>'), ('To', 'ops@example.net'), ('Subject', '=?utf-8?q?Caf=C3=A9_budget_Q4?='), ('Date', 'Tue, 20 Oct 2026 08:05:44 +0530'), ('Message-ID', '<cafe-q4@example.com>')]
+  body 'Budget for the team cafe is attached in the shared drive.\n'
+  sequences {'unseen': [2, 3, 5, 6], 'flagged': [1], 'replied': [3, 7]}
+    | 'unseen: 2-3 5-6\n'
+    | 'flagged: 1\n'
+    | 'replied: 3 7\n'
+  added 8
+  mboxMessage from='mei@example.net Wed Oct 21 18:47:19 2026' flags='OA'
+  unixfrom None
+  headers [('From', 'Mei Chen <mei@example.net>'), ('To', 'ops@example.net'), ('Subject', 'How to rotate the logs'), ('Date', 'Wed, 21 Oct 2026 11:47:19 -0700'), ('Message-ID', '<logs-howto@example.net>'), ('Status', 'O'), ('X-Status', 'A')]
+  body 'Steps for the new log host:\n\nFrom the shell, run:\n\n    logrotate -f /etc/logrotate.conf\n\nand check /var/log/app.\n'
+  added 9
+  mboxMessage from='ana.lima@example.org Mon Oct 19 12:30:02 2026' flags='O'
+  unixfrom None
+  headers [('From', 'Ana Lima <ana.lima@example.org>'), ('To', 'ops@example.net'), ('Subject', 'Deploy window moved to Thursday'), ('Date', 'Mon, 19 Oct 2026 14:30:02 +0200'), ('Message-ID', '<deploy-1@example.org>'), ('Status', 'O'), ('X-Status', '')]
+  body 'Hi all,\n\nThe deploy window moves to Thursday 09:00 UTC.\n\n>From now on, deploys need two approvals.\n\n-- Ana\n'
+  flushed in
+  keys [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    | 'From ana.lima@example.org Mon Oct 19 12:30:02 2026\n'
+    | 'From: Ana Lima <ana.lima@example.org>\n'
+    | 'To: ops@example.net\n'
+    | 'Subject: Deploy window moved to Thursday\n'
+    | 'Date: Mon, 19 Oct 2026 14:30:02 +0200\n'
+    | 'Message-ID: <deploy-1@example.org>\n'
+    | 'Status: O\n'
+    | 'X-Status: \n'
+    | '\n'
+    | 'Hi all,\n'
+    | '\n'
+    | 'The deploy window moves to Thursday 09:00 UTC.\n'
+    | '\n'
+    | '>From now on, deploys need two approvals.\n'
+    | '\n'
+    | '-- Ana\n'
+== unread across mailboxes
+  opened in
+  opened ar
+  opened rm
+  opened mh
+  opened md
+  opened l
+  in: 5 unread of 8
+  ar: 2 unread of 3
+  rm: 0 unread of 3
+  mh: 3 unread of 4
+  md: 2 unread of 5
+  l: 0 unread of 1
+  total 12
+== search
+  opened in
+  opened ar
+  opened mh
+  opened md
+  opened rm
+  in 0: Deploy window moved to Thursday
+  mh 1: Deploy window moved to Thursday
+  md '1760870000.M100P200Q1.mx1': Deploy window moved to Thursday
+  rm 0: Deploy window moved to Thursday
+  in 2: Nightly build #4412 failed
+  ar 1: Nightly build #3100 passed
+  md '1760870300.M103P200Q4.mx1': Nightly build #4412 failed
+  rm 2: Q2 retro notes
+  in 7: Q2 retro notes
+  in 4: -
+== digest
+  opened in
+  opened ar
+  opened mh
+    0 Mon Oct 19 12:30:02 2026  ana.lima@example.org         Deploy window moved to Thursday
+    1 Tue Oct 20 02:35:44 2026  ravi@example.com             Café budget Q4
+    2 Wed Oct 21 02:10:00 2026  ci@builds.example.net        Nightly build #4412 failed
+    3 Wed Oct 21 18:47:19 2026  mei@example.net              How to rotate the logs
+    4 -                               -
+    5 Thu Oct 22 06:31:00 2026  ravi@example.com             Re: lunch?
+    6 Fri Oct 23 07:00:00 2026  billing@vendor.example       Invoice 2026-10 for ops
+    7 Thu Jul  2 14:00:00 2026  ana.lima@example.org         Q2 retro notes
+    0 Mon Jun  1 16:30:00 2026  mei@example.net              On-call rota for June
+    1 Sun Mar 15 02:10:00 2026  ci@builds.example.net        Nightly build #3100 passed
+    2 Thu Jul  2 14:00:00 2026  ana.lima@example.org         Q2 retro notes
+    1 Mon Oct 19 12:30:02 2026  ana.lima@example.org         Deploy window moved to Thursday
+    2 Tue Oct 20 02:35:44 2026  ravi@example.com             Café budget Q4
+    3 Wed Oct 21 18:47:19 2026  mei@example.net              How to rotate the logs
+    5 Thu Oct 22 06:31:00 2026  ravi@example.com             Re: lunch?
+== dedupe the MH inbox against the Maildir
+  opened md
+  opened mh
+  dropped 1 <deploy-1@example.org>
+  dropped 2 <cafe-q4@example.com>
+  packed
+  keys [1, 2]
+  sequences {'unseen': [1, 2], 'replied': [1]}
+  1: 'How to rotate the logs' | MHMessage sequences=['unseen', 'replied']
+  2: 'Re: lunch?' | MHMessage sequences=['unseen']
+== missing and new mailboxes
+  error: NoSuchMailboxError: <data>/work/20/none.mbox
+  error: NoSuchMailboxError: <data>/work/20/none-mh
+  error: NoSuchMailboxError: <data>/work/20/none-md
+  opened n
+  len 0
+  added 0
+  error: KeyError: 'No message with key: 3'
+  keys [0]
+  opened nm
+  added 1
+  added 2
+  sequences {}
+  keys [1, 2]
+  opened nd
+  added <new>
+  len 1
+  nd: 1 unread of 1
+  n: 1 unread of 1
+  nm: 0 unread of 2
+  total 2
+  opened m2
+  added 0
+    | '\x01\x01\x01\x01\n'
+    | 'From nobody Sun Oct 25 00:00:00 2026\n'
+    | 'Subject: no blank line\n'
+    | 'X-Note: headers only\n'
+    | '\x01\x01\x01\x01\n'
+    .mh_sequences
+    1
+    2
+== dates
+  date 'Mon, 19 Oct 2026 14:30:02 +0200': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 7200) -> 1792413002 Mon Oct 19 12:30:02 2026
+  date 'Tue, 20 Oct 2026 08:05:44 +0530': (2026, 10, 20, 8, 5, 44, 0, 1, -1, 19800) -> 1792463744 Tue Oct 20 02:35:44 2026
+  date 'Wed, 21 Oct 2026 02:10:00 GMT': (2026, 10, 21, 2, 10, 0, 0, 1, -1, 0) -> 1792548600 Wed Oct 21 02:10:00 2026
+  date 'Thu, 22 Oct 2026 12:01:00 EDT': (2026, 10, 22, 12, 1, 0, 0, 1, -1, -14400) -> 1792684860 Thu Oct 22 16:01:00 2026
+  date '19 Oct 2026 14:30 -0000': (2026, 10, 19, 14, 30, 0, 0, 1, -1, 0) -> 1792420200 Mon Oct 19 14:30:00 2026
+  date 'Monday, 19-Oct-26 14:30:02 PST': (2026, 10, 19, 14, 30, 2, 0, 1, -1, -28800) -> 1792449002 Mon Oct 19 22:30:02 2026
+  date 'Oct 19 2026 14:30:02': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 0) -> 1792420202 Mon Oct 19 14:30:02 2026
+  date '1 Jan 70 00:00:00 +0000': (1970, 1, 1, 0, 0, 0, 0, 1, -1, 0) -> 0 Thu Jan  1 00:00:00 1970
+  date '31 Dec 2026 23:59:60 +0000': (2026, 12, 31, 23, 59, 60, 0, 1, -1, 0) -> 1798761600 Fri Jan  1 00:00:00 2027
+  date '2026-10-19': None
+  date '': None
+  date 'Sat, 24 Oct 2026 03:12:09 +0000 (UTC)': (2026, 10, 24, 3, 12, 9, 0, 1, -1, 0) -> 1792811529 Sat Oct 24 03:12:09 2026
+  date 'Mon, 19 Oct 2026 14.30.02 +0100': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 3600) -> 1792416602 Mon Oct 19 13:30:02 2026
+  date 'Fri, 30 Feb 2026 10:00:00 +0000': (2026, 2, 30, 10, 0, 0, 0, 1, -1, 0) -> 1772445600 Mon Mar  2 10:00:00 2026
+  date 'Mon, 19 Oct 2026 25:61:61 +0000': (2026, 10, 19, 25, 61, 61, 0, 1, -1, 0) -> 1792461721 Tue Oct 20 02:02:01 2026
+  date 'Mon, 19 Oct 2026 14:30:02 +05:30': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 0) -> 1792420202 Mon Oct 19 14:30:02 2026
+  date 'Mon,19 Oct 2026 14:30:02 -0130': (2026, 10, 19, 14, 30, 2, 0, 1, -1, -5400) -> 1792425602 Mon Oct 19 16:00:02 2026
+  date '19 October 2026 14:30:02 +0100': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 3600) -> 1792416602 Mon Oct 19 13:30:02 2026
+  date '19 Oct 2026 14:30:02 z': (2026, 10, 19, 14, 30, 2, 0, 1, -1, 0) -> 1792420202 Mon Oct 19 14:30:02 2026
+  date 'Thu, 01 Jan 1970 00:00:00 +0100': (1970, 1, 1, 0, 0, 0, 0, 1, -1, 3600) -> -3600 Wed Dec 31 23:00:00 1969
