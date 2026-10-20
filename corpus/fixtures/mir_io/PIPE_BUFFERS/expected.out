@@ -1,0 +1,9 @@
+out [a]
+out [bb]
+err [e1]
+err [e2]
+sh true
+first 6 alpha
+mid
+zeta
+sort true

@@ -1,0 +1,14 @@
+read [hi there] 8
+taken once
+exit 3 false
+waited twice 3
+wrote
+closed
+cat [piped through]
+cat exit 0
+still running
+killed
+killed by 9, code none true, false
+not found
+output [out] [err] 4
+a | b [3]

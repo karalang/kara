@@ -1,0 +1,18 @@
+ports differ: true
+sent 11
+got 8 [hello wo] from a: true
+connected
+sent 4
+got [pong]
+invalid input
+timeout set
+timed out
+clone at a: true
+addr in use
+invalid input
+tcp timeout set
+timed out
+tcp timeout cleared
+tcp sent 1
+tcp got 1
+refused, through the alias
