@@ -1,0 +1,11 @@
+n = 4, flights = [[0, 1, 100], [1, 2, 100], [2, 0, 100], [1, 3, 600], [2, 3, 200]], 0 to 3, k = 1 -> 700
+n = 3, flights = [[0, 1, 100], [1, 2, 100], [0, 2, 500]], 0 to 2, k = 1 -> 200
+n = 3, flights = [[0, 1, 100], [1, 2, 100], [0, 2, 500]], 0 to 2, k = 0 -> 500
+n = 3, flights = [[0, 1, 100], [1, 0, 100]], 0 to 2, k = 2 -> -1
+n = 4, flights = [[0, 1, 1], [0, 2, 5], [1, 2, 1], [2, 3, 1]], 0 to 3, k = 1 -> 6
+n = 5, flights = [[0, 1, 5], [1, 2, 5], [0, 3, 2], [3, 1, 2], [1, 4, 1]], 0 to 2, k = 2 -> 9
+a chain of 100 cities and one direct flight, k = 0 -> 1000
+a chain of 100 cities and one direct flight, k = 97 -> 1000
+a chain of 100 cities and one direct flight, k = 98 -> 99
+a chain of 100 cities and one direct flight, k = 99 -> 99
+300 random networks: 169 with a way, checksum 357489238

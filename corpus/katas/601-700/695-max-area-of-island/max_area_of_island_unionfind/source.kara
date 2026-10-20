@@ -20,8 +20,8 @@ fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn join(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
-    let mut x = find(parent, a);
-    let mut y = find(parent, b);
+    let mut x = find(mut parent, a);
+    let mut y = find(mut parent, b);
     if x == y {
         return;
     }

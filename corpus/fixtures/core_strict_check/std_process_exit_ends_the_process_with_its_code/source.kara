@@ -1,0 +1,15 @@
+import std.process.{exit};
+struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn bail(code: i32) -> i64 {
+    exit(code)
+}
+fn main() {
+    let a = Noisy { n: 1 };
+    defer { println("deferred"); }
+    print("no newline");
+    let v = bail(7);
+    println(f"{v} {a.n}");
+}

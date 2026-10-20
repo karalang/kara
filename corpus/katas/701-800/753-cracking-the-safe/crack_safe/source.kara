@@ -1,0 +1,125 @@
+// LeetCode 753 — Cracking the Safe, an Euler circuit by Hierholzer's
+// method.
+//
+// Take the (n-1)-digit strings as nodes and each n-digit code as an edge
+// from its first n-1 digits to its last n-1. Every node has k edges out
+// and k in, so a circuit uses every edge once, and walking it from 0...0
+// writes each code exactly once. Hierholzer's method with an explicit
+// stack: follow unused edges until stuck, then back up, writing each edge
+// as it is left; the written edges are the circuit in reverse. Nodes are
+// numbers below k^(n-1). O(k^n).
+
+fn crack_safe(n: i64, k: i64) -> String {
+    let mut nodes = 1;
+    for _ in 0..n - 1 {
+        nodes *= k;
+    }
+    let mut used: Vec[i64] = Vec.new();
+    for _ in 0..nodes {
+        used.push(0);
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((0, -1));
+    let mut digits: Vec[i64] = Vec.new();
+    while stack.len() > 0 {
+        let (node, digit) = stack[stack.len() - 1];
+        if used[node] < k {
+            let d = used[node];
+            used[node] += 1;
+            stack.push(((node * k + d) % nodes, d));
+        } else {
+            stack.pop();
+            if digit >= 0 {
+                digits.push(digit);
+            }
+        }
+    }
+    let mut out = String.new();
+    for _ in 0..n - 1 {
+        out.push('0');
+    }
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push((b'0' + digits[i] as u8) as char);
+        i -= 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// What the answer is, judged: its length against the shortest possible,
+// k^n + n - 1, and whether every code appears in it exactly once.
+fn judged(text: String, n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let bytes = text.bytes();
+    let mut seen: Vec[i64] = Vec.new();
+    for _ in 0..total {
+        seen.push(0);
+    }
+    let mut bad = 0;
+    let mut i = 0;
+    while i + n <= bytes.len() {
+        let mut code = 0;
+        for j in i..i + n {
+            let d = (bytes[j] - b'0') as i64;
+            if d < 0 or d >= k {
+                bad += 1;
+            }
+            code = code * k + d;
+        }
+        if code >= 0 and code < total {
+            seen[code] += 1;
+        }
+        i += 1;
+    }
+    let mut once = 0;
+    for c in seen.iter() {
+        if *c == 1 {
+            once += 1;
+        }
+    }
+    let shortest = total + n - 1;
+    let size = if text.len() == shortest { "shortest" } else { "NOT SHORTEST" };
+    let codes = if once == total and bad == 0 { "every code once" } else { "CODES WRONG" };
+    f"{text.len()} digits, {size}, {codes}"
+}
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k}: {judged(crack_safe(n, k), n, k)}");
+}
+
+fn main() {
+    show(1, 2);
+    show(2, 2);
+    show(1, 1);
+    show(4, 1);
+    show(1, 10);
+    show(3, 2);
+    show(2, 10);
+    show(3, 10);
+    show(4, 8);
+    let mut safes = 0;
+    let mut digits = 0;
+    let mut good = 0;
+    for n in 1..5 {
+        for k in 1..11 {
+            let mut total = 1;
+            for _ in 0..n {
+                total *= k;
+            }
+            if total <= 4096 {
+                safes += 1;
+                let text = crack_safe(n, k);
+                digits += text.len();
+                if judged(text, n, k).ends_with("shortest, every code once") {
+                    good += 1;
+                }
+            }
+        }
+    }
+    println(f"all {safes} safes: {digits} digits in all, {good} shortest with every code once");
+}

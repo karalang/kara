@@ -1,0 +1,35 @@
+struct Totals { count: i64, sum: i64 }
+
+sync struct Tally {
+    name: String,
+    totals: Mutex[Totals],
+}
+
+impl Tally {
+    fn record(self, n: i64) {
+        let g = self.totals.lock();
+        g.value.count += 1;
+        g.value.sum += n;
+    }
+}
+
+fn first_even(m: Mutex[Vec[i64]]) -> Option[i64] {
+    lock m v {
+        for x in v.iter() {
+            if *x % 2 == 0 { return Some(*x); }
+        }
+    }
+    None
+}
+
+fn main() {
+    let s = Tally { name: "s", totals: Mutex.new(Totals { count: 0, sum: 0 }) };
+    s.record(3);
+    s.record(4);
+    let g = s.totals.lock();
+    println(f"{s.name} {g.value.count} {g.value.sum}");
+    let m = Mutex.new(vec![1, 3, 4, 5]);
+    let a = first_even(m);
+    let b = first_even(m);
+    println(f"{a} {b}");
+}

@@ -1,0 +1,77 @@
+// LeetCode 791 — Custom Sort String: the bench.
+//
+// 64 orders of 1 to 26 different letters and 64 strings of 200 letters,
+// LeetCode's longest, are made once. Each of 1,000,000 rounds sorts one
+// of the strings by one of the orders with the ★ arm, which counts the
+// letters; every 1,000th answer goes into the checksum.
+
+fn custom_sort_string(order: String, s: String) -> String {
+    let mut count: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        count.push(0);
+    }
+    for b in s.bytes() {
+        count[(b - b'a') as i64] += 1;
+    }
+    let mut named: Vec[bool] = Vec.new();
+    for _ in 0..26 {
+        named.push(false);
+    }
+    let mut out = String.new();
+    for c in order.chars() {
+        let at = (c as i64) - ('a' as i64);
+        named[at] = true;
+        for _ in 0..count[at] {
+            out.push(c);
+        }
+    }
+    for c in s.chars() {
+        if not named[(c as i64) - ('a' as i64)] {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 791;
+    let mut orders: Vec[String] = Vec.new();
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..64 {
+        let mut pool = letters.clone();
+        let mut i = 25;
+        while i > 0 {
+            pool.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let mut order = String.new();
+        for j in 0..1 + next_random(mut seed) % 26 {
+            order.push(pool[j]);
+        }
+        orders.push(order);
+        let mut s = String.new();
+        for _ in 0..200 {
+            s.push(letters[next_random(mut seed) % 26]);
+        }
+        strings.push(s);
+    }
+    let rounds = 1000000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let answer = custom_sort_string(orders[r % 64], strings[(r / 64) % 64]);
+        total += answer.len();
+        if r % 1000 == 0 {
+            for b in answer.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds of 200-letter strings: {total} letters, checksum {check}");
+}

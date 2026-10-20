@@ -1,0 +1,18 @@
+struct H {
+    text: String,
+}
+
+fn main() {
+    let mut cur: Option[H] = Some(H { text: String.new() });
+    let words: Vec[String] = vec!["a".to_string(), "b".to_string()];
+    for w in words.iter() {
+        match cur {
+            Some(h) => h.text.push_str(w),
+            None => {}
+        }
+    }
+    match cur {
+        Some(mut ref h) => println(h.text),
+        None => {}
+    }
+}

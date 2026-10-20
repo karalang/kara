@@ -42,8 +42,8 @@ fn fill(node: Option[TreeNode], row: i64, low: i64, high: i64, grid: mut ref Vec
         Some(n) => {
             let middle = (low + high) / 2;
             grid[row][middle] = f"{n.val}";
-            fill(n.left, row + 1, low, middle - 1, grid);
-            fill(n.right, row + 1, middle + 1, high, grid);
+            fill(n.left, row + 1, low, middle - 1, mut grid);
+            fill(n.right, row + 1, middle + 1, high, mut grid);
         }
     }
 }

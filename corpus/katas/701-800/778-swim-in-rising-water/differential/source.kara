@@ -1,0 +1,444 @@
+// LeetCode #778: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random grids.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn swim_in_water_star(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut done: Vec[bool] = Vec.filled(n * n, false);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((grid[0][0], 0));
+    while let Some((t, at)) = queue.pop() {
+        if done[at] {
+            continue;
+        }
+        done[at] = true;
+        let r = at / n;
+        let c = at % n;
+        if r == n - 1 and c == n - 1 {
+            return t;
+        }
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < n and nc >= 0 and nc < n and not done[nr * n + nc] {
+                let h = grid[nr][nc];
+                queue.push((if h > t { h } else { t }, nr * n + nc));
+            }
+        }
+    }
+    -1
+}
+
+// ---- binary search arm ----------------------------------------------
+
+fn crosses_binary(grid: Vec[Vec[i64]], t: i64) -> bool {
+    let n = grid.len();
+    if grid[0][0] > t {
+        return false;
+    }
+    let mut seen: Vec[bool] = Vec.filled(n * n, false);
+    let mut stack: Vec[i64] = Vec.new();
+    seen[0] = true;
+    stack.push(0);
+    while let Some(at) = stack.pop() {
+        let r = at / n;
+        let c = at % n;
+        if r == n - 1 and c == n - 1 {
+            return true;
+        }
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < n and nc >= 0 and nc < n and not seen[nr * n + nc] and grid[nr][nc] <= t {
+                seen[nr * n + nc] = true;
+                stack.push(nr * n + nc);
+            }
+        }
+    }
+    false
+}
+
+fn swim_in_water_binary(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut low = if grid[0][0] > grid[n - 1][n - 1] { grid[0][0] } else { grid[n - 1][n - 1] };
+    let mut high = n * n - 1;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if crosses_binary(grid, mid) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    low
+}
+
+// ---- union-find arm -------------------------------------------------
+
+fn find_unionfind(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn swim_in_water_unionfind(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut square_of: Vec[i64] = Vec.filled(n * n, 0);
+    for r in 0..n {
+        for c in 0..n {
+            square_of[grid[r][c]] = r * n + c;
+        }
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    for i in 0..n * n {
+        parent.push(i);
+        size.push(1);
+    }
+    let mut flooded: Vec[bool] = Vec.filled(n * n, false);
+    for t in 0..n * n {
+        let at = square_of[t];
+        flooded[at] = true;
+        let r = at / n;
+        let c = at % n;
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < n and nc >= 0 and nc < n and flooded[nr * n + nc] {
+                let a = find_unionfind(mut parent, at);
+                let b = find_unionfind(mut parent, nr * n + nc);
+                if a != b {
+                    if size[a] < size[b] {
+                        parent[a] = b;
+                        size[b] += size[a];
+                    } else {
+                        parent[b] = a;
+                        size[a] += size[b];
+                    }
+                }
+            }
+        }
+        if flooded[0] and flooded[n * n - 1] and find_unionfind(mut parent, 0) == find_unionfind(mut parent, n * n - 1) {
+            return t;
+        }
+    }
+    -1
+}
+
+// ---- bucket arm -----------------------------------------------------
+
+fn swim_in_water_bucket(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut square_of: Vec[i64] = Vec.filled(n * n, 0);
+    for r in 0..n {
+        for c in 0..n {
+            square_of[grid[r][c]] = r * n + c;
+        }
+    }
+    let mut waiting: Vec[bool] = Vec.filled(n * n, false);
+    let mut reached: Vec[bool] = Vec.filled(n * n, false);
+    waiting[0] = true;
+    for t in 0..n * n {
+        let first = square_of[t];
+        if not waiting[first] {
+            continue;
+        }
+        let mut stack: Vec[i64] = Vec.new();
+        reached[first] = true;
+        stack.push(first);
+        while let Some(at) = stack.pop() {
+            if at == n * n - 1 {
+                return t;
+            }
+            let r = at / n;
+            let c = at % n;
+            for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < n and nc >= 0 and nc < n and not reached[nr * n + nc] {
+                    if grid[nr][nc] <= t {
+                        reached[nr * n + nc] = true;
+                        stack.push(nr * n + nc);
+                    } else {
+                        waiting[nr * n + nc] = true;
+                    }
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        swim_in_water_star(grid)
+    } else if which == 1 {
+        swim_in_water_binary(grid)
+    } else if which == 2 {
+        swim_in_water_unionfind(grid)
+    } else {
+        swim_in_water_bucket(grid)
+    }
+}
+
+// The highest square on the best way on from (r, c), over every simple
+// way that does not revisit a square, given the highest so far.
+fn best_from(grid: Vec[Vec[i64]], on: mut ref Vec[bool], r: i64, c: i64, highest: i64) -> i64 {
+    let n = grid.len();
+    if r == n - 1 and c == n - 1 {
+        return highest;
+    }
+    let mut best = n * n;
+    for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+        let nr = r + dr;
+        let nc = c + dc;
+        if nr >= 0 and nr < n and nc >= 0 and nc < n and not on[nr * n + nc] {
+            on[nr * n + nc] = true;
+            let h = grid[nr][nc];
+            let got = best_from(grid, mut on, nr, nc, if h > highest { h } else { highest });
+            on[nr * n + nc] = false;
+            if got < best {
+                best = got;
+            }
+        }
+    }
+    best
+}
+
+// The definition: the least, over every simple way from the top left to
+// the bottom right, of the highest square on it.
+fn definition(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut on: Vec[bool] = Vec.filled(n * n, false);
+    on[0] = true;
+    best_from(grid, mut on, 0, 0, grid[0][0])
+}
+
+// Whether the squares of elevation at most t join the two corners.
+fn joined_at(grid: Vec[Vec[i64]], t: i64) -> bool {
+    let n = grid.len();
+    if grid[0][0] > t {
+        return false;
+    }
+    let mut seen: Vec[bool] = Vec.filled(n * n, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    seen[0] = true;
+    queue.push_back(0);
+    while let Some(at) = queue.pop_front() {
+        let r = at / n;
+        let c = at % n;
+        if r > 0 and not seen[at - n] and grid[r - 1][c] <= t {
+            seen[at - n] = true;
+            queue.push_back(at - n);
+        }
+        if r < n - 1 and not seen[at + n] and grid[r + 1][c] <= t {
+            seen[at + n] = true;
+            queue.push_back(at + n);
+        }
+        if c > 0 and not seen[at - 1] and grid[r][c - 1] <= t {
+            seen[at - 1] = true;
+            queue.push_back(at - 1);
+        }
+        if c < n - 1 and not seen[at + 1] and grid[r][c + 1] <= t {
+            seen[at + 1] = true;
+            queue.push_back(at + 1);
+        }
+    }
+    seen[n * n - 1]
+}
+
+// The grid transposed (how 0), turned half round (1) or reflected in the
+// other diagonal (2).
+fn remapped(grid: Vec[Vec[i64]], how: i64) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(if how == 0 {
+                grid[c][r]
+            } else if how == 1 {
+                grid[n - 1 - r][n - 1 - c]
+            } else {
+                grid[n - 1 - c][n - 1 - r]
+            });
+        }
+        out.push(row);
+    }
+    out
+}
+
+// The grid with the values a and b traded.
+fn traded(grid: Vec[Vec[i64]], a: i64, b: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in grid.iter() {
+        let mut copy: Vec[i64] = Vec.new();
+        for v in row.iter() {
+            copy.push(if *v == a { b } else if *v == b { a } else { *v });
+        }
+        out.push(copy);
+    }
+    out
+}
+
+fn make_grid(seed: mut ref i64, n: i64, kind: i64) -> Vec[Vec[i64]] {
+    // kind 0: 0 to n² - 1 in a random order; kind 1: laid along the
+    // rows, every other row backwards; kind 2: along the rows, all
+    // forwards; kind 3: a winding corridor, the even rows joined at
+    // alternate ends by one square of the odd row between, laid with the
+    // lowest values in its order and the walls left above it at random.
+    // Kinds 1 to 3 then have up to n values traded at random.
+    let mut values: Vec[i64] = Vec.new();
+    for r in 0..n {
+        for c in 0..n {
+            values.push(if kind == 1 and r % 2 == 1 { r * n + n - 1 - c } else { r * n + c });
+        }
+    }
+    if kind == 3 {
+        let mut order: Vec[i64] = Vec.new();
+        let mut on_way: Vec[bool] = Vec.filled(n * n, false);
+        for r in 0..n {
+            let rightwards = (r / 2) % 2 == 0;
+            if r % 2 == 0 {
+                for k in 0..n {
+                    order.push(r * n + if rightwards { k } else { n - 1 - k });
+                }
+            } else {
+                order.push(r * n + if rightwards { n - 1 } else { 0 });
+            }
+        }
+        for at in order.iter() {
+            on_way[*at] = true;
+        }
+        let mut walls: Vec[i64] = Vec.new();
+        for at in 0..n * n {
+            if not on_way[at] {
+                walls.push(at);
+            }
+        }
+        let mut i = walls.len() - 1;
+        while i > 0 {
+            walls.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let way = order.len();
+        for k in 0..way {
+            values[order[k]] = k;
+        }
+        for k in 0..walls.len() {
+            values[walls[k]] = way + k;
+        }
+    }
+    if kind == 0 {
+        let mut i = n * n - 1;
+        while i > 0 {
+            values.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+    } else {
+        let trades = next_random(mut seed) % (n + 1);
+        for _ in 0..trades {
+            let i = next_random(mut seed) % (n * n);
+            let j = next_random(mut seed) % (n * n);
+            values.swap(i, j);
+        }
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(values[r * n + c]);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7780;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1100;
+    let mut total = 0;
+    for case in 0..cases {
+        // 1,000 grids of 1 to 5 squares a side, where the definition's
+        // walk over every simple way is cheap, then 100 of 6 to 40.
+        let small = case < 1000;
+        let n = if small { 1 + next_random(mut seed) % 5 } else { 6 + next_random(mut seed) % 35 };
+        let grid = make_grid(mut seed, n, case % 4);
+        let want = if small { definition(grid) } else { answer_with(0, grid) };
+        total += want;
+        // Two values below the answer and two above, for P3, when there
+        // are two.
+        let low_a = if want >= 2 { next_random(mut seed) % want } else { -1 };
+        let low_b = if want >= 2 { next_random(mut seed) % want } else { -1 };
+        let above = n * n - 1 - want;
+        let high_a = if above >= 2 { want + 1 + next_random(mut seed) % above } else { -1 };
+        let high_b = if above >= 2 { want + 1 + next_random(mut seed) % above } else { -1 };
+        for which in 0..arms {
+            let got = answer_with(which, grid);
+            // P1: the definition's answer, on the small grids.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: transposed, turned half round, or reflected in the other
+            // diagonal, the grid gives the same answer: each keeps the two
+            // corners as the two corners.
+            checks += 1;
+            if answer_with(which, remapped(grid, 0)) != got or answer_with(which, remapped(grid, 1)) != got or answer_with(which, remapped(grid, 2)) != got {
+                fails[1] += 1;
+            }
+            // P3: two values below the answer traded, or two above it, give
+            // the same answer: the squares under water at each time up to
+            // the answer are the same.
+            checks += 1;
+            let mut same = true;
+            if low_a >= 0 and answer_with(which, traded(grid, low_a, low_b)) != got {
+                same = false;
+            }
+            if high_a >= 0 and answer_with(which, traded(grid, high_a, high_b)) != got {
+                same = false;
+            }
+            if not same {
+                fails[2] += 1;
+            }
+            // P4: the squares of elevation at most the answer join the
+            // corners, and those at most one less do not.
+            checks += 1;
+            if not joined_at(grid, got) or joined_at(grid, got - 1) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} grids (answers sum to {total}), {arms} arms, {checks} checks, {failures} failures");
+}

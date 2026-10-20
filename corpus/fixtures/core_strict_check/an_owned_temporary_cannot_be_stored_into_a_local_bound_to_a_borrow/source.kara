@@ -1,0 +1,11 @@
+fn pad_left(s: String, width: i64) -> String {
+    let mut out = s;
+    while out.len() < width {
+        out = " " + out;
+    }
+    out.clone()
+}
+
+fn main() {
+    println(f"[{pad_left("ab".to_string(), 5)}]");
+}

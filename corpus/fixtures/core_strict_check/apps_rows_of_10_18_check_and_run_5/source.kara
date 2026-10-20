@@ -1,0 +1,30 @@
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+fn to_vec[I: Iterator](it: own I) -> Vec[I.Item] {
+    let mut it = it;
+    let mut out: Vec[I.Item] = Vec.new();
+    while let Some(x) = it.next() {
+        out.push(x);
+    }
+    out
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let w = to_vec(VecIter { items: v, pos: 0 });
+    println(f"{w.len()}");
+}

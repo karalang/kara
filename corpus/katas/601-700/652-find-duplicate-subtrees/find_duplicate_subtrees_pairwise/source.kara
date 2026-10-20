@@ -39,8 +39,8 @@ fn find_duplicate_subtrees(root: Option[TreeNode]) -> Vec[TreeNode] {
 fn list(node: Option[TreeNode], nodes: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         nodes.push(n);
-        list(n.left, nodes);
-        list(n.right, nodes);
+        list(n.left, mut nodes);
+        list(n.right, mut nodes);
     }
 }
 

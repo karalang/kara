@@ -1,0 +1,68 @@
+// LeetCode 799 — Champagne Tower, one row at a time.
+//
+// Pour everything into the top glass, then go down a row at a time: a
+// glass holding more than one cup keeps one and passes half the rest to
+// each of the two glasses under it. Only the rows down to query_row
+// matter, and each needs only the one above. A glass holds at most one
+// cup, so the answer is what reached it, capped at 1. O(r²).
+fn champagne_tower(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut row: Vec[f64] = Vec.new();
+    row.push(poured as f64);
+    for r in 0..query_row {
+        let mut below: Vec[f64] = Vec.new();
+        for _ in 0..r + 2 {
+            below.push(0.0);
+        }
+        for c in 0..r + 1 {
+            if row[c] > 1.0 {
+                let half = (row[c] - 1.0) / 2.0;
+                below[c] += half;
+                below[c + 1] += half;
+            }
+        }
+        row = below;
+    }
+    let got = row[query_glass];
+    if got > 1.0 { 1.0 } else { got }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(poured: i64, query_row: i64, query_glass: i64) {
+    let got = champagne_tower(poured, query_row, query_glass);
+    println(f"poured = {poured}, glass ({query_row}, {query_glass}) -> {got:.5}");
+}
+
+fn main() {
+    show(1, 1, 1);
+    show(2, 1, 1);
+    show(100000009, 33, 17);
+    show(0, 0, 0);
+    show(1, 0, 0);
+    show(4, 2, 1);
+    show(4, 2, 0);
+    show(25, 6, 0);
+    show(1000000000, 99, 0);
+    show(1000000000, 99, 49);
+    let mut seed = 799;
+    let mut total = 0.0;
+    let mut check = 0;
+    for i in 0..300 {
+        let poured = if i % 2 == 0 {
+            next_random(mut seed) % 200
+        } else {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001
+        };
+        let query_row = next_random(mut seed) % 100;
+        let query_glass = next_random(mut seed) % (query_row + 1);
+        let got = champagne_tower(poured, query_row, query_glass);
+        total += got;
+        check = (check * 31 + (got * 1000000.0) as i64) % 1000000007;
+    }
+    println(f"300 random glasses: {total:.5} cups in all, checksum {check}");
+}

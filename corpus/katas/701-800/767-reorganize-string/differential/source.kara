@@ -1,0 +1,295 @@
+// LeetCode #767: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn reorganize_string_star(s: String) -> String {
+    let n = s.len();
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    let mut most = 0;
+    for k in 1..26 {
+        if counts[k] > counts[most] {
+            most = k;
+        }
+    }
+    if counts[most] > (n + 1) / 2 {
+        return String.new();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        out.push(0);
+    }
+    let mut place = 0;
+    for step in 0..27 {
+        let k = if step == 0 { most } else { step - 1 };
+        if step > 0 and k == most {
+            continue;
+        }
+        for _ in 0..counts[k] {
+            if place >= n {
+                place = 1;
+            }
+            out[place] = (97 + k) as u8;
+            place += 2;
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// ---- heap arm -------------------------------------------------------
+
+fn reorganize_string_heap(s: String) -> String {
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    // smallest first, so counts go in negated
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    for k in 0..26 {
+        if counts[k] > 0 {
+            queue.push((-counts[k], k));
+        }
+    }
+    let mut out = String.new();
+    let mut last = -1;
+    while let Some((left, k)) = queue.pop() {
+        if k != last {
+            out.push((97 + k) as u8 as char);
+            last = k;
+            if left + 1 < 0 {
+                queue.push((left + 1, k));
+            }
+        } else {
+            match queue.pop() {
+                Some((other, j)) => {
+                    out.push((97 + j) as u8 as char);
+                    last = j;
+                    if other + 1 < 0 {
+                        queue.push((other + 1, j));
+                    }
+                    queue.push((left, k));
+                }
+                None => {
+                    return String.new();
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn reorganize_string_sorted(s: String) -> String {
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    let mut letters: Vec[(i64, u8)] = Vec.new();
+    for b in s.bytes() {
+        letters.push((-counts[b as i64 - 97], b));
+    }
+    letters.sort();
+    let n = letters.len();
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        out.push(0);
+    }
+    let half = (n + 1) / 2;
+    for i in 0..n {
+        let place = if i < half { 2 * i } else { 2 * (i - half) + 1 };
+        out[place] = letters[i].1;
+    }
+    for i in 1..n {
+        if out[i] == out[i - 1] {
+            return String.new();
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// ---- greedy arm -----------------------------------------------------
+
+fn reorganize_string_greedy(s: String) -> String {
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    let mut out = String.new();
+    let mut last = -1;
+    for _ in 0..s.len() {
+        let mut best = -1;
+        for k in 0..26 {
+            if k != last and counts[k] > 0 and (best < 0 or counts[k] > counts[best]) {
+                best = k;
+            }
+        }
+        if best < 0 {
+            return String.new();
+        }
+        out.push((97 + best) as u8 as char);
+        counts[best] -= 1;
+        last = best;
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: String) -> String {
+    if which == 0 {
+        reorganize_string_star(s)
+    } else if which == 1 {
+        reorganize_string_heap(s)
+    } else if which == 2 {
+        reorganize_string_sorted(s)
+    } else {
+        reorganize_string_greedy(s)
+    }
+}
+
+fn counts_of(s: String) -> Vec[i64] {
+    let mut counts: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        counts.push(0);
+    }
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    counts
+}
+
+// Whether the letters left in `counts` can follow letter `last` with no
+// two neighbours equal, trying every letter in every place.
+fn arrangeable(counts: mut ref Vec[i64], left: i64, last: i64) -> bool {
+    if left == 0 {
+        return true;
+    }
+    for k in 0..26 {
+        if k != last and counts[k] > 0 {
+            counts[k] -= 1;
+            let found = arrangeable(mut counts, left - 1, k);
+            counts[k] += 1;
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The definition: some order of the letters has no two neighbours equal.
+fn definition(s: String) -> bool {
+    let mut counts = counts_of(s);
+    arrangeable(mut counts, s.len(), -1)
+}
+
+fn rearranged(s: String, answer: String) -> bool {
+    if answer.len() != s.len() or counts_of(answer) != counts_of(s) {
+        return false;
+    }
+    let bytes = answer.bytes();
+    for i in 1..bytes.len() {
+        if bytes[i] == bytes[i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7670;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut possible = 0;
+    for case in 0..cases {
+        // up to 9 letters for the definition, then up to 500
+        let n = if case < small { 1 + next_random(mut seed) % 9 } else { 1 + next_random(mut seed) % 500 };
+        let letters = if case < small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 26 };
+        let mut bytes: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            // letter 0 drawn about twice as often as the others
+            let k = next_random(mut seed) % (letters + 1);
+            bytes.push((97 + if k == letters { 0 } else { k }) as u8);
+        }
+        // the letters renamed and the string shuffled
+        let mut name: Vec[i64] = Vec.new();
+        for k in 0..26 {
+            name.push(k);
+        }
+        for k in 0..26 {
+            let j = k + next_random(mut seed) % (26 - k);
+            name.swap(k, j);
+        }
+        let mut moved: Vec[u8] = Vec.new();
+        for i in 0..n {
+            moved.push((97 + name[bytes[i] as i64 - 97]) as u8);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            moved.swap(i, j);
+        }
+        let s = String.from_utf8(bytes).unwrap();
+        let t = String.from_utf8(moved).unwrap();
+        let mut most = 0;
+        for c in counts_of(s) {
+            if c > most {
+                most = c;
+            }
+        }
+        let want = if case < small { definition(s) } else { false };
+        for which in 0..arms {
+            let answer = answer_with(which, s);
+            let found = answer.len() > 0;
+            if which == 0 and found {
+                possible += 1;
+            }
+            // P1: an answer exactly when the definition finds one.
+            if case < small {
+                checks += 1;
+                if found != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: an answer is a rearrangement of the string with no two
+            // neighbours equal.
+            checks += 1;
+            if found and not rearranged(s, answer) {
+                fails[1] += 1;
+            }
+            // P3: renaming the letters and shuffling the string changes
+            // nothing about whether there is an answer.
+            checks += 1;
+            if (answer_with(which, t).len() > 0) != found {
+                fails[2] += 1;
+            }
+            // P4: there is an answer exactly when no letter fills more
+            // than half the places, rounded up.
+            checks += 1;
+            if found != (most <= (n + 1) / 2) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} strings ({possible} rearranged), {arms} arms, {checks} checks, {failures} failures");
+}

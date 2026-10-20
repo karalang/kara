@@ -1,0 +1,245 @@
+// LeetCode #793: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on every small k and random large ones.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn zeroes_star(x: i64) -> i64 {
+    let mut count = 0;
+    let mut p = x / 5;
+    while p > 0 {
+        count += p;
+        p /= 5;
+    }
+    count
+}
+
+fn preimage_size_fzf_star(k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 5 * k + 5;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if zeroes_star(mid) < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if zeroes_star(lo) == k { 5 } else { 0 }
+}
+
+// ---- count arm ------------------------------------------------------
+
+fn zeroes_count(x: i64) -> i64 {
+    let mut count = 0;
+    let mut p = x / 5;
+    while p > 0 {
+        count += p;
+        p /= 5;
+    }
+    count
+}
+
+// The least x with f(x) at least `k`.
+fn least_with_count(k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 5 * k + 5;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if zeroes_count(mid) < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn preimage_size_fzf_count(k: i64) -> i64 {
+    least_with_count(k + 1) - least_with_count(k)
+}
+
+// ---- digits arm -----------------------------------------------------
+
+fn preimage_size_fzf_digits(k: i64) -> i64 {
+    let mut size = 1;
+    while size * 5 + 1 <= k {
+        size = size * 5 + 1;
+    }
+    let mut rest = k;
+    while size > 0 {
+        if rest / size == 5 {
+            return 0;
+        }
+        rest %= size;
+        size = (size - 1) / 5;
+    }
+    5
+}
+
+// ---- walk arm -------------------------------------------------------
+
+fn zeroes_walk(x: i64) -> i64 {
+    let mut count = 0;
+    let mut p = x / 5;
+    while p > 0 {
+        count += p;
+        p /= 5;
+    }
+    count
+}
+
+fn preimage_size_fzf_walk(k: i64) -> i64 {
+    let mut x = 4 * k / 5 * 5;
+    while zeroes_walk(x) < k {
+        x += 5;
+    }
+    if zeroes_walk(x) == k { 5 } else { 0 }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, k: i64) -> i64 {
+    if which == 0 {
+        preimage_size_fzf_star(k)
+    } else if which == 1 {
+        preimage_size_fzf_count(k)
+    } else if which == 2 {
+        preimage_size_fzf_digits(k)
+    } else {
+        preimage_size_fzf_walk(k)
+    }
+}
+
+// How many times 5 divides x, for x above 0.
+fn fives_in(x: i64) -> i64 {
+    let mut n = x;
+    let mut j = 0;
+    while n % 5 == 0 {
+        n /= 5;
+        j += 1;
+    }
+    j
+}
+
+// The zeroes at the end of x!, by a sum over 1..x of the fives in each:
+// the count in the definition's own terms, for checking the arms'.
+fn zeroes_by_sum(x: i64) -> i64 {
+    let mut count = 0;
+    for i in 1..x + 1 {
+        count += fives_in(i);
+    }
+    count
+}
+
+// A random number from 0 to about four billion.
+fn big_random(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) * 4
+}
+
+// The zeroes at the end of x!, Legendre's way, for the large x that the
+// sum above is too slow for.
+fn zeroes_of(x: i64) -> i64 {
+    let mut count = 0;
+    let mut p = 5;
+    while p <= x {
+        count += x / p;
+        p *= 5;
+    }
+    count
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7930;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    // The definition: for every k up to `small`, the number of x with
+    // exactly k zeroes, counted by walking x up from 0.
+    let small = 3000;
+    let mut tally: Vec[i64] = Vec.new();
+    for _ in 0..small + 1 {
+        tally.push(0);
+    }
+    let mut x = 0;
+    let mut z = 0;
+    while z <= small {
+        tally[z] += 1;
+        x += 1;
+        z += fives_in(x);
+    }
+    let mut sum_checked = 0;
+    for x in [0, 4, 5, 24, 25, 124, 125, 625, 3124, 3125] {
+        if zeroes_by_sum(x) == zeroes_of(x) {
+            sum_checked += 1;
+        }
+    }
+    let mut fives = 0;
+    for k in 0..small + 1 {
+        if tally[k] == 5 {
+            fives += 1;
+        }
+        for which in 0..arms {
+            // P1: the definition's count, for every small k.
+            checks += 1;
+            if answer_with(which, k) != tally[k] {
+                fails[0] += 1;
+            }
+        }
+    }
+    let cases = 1600;
+    for _ in 0..cases {
+        // A random k up to a billion.
+        let k = big_random(mut seed) / 4 % 1000000001;
+        let first = answer_with(0, k);
+        // A random x, and a random x with 5 in it two to five times.
+        let x = big_random(mut seed);
+        let mut power = 25;
+        for _ in 0..next_random(mut seed) % 4 {
+            power *= 5;
+        }
+        let y = power * (1 + big_random(mut seed) % (4000000000 / power));
+        let j = fives_in(y);
+        for which in 0..arms {
+            // P2: 0 or 5, and the same for every arm.
+            checks += 1;
+            let got = answer_with(which, k);
+            if (got != 0 and got != 5) or got != first {
+                fails[1] += 1;
+            }
+            // P3: a count some x has is reached by five.
+            checks += 1;
+            if answer_with(which, zeroes_of(x)) != 5 {
+                fails[2] += 1;
+            }
+            // P4: the j - 1 counts that y's j fives jump over have none,
+            // and the counts on each side of them have five.
+            checks += 1;
+            let top = zeroes_of(y);
+            let mut right = answer_with(which, top) == 5 and answer_with(which, top - j) == 5;
+            for skipped in top - j + 1..top {
+                if answer_with(which, skipped) != 0 {
+                    right = false;
+                }
+            }
+            if not right {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}k up to {small} ({fives} with five, {sum_checked} of 10 sums agreeing) and {cases} large cases, {arms} arms, {checks} checks, {failures} failures");
+}

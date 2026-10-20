@@ -1,0 +1,42 @@
+// LeetCode 790 — Domino and Tromino Tiling, full and ragged ends.
+//
+// full[i] counts the tilings of the first i columns, and ragged[i] those
+// of the first i columns with one more square of column i + 1 covered,
+// the same for the top square as for the bottom one. The last piece of a
+// full board is a vertical domino, two horizontal dominoes, or a tromino
+// finishing a ragged end of either side; a ragged end grows by a
+// horizontal domino on its open side or starts with a tromino on a full
+// board. O(n).
+fn num_tilings(n: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut full: Vec[i64] = [1, 1];
+    let mut ragged: Vec[i64] = [0, 1];
+    for i in 2..n + 1 {
+        full.push((full[i - 1] + full[i - 2] + 2 * ragged[i - 2]) % modulus);
+        ragged.push((ragged[i - 1] + full[i - 1]) % modulus);
+    }
+    full[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    for n in [3, 1, 2, 4, 5, 10, 27, 28, 100, 999, 1000] {
+        println(f"n = {n} -> {num_tilings(n)}");
+    }
+    let mut seed = 790;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let ways = num_tilings(n);
+        sum = (sum + ways) % 1000000007;
+        check = (check * 31 + ways) % 1000000007;
+    }
+    println(f"300 random n: answers sum to {sum}, checksum {check}");
+}

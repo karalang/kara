@@ -1,0 +1,16 @@
+fn main() {
+    let out = "hello".to_string();
+    match fs.write("o.txt".to_string(), out) {
+        Ok(_) => println(f"{out.len()}"),
+        Err(_) => println("err"),
+    }
+    let o2 = "x".to_string();
+    let r = fs.write("p.txt".to_string(), o2);
+    println(f"{o2.len()} {r.is_ok()}");
+    let name = "HOME".to_string();
+    match env.var(name) {
+        Ok(_) => println("set"),
+        Err(_) => println("unset"),
+    }
+    println(f"asked for {name}");
+}

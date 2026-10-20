@@ -1,0 +1,10 @@
+
+struct Client { out: String }
+impl Client {
+    fn error(mut ref self, msg: Str) { self.out.push_str(msg); }
+}
+fn main() {
+    let mut c = Client { out: String.new() };
+    c.error("x");
+    let bad: i64 = c;
+}

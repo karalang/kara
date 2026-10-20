@@ -1,0 +1,59 @@
+// LeetCode 766 — Toeplitz Matrix: benchmark, the ★ arm.
+//
+// Sixteen 200 by 200 Toeplitz matrices, built once. Each of 30,000 rounds
+// takes one of them, adds 0 or 1 to one random cell, asks whether it is
+// still Toeplitz, and puts the cell back.
+
+fn is_toeplitz_matrix(matrix: Vec[Vec[i64]]) -> bool {
+    for i in 1..matrix.len() {
+        for j in 1..matrix[i].len() {
+            if matrix[i][j] != matrix[i - 1][j - 1] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let size = 200;
+    let rounds = 30000;
+    let mut seed = 766;
+    let mut pool: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..16 {
+        let mut diag: Vec[i64] = Vec.new();
+        for _ in 0..2 * size - 1 {
+            diag.push(next_random(mut seed) % 10);
+        }
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        for i in 0..size {
+            let mut row: Vec[i64] = Vec.new();
+            for j in 0..size {
+                row.push(diag[i - j + size - 1]);
+            }
+            matrix.push(row);
+        }
+        pool.push(matrix);
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for round in 0..rounds {
+        let k = round % 16;
+        let i = next_random(mut seed) % size;
+        let j = next_random(mut seed) % size;
+        let old = pool[k][i][j];
+        pool[k][i][j] = old + next_random(mut seed) % 2;
+        let answer = is_toeplitz_matrix(pool[k]);
+        pool[k][i][j] = old;
+        if answer {
+            yes += 1;
+        }
+        check = (check * 31 + if answer { 1 } else { 0 } + i * size + j) % 1000000007;
+    }
+    println(f"{rounds} rounds on 200 by 200: {yes} Toeplitz, checksum {check}");
+}

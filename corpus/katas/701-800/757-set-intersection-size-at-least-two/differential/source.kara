@@ -1,0 +1,257 @@
+// LeetCode #757: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random interval sets.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn intersection_size_two_star(intervals: Vec[Vec[i64]]) -> i64 {
+    let mut order = intervals.clone();
+    order.sort_by(|x, y| if x[1] != y[1] { x[1].cmp(y[1]) } else { y[0].cmp(x[0]) });
+    let mut count = 0;
+    let mut second = -1;
+    let mut largest = -1;
+    for interval in order.iter() {
+        let start = interval[0];
+        let end = interval[1];
+        if start > largest {
+            count += 2;
+            second = end - 1;
+            largest = end;
+        } else if start > second {
+            count += 1;
+            second = largest;
+            largest = end;
+        }
+    }
+    count
+}
+
+// ---- points arm -----------------------------------------------------
+
+fn first_at_least_points(sorted: ref Vec[i64], value: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < value {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn intersection_size_two_points(intervals: Vec[Vec[i64]]) -> i64 {
+    let mut order = intervals.clone();
+    order.sort_by(|x, y| x[1].cmp(y[1]));
+    let mut chosen: Vec[i64] = Vec.new();
+    for interval in order.iter() {
+        let start = interval[0];
+        let mut have = chosen.len() - first_at_least_points(chosen, start);
+        let mut point = interval[1];
+        while have < 2 {
+            let at = first_at_least_points(chosen, point);
+            if at == chosen.len() or chosen[at] != point {
+                chosen.insert(at, point);
+                have += 1;
+            }
+            point -= 1;
+        }
+    }
+    chosen.len()
+}
+
+// ---- left-end arm ---------------------------------------------------
+
+fn intersection_size_two_reverse(intervals: Vec[Vec[i64]]) -> i64 {
+    let mut order = intervals.clone();
+    order.sort_by(|x, y| if x[0] != y[0] { x[0].cmp(y[0]) } else { y[1].cmp(x[1]) });
+    let mut owed: Vec[i64] = Vec.new();
+    for _ in 0..order.len() {
+        owed.push(2);
+    }
+    let mut count = 0;
+    let mut last = order.len() - 1;
+    while last >= 0 {
+        let start = order[last][0];
+        for point in start..start + owed[last] {
+            for i in 0..last {
+                if owed[i] > 0 and point <= order[i][1] {
+                    owed[i] -= 1;
+                }
+            }
+            count += 1;
+        }
+        last -= 1;
+    }
+    count
+}
+
+// ---- fold arm -------------------------------------------------------
+
+fn intersection_size_two_fold(intervals: Vec[Vec[i64]]) -> i64 {
+    let mut order = intervals.clone();
+    order.sort_by(|x, y| (x[1], -x[0]).cmp((y[1], -y[0])));
+    let (count, _, _) = order.iter().fold((0, -1, -1), |state, interval| {
+        let (count, second, largest) = state;
+        if interval[0] > largest {
+            (count + 2, interval[1] - 1, interval[1])
+        } else if interval[0] > second {
+            (count + 1, largest, interval[1])
+        } else {
+            state
+        }
+    });
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, intervals: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        intersection_size_two_star(intervals)
+    } else if which == 1 {
+        intersection_size_two_points(intervals)
+    } else if which == 2 {
+        intersection_size_two_reverse(intervals)
+    } else {
+        intersection_size_two_fold(intervals)
+    }
+}
+
+// The definition, by brute force over points 0 to 9: the fewest points
+// of any subset that every interval holds at least two of.
+fn definition(intervals: ref Vec[Vec[i64]]) -> i64 {
+    let mut best = 11;
+    for mask in 0..1024 {
+        let mut size = 0;
+        for p in 0..10 {
+            if (mask >> p) & 1 == 1 {
+                size += 1;
+            }
+        }
+        if size < best {
+            let mut all = true;
+            for interval in intervals.iter() {
+                let mut held = 0;
+                for p in interval[0]..interval[1] + 1 {
+                    if (mask >> p) & 1 == 1 {
+                        held += 1;
+                    }
+                }
+                if held < 2 {
+                    all = false;
+                }
+            }
+            if all {
+                best = size;
+            }
+        }
+    }
+    best
+}
+
+fn random_intervals(seed: mut ref i64, n: i64, span: i64, widest: i64) -> Vec[Vec[i64]] {
+    let mut intervals: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let width = 1 + next_random(mut seed) % widest;
+        let a = next_random(mut seed) * 32768 % (span - width + 1);
+        intervals.push([a, a + width]);
+    }
+    intervals
+}
+
+fn moved(intervals: ref Vec[Vec[i64]], by: i64, mirror: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for interval in intervals.iter() {
+        if mirror {
+            out.push([by - interval[1], by - interval[0]]);
+        } else {
+            out.push([interval[0] + by, interval[1] + by]);
+        }
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7570;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let large = 300;
+    let mut points = 0;
+    for case in 0..small + large {
+        // small sets on the points 0 to 9, where the definition can
+        // look, then large ones of up to 400 intervals up to 10^8
+        let intervals = if case < small {
+            let n = 1 + next_random(mut seed) % 6;
+            let widest = 1 + next_random(mut seed) % 9;
+            random_intervals(mut seed, n, 9, widest)
+        } else {
+            let n = 1 + next_random(mut seed) % 400;
+            let widest = 1 + next_random(mut seed) % 5000000;
+            random_intervals(mut seed, n, 100000000, widest)
+        };
+        let top = if case < small { 9 } else { 100000000 };
+        let mut highest = 0;
+        for interval in intervals.iter() {
+            if interval[1] > highest {
+                highest = interval[1];
+            }
+        }
+        let shift = next_random(mut seed) * 32768 % (100000000 - highest + 1);
+        let shifted = moved(intervals, shift, false);
+        let mirrored = moved(intervals, top, true);
+        let mut more = intervals.clone();
+        let extra = random_intervals(mut seed, 1, top, if case < small { 9 } else { 5000000 });
+        more.push(extra[0].clone());
+        let want = if case < small { definition(intervals) } else { 0 };
+        for which in 0..arms {
+            let got = answer_with(which, intervals.clone());
+            if which == 0 {
+                points += got;
+            }
+            // P1: the definition's answer, on the small sets.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: moving every interval by the same amount changes
+            // nothing.
+            checks += 1;
+            if answer_with(which, shifted.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: nor does a mirror.
+            checks += 1;
+            if answer_with(which, mirrored.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: one more interval needs no fewer points and at most
+            // two more.
+            checks += 1;
+            let with_more = answer_with(which, more.clone());
+            if with_more < got or with_more > got + 2 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{small + large} interval sets ({points} points), {arms} arms, {checks} checks, {failures} failures");
+}

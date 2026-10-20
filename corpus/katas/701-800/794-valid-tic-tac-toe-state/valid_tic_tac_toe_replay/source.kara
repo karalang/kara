@@ -1,0 +1,143 @@
+// LeetCode 794 — Valid Tic-Tac-Toe State, replaying the game.
+//
+// Search for a game that ends at the board: from the empty board, the
+// player to move puts a mark on a cell where the board has that
+// player's mark, and the game stops as soon as someone has a line. The
+// board is valid when some such game reaches it. Which player is to
+// move follows from how many marks are down, so a position is fixed by
+// which of the board's marks are down, nine bits, and each is searched
+// once. O(2^9 × 9).
+fn has_line(cells: Vec[u8], mark: u8) -> bool {
+    for r in 0..3 {
+        if cells[r * 3] == mark and cells[r * 3 + 1] == mark and cells[r * 3 + 2] == mark {
+            return true;
+        }
+    }
+    for c in 0..3 {
+        if cells[c] == mark and cells[c + 3] == mark and cells[c + 6] == mark {
+            return true;
+        }
+    }
+    (cells[0] == mark and cells[4] == mark and cells[8] == mark) or (cells[2] == mark and cells[4] == mark and cells[6] == mark)
+}
+
+// Whether play from `now`, with `mover` to move, can reach `goal`;
+// `down` has bit i set when cell i is marked, and `tried` the positions
+// already searched.
+fn reaches(now: mut ref Vec[u8], down: i64, goal: Vec[u8], mover: u8, tried: mut ref Vec[bool]) -> bool {
+    if now == goal {
+        return true;
+    }
+    if tried[down] or has_line(now, b'X') or has_line(now, b'O') {
+        return false;
+    }
+    tried[down] = true;
+    let other = if mover == b'X' { b'O' } else { b'X' };
+    for i in 0..9 {
+        if now[i] == b' ' and goal[i] == mover {
+            now[i] = mover;
+            let found = reaches(mut now, down | (1 << i), goal, other, mut tried);
+            now[i] = b' ';
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn valid_tic_tac_toe(board: Vec[String]) -> bool {
+    let mut goal: Vec[u8] = Vec.new();
+    for row in board {
+        for b in row.bytes() {
+            goal.push(b);
+        }
+    }
+    let mut now: Vec[u8] = Vec.new();
+    for _ in 0..9 {
+        now.push(b' ');
+    }
+    let mut tried: Vec[bool] = Vec.new();
+    for _ in 0..512 {
+        tried.push(false);
+    }
+    reaches(mut now, 0, goal, b'X', mut tried)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn board_of(rows: Array[Str, 3]) -> Vec[String] {
+    rows.iter().map(|r| r.to_string()).collect()
+}
+
+fn show(rows: Array[Str, 3]) {
+    let board = board_of(rows);
+    let shown = board.clone();
+    let answer = valid_tic_tac_toe(board);
+    println(f"[\"{shown[0]}\", \"{shown[1]}\", \"{shown[2]}\"] -> {answer}");
+}
+
+// A random board: cells filled at random, or a random game played for a
+// random number of moves, going on past a line one time in four.
+fn random_board(seed: mut ref i64) -> Vec[String] {
+    let mut cells: Vec[char] = Vec.new();
+    for _ in 0..9 {
+        cells.push(' ');
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let marks = [' ', 'X', 'O'];
+        for i in 0..9 {
+            cells[i] = marks[next_random(mut seed) % 3];
+        }
+    } else {
+        let moves = next_random(mut seed) % 10;
+        let mut mover = 'X';
+        for _ in 0..moves {
+            let mut empty: Vec[i64] = Vec.new();
+            for i in 0..9 {
+                if cells[i] == ' ' {
+                    empty.push(i);
+                }
+            }
+            cells[empty[next_random(mut seed) % empty.len()]] = mover;
+            mover = if mover == 'X' { 'O' } else { 'X' };
+        }
+    }
+    let mut board: Vec[String] = Vec.new();
+    for r in 0..3 {
+        let mut row = String.new();
+        for c in 0..3 {
+            row.push(cells[r * 3 + c]);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn main() {
+    show(["O  ", "   ", "   "]);
+    show(["XOX", " X ", "   "]);
+    show(["XOX", "O O", "XOX"]);
+    show(["   ", "   ", "   "]);
+    show(["XXX", "OO ", "   "]);
+    show(["XXX", "XOO", "OO "]);
+    show(["XXX", "   ", "OOO"]);
+    show(["XO ", "XO ", "XO "]);
+    show(["XOX", "XOO", "XXO"]);
+    let mut seed = 794;
+    let mut valid = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let board = random_board(mut seed);
+        if valid_tic_tac_toe(board) {
+            valid += 1;
+            check = (check * 131 + i) % 1000000007;
+        }
+    }
+    println(f"300 random boards: {valid} valid, checksum {check}");
+}

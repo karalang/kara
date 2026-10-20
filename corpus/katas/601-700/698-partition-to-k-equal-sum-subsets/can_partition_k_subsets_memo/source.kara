@@ -18,7 +18,7 @@ fn search(nums: Vec[i64], mask: i64, sum: i64, target: i64, failed: mut ref Vec[
     let room = target - sum % target;
     for i in 0..n {
         if mask & (1 << i) == 0 and nums[i] <= room {
-            if search(nums, mask | (1 << i), sum + nums[i], target, failed) {
+            if search(nums, mask | (1 << i), sum + nums[i], target, mut failed) {
                 return true;
             }
         }

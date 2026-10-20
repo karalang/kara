@@ -1,0 +1,75 @@
+// LeetCode 760 — Find Anagram Mappings, a map of positions.
+//
+// `nums2` is `nums1` rearranged; return `mapping` with
+// `nums1[i] == nums2[mapping[i]]`. With repeated values any matching
+// works; these arms all give the k-th occurrence of a value in `nums1`
+// the k-th occurrence of it in `nums2`, so that their answers agree.
+// Here a map from each value to its positions in `nums2`, in order, and
+// a second map counting how many of them have been used. O(n).
+
+fn anagram_mappings(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut positions: Map[i64, Vec[i64]] = Map.new();
+    for j in 0..nums2.len() {
+        if positions.contains_key(nums2[j]) {
+            positions.get_mut(nums2[j]).unwrap().push(j);
+        } else {
+            positions.insert(nums2[j], [j]);
+        }
+    }
+    let mut used: Map[i64, i64] = Map.new();
+    let mut mapping: Vec[i64] = Vec.new();
+    for x in nums1.iter() {
+        let k = used.get(*x) ?? 0;
+        mapping.push(positions.get(*x).unwrap()[k]);
+        used.insert(*x, k + 1);
+    }
+    mapping
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums1: Vec[i64], nums2: Vec[i64]) {
+    let mapping = anagram_mappings(nums1.clone(), nums2.clone());
+    println(f"{nums1} {nums2} -> {mapping}");
+}
+
+fn main() {
+    show([12, 28, 46, 32, 50], [50, 12, 32, 46, 28]);
+    show([84, 46], [84, 46]);
+    show([7], [7]);
+    show([1, 1, 1], [1, 1, 1]);
+    show([2, 1, 2, 1], [1, 2, 1, 2]);
+    show([0, 100000, 0], [0, 0, 100000]);
+    show([5, 4, 3, 2, 1], [1, 2, 3, 4, 5]);
+    let mut seed = 760;
+    let mut fixed = 0;
+    let mut check = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 100;
+        // few distinct values half the time, so that repeats are common
+        let widest = if next_random(mut seed) % 2 == 0 { 10 } else { 100001 };
+        let range = 1 + next_random(mut seed) % widest;
+        let mut nums1: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums1.push(next_random(mut seed) * 4 % range);
+        }
+        let mut nums2 = nums1.clone();
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            nums2.swap(i, j);
+        }
+        let mapping = anagram_mappings(nums1, nums2);
+        for i in 0..mapping.len() {
+            if mapping[i] == i {
+                fixed += 1;
+            }
+            check = (check * 31 + mapping[i]) % 1000000007;
+        }
+    }
+    println(f"500 random pairs: {fixed} values mapped to their own index, checksum {check}");
+}

@@ -1,0 +1,198 @@
+// LeetCode 803 — Bricks Falling When Hit, flooding from the top after
+// every hit.
+//
+// Play the hits forward. After each one, flood from the bricks in the
+// top row through the bricks next to each other; every brick the flood
+// does not reach falls, and is taken away and counted. O(hits · rows ·
+// cols).
+fn hit_bricks(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut wall = grid.clone();
+    let mut fallen: Vec[i64] = Vec.new();
+    for k in 0..hits.len() {
+        let (r, c) = hits[k];
+        if wall[r][c] == 0 {
+            fallen.push(0);
+            continue;
+        }
+        wall[r][c] = 0;
+        let mut held: Vec[bool] = Vec.new();
+        for _ in 0..rows * cols {
+            held.push(false);
+        }
+        let mut queue: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            if wall[0][c] == 1 {
+                held[c] = true;
+                queue.push(c);
+            }
+        }
+        let mut head = 0;
+        while head < queue.len() {
+            let cell = queue[head];
+            head += 1;
+            let (r, c) = (cell / cols, cell % cols);
+            let dr = [-1, 1, 0, 0];
+            let dc = [0, 0, -1, 1];
+            for d in 0..4 {
+                let nr = r + dr[d];
+                let nc = c + dc[d];
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and wall[nr][nc] == 1 and not held[nr * cols + nc] {
+                    held[nr * cols + nc] = true;
+                    queue.push(nr * cols + nc);
+                }
+            }
+        }
+        let mut count = 0;
+        for r in 0..rows {
+            for c in 0..cols {
+                if wall[r][c] == 1 and not held[r * cols + c] {
+                    wall[r][c] = 0;
+                    count += 1;
+                }
+            }
+        }
+        fallen.push(count);
+    }
+    fallen
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text_list(list: Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..list.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{list[i]}");
+    }
+    out.push_str("]");
+    out
+}
+
+fn text_grid(grid: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..grid.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(text_list(grid[i].clone()));
+    }
+    out.push_str("]");
+    out
+}
+
+fn text_hits(hits: Vec[(i64, i64)]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..hits.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let (r, c) = hits[i];
+        out.push_str(f"[{r}, {c}]");
+    }
+    out.push_str("]");
+    out
+}
+
+// The wall with every brick that is not held up from the top row taken
+// away, so that every brick starts held up. A brick that started loose
+// would be counted as falling at the first hit by an arm playing the
+// hits forward, and never by one playing them backwards.
+fn settled(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(0);
+        }
+        out.push(row);
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for c in 0..cols {
+        if grid[0][c] == 1 {
+            out[0][c] = 1;
+            stack.push((0, c));
+        }
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    while let Some((r, c)) = stack.pop() {
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and grid[nr][nc] == 1 and out[nr][nc] == 0 {
+                out[nr][nc] = 1;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    out
+}
+
+fn show(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) {
+    println(f"{text_grid(grid)}, {text_hits(hits)} -> {text_list(hit_bricks(grid, hits))}");
+}
+
+fn main() {
+    show(vec![vec![1, 0, 0, 0], vec![1, 1, 1, 0]], vec![(1, 0)]);
+    show(vec![vec![1, 0, 0, 0], vec![1, 1, 0, 0]], vec![(1, 1), (1, 0)]);
+    show(vec![vec![1], vec![1], vec![1], vec![1]], vec![(1, 0)]);
+    show(vec![vec![1, 1, 1], vec![0, 1, 0], vec![1, 1, 1]], vec![(0, 1), (0, 0)]);
+    show(vec![vec![0, 1, 0], vec![1, 1, 1]], vec![(0, 0), (0, 1), (1, 1)]);
+    show(vec![vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 1]], vec![(0, 0), (0, 2), (0, 1)]);
+    show(vec![vec![1, 0, 1], vec![1, 1, 1]], vec![(0, 0), (0, 2), (1, 1)]);
+    let mut seed = 803;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // A random wall with its loose bricks taken away, then some of
+        // its cells hit in a random order, bricks and empty cells alike.
+        let rows = 1 + next_random(mut seed) % 8;
+        let cols = 1 + next_random(mut seed) % 8;
+        let fill = 2 + next_random(mut seed) % 3;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(if next_random(mut seed) % 4 < fill { 1 } else { 0 });
+            }
+            grid.push(row);
+        }
+        let grid = settled(grid);
+        let mut cells: Vec[i64] = Vec.new();
+        for j in 0..rows * cols {
+            cells.push(j);
+        }
+        for j in 1..rows * cols {
+            let t = next_random(mut seed) % (j + 1);
+            let x = cells[j];
+            cells[j] = cells[t];
+            cells[t] = x;
+        }
+        let count = 1 + next_random(mut seed) % (rows * cols);
+        let mut hits: Vec[(i64, i64)] = Vec.new();
+        for j in 0..count {
+            hits.push((cells[j] / cols, cells[j] % cols));
+        }
+        let fallen = hit_bricks(grid, hits);
+        for f in fallen.iter() {
+            total += f;
+            check = (check * 131 + f + 1) % 1000000007;
+        }
+        check = (check * 131 + i) % 1000000007;
+    }
+    println(f"300 random walls: {total} bricks fell, checksum {check}");
+}

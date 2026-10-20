@@ -1,0 +1,9 @@
+fn main() {
+    let mut v: Vec[i64] = vec![1, 2, 3];
+    let mut n = 0;
+    for x in v[1..].iter() {
+        n += *x;
+    }
+    v.push(4);
+    println(f"{v.len()} {n}");
+}

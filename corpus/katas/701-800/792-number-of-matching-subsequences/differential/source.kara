@@ -1,0 +1,312 @@
+// LeetCode #792: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random strings and word lists.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_matching_subseq_star(s: Str, words: Vec[String]) -> i64 {
+    // waiting[c]: (word, letters matched) for the words that need c next.
+    let mut waiting: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..26 {
+        waiting.push(Vec.new());
+    }
+    for i in 0..words.len() {
+        let first = words[i].bytes()[0];
+        waiting[(first - b'a') as i64].push((i, 0));
+    }
+    let mut count = 0;
+    for b in s.bytes() {
+        let moving = mem.take(mut waiting[(b - b'a') as i64]);
+        for (w, matched) in moving {
+            let word = words[w].bytes();
+            if matched + 1 == word.len() {
+                count += 1;
+            } else {
+                waiting[(word[matched + 1] - b'a') as i64].push((w, matched + 1));
+            }
+        }
+    }
+    count
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn num_matching_subseq_table(s: Str, words: Vec[String]) -> i64 {
+    let t = s.bytes();
+    let n = t.len();
+    let mut next: Vec[i64] = Vec.new();
+    for _ in 0..(n + 1) * 26 {
+        next.push(n);
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        for c in 0..26 {
+            next[i * 26 + c] = next[(i + 1) * 26 + c];
+        }
+        next[i * 26 + (t[i] - b'a') as i64] = i;
+        i -= 1;
+    }
+    let mut count = 0;
+    for word in words {
+        let mut at = 0;
+        let mut found = true;
+        for b in word.bytes() {
+            let place = next[at * 26 + (b - b'a') as i64];
+            if place == n {
+                found = false;
+                break;
+            }
+            at = place + 1;
+        }
+        if found {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- binary search arm ----------------------------------------------
+
+// The index of the first entry of the sorted `list` that is at least
+// `at`, or the list's length when there is none.
+fn first_at_least_search(list: ref Vec[i64], at: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = list.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if list[mid] < at {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn num_matching_subseq_search(s: Str, words: Vec[String]) -> i64 {
+    let mut places: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        places.push(Vec.new());
+    }
+    let t = s.bytes();
+    for i in 0..t.len() {
+        places[(t[i] - b'a') as i64].push(i);
+    }
+    let mut count = 0;
+    for word in words {
+        let mut at = 0;
+        let mut found = true;
+        for b in word.bytes() {
+            let list = ref places[(b - b'a') as i64];
+            let k = first_at_least_search(list, at);
+            if k == list.len() {
+                found = false;
+                break;
+            }
+            at = list[k] + 1;
+        }
+        if found {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn is_subsequence_memo(word: Str, s: Str) -> bool {
+    let w = word.bytes();
+    let t = s.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < t.len() {
+        if w[i] == t[j] {
+            i += 1;
+        }
+        j += 1;
+    }
+    i == w.len()
+}
+
+fn num_matching_subseq_memo(s: Str, words: Vec[String]) -> i64 {
+    let mut seen: Map[String, bool] = Map.new();
+    let mut count = 0;
+    for word in words {
+        let found = match seen.get(word) {
+            Some(known) => *known,
+            None => {
+                let answer = is_subsequence_memo(word, s);
+                seen.insert(word.clone(), answer);
+                answer
+            }
+        };
+        if found {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: Str, words: Vec[String]) -> i64 {
+    if which == 0 {
+        num_matching_subseq_star(s, words)
+    } else if which == 1 {
+        num_matching_subseq_table(s, words)
+    } else if which == 2 {
+        num_matching_subseq_search(s, words)
+    } else {
+        num_matching_subseq_memo(s, words)
+    }
+}
+
+// The number of ways to read word off s, as many as there are sets of
+// places in s that spell it, held at a billion. ways[j] counts the ways
+// to spell the first j letters with the letters of s seen so far.
+fn embeddings(s: Str, word: Str) -> i64 {
+    let w = word.bytes();
+    let mut ways: Vec[i64] = Vec.new();
+    ways.push(1);
+    for _ in 0..w.len() {
+        ways.push(0);
+    }
+    for b in s.bytes() {
+        let mut j = w.len();
+        while j > 0 {
+            if w[j - 1] == b {
+                ways[j] = (ways[j] + ways[j - 1]).min(1000000000);
+            }
+            j -= 1;
+        }
+    }
+    ways[w.len()]
+}
+
+// The definition: the words that s can spell in at least one way.
+fn definition(s: Str, words: Vec[String]) -> i64 {
+    let mut count = 0;
+    for word in words {
+        if embeddings(s, word) > 0 {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    word
+}
+
+// A piece of s: each letter kept one time in `keep`, and at least one.
+fn piece_of(seed: mut ref i64, s: Str, keep: i64) -> String {
+    let t = s.bytes();
+    let mut word = String.new();
+    for b in t.iter() {
+        if next_random(mut seed) % keep == 0 {
+            word.push(*b as char);
+        }
+    }
+    if word.len() == 0 {
+        word.push(t[next_random(mut seed) % t.len()] as char);
+    }
+    word
+}
+
+fn make_case(seed: mut ref i64, kind: i64) -> (String, Vec[String]) {
+    // kind 0: s and words over a random number of letters; kind 1: s of
+    // one or two letters, so words can be spelled in very many ways;
+    // kind 2: most words are pieces of s; kind 3: words over more
+    // letters than s has, and some longer than s.
+    let letters = if kind == 1 { 1 + next_random(mut seed) % 2 } else { 1 + next_random(mut seed) % 26 };
+    let s = random_word(mut seed, 1 + next_random(mut seed) % 40, letters);
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..1 + next_random(mut seed) % 15 {
+        let pick = next_random(mut seed) % 4;
+        if pick == 0 and words.len() > 0 {
+            let again = words[next_random(mut seed) % words.len()].clone();
+            words.push(again);
+        } else if kind == 2 and pick != 3 {
+            let keep = 1 + next_random(mut seed) % 4;
+            words.push(piece_of(mut seed, s, keep));
+        } else if kind == 3 {
+            let more = (letters + 1 + next_random(mut seed) % 3).min(26);
+            words.push(random_word(mut seed, 1 + next_random(mut seed) % (s.len() + 3), more));
+        } else {
+            words.push(random_word(mut seed, 1 + next_random(mut seed) % 12, letters));
+        }
+    }
+    (s, words)
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7920;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    let mut matching = 0;
+    for case in 0..cases {
+        let (s, words) = make_case(mut seed, case % 4);
+        let want = definition(s, words.clone());
+        total += words.len();
+        matching += want;
+        // The same words in a random order.
+        let mut shuffled = words.clone();
+        let mut i = shuffled.len() - 1;
+        while i > 0 {
+            shuffled.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        // The words with s itself and a piece of s added.
+        let mut more = words.clone();
+        more.push(s.to_string());
+        more.push(piece_of(mut seed, s, 2));
+        // s with more letters after it.
+        let extra = random_word(mut seed, 1 + next_random(mut seed) % 10, 26);
+        let longer = f"{s}{extra}";
+        for which in 0..arms {
+            let got = answer_with(which, s, words.clone());
+            // P1: the definition's count.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the order of the words does not matter.
+            checks += 1;
+            if answer_with(which, s, shuffled.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: adding s and a piece of s adds two.
+            checks += 1;
+            if answer_with(which, s, more.clone()) != got + 2 {
+                fails[2] += 1;
+            }
+            // P4: more letters after s never lose a word.
+            checks += 1;
+            if answer_with(which, longer, words.clone()) < got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} words, {matching} matching), {arms} arms, {checks} checks, {failures} failures");
+}

@@ -1,0 +1,265 @@
+// LeetCode #801: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random pairs of arrays.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn min_swap_star(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let mut keep = 0;
+    let mut swap = 1;
+    for i in 1..n {
+        let same = nums1[i - 1] < nums1[i] and nums2[i - 1] < nums2[i];
+        let cross = nums1[i - 1] < nums2[i] and nums2[i - 1] < nums1[i];
+        let mut next_keep = n + 1;
+        let mut next_swap = n + 1;
+        if same {
+            next_keep = keep;
+            next_swap = swap + 1;
+        }
+        if cross {
+            next_keep = next_keep.min(swap);
+            next_swap = next_swap.min(keep + 1);
+        }
+        keep = next_keep;
+        swap = next_swap;
+    }
+    keep.min(swap)
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn min_swap_table(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let none = n + 1;
+    let mut best: Vec[Array[i64, 2]] = Vec.new();
+    // Each row is bound with its type written out before it is pushed:
+    // a list literal passed to `push` is built as a `Vec`
+    // (B-2026-10-19-32); push the literal once that is fixed.
+    let first: Array[i64, 2] = [0, 1];
+    best.push(first);
+    for i in 1..n {
+        let mut row: Array[i64, 2] = [none, none];
+        for now in 0..2 {
+            for before in 0..2 {
+                // The two numbers at each place, in the arrays they end in.
+                let (a0, b0) = if before == 0 { (nums1[i - 1], nums2[i - 1]) } else { (nums2[i - 1], nums1[i - 1]) };
+                let (a1, b1) = if now == 0 { (nums1[i], nums2[i]) } else { (nums2[i], nums1[i]) };
+                if a0 < a1 and b0 < b1 and best[i - 1][before] + now < row[now] {
+                    row[now] = best[i - 1][before] + now;
+                }
+            }
+        }
+        best.push(row);
+    }
+    best[n - 1][0].min(best[n - 1][1])
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn min_swap_memo(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let mut known: Vec[i64] = Vec.new();
+    for _ in 0..2 * nums1.len() {
+        known.push(-1);
+    }
+    fewest_memo(nums1, nums2, 0, 0, mut known)
+}
+
+fn fewest_memo(nums1: Vec[i64], nums2: Vec[i64], i: i64, swapped: i64, known: mut ref Vec[i64]) -> i64 {
+    let n = nums1.len();
+    if i == n {
+        return 0;
+    }
+    if known[2 * i + swapped] >= 0 {
+        return known[2 * i + swapped];
+    }
+    let mut best = n + 1;
+    for now in 0..2 {
+        let (a, b) = if now == 0 { (nums1[i], nums2[i]) } else { (nums2[i], nums1[i]) };
+        let fits = if i == 0 {
+            true
+        } else {
+            let (pa, pb) = if swapped == 0 { (nums1[i - 1], nums2[i - 1]) } else { (nums2[i - 1], nums1[i - 1]) };
+            pa < a and pb < b
+        };
+        if fits {
+            let rest = now + fewest_memo(nums1, nums2, i + 1, now, mut known);
+            if rest < best {
+                best = rest;
+            }
+        }
+    }
+    known[2 * i + swapped] = best;
+    best
+}
+
+// ---- pieces arm -----------------------------------------------------
+
+fn min_swap_pieces(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let mut total = 0;
+    // In the current piece: its length, and how many places differ from
+    // its first in whether they are swapped.
+    let mut length = 1;
+    let mut flipped = 0;
+    let mut differs = false;
+    for i in 1..n {
+        let same = nums1[i - 1] < nums1[i] and nums2[i - 1] < nums2[i];
+        let cross = nums1[i - 1] < nums2[i] and nums2[i - 1] < nums1[i];
+        if same and cross {
+            total += flipped.min(length - flipped);
+            length = 1;
+            flipped = 0;
+            differs = false;
+        } else {
+            if cross {
+                differs = not differs;
+            }
+            length += 1;
+            if differs {
+                flipped += 1;
+            }
+        }
+    }
+    total + flipped.min(length - flipped)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    if which == 0 {
+        min_swap_star(nums1, nums2)
+    } else if which == 1 {
+        min_swap_table(nums1, nums2)
+    } else if which == 2 {
+        min_swap_memo(nums1, nums2)
+    } else {
+        min_swap_pieces(nums1, nums2)
+    }
+}
+
+// The definition: try every set of places to swap, and keep the
+// smallest that leaves both arrays increasing.
+fn definition(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let mut best = n + 1;
+    for mask in 0..1 << n {
+        let mut a: Vec[i64] = Vec.new();
+        let mut b: Vec[i64] = Vec.new();
+        let mut count = 0;
+        for i in 0..n {
+            if mask & (1 << i) != 0 {
+                a.push(nums2[i]);
+                b.push(nums1[i]);
+                count += 1;
+            } else {
+                a.push(nums1[i]);
+                b.push(nums2[i]);
+            }
+        }
+        let mut rising = true;
+        for i in 1..n {
+            if a[i - 1] >= a[i] or b[i - 1] >= b[i] {
+                rising = false;
+            }
+        }
+        if rising and count < best {
+            best = count;
+        }
+    }
+    best
+}
+
+// The arrays read from the end with every number negated, so that they
+// still go up.
+fn backwards(nums: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        out.push(-nums[nums.len() - 1 - i]);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8010;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    for case in 0..cases {
+        // Two increasing arrays with some places swapped. kind 0: steps
+        // of 1, so many places can only go one way; kind 1: steps of 1
+        // or 2; kind 2: steps of 1 to 4; kind 3: the two arrays often
+        // holding the same number at a place.
+        let kind = case % 4;
+        let n = 2 + next_random(mut seed) % 11;
+        let gap = if kind == 0 { 1 } else if kind == 1 { 2 } else { 4 };
+        let mut nums1: Vec[i64] = Vec.new();
+        let mut nums2: Vec[i64] = Vec.new();
+        let mut x = next_random(mut seed) % 4;
+        let mut y = next_random(mut seed) % 4;
+        for _ in 0..n {
+            x += 1 + next_random(mut seed) % gap;
+            y += 1 + next_random(mut seed) % gap;
+            if kind == 3 and next_random(mut seed) % 2 == 0 {
+                let top = if x > y { x } else { y };
+                x = top;
+                y = top;
+            }
+            if next_random(mut seed) % 2 == 0 {
+                nums1.push(x);
+                nums2.push(y);
+            } else {
+                nums1.push(y);
+                nums2.push(x);
+            }
+        }
+        let want = definition(nums1, nums2);
+        total += want;
+        let top = nums1[n - 1].max(nums2[n - 1]) + 1;
+        let mut longer1 = nums1.clone();
+        let mut longer2 = nums2.clone();
+        longer1.push(top);
+        longer2.push(top);
+        for which in 0..arms {
+            let got = answer_with(which, nums1, nums2);
+            // P1: the definition's count.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the two arrays given the other way round.
+            checks += 1;
+            if answer_with(which, nums2, nums1) != got {
+                fails[1] += 1;
+            }
+            // P3: both arrays read backwards and negated.
+            checks += 1;
+            if answer_with(which, backwards(nums1), backwards(nums2)) != got {
+                fails[2] += 1;
+            }
+            // P4: at most half the places, and a number above all others
+            // put at the end of both changes nothing.
+            checks += 1;
+            if 2 * got > n or answer_with(which, longer1, longer2) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} swaps), {arms} arms, {checks} checks, {failures} failures");
+}

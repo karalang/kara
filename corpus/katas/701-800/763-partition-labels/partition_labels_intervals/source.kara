@@ -1,0 +1,84 @@
+// LeetCode 763 — Partition Labels, merging intervals.
+//
+// Each letter spans an interval, from its first appearance to its last,
+// and a part must hold every interval it touches. Sort the intervals by
+// their starts and merge those that overlap; each merged interval is a
+// part. O(n + 26 log 26).
+
+fn partition_labels(s: String) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut first: Map[char, i64] = Map.new();
+    let mut last: Map[char, i64] = Map.new();
+    for i in 0..chars.len() {
+        if not first.contains_key(chars[i]) {
+            first.insert(chars[i], i);
+        }
+        last.insert(chars[i], i);
+    }
+    let mut spans: Vec[(i64, i64)] = Vec.new();
+    for (letter, at) in first.iter() {
+        spans.push((*at, last[*letter]));
+    }
+    spans.sort();
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = spans[0].0;
+    let mut end = spans[0].1;
+    for span in spans.iter() {
+        if span.0 > end {
+            sizes.push(end - start + 1);
+            start = span.0;
+        }
+        end = end.max(span.1);
+    }
+    sizes.push(end - start + 1);
+    sizes
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random string of n letters whose letters drift through the alphabet,
+// so that it falls into several parts: the letter at i is drawn from a
+// window of `width` letters starting near i x 26 / n.
+fn random_letters(n: i64, width: i64, seed: mut ref i64) -> String {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut s = String.new();
+    for i in 0..n {
+        let k = (i * 26 / n + next_random(mut seed) % width).min(25);
+        s.push_str(letters[k..k + 1]);
+    }
+    s
+}
+
+fn show(s: String) {
+    let sizes = partition_labels(s.clone());
+    println(f"{s} -> {sizes}");
+}
+
+fn main() {
+    show("ababcbacadefegdehijhklij");
+    show("eccbbbbdec");
+    show("a");
+    show("abc");
+    show("abca");
+    show("aabbcc");
+    show("abacbdcedfeg");
+    show("zyxwvutsrqponmlkjihgfedcbaz");
+    let mut seed = 763;
+    let mut parts = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 500;
+        let width = 1 + next_random(mut seed) % 4;
+        let sizes = partition_labels(random_letters(n, width, mut seed));
+        parts += sizes.len();
+        for size in sizes.iter() {
+            check = (check * 31 + *size) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {parts} parts, checksum {check}");
+}

@@ -1,0 +1,8 @@
+["gin", "zen", "gig", "msg"] -> 2
+["a"] -> 1
+["a", "et"] -> 1
+["n", "te", "tn"] -> 2
+["s", "eee", "ie", "ei", "i", "e"] -> 3
+["abcdefghijkl", "mnopqrstuvwx", "yz"] -> 3
+["zzzzzzzzzzzz", "qqqqqqqqqqqq", "zzzzzzzzzzzz"] -> 2
+300 random lists: 4003 codes in all, checksum 692593278

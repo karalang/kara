@@ -1,0 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
+fn main() {
+    let i0 = Instant.now();
+    sleep(Duration.ms(2));
+    let i1 = Instant.now();
+    let later = i0.add(Duration.ms(5));
+    println(f"{i1.duration_since(i0).as_ms() >= 2} {i0 < i1} {later.duration_since(i0).as_ms()} {i0.elapsed().as_ms() >= 2}");
+}

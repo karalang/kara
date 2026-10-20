@@ -54,13 +54,13 @@ fn push_right(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
 // The next value up; the walks cross before either runs out.
 fn next_rising(stack: mut ref Vec[TreeNode]) -> i64 {
     let n = stack.pop().unwrap();
-    push_left(n.right, stack);
+    push_left(n.right, mut stack);
     n.val
 }
 
 fn next_falling(stack: mut ref Vec[TreeNode]) -> i64 {
     let n = stack.pop().unwrap();
-    push_right(n.left, stack);
+    push_right(n.left, mut stack);
     n.val
 }
 

@@ -14,7 +14,7 @@ fn fill(nums: Vec[i64], used: mut ref Vec[bool], start: i64, left: i64, sum: i64
         return true;
     }
     if sum == target {
-        return fill(nums, used, 0, left - 1, 0, target);
+        return fill(nums, mut used, 0, left - 1, 0, target);
     }
     if sum == 0 {
         // A new subset: its first value is the first one not used.
@@ -23,7 +23,7 @@ fn fill(nums: Vec[i64], used: mut ref Vec[bool], start: i64, left: i64, sum: i64
             first += 1;
         }
         used[first] = true;
-        let ok = fill(nums, used, first + 1, left, nums[first], target);
+        let ok = fill(nums, mut used, first + 1, left, nums[first], target);
         used[first] = false;
         return ok;
     }
@@ -31,7 +31,7 @@ fn fill(nums: Vec[i64], used: mut ref Vec[bool], start: i64, left: i64, sum: i64
     while i < nums.len() {
         if not used[i] and sum + nums[i] <= target {
             used[i] = true;
-            if fill(nums, used, i + 1, left, sum + nums[i], target) {
+            if fill(nums, mut used, i + 1, left, sum + nums[i], target) {
                 return true;
             }
             used[i] = false;

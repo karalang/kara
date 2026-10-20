@@ -1,0 +1,9 @@
+n = 5, mines [[4, 2]] -> 2
+n = 1, mines [[0, 0]] -> 0
+n = 2, mines [[0, 0]] -> 1
+n = 3, mines [[0, 0]] -> 2
+n = 3, mines [[1, 1]] -> 1
+n = 10, mines [[0, 0]] -> 5
+n = 4, mines [[0, 1], [1, 3], [2, 0], [3, 2]] -> 1
+n = 500, mines [[0, 0], [249, 250], [499, 499]] -> 250
+300 random grids: orders adding up to 2808, checksum 973560202

@@ -1,0 +1,56 @@
+// LeetCode 807 — Max Increase to Keep City Skyline: the bench.
+//
+// 64 grids of 50 by 50, LeetCode's largest, with heights from 0 to 100,
+// are made once; each round finds how much the next one can grow.
+fn max_increase_keeping_skyline(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut row_max: Vec[i64] = Vec.new();
+    let mut col_max: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        row_max.push(0);
+        col_max.push(0);
+    }
+    for i in 0..n {
+        for j in 0..n {
+            row_max[i] = row_max[i].max(grid[i][j]);
+            col_max[j] = col_max[j].max(grid[i][j]);
+        }
+    }
+    let mut total = 0;
+    for i in 0..n {
+        for j in 0..n {
+            total += row_max[i].min(col_max[j]) - grid[i][j];
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 807;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..64 {
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..50 {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..50 {
+                row.push(next_random(mut seed) % 101);
+            }
+            grid.push(row);
+        }
+        grids.push(grid);
+    }
+    let rounds = 300000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let added = max_increase_keeping_skyline(grids[r % 64]);
+        total += added;
+        check = (check * 131 + added) % 1000000007;
+    }
+    println(f"{rounds} rounds of 50 x 50: {total} floors in all, checksum {check}");
+}

@@ -3,38 +3,38 @@ shared struct Inner { word: String }
 shared struct Leaf { word: String }
 shared struct Node { leaf: Leaf }
 struct Holder { inner: Inner, tag: i64 }
-impl Inner { fn get(ref self) -> String { self.word } }
-fn peek(i: ref Inner) -> i64 { let w = i.word; w.len() }
-fn give(i: ref Inner) -> String { let w = i.word; w }
+impl Inner { fn get(ref self) -> String { self.word.clone() } }
+fn peek(i: ref Inner) -> i64 { let w = i.word.clone(); w.len() }
+fn give(i: ref Inner) -> String { let w = i.word.clone(); w }
 fn main() {
     let k = env.args().len() as i64;
     let i = Inner { word: f"a{k}" };
-    let bound = i.word;
-    let again = i.word;
+    let bound = i.word.clone();
+    let again = i.word.clone();
     let mut acc = bound.len() + again.len();
     let j = i;
-    let via_second = j.word;
+    let via_second = j.word.clone();
     acc = acc + via_second.len();
     let mut is: Vec[Inner] = Vec.new();
     is.push(Inner { word: f"b{k}" });
-    let elem = is[0].word;
+    let elem = is[0].word.clone();
     acc = acc + elem.len();
     let mut hs: Vec[Holder] = Vec.new();
     hs.push(Holder { inner: Inner { word: f"c{k}" }, tag: 2 });
-    let hop = hs[0].inner.word;
+    let hop = hs[0].inner.word.clone();
     acc = acc + hop.len();
     let n = Node { leaf: Leaf { word: f"d{k}" } };
-    let deep = n.leaf.word;
+    let deep = n.leaf.word.clone();
     acc = acc + deep.len();
     let o: Option[Inner] = Option.Some(Inner { word: f"e{k}" });
     match o {
-        Some(inner) => { let w = inner.word; acc = acc + w.len(); }
+        Some(inner) => { let w = inner.word.clone(); acc = acc + w.len(); }
         None => { acc = acc + 1; }
     }
     acc = acc + i.get().len() + peek(i) + give(i).len();
-    let mut c = 0i64;
+    let mut c = 0;
     while c < 200 {
-        let w = i.word;
+        let w = i.word.clone();
         acc = acc + w.len();
         c = c + 1;
     }

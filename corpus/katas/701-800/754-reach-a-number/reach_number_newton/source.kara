@@ -1,0 +1,76 @@
+// LeetCode 754 — Reach a Number, with an integer square root.
+//
+// The same start as the square-root arm without floating point: Newton's
+// method on integers, x <- (x + m / x) / 2 from above, gives the floor of
+// sqrt(m) for m = 8t + 1 exactly, and (that - 1) / 2 is the largest k
+// whose sum 1 + ... + k is at most t; one more if the sum falls short.
+// Then the parity of the sums of 1..k repeats odd, odd, even, even, so
+// the answer is k, k + 1 or k + 2 by the excess and k's parity. O(log t).
+
+fn floor_sqrt(m: i64) -> i64 {
+    if m < 2 {
+        return m;
+    }
+    let mut x = m;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + m / x) / 2;
+    }
+    x
+}
+
+fn reach_number(target: i64) -> i64 {
+    let t = target.abs();
+    let mut k = (floor_sqrt(8 * t + 1) - 1) / 2;
+    if k * (k + 1) / 2 < t {
+        k += 1;
+    }
+    let excess = k * (k + 1) / 2 - t;
+    if excess % 2 == 0 {
+        k
+    } else if k % 2 == 0 {
+        k + 1
+    } else {
+        k + 2
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(target: i64) {
+    println(f"target = {target} -> {reach_number(target)}");
+}
+
+fn main() {
+    show(2);
+    show(3);
+    show(1);
+    show(-1);
+    show(4);
+    show(5);
+    show(-6);
+    show(1000000000);
+    show(-1000000000);
+    show(999961560);
+    show(999961561);
+    let mut seed = 754;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let mut target = next_random(mut seed) * 32768 + next_random(mut seed);
+        target = target % 1000000000 + 1;
+        if next_random(mut seed) % 2 == 0 {
+            target = -target;
+        }
+        let moves = reach_number(target);
+        total += moves;
+        check = (check * 31 + moves) % 1000000007;
+    }
+    println(f"1000 random targets: {total} moves in all, checksum {check}");
+}

@@ -243,12 +243,12 @@ fn starred(s: String, at: i64) -> String {
 }
 
 fn random_string(seed: mut ref i64, most: i64, weights: i64) -> String {
-    let n = 1 + next_random(seed) % most;
+    let n = 1 + next_random(mut seed) % most;
     let mut s = String.new();
     for _ in 0..n {
         // weights picks how often each character comes: 0 even, 1 more
         // `(` and `)`, 2 more `*`.
-        let r = next_random(seed) % 10;
+        let r = next_random(mut seed) % 10;
         let star = if weights == 0 { 3 } else if weights == 1 { 1 } else { 6 };
         if r < star {
             s.push('*');

@@ -1,0 +1,12 @@
+enum NetE { A, B(i32) }
+type OldE = NetE;
+
+fn f(x: i64) -> Result[i64, OldE] {
+    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
+}
+
+fn main() {
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let u = OldE.A;
+    match u { NetE.A => println("a"), _ => println("x") }
+}

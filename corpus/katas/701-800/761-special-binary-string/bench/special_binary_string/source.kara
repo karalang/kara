@@ -1,0 +1,69 @@
+// LeetCode 761 — Special Binary String: benchmark, the ★ arm.
+//
+// 200,000 random special strings of 50 characters, the most LeetCode
+// allows.
+
+fn make_largest_special(s: String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut mountains: Vec[String] = Vec.new();
+    let mut depth = 0;
+    let mut start = 0;
+    for i in 0..chars.len() {
+        if chars[i] == '1' {
+            depth += 1;
+        } else {
+            depth -= 1;
+        }
+        if depth == 0 {
+            let inside = make_largest_special(s[start + 1..i].to_string());
+            mountains.push(f"1{inside}0");
+            start = i + 1;
+        }
+    }
+    mountains.sort_by(|a, b| b.cmp(a));
+    mountains.join("")
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_special(m: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let mut ones = 0;
+    let mut depth = 0;
+    for _ in 0..2 * m {
+        if ones < m and (depth == 0 or next_random(mut seed) % 2 == 0) {
+            s.push('1');
+            ones += 1;
+            depth += 1;
+        } else {
+            s.push('0');
+            depth -= 1;
+        }
+    }
+    s
+}
+
+fn main() {
+    let rounds = 200000;
+    let mut seed = 761;
+    let mut leading = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let s = random_special(25, mut seed);
+        let largest = make_largest_special(s);
+        let mut ones = true;
+        for c in largest.chars() {
+            if c == '0' {
+                ones = false;
+            }
+            if ones {
+                leading += 1;
+            }
+            check = (check * 2 + if c == '1' { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"{rounds} strings of 50 characters: {leading} leading 1s, checksum {check}");
+}

@@ -1,0 +1,63 @@
+// LeetCode 771 — Jewels and Stones, a set of the jewels.
+//
+// Put the jewel letters in a set, then count the stones whose letter is
+// in it. O(j + s).
+
+fn num_jewels_in_stones(jewels: String, stones: String) -> i64 {
+    let mut kinds: Set[char] = Set.new();
+    for c in jewels.chars() {
+        kinds.insert(c);
+    }
+    let mut count = 0;
+    for c in stones.chars() {
+        if kinds.contains(c) {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(jewels: String, stones: String) {
+    let count = num_jewels_in_stones(jewels, stones);
+    println(f"\"{jewels}\" \"{stones}\" -> {count}");
+}
+
+// A random string of `n` letters from the first `kinds` of aAbBcC...
+fn random_letters(seed: mut ref i64, n: i64, kinds: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        let k = next_random(mut seed) % kinds;
+        let base = if k % 2 == 0 { 97 } else { 65 };
+        out.push((base + k / 2) as u8 as char);
+    }
+    out
+}
+
+fn main() {
+    show("aA", "aAAbbbb");
+    show("z", "ZZ");
+    show("abc", "");
+    show("", "abc");
+    show("zZ", "zZzZzZ");
+    show("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "theQuickBrownFoxJumps");
+    show("aa", "a");
+    let mut seed = 771;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let kinds = 1 + next_random(mut seed) % 52;
+        let jewels = random_letters(mut seed, next_random(mut seed) % 51, kinds);
+        let stones = random_letters(mut seed, next_random(mut seed) % 51, kinds);
+        let count = num_jewels_in_stones(jewels, stones);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 random pairs: {total} jewels in all, checksum {check}");
+}

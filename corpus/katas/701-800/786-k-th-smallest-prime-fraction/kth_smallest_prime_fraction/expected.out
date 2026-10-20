@@ -1,0 +1,13 @@
+arr = [1, 2, 3, 5], k = 3 -> [2, 5]
+arr = [1, 7], k = 1 -> [1, 7]
+arr = [1, 2, 3, 5], k = 1 -> [1, 5]
+arr = [1, 2, 3, 5], k = 6 -> [2, 3]
+arr = [1, 13, 17, 59], k = 4 -> [13, 59]
+arr = [1, 2, 29989], k = 2 -> [2, 29989]
+1 and the first 999 primes, k = 1 -> [1, 7907]
+1 and the first 999 primes, k = 2 -> [1, 7901]
+1 and the first 999 primes, k = 1000 -> [3, 7541]
+1 and the first 999 primes, k = 250000 -> [3061, 6857]
+1 and the first 999 primes, k = 499499 -> [7757, 7759]
+1 and the first 999 primes, k = 499500 -> [7877, 7879]
+300 random arrays: terms sum to 7962930, checksum 318307840

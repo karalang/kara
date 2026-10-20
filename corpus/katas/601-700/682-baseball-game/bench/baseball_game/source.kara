@@ -40,7 +40,7 @@ fn random_ops(seed: mut ref i64, n: i64) -> Vec[String] {
     let mut out: Vec[String] = Vec.new();
     while out.len() < n {
         let k = record.len();
-        let pick = next_random(seed) % 10;
+        let pick = next_random(mut seed) % 10;
         if pick == 0 and k >= 1 {
             record.pop();
             out.push("C".to_string());
@@ -51,7 +51,7 @@ fn random_ops(seed: mut ref i64, n: i64) -> Vec[String] {
             record.push(record[k - 1] + record[k - 2]);
             out.push("+".to_string());
         } else if pick >= 3 {
-            let x = next_random(seed) % 60001 - 30000;
+            let x = next_random(mut seed) % 60001 - 30000;
             record.push(x);
             out.push(f"{x}");
         }

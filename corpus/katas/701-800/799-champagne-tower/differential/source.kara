@@ -1,0 +1,241 @@
+// LeetCode #799: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random pours.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn champagne_tower_star(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut row: Vec[f64] = Vec.new();
+    row.push(poured as f64);
+    for r in 0..query_row {
+        let mut below: Vec[f64] = Vec.new();
+        for _ in 0..r + 2 {
+            below.push(0.0);
+        }
+        for c in 0..r + 1 {
+            if row[c] > 1.0 {
+                let half = (row[c] - 1.0) / 2.0;
+                below[c] += half;
+                below[c + 1] += half;
+            }
+        }
+        row = below;
+    }
+    let got = row[query_glass];
+    if got > 1.0 { 1.0 } else { got }
+}
+
+// ---- in-place arm ---------------------------------------------------
+
+fn champagne_tower_inplace(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut glass: Vec[f64] = Vec.new();
+    for _ in 0..query_row + 2 {
+        glass.push(0.0);
+    }
+    glass[0] = poured as f64;
+    for r in 0..query_row {
+        let mut c = r;
+        while c >= 0 {
+            let over = glass[c] - 1.0;
+            let half = if over > 0.0 { over / 2.0 } else { 0.0 };
+            glass[c + 1] += half;
+            glass[c] = half;
+            c -= 1;
+        }
+    }
+    let got = glass[query_glass];
+    if got > 1.0 { 1.0 } else { got }
+}
+
+// ---- grid arm -------------------------------------------------------
+
+fn champagne_tower_grid(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut tower: Vec[Vec[f64]] = Vec.new();
+    for r in 0..query_row + 1 {
+        let mut row: Vec[f64] = Vec.new();
+        for _ in 0..r + 1 {
+            row.push(0.0);
+        }
+        tower.push(row);
+    }
+    tower[0][0] = poured as f64;
+    for r in 0..query_row {
+        for c in 0..r + 1 {
+            let over = tower[r][c] - 1.0;
+            if over > 0.0 {
+                tower[r + 1][c] += over / 2.0;
+                tower[r + 1][c + 1] += over / 2.0;
+            }
+        }
+    }
+    let got = tower[query_row][query_glass];
+    if got > 1.0 { 1.0 } else { got }
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn champagne_tower_memo(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut known: Map[(i64, i64), f64] = Map.new();
+    let got = reaching_memo(poured, query_row, query_glass, mut known);
+    if got > 1.0 { 1.0 } else { got }
+}
+
+fn reaching_memo(poured: i64, r: i64, c: i64, known: mut ref Map[(i64, i64), f64]) -> f64 {
+    if r == 0 {
+        return poured as f64;
+    }
+    if let Some(amount) = known.get((r, c)) {
+        return *amount;
+    }
+    let mut amount = 0.0;
+    if c > 0 {
+        let over = reaching_memo(poured, r - 1, c - 1, mut known) - 1.0;
+        if over > 0.0 {
+            amount += over / 2.0;
+        }
+    }
+    if c < r {
+        let over = reaching_memo(poured, r - 1, c, mut known) - 1.0;
+        if over > 0.0 {
+            amount += over / 2.0;
+        }
+    }
+    known.insert((r, c), amount);
+    amount
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, poured: i64, row: i64, glass: i64) -> f64 {
+    if which == 0 {
+        champagne_tower_star(poured, row, glass)
+    } else if which == 1 {
+        champagne_tower_inplace(poured, row, glass)
+    } else if which == 2 {
+        champagne_tower_grid(poured, row, glass)
+    } else {
+        champagne_tower_memo(poured, row, glass)
+    }
+}
+
+// The definition, in whole numbers. Every amount down to row 20 is a
+// whole number of 2^-20 cups, so count in those units: a glass holds
+// `unit` of them and passes half of anything more to each glass under
+// it, which halves exactly. The answer is a fraction with a power of
+// two below and fewer than 53 bits, so it converts to the same double
+// the arms should reach.
+fn definition(poured: i64, row: i64, glass: i64) -> f64 {
+    let unit = 1048576;
+    let mut tower: Vec[Vec[i64]] = Vec.new();
+    for r in 0..row + 1 {
+        let mut cups: Vec[i64] = Vec.new();
+        for _ in 0..r + 1 {
+            cups.push(0);
+        }
+        tower.push(cups);
+    }
+    tower[0][0] = poured * unit;
+    for r in 0..row {
+        for c in 0..r + 1 {
+            if tower[r][c] > unit {
+                let half = (tower[r][c] - unit) / 2;
+                tower[r + 1][c] += half;
+                tower[r + 1][c + 1] += half;
+            }
+        }
+    }
+    let held = if tower[row][glass] > unit { unit } else { tower[row][glass] };
+    held as f64 / unit as f64
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7990;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut full = 0;
+    let mut part = 0;
+    for case in 0..cases {
+        // kind 0: up to 20 cups; kind 1: about as much as fills the rows
+        // above the asked one, so that its glasses are part full; kind
+        // 2: up to 1,000, asked about a glass in row 10 or below; kind
+        // 3: just enough to fill the first k rows, k(k + 1) / 2 cups,
+        // give or take one.
+        let kind = case % 4;
+        let mut deepest = 1 + next_random(mut seed) % 15;
+        let mut row = next_random(mut seed) % (deepest + 1);
+        let poured = if kind == 0 {
+            next_random(mut seed) % 21
+        } else if kind == 1 {
+            let near = row * (row + 1) / 2 + next_random(mut seed) % (2 * row + 1) - row;
+            if near < 0 { 0 } else { near }
+        } else if kind == 2 {
+            if deepest < 10 {
+                deepest = 10 + next_random(mut seed) % 6;
+            }
+            row = 10 + next_random(mut seed) % (deepest - 9);
+            next_random(mut seed) % 1001
+        } else {
+            let k = next_random(mut seed) % 15;
+            let near = k * (k + 1) / 2 + next_random(mut seed) % 3 - 1;
+            if near < 0 { 0 } else { near }
+        };
+        let glass = next_random(mut seed) % (row + 1);
+        let want = definition(poured, row, glass);
+        if want == 1.0 {
+            full += 1;
+        } else if want > 0.0 {
+            part += 1;
+        }
+        for which in 0..arms {
+            let got = answer_with(which, poured, row, glass);
+            // P1: the definition's amount, to the bit.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the tower is the same seen in a mirror.
+            checks += 1;
+            if answer_with(which, poured, row, row - glass) != got {
+                fails[1] += 1;
+            }
+            // P3: one cup more takes nothing from any glass.
+            checks += 1;
+            if answer_with(which, poured + 1, row, glass) < got {
+                fails[2] += 1;
+            }
+            // P4: the glasses down to row `deepest` hold no more than was
+            // poured, and all of it when nothing reaches the row below.
+            checks += 1;
+            let mut held = 0.0;
+            for r in 0..deepest + 1 {
+                for c in 0..r + 1 {
+                    held += answer_with(which, poured, r, c);
+                }
+            }
+            let mut below = 0.0;
+            for c in 0..deepest + 2 {
+                below += answer_with(which, poured, deepest + 1, c);
+            }
+            if held > poured as f64 or (below == 0.0 and held != poured as f64) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({full} glasses full, {part} part full), {arms} arms, {checks} checks, {failures} failures");
+}

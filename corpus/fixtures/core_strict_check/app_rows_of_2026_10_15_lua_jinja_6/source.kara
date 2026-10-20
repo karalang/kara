@@ -1,0 +1,11 @@
+struct T { text: String, f: f64 }
+fn main() {
+    let mut out: Vec[T] = Vec.new();
+    let mut t = T { text: "1.5".to_string(), f: 0.0 };
+    t.f = f64.parse(t.text).unwrap_or(0.0);
+    out.push(t);
+    let text = "2.5".to_string();
+    let g = f64.parse(text).unwrap_or(0.0);
+    out.push(T { text: text, f: g });
+    println(f"{out[0].f} {out[1].f} {out[1].text}");
+}

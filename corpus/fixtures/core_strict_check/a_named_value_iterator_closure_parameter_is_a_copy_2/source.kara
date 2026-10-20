@@ -1,0 +1,10 @@
+fn main() {
+    let w = "QqqQ";
+    let it = w.chars();
+    println(f"{it.filter(|c| c == 'Q').count()}");
+    let r = (0..10).rev();
+    println(f"{r.filter(|j| j % 2 == 0).count()}");
+    let v = vec![1, 2, 3];
+    let vi = v.iter();
+    println(f"{vi.filter(|x| *x > 1).count()}");
+}

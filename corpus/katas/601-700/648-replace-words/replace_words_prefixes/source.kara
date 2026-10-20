@@ -16,7 +16,7 @@ fn replace_words(dictionary: Vec[String], sentence: String) -> String {
         }
     }
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for k in 1..word.len().min(longest) + 1 {
             let prefix = word.slice(0, k).to_string();

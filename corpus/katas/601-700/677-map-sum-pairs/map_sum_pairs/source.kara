@@ -45,7 +45,7 @@ fn run_all(script: String) -> String {
     let mut out: Vec[String] = Vec.new();
     out.push("null".to_string());
     for call in script.split(";") {
-        let parts: Vec[String] = call.split(" ").iter().map(|p| p.to_string()).collect();
+        let parts: Vec[String] = call.split(" ").map(|p| p.to_string()).collect();
         if parts[0] == "insert" {
             m.insert(parts[1].clone(), i64.parse(parts[2]).unwrap());
             out.push("null".to_string());
@@ -57,10 +57,10 @@ fn run_all(script: String) -> String {
 }
 
 fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
-    let n = 1 + next_random(seed) % most;
+    let n = 1 + next_random(mut seed) % most;
     let mut s = String.new();
     for _ in 0..n {
-        s.push(((97 + next_random(seed) % letters) as u8) as char);
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
     }
     s
 }

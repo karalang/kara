@@ -1,0 +1,11 @@
+fn last_slash(s: Str) -> Option[i64] { let b = s.bytes(); let mut i = b.len(); while i > 0 { i -= 1; if b[i] == b'/' { return Some(i); } } None }
+fn take(s: own String) -> i64 { s.len() }
+fn main() {
+    let path = "data/a/b.txt".to_string();
+    let dir = match last_slash(path.as_str()) {
+        Some(i) => path[..i].to_string(),
+        None => ".".to_string(),
+    };
+    println(dir);
+    println(f"{take(path)}");
+}

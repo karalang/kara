@@ -1,0 +1,7 @@
+
+fn main() {
+    match Server.serve_static("127.0.0.1:0", "{}") {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}

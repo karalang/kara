@@ -1,0 +1,36 @@
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Tagged[I, T] {
+    it: I,
+    tag: T,
+}
+
+impl[T: Clone, I: Iterator] Iterator for Tagged[I, T] {
+    type Item = (T, I.Item);
+    fn next(mut ref self) -> Option[(T, I.Item)] {
+        let x = self.it.next()?;
+        Some((self.tag.clone(), x))
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2];
+    let mut t: Tagged[VecIter[i64], String] = Tagged { it: VecIter { items: v, pos: 0 }, tag: "a".to_string() };
+    while let Some((s, x)) = t.next() {
+        println(f"{s} {x}");
+    }
+}

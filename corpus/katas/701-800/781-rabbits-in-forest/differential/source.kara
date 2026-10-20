@@ -1,0 +1,221 @@
+// LeetCode #781: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random forests.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_rabbits_star(answers: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for a in answers.iter() {
+        *count.entry(*a).or_insert(0) += 1;
+    }
+    let mut total = 0;
+    for (v, c) in count.iter() {
+        let size = *v + 1;
+        total += (*c + size - 1) / size * size;
+    }
+    total
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn num_rabbits_sorted(answers: Vec[i64]) -> i64 {
+    let mut sorted = answers.clone();
+    sorted.sort();
+    let mut total = 0;
+    let mut room = 0;
+    for i in 0..sorted.len() {
+        if i > 0 and sorted[i] == sorted[i - 1] and room > 0 {
+            room -= 1;
+        } else {
+            total += sorted[i] + 1;
+            room = sorted[i];
+        }
+    }
+    total
+}
+
+// ---- greedy arm -----------------------------------------------------
+
+fn num_rabbits_greedy(answers: Vec[i64]) -> i64 {
+    let mut room: Map[i64, i64] = Map.new();
+    let mut total = 0;
+    for a in answers.iter() {
+        let v = *a;
+        let left = match room.get(v) {
+            Some(r) => *r,
+            None => 0,
+        };
+        if left > 0 {
+            room.insert(v, left - 1);
+        } else {
+            total += v + 1;
+            room.insert(v, v);
+        }
+    }
+    total
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn num_rabbits_table(answers: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(1000, 0);
+    for a in answers.iter() {
+        count[*a] += 1;
+    }
+    let mut total = 0;
+    for v in 0..1000 {
+        let c = count[v];
+        let size = v + 1;
+        let colours = c / size + if c % size > 0 { 1 } else { 0 };
+        total += colours * size;
+    }
+    total
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, answers: Vec[i64]) -> i64 {
+    if which == 0 {
+        num_rabbits_star(answers)
+    } else if which == 1 {
+        num_rabbits_sorted(answers)
+    } else if which == 2 {
+        num_rabbits_greedy(answers)
+    } else {
+        num_rabbits_table(answers)
+    }
+}
+
+// The least forest over every way of giving rabbits i.. a colour, the
+// colours so far having the answers in `answer_of` and the sizes in
+// `size_of`. A colour holds only rabbits with its answer v, at most
+// v + 1 of them, and the forest has v + 1 rabbits of it.
+fn least_from(answers: Vec[i64], i: i64, answer_of: mut ref Vec[i64], size_of: mut ref Vec[i64]) -> i64 {
+    if i == answers.len() {
+        let mut total = 0;
+        for v in answer_of.iter() {
+            total += *v + 1;
+        }
+        return total;
+    }
+    let v = answers[i];
+    let mut best = -1;
+    for j in 0..answer_of.len() {
+        if answer_of[j] == v and size_of[j] < v + 1 {
+            size_of[j] += 1;
+            let got = least_from(answers, i + 1, mut answer_of, mut size_of);
+            size_of[j] -= 1;
+            if best == -1 or got < best {
+                best = got;
+            }
+        }
+    }
+    answer_of.push(v);
+    size_of.push(1);
+    let got = least_from(answers, i + 1, mut answer_of, mut size_of);
+    answer_of.pop();
+    size_of.pop();
+    if best == -1 or got < best {
+        best = got;
+    }
+    best
+}
+
+// The definition: the least number of rabbits over every way of sharing
+// the answering rabbits out among colours.
+fn definition(answers: Vec[i64]) -> i64 {
+    let mut answer_of: Vec[i64] = Vec.new();
+    let mut size_of: Vec[i64] = Vec.new();
+    least_from(answers, 0, mut answer_of, mut size_of)
+}
+
+fn random_answers(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        out.push(next_random(mut seed) % top);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7810;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1500;
+    let mut rabbits = 0;
+    for case in 0..cases {
+        // 1,200 forests of 1 to 7 answers below 4, where the definition's
+        // search is cheap, then 300 of up to 1,000 answers, LeetCode's
+        // most, drawn from a few values or from 950, which leaves room
+        // below LeetCode's limit of 1,000 for P3's second forest.
+        let small = case < 1200;
+        let n = if small { 1 + next_random(mut seed) % 7 } else { 1 + next_random(mut seed) % 1000 };
+        let top = if small { 1 + next_random(mut seed) % 4 } else if case % 2 == 0 { 1 + next_random(mut seed) % 20 } else { 950 };
+        let answers = random_answers(mut seed, n, top);
+        let want = if small { definition(answers) } else { answer_with(0, answers) };
+        rabbits += want;
+        // For P2, the answers shuffled.
+        let mut shuffled = answers.clone();
+        let mut i = n - 1;
+        while i > 0 {
+            shuffled.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        // For P3, a second forest whose answers are all above this one's.
+        let other = random_answers(mut seed, 1 + next_random(mut seed) % 30, 1 + next_random(mut seed) % 30);
+        let mut joined = answers.clone();
+        let mut lifted: Vec[i64] = Vec.new();
+        for v in other.iter() {
+            joined.push(*v + top);
+            lifted.push(*v + top);
+        }
+        // For P4, v + 1 more rabbits answering v, for a v given here.
+        let v = answers[next_random(mut seed) % n];
+        let mut grown = answers.clone();
+        for _ in 0..v + 1 {
+            grown.push(v);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, answers);
+            // P1: the definition's answer, on the small forests.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the answers in another order give the same forest.
+            checks += 1;
+            if answer_with(which, shuffled) != got {
+                fails[1] += 1;
+            }
+            // P3: two forests with no answer in common add up.
+            checks += 1;
+            if answer_with(which, joined) != got + answer_with(which, lifted) {
+                fails[2] += 1;
+            }
+            // P4: v + 1 more rabbits answering v fill one more colour.
+            checks += 1;
+            if answer_with(which, grown) != got + v + 1 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} forests ({rabbits} rabbits), {arms} arms, {checks} checks, {failures} failures");
+}

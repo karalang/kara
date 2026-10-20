@@ -1,0 +1,97 @@
+// LeetCode 756 — Pyramid Transition Matrix, level by level.
+//
+// Hold every row that can stand at the current level, starting from the
+// bottom alone, and from them make every row that can stand on one of
+// them, one letter at a time, checking each triple against the allowed
+// set. The pyramid can be built if some row survives to width one.
+
+fn grow(row: String, i: i64, part: String, allowed: ref Set[String], out: mut ref Set[String]) {
+    if i + 1 == row.len() {
+        out.insert(part.clone());
+        return;
+    }
+    for c in "ABCDEF".chars() {
+        let mut triple = row[i..i + 2].to_string();
+        triple.push(c);
+        if allowed.contains(triple) {
+            let mut next = part.clone();
+            next.push(c);
+            grow(row, i + 1, next, allowed, mut out);
+        }
+    }
+}
+
+fn pyramid_transition(bottom: String, allowed: Vec[String]) -> bool {
+    let mut triples: Set[String] = Set.new();
+    for triple in allowed.iter() {
+        triples.insert(triple.clone());
+    }
+    let mut width = bottom.len();
+    let mut level: Set[String] = Set.new();
+    level.insert(bottom.clone());
+    while width > 1 {
+        let mut above: Set[String] = Set.new();
+        for row in level.iter() {
+            grow(row.clone(), 0, String.new(), triples, mut above);
+        }
+        if above.len() == 0 {
+            return false;
+        }
+        level = above;
+        width -= 1;
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(x: i64) -> String {
+    let mut s = String.new();
+    s.push((b'A' + x as u8) as char);
+    s
+}
+
+fn show(bottom: String, allowed: Vec[String]) {
+    let n = allowed.len();
+    let answer = pyramid_transition(bottom.clone(), allowed);
+    println(f"{bottom} with {n} triples -> {answer}");
+}
+
+fn main() {
+    show(String.from("BCD"), [String.from("BCC"), String.from("CDE"), String.from("CEA"), String.from("FFF")]);
+    show(String.from("AAAA"), [String.from("AAB"), String.from("AAC"), String.from("BCD"), String.from("BBE"), String.from("DEF")]);
+    show(String.from("AB"), [String.from("ABC")]);
+    show(String.from("AB"), [String.from("BAC")]);
+    show(String.from("AB"), Vec.new());
+    show(String.from("FFFFFF"), [String.from("FFF")]);
+    show(String.from("ABCDEF"), [String.from("FFF")]);
+    let mut seed = 756;
+    let mut yes = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        let width = 2 + next_random(mut seed) % 5;
+        let mut bottom = String.new();
+        for _ in 0..width {
+            bottom.push_str(letter(next_random(mut seed) % 6));
+        }
+        let count = next_random(mut seed) % 60;
+        let mut allowed: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let mut t = String.new();
+            for _ in 0..3 {
+                t.push_str(letter(next_random(mut seed) % 6));
+            }
+            allowed.push(t);
+        }
+        if pyramid_transition(bottom, allowed) {
+            yes += 1;
+            check = (check * 31 + round) % 1000000007;
+        }
+    }
+    println(f"300 random pyramids: {yes} can be built, checksum {check}");
+}

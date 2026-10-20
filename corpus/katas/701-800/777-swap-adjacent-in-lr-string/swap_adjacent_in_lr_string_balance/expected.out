@@ -1,0 +1,13 @@
+"RXXLRXRXL" -> "XRLXXRRLX": true
+"X" -> "L": false
+"LXXLXRLXXL" -> "XLLXRXLXLX": false
+"XXXXXLXXXX" -> "LXXXXXXXXX": true
+"XXRXXLXXXX" -> "XXXXRXXLXX": false
+"RL" -> "LR": false
+"XL" -> "LX": true
+"RX" -> "XR": true
+"LX" -> "XL": false
+"XLR" -> "LXR": true
+10000 letters, 400000 moves -> true
+10000 letters, an L a place right -> false
+300 random pairs: 153 reachable, checksum 140766360

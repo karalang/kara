@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/758-bold-words-in-string/bench/bold_words.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "db0aa9a19"
+extracted_src = "6d0e1d08"
+model_rev = "583cfb0d"
+model_src = "6d0e1d08"

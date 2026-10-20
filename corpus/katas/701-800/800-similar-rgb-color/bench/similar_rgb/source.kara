@@ -1,0 +1,59 @@
+// LeetCode 800 — Similar RGB Color: the bench.
+//
+// 4,096 colours are made once, each of their six digits drawn at
+// random. Each of 40,960,000 rounds finds the most similar shorthand colour
+// to the next one with the ★ arm, adding up a checksum of the answers.
+fn similar_rgb(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let part = hex_value(color, 1 + 2 * p);
+        let k = (part + 8) / 17;
+        let d = digits.bytes()[k] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+// The number written by the two hex digits of `color` at `at`.
+fn hex_value(color: Str, at: i64) -> i64 {
+    let b = color.bytes();
+    digit(b[at]) * 16 + digit(b[at + 1])
+}
+
+fn digit(c: u8) -> i64 {
+    if c >= 48 and c <= 57 {
+        c as i64 - 48
+    } else {
+        c as i64 - 97 + 10
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let digits = "0123456789abcdef";
+    let mut seed = 800;
+    let mut colors: Vec[String] = Vec.new();
+    for _ in 0..4096 {
+        let mut color = String.new();
+        color.push('#');
+        for _ in 0..6 {
+            color.push(digits.bytes()[next_random(mut seed) % 16] as char);
+        }
+        colors.push(color);
+    }
+    let rounds = 40960000;
+    let mut check = 0;
+    for r in 0..rounds {
+        let got = similar_rgb(colors[r % 4096]);
+        let b = got.bytes();
+        check = (check * 31 + b[1] as i64 * 65536 + b[3] as i64 * 256 + b[5] as i64) % 1000000007;
+    }
+    println(f"{rounds} colours: checksum {check}");
+}

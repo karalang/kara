@@ -42,9 +42,9 @@ fn next_random(seed: mut ref i64) -> i64 {
 fn random_string(seed: mut ref i64, c: i64) -> String {
     let mut s = String.new();
     if c % 3 == 0 {
-        let n = 1 + next_random(seed) % 100;
+        let n = 1 + next_random(mut seed) % 100;
         for _ in 0..n {
-            let d = next_random(seed) % 3;
+            let d = next_random(mut seed) % 3;
             if d == 0 {
                 s.push('(');
             } else if d == 1 {
@@ -55,12 +55,12 @@ fn random_string(seed: mut ref i64, c: i64) -> String {
         }
         return s;
     }
-    let half = 1 + next_random(seed) % 50;
+    let half = 1 + next_random(mut seed) % 50;
     let mut open = 0;
     let mut left = half;
     let mut b = String.new();
     while left > 0 or open > 0 {
-        if left > 0 and (open == 0 or next_random(seed) % 2 == 0) {
+        if left > 0 and (open == 0 or next_random(mut seed) % 2 == 0) {
             b.push('(');
             open += 1;
             left -= 1;
@@ -69,13 +69,13 @@ fn random_string(seed: mut ref i64, c: i64) -> String {
             open -= 1;
         }
     }
-    let stars = next_random(seed) % 4;
-    let changes = next_random(seed) % 3;
+    let stars = next_random(mut seed) % 4;
+    let changes = next_random(mut seed) % 3;
     for ch in b.bytes() {
-        let r = next_random(seed) % 10;
+        let r = next_random(mut seed) % 10;
         if r < stars {
             s.push('*');
-        } else if r == 9 and next_random(seed) % 3 < changes {
+        } else if r == 9 and next_random(mut seed) % 3 < changes {
             if ch == b'(' {
                 s.push(')');
             } else {

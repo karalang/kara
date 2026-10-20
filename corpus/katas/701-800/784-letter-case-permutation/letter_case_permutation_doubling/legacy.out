@@ -1,0 +1,8 @@
+"a1b2" -> [A1B2, A1b2, a1B2, a1b2]
+"3z4" -> [3Z4, 3z4]
+"12345" -> [12345]
+"C" -> [C, c]
+"aBc" -> [ABC, ABc, AbC, Abc, aBC, aBc, abC, abc]
+"Zz9" -> [ZZ9, Zz9, zZ9, zz9]
+"abcdefghijkl" -> 4096 strings, first ABCDEFGHIJKL, last abcdefghijkl, checksum 250563670
+300 random strings: 78572 permutations, checksum 152221707

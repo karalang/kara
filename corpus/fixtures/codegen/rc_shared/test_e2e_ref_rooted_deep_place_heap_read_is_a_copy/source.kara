@@ -2,9 +2,9 @@
 struct R { id: i64, name: String }
 struct W { r: R, n: i64 }
 
-fn peek(w: ref W) -> String { return w.r.name; }
-fn peek_tail(w: ref W) -> String { w.r.name }
-fn tuple_hop(p: ref (R, i64)) -> String { return p.0.name; }
+fn peek(w: ref W) -> String { return w.r.name.clone(); }
+fn peek_tail(w: ref W) -> String { w.r.name.clone() }
+fn tuple_hop(p: ref (R, i64)) -> String { return p.0.name.clone(); }
 
 fn main() {
     let v = W { r: R { id: 41, name: f"n{41}" }, n: 1 };

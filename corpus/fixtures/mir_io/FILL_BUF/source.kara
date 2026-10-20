@@ -1,0 +1,19 @@
+
+fn main() {
+    fs.write("DIR/fb.txt", "HELLOWORLD").unwrap();
+    let mut r = BufReader.with_capacity(File.open("DIR/fb.txt").unwrap(), 4);
+    let n = match r.fill_buf() {
+        Ok(b) => {
+            println(f"{b.len()} {b[0]} {b[3]}");
+            b.len() - 1
+        }
+        Err(_) => 0,
+    };
+    r.consume(n);
+    match r.fill_buf() { Ok(b) => println(f"{b.len()} {b[0]}"), Err(_) => println("e") }
+    r.consume(100);
+    let mut s = String.new();
+    let _ = r.read_to_string(mut s);
+    println(s);
+    match r.fill_buf() { Ok(b) => println(f"end {b.len()}"), Err(_) => println("e") }
+}

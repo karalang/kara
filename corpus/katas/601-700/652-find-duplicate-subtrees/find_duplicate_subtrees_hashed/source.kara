@@ -24,7 +24,7 @@ fn hash(node: Option[TreeNode], kinds: mut ref Map[i64, Vec[(TreeNode, i64)]], f
     match node {
         None => 1,
         Some(n) => {
-            let h = (n.val + 201 + 403 * hash(n.left, kinds, found) + 7919 * hash(n.right, kinds, found)) % 1000000007;
+            let h = (n.val + 201 + 403 * hash(n.left, mut kinds, mut found) + 7919 * hash(n.right, mut kinds, mut found)) % 1000000007;
             let bucket = kinds.entry(h).or_insert(Vec.new());
             let mut matched = false;
             for k in 0..bucket.len() {

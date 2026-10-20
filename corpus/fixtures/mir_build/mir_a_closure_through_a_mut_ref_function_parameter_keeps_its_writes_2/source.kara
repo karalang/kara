@@ -1,0 +1,52 @@
+struct Acc {
+    total: i64,
+}
+
+impl Acc {
+    fn run(mut ref self, f: mut ref MutFn(i64) -> i64) {
+        self.total += f(self.total);
+    }
+}
+
+fn twice(f: mut ref MutFn()) {
+    f();
+    f();
+}
+
+fn thrice(f: mut ref MutFn()) {
+    twice(mut f);
+    f();
+}
+
+fn sum(f: ref Fn(i64) -> i64) -> i64 {
+    f(1) + f(2)
+}
+
+fn main() {
+    let mut count = 0;
+    let mut c = || { count += 1; };
+    twice(mut c);
+    thrice(mut c);
+    c();
+    println(f"{count}");
+
+    let mut v: Vec[i64] = Vec.new();
+    twice(mut || { v.push(v.len() as i64); });
+    println(f"{v.len()} {v[1]}");
+
+    let k = 10;
+    let g = |x: i64| x * k;
+    println(f"{sum(g)} {sum(|x: i64| x + k)}");
+
+    let mut calls = 0;
+    let mut h: MutFn() = || { calls += 1; };
+    twice(mut h);
+    h();
+    println(f"{calls}");
+
+    let mut a = Acc { total: 1 };
+    let mut seen = 0;
+    a.run(mut |t: i64| { seen += t; t * 2 });
+    a.run(mut |t: i64| { seen += t; t * 2 });
+    println(f"{a.total} {seen}");
+}

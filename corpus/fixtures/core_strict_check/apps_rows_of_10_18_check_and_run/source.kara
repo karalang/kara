@@ -1,0 +1,30 @@
+struct It {
+    n: i64,
+}
+
+struct Store {
+    v: Vec[It],
+}
+
+impl Store {
+    fn link(mut ref self, it: own It) {
+        self.v.push(it);
+    }
+}
+
+fn run(s: mut ref Store, cmds: ref Vec[i64]) {
+    for k in cmds {
+        let it = It { n: *k };
+        if *k == 0 {
+            s.link(it);
+        } else {
+            s.link(it);
+        }
+    }
+}
+
+fn main() {
+    let mut s = Store { v: Vec.new() };
+    run(mut s, vec![0, 1, 2]);
+    println(f"{s.v.len()}");
+}

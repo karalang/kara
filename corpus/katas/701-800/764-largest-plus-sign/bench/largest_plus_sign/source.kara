@@ -1,0 +1,74 @@
+// LeetCode 764 — Largest Plus Sign: benchmark, the ★ arm.
+//
+// 300 random grids of 500 x 500 with 5,000 mines each, the most LeetCode
+// allows.
+
+fn order_of_largest_plus_sign(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(n);
+        }
+        grid.push(row);
+    }
+    for mine in mines.iter() {
+        grid[mine[0]][mine[1]] = 0;
+    }
+    for i in 0..n {
+        let mut left = 0;
+        let mut right = 0;
+        let mut up = 0;
+        let mut down = 0;
+        for j in 0..n {
+            left = if grid[i][j] == 0 { 0 } else { left + 1 };
+            grid[i][j] = grid[i][j].min(left);
+            let k = n - 1 - j;
+            right = if grid[i][k] == 0 { 0 } else { right + 1 };
+            grid[i][k] = grid[i][k].min(right);
+            up = if grid[j][i] == 0 { 0 } else { up + 1 };
+            grid[j][i] = grid[j][i].min(up);
+            down = if grid[k][i] == 0 { 0 } else { down + 1 };
+            grid[k][i] = grid[k][i].min(down);
+        }
+    }
+    let mut best = 0;
+    for row in grid.iter() {
+        for order in row.iter() {
+            best = best.max(*order);
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 300;
+    let n = 500;
+    let mut seed = 764;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let mut taken: Vec[bool] = Vec.new();
+        for _ in 0..n * n {
+            taken.push(false);
+        }
+        let mut mines: Vec[Vec[i64]] = Vec.new();
+        while mines.len() < 5000 {
+            let r = next_random(mut seed) % n;
+            let c = next_random(mut seed) % n;
+            if not taken[r * n + c] {
+                taken[r * n + c] = true;
+                mines.push([r, c]);
+            }
+        }
+        let order = order_of_largest_plus_sign(n, mines);
+        total += order;
+        check = (check * 31 + order) % 1000000007;
+    }
+    println(f"{rounds} grids of 500 x 500 with 5000 mines: orders adding up to {total}, checksum {check}");
+}

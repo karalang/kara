@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/775-global-and-local-inversions/bench/global_and_local_inversions.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "db0aa9a19"
+extracted_src = "5a36236e"
+model_rev = "583cfb0d"
+model_src = "5a36236e"

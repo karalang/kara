@@ -1,0 +1,12 @@
+fn main() {
+    let c = false;
+    let k = 2;
+    let mut v: Vec[u8] = Vec.new();
+    v.push(if c { 9 } else { 8 });
+    v.push(match k {
+        1 => 4,
+        _ => 5,
+    });
+    v.push(if c { 9 } else if k == 2 { 7 } else { 8 });
+    println(f"{v[0]} {v[1]} {v[2]}");
+}

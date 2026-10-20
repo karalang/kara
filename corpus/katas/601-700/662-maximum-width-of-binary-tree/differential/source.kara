@@ -50,8 +50,8 @@ fn walk_dfs(node: Option[TreeNode], depth: i64, place: i64, firsts: mut ref Vec[
                 firsts.push(place);
             }
             let offset = place - firsts[depth];
-            let left = walk_dfs(n.left, depth + 1, offset * 2, firsts);
-            let right = walk_dfs(n.right, depth + 1, offset * 2 + 1, firsts);
+            let left = walk_dfs(n.left, depth + 1, offset * 2, mut firsts);
+            let right = walk_dfs(n.right, depth + 1, offset * 2 + 1, mut firsts);
             (offset + 1).max(left).max(right)
         }
     }
@@ -120,10 +120,10 @@ fn walk_paths(node: Option[TreeNode], right_first: bool, path: mut ref Vec[i64],
         let (a, b) = if right_first { (n.right, n.left) } else { (n.left, n.right) };
         let (da, db) = if right_first { (1, 0) } else { (0, 1) };
         path.push(da);
-        walk_paths(a, right_first, path, firsts);
+        walk_paths(a, right_first, mut path, mut firsts);
         path.pop();
         path.push(db);
-        walk_paths(b, right_first, path, firsts);
+        walk_paths(b, right_first, mut path, mut firsts);
         path.pop();
     }
 }
@@ -180,8 +180,8 @@ fn places(node: Option[TreeNode], depth: i64, place: i64, out: mut ref Vec[Vec[i
             out.push(Vec.new());
         }
         out[depth].push(place);
-        places(n.left, depth + 1, place * 2, out);
-        places(n.right, depth + 1, place * 2 + 1, out);
+        places(n.left, depth + 1, place * 2, mut out);
+        places(n.right, depth + 1, place * 2 + 1, mut out);
     }
 }
 
@@ -209,8 +209,8 @@ fn level_sizes(node: Option[TreeNode], depth: i64, out: mut ref Vec[i64]) {
             out.push(0);
         }
         out[depth] += 1;
-        level_sizes(n.left, depth + 1, out);
-        level_sizes(n.right, depth + 1, out);
+        level_sizes(n.left, depth + 1, mut out);
+        level_sizes(n.right, depth + 1, mut out);
     }
 }
 

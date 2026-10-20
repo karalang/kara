@@ -1,0 +1,45 @@
+// LeetCode 808 — Soup Servings: the bench.
+//
+// Each round works out the answer for a size from 3750 to 4800 ml, 150
+// to 192 servings, the largest the table is built for.
+fn soup_servings(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    let mut p = Vec.filled(m + 1, Vec.filled(m + 1, 0.0));
+    for a in 0..m + 1 {
+        for b in 0..m + 1 {
+            p[a][b] = if a == 0 and b == 0 {
+                0.5
+            } else if a == 0 {
+                1.0
+            } else if b == 0 {
+                0.0
+            } else {
+                let pour = [(4, 0), (3, 1), (2, 2), (1, 3)];
+                let mut sum = 0.0;
+                for (da, db) in pour {
+                    sum += p[(a - da).max(0)][(b - db).max(0)];
+                }
+                0.25 * sum
+            };
+        }
+    }
+    p[m][m]
+}
+
+fn main() {
+    let rounds = 30000;
+    let mut total = 0.0;
+    let mut sure = 0;
+    for r in 0..rounds {
+        let n = 3750 + (r * 37) % 1051;
+        let p = soup_servings(n);
+        total += p;
+        if p > 0.99999 {
+            sure += 1;
+        }
+    }
+    println(f"{rounds} rounds of 3750 to 4800 ml: sum {total:.6}, {sure} above 0.99999");
+}

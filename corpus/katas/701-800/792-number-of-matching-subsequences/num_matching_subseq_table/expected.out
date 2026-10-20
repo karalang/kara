@@ -1,0 +1,6 @@
+s = "abcde", words = [a, bb, acd, ace] -> 3
+s = "dsahjpjauf", words = [ahjpjau, ja, ahbwzgqnuk, tnmlanowax] -> 2
+s = "a", words = [a, a, b, aa] -> 2
+s = "aaaaa", words = [a, aa, aaa, aaaaa, aaaaaa] -> 4
+s = "abc", words = [abc, cba, ac, ca, c] -> 3
+300 random cases: 7145 matching words, checksum 213868396

@@ -1,0 +1,9 @@
+fn p(x: i64) -> i64 { println(f"p{x}"); x }
+fn main() {
+    let t = (p(1), p(2));
+    let a = [p(3), p(4)];
+    let v: Vec[Vec[i64]] = [[10, 20], [30, 40]];
+    let e = v[p(1)][p(0)];
+    println(f"{p(5)} {p(6)}");
+    println(f"{t.0} {a[1]} {e}");
+}

@@ -1,0 +1,15 @@
+
+fn main() {
+    let a: Vec[u8] = Vec.filled(0, 1u8);
+    let mut b: Vec[i64] = Vec.with_capacity(0);
+    b.push(7);
+    let c: Vec[()] = Vec.filled(3, ());
+    let d: Vec[i64] = vec![1, 2, 3];
+    let mut e: Vec[i64] = Vec.with_capacity(2);
+    for i in 0..5 {
+        e.push(i * i);
+    }
+    let f = e.clone();
+    let g: Vec[String] = Vec.filled(2, "x".to_string());
+    println(f"{a.len()} {b} {c.len()} {d} {e} {f} {g}");
+}

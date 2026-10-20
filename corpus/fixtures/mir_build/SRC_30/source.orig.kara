@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut m: SortedMap[String, String] = SortedMap.new();
+    m.insert("a".to_string(), "1".to_string());
+    let v = m.get("a").unwrap_or(String.new());
+    println(f"{v}");
+}

@@ -1,0 +1,16 @@
+
+fn handle(req: Request) -> Response {
+    let mut s = "".to_string();
+    for (k, v) in req.headers() {
+        s = s + k + "=" + v + ";";
+    }
+    match req.header("X-TEST-ECHO") {
+        Some(v) => { s = s + " found " + v; }
+        None => { s = s + " none"; }
+    }
+    Response { status: 200, body: s }
+}
+
+fn main() {
+    let _ = Server.serve("127.0.0.1:0", handle);
+}

@@ -1,0 +1,10 @@
+import std.path;
+
+fn parent(n: i64) -> i64 {
+    n - 1
+}
+
+fn main() {
+    println(path.parent("/a/b") ?? "none");
+    println(parent(3));
+}

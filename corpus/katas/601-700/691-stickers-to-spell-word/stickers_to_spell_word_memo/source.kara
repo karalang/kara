@@ -56,7 +56,7 @@ fn solve(counts: ref Vec[Vec[i64]], rest: own String, memo: mut ref Map[String, 
         for k in 0..26 {
             left[k] = if need[k] > c[k] { need[k] - c[k] } else { 0 };
         }
-        let sub = solve(counts, spelled(left), memo);
+        let sub = solve(counts, spelled(left), mut memo);
         if sub >= 0 and (best < 0 or sub + 1 < best) {
             best = sub + 1;
         }

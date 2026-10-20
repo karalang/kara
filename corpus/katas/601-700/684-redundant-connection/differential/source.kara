@@ -186,7 +186,7 @@ fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         v.swap(i, j);
         i -= 1;
     }
@@ -200,13 +200,13 @@ fn scrambled(seed: mut ref i64, edges: ref Vec[(i64, i64)], marks: ref Vec[bool]
     let mut m = marks.clone();
     let mut k = e.len() - 1;
     while k > 0 {
-        let j = next_random(seed) % (k + 1);
+        let j = next_random(mut seed) % (k + 1);
         e.swap(k, j);
         m.swap(k, j);
         k -= 1;
     }
     for i in 0..e.len() {
-        if next_random(seed) % 2 == 0 {
+        if next_random(mut seed) % 2 == 0 {
             let (a, b) = e[i];
             e[i] = (b, a);
         }
@@ -217,7 +217,7 @@ fn scrambled(seed: mut ref i64, edges: ref Vec[(i64, i64)], marks: ref Vec[bool]
 // A cycle of `len` vertices, every other vertex hung below an earlier
 // one, so the cycle edges are known; they are marked true.
 fn with_cycle(seed: mut ref i64, n: i64, len: i64) -> (Vec[(i64, i64)], Vec[bool]) {
-    let name = shuffled(seed, n);
+    let name = shuffled(mut seed, n);
     let mut edges: Vec[(i64, i64)] = Vec.new();
     let mut marks: Vec[bool] = Vec.new();
     for i in 0..len {
@@ -225,22 +225,22 @@ fn with_cycle(seed: mut ref i64, n: i64, len: i64) -> (Vec[(i64, i64)], Vec[bool
         marks.push(true);
     }
     for v in len..n {
-        edges.push((name[next_random(seed) % v], name[v]));
+        edges.push((name[next_random(mut seed) % v], name[v]));
         marks.push(false);
     }
-    scrambled(seed, edges, marks)
+    scrambled(mut seed, edges, marks)
 }
 
 // A random tree on 1 to n with one more edge.
 fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
-    let name = shuffled(seed, n);
+    let name = shuffled(mut seed, n);
     let mut edges: Vec[(i64, i64)] = Vec.new();
     for v in 1..n {
-        edges.push((name[next_random(seed) % v], name[v]));
+        edges.push((name[next_random(mut seed) % v], name[v]));
     }
     loop {
-        let a = 1 + next_random(seed) % n;
-        let b = 1 + next_random(seed) % n;
+        let a = 1 + next_random(mut seed) % n;
+        let b = 1 + next_random(mut seed) % n;
         let mut fresh = a != b;
         for (x, y) in edges.iter() {
             if (*x == a and *y == b) or (*x == b and *y == a) {
@@ -253,7 +253,7 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
         }
     }
     let marks: Vec[bool] = vec![false; n];
-    let (e, _) = scrambled(seed, edges, marks);
+    let (e, _) = scrambled(mut seed, edges, marks);
     e
 }
 

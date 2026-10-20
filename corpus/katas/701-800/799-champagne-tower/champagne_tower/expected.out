@@ -1,0 +1,11 @@
+poured = 1, glass (1, 1) -> 0.00000
+poured = 2, glass (1, 1) -> 0.50000
+poured = 100000009, glass (33, 17) -> 1.00000
+poured = 0, glass (0, 0) -> 0.00000
+poured = 1, glass (0, 0) -> 1.00000
+poured = 4, glass (2, 1) -> 0.50000
+poured = 4, glass (2, 0) -> 0.25000
+poured = 25, glass (6, 0) -> 0.00000
+poured = 1000000000, glass (99, 0) -> 0.00000
+poured = 1000000000, glass (99, 49) -> 1.00000
+300 random glasses: 138.74860 cups in all, checksum 280823181

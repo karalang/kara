@@ -1,0 +1,9 @@
+fn main() {
+    let c: u8 = 20;
+    let d: u8 = 0xC0 ^ c;
+    let g: u8 = (c >> 2) | 0x80;
+    let x: u8 = 0x80 | (c & 0x3F);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xC0 | (c >> 6));
+    println(f"{d} {g} {x} {out[0]}");
+}

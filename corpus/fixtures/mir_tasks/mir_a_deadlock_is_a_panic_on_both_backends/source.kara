@@ -1,0 +1,7 @@
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    println("start");
+    let v = rx.recv();
+    println("unreached");
+}

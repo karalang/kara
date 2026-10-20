@@ -1,0 +1,77 @@
+// LeetCode 800 — Similar RGB Color, the nearest of sixteen.
+//
+// For each part, try the sixteen doubled hex digits 0x00 to 0xff and
+// keep the one closest to the part. O(1), sixteen tries a part.
+fn similar_rgb(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let b = color.bytes();
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let part = value_of(b[1 + 2 * p]) * 16 + value_of(b[2 + 2 * p]);
+        let mut best = 0;
+        for k in 1..16 {
+            if (17 * k - part).abs() < (17 * best - part).abs() {
+                best = k;
+            }
+        }
+        let d = digits.bytes()[best] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+fn value_of(c: u8) -> i64 {
+    if c <= 57 { c as i64 - 48 } else { c as i64 - 87 }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(color: Str) {
+    println(f"{color} -> {similar_rgb(color)}");
+}
+
+fn main() {
+    show("#09f166");
+    show("#4e3fe1");
+    show("#000000");
+    show("#ffffff");
+    show("#080808");
+    show("#090909");
+    show("#f7f7f7");
+    show("#123456");
+    show("#abcdef");
+    let digits = "0123456789abcdef";
+    let mut seed = 800;
+    let mut same = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Any colour, or every other time one with each part's two
+        // digits alike, which is its own answer.
+        let mut color = String.new();
+        color.push('#');
+        for _ in 0..3 {
+            let d = digits.bytes()[next_random(mut seed) % 16] as char;
+            color.push(d);
+            if i % 2 == 0 {
+                color.push(digits.bytes()[next_random(mut seed) % 16] as char);
+            } else {
+                color.push(d);
+            }
+        }
+        let got = similar_rgb(color);
+        if got == color {
+            same += 1;
+        }
+        for c in got.bytes() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+    }
+    println(f"300 random colours: {same} already shorthand, checksum {check}");
+}

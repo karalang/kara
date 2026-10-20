@@ -1,0 +1,148 @@
+// LeetCode 759 — Employee Free Time, merging the schedules in pairs.
+//
+// Merging two sorted lists of disjoint intervals gives the sorted list of
+// their union: walk both, take whichever starts first, and fuse it into
+// the last interval kept when they overlap or touch. Merge the employees
+// in pairs, then the results in pairs, until one busy list is left; the
+// free time is the gaps between its intervals. O(n log k).
+
+#[derive(Clone, Copy)]
+struct Interval {
+    start: i64,
+    end: i64,
+}
+
+fn add(out: mut ref Vec[Interval], next: Interval) {
+    let last = out.len() - 1;
+    if out.len() > 0 and next.start <= out[last].end {
+        if next.end > out[last].end {
+            out[last].end = next.end;
+        }
+    } else {
+        out.push(next);
+    }
+}
+
+fn merge(a: ref Vec[Interval], b: ref Vec[Interval]) -> Vec[Interval] {
+    let mut out: Vec[Interval] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        if j == b.len() or (i < a.len() and a[i].start <= b[j].start) {
+            add(mut out, a[i]);
+            i += 1;
+        } else {
+            add(mut out, b[j]);
+            j += 1;
+        }
+    }
+    out
+}
+
+fn employee_free_time(schedule: Vec[Vec[Interval]]) -> Vec[Interval] {
+    let mut lists = schedule.clone();
+    while lists.len() > 1 {
+        let mut next: Vec[Vec[Interval]] = Vec.new();
+        let mut k = 0;
+        while k + 1 < lists.len() {
+            next.push(merge(lists[k], lists[k + 1]));
+            k += 2;
+        }
+        if k < lists.len() {
+            next.push(lists[k].clone());
+        }
+        lists = next;
+    }
+    let mut free: Vec[Interval] = Vec.new();
+    for k in 1..lists[0].len() {
+        free.push(Interval { start: lists[0][k - 1].end, end: lists[0][k].start });
+    }
+    free
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 30 random bits, for values up to 10^8
+fn wide_random(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    high * 32768 + next_random(mut seed)
+}
+
+fn text(intervals: ref Vec[Interval]) -> String {
+    let mut out = String.from("[");
+    for i in 0..intervals.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"[{intervals[i].start}, {intervals[i].end}]");
+    }
+    out.push_str("]");
+    out
+}
+
+fn schedule_of(lists: Vec[Vec[Vec[i64]]]) -> Vec[Vec[Interval]] {
+    let mut schedule: Vec[Vec[Interval]] = Vec.new();
+    for list in lists.iter() {
+        let mut employee: Vec[Interval] = Vec.new();
+        for pair in list.iter() {
+            employee.push(Interval { start: pair[0], end: pair[1] });
+        }
+        schedule.push(employee);
+    }
+    schedule
+}
+
+fn show(lists: Vec[Vec[Vec[i64]]]) {
+    let schedule = schedule_of(lists);
+    let mut parts: Vec[String] = Vec.new();
+    for employee in schedule.iter() {
+        parts.push(text(employee));
+    }
+    let free = employee_free_time(schedule);
+    println(f"{parts.join(" ")} -> {text(free)}");
+}
+
+fn main() {
+    show([[[1, 2], [5, 6]], [[1, 3]], [[4, 10]]]);
+    show([[[1, 3], [6, 7]], [[2, 4]], [[2, 5], [9, 12]]]);
+    show([[[1, 2]]]);
+    show([[[1, 2], [3, 4], [5, 6]]]);
+    show([[[1, 2]], [[2, 3]], [[3, 4]]]);
+    show([[[0, 100000000]], [[5, 6]]]);
+    show([[[7, 8]], [[1, 2]], [[4, 5]]]);
+    show([[[1, 10]], [[2, 3], [4, 5], [6, 7]]]);
+    let mut seed = 759;
+    let mut gaps = 0;
+    let mut length = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let employees = 1 + next_random(mut seed) % 50;
+        let spread = 1 + wide_random(mut seed) % 999990;
+        let mut schedule: Vec[Vec[Interval]] = Vec.new();
+        for _ in 0..employees {
+            let count = 1 + next_random(mut seed) % 50;
+            let mut employee: Vec[Interval] = Vec.new();
+            let mut t = 0;
+            for _ in 0..count {
+                let start = t + wide_random(mut seed) % spread;
+                let end = start + 1 + wide_random(mut seed) % spread;
+                employee.push(Interval { start: start, end: end });
+                t = end + 1;
+            }
+            schedule.push(employee);
+        }
+        let free = employee_free_time(schedule);
+        gaps += free.len();
+        for interval in free.iter() {
+            length += interval.end - interval.start;
+            check = (check * 31 + interval.start) % 1000000007;
+            check = (check * 31 + interval.end) % 1000000007;
+        }
+    }
+    println(f"300 random schedules: {gaps} free intervals, {length} free in all, checksum {check}");
+}

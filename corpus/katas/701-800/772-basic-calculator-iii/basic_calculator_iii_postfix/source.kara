@@ -1,0 +1,161 @@
+// LeetCode 772 — Basic Calculator III, postfix.
+//
+// Dijkstra's shunting-yard puts the tokens in postfix order, an operator
+// leaving the stack when the next one binds no tighter, so equal binding
+// groups from the left; a stack of numbers then evaluates them. O(n).
+
+enum Token {
+    Num(i64),
+    Op(u8),
+}
+
+fn binding(op: u8) -> i64 {
+    if op == b'*' or op == b'/' { 2 } else if op == b'+' or op == b'-' { 1 } else { 0 }
+}
+
+fn apply(a: i64, op: u8, b: i64) -> i64 {
+    if op == b'+' {
+        a + b
+    } else if op == b'-' {
+        a - b
+    } else if op == b'*' {
+        a * b
+    } else {
+        a / b
+    }
+}
+
+fn calculate(s: String) -> i64 {
+    let bytes = s.bytes();
+    let mut postfix: Vec[Token] = Vec.new();
+    let mut ops: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' and c <= b'9' {
+            let mut n = 0;
+            while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+                n = n * 10 + (bytes[i] - b'0') as i64;
+                i += 1;
+            }
+            postfix.push(Token.Num(n));
+            continue;
+        }
+        if c == b'(' {
+            ops.push(c);
+        } else if c == b')' {
+            while ops[ops.len() - 1] != b'(' {
+                postfix.push(Token.Op(ops.pop().unwrap()));
+            }
+            ops.pop();
+        } else {
+            while ops.len() > 0 and binding(ops[ops.len() - 1]) >= binding(c) {
+                postfix.push(Token.Op(ops.pop().unwrap()));
+            }
+            ops.push(c);
+        }
+        i += 1;
+    }
+    while ops.len() > 0 {
+        postfix.push(Token.Op(ops.pop().unwrap()));
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    for token in postfix.into_iter() {
+        match token {
+            Token.Num(n) => stack.push(n),
+            Token.Op(op) => {
+                let b = stack.pop().unwrap();
+                let a = stack.pop().unwrap();
+                stack.push(apply(a, op, b));
+            }
+        }
+    }
+    stack[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    let value = calculate(s);
+    println(f"\"{s}\" -> {value}");
+}
+
+// A random expression: its text, its value, how loosely its outermost
+// operator binds (1 for + and -, 2 for * and /, 3 for none), and whether
+// it is valid, with no division by zero and every value in 32 bits.
+struct Piece {
+    text: String,
+    value: i64,
+    level: i64,
+    valid: bool,
+}
+
+fn bracketed(p: Piece) -> String {
+    f"({p.text})"
+}
+
+fn random_piece(seed: mut ref i64, leaves: i64) -> Piece {
+    if leaves == 1 {
+        let n = if next_random(mut seed) % 4 == 0 { next_random(mut seed) % 1000 } else { next_random(mut seed) % 10 };
+        return Piece { text: f"{n}", value: n, level: 3, valid: true };
+    }
+    let left_leaves = 1 + next_random(mut seed) % (leaves - 1);
+    let left = random_piece(mut seed, left_leaves);
+    let right = random_piece(mut seed, leaves - left_leaves);
+    let op = b"+-*/"[next_random(mut seed) % 4];
+    let level = if op == b'+' or op == b'-' { 1 } else { 2 };
+    let left_text = if left.level < level or next_random(mut seed) % 4 == 0 { bracketed(left) } else { left.text.clone() };
+    let right_text = if right.level < level or (right.level == level and op != b'+') or next_random(mut seed) % 4 == 0 { bracketed(right) } else { right.text.clone() };
+    let mut valid = left.valid and right.valid;
+    let mut value = 0;
+    if op == b'+' {
+        value = left.value + right.value;
+    } else if op == b'-' {
+        value = left.value - right.value;
+    } else if op == b'*' {
+        value = left.value * right.value;
+    } else if right.value == 0 {
+        valid = false;
+    } else {
+        value = left.value / right.value;
+    }
+    if value < -2147483648 or value > 2147483647 {
+        valid = false;
+    }
+    Piece { text: f"{left_text}{op as char}{right_text}", value: value, level: level, valid: valid }
+}
+
+fn main() {
+    show("1+1");
+    show("6-4/2");
+    show("2*(5+5*2)/3+(6/2+8)");
+    show("0");
+    show("1-1-1");
+    show("8/3/2");
+    show("(1-8)/2");
+    show("2147483647");
+    show("((((7))))");
+    show("1*2-3/4+5*6-7*8+9/10");
+    show("2-(5-8)");
+    show("(0-7)*(0-6)/(2-9)");
+    let mut seed = 772;
+    let mut count = 0;
+    let mut length = 0;
+    let mut check = 0;
+    while count < 300 {
+        let piece = random_piece(mut seed, 1 + next_random(mut seed) % 12);
+        if not piece.valid {
+            continue;
+        }
+        let value = calculate(piece.text);
+        count += 1;
+        length += piece.text.len();
+        check = ((check * 31 + value) % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"300 random expressions, {length} characters: checksum {check}");
+}

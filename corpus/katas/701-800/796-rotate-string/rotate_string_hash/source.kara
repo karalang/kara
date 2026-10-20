@@ -1,0 +1,101 @@
+// LeetCode 796 — Rotate String, rolling hash.
+//
+// Hash goal and each window of s + s of goal's length as numbers in base
+// 131 modulo a large prime, moving the window one letter at a time by
+// taking off the letter that leaves and adding the one that comes. A
+// window whose hash is goal's is compared letter by letter, so a
+// collision cannot give a wrong answer. O(n) expected.
+fn rotate_string(s: Str, goal: Str) -> bool {
+    let t = s.bytes();
+    let p = goal.bytes();
+    let n = t.len();
+    if p.len() != n {
+        return false;
+    }
+    let modulus = 1000000007;
+    let base = 131;
+    // high: base^(n - 1), the weight of a window's first letter.
+    let mut high = 1;
+    for _ in 1..n {
+        high = high * base % modulus;
+    }
+    let mut want = 0;
+    let mut have = 0;
+    for i in 0..n {
+        want = (want * base + p[i] as i64) % modulus;
+        have = (have * base + t[i] as i64) % modulus;
+    }
+    for start in 0..n {
+        if have == want {
+            let mut same = true;
+            for i in 0..n {
+                if t[(start + i) % n] != p[i] {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return true;
+            }
+        }
+        // The window moves on: t[start] leaves, t[start + n], which is
+        // t[start] again, comes in.
+        let out = t[start] as i64 * high % modulus;
+        have = ((have - out + modulus) % modulus * base + t[start] as i64) % modulus;
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, goal: Str) {
+    println(f"s = \"{s}\", goal = \"{goal}\" -> {rotate_string(s, goal)}");
+}
+
+fn main() {
+    show("abcde", "cdeab");
+    show("abcde", "abced");
+    show("a", "a");
+    show("aa", "a");
+    show("abab", "baba");
+    show("abc", "abc");
+    show("aab", "abb");
+    let mut seed = 796;
+    let mut rotations = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let letters = 1 + next_random(mut seed) % 4;
+        let n = 1 + next_random(mut seed) % 100;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+        let kind = next_random(mut seed) % 3;
+        let mut goal = String.new();
+        if kind == 2 {
+            // Any string of the same length.
+            for _ in 0..n {
+                goal.push((97 + next_random(mut seed) % letters) as u8 as char);
+            }
+        } else {
+            // A rotation, with one letter changed when kind is 1.
+            let k = next_random(mut seed) % n;
+            let chars: Vec[char] = s.chars().collect();
+            let change = if kind == 1 { next_random(mut seed) % n } else { -1 };
+            for j in 0..n {
+                let c = chars[(j + k) % n];
+                goal.push(if j == change { (97 + (c as i64 - 97 + 1) % letters) as u8 as char } else { c });
+            }
+        }
+        if rotate_string(s, goal) {
+            rotations += 1;
+            check = (check * 131 + i) % 1000000007;
+        }
+    }
+    println(f"300 random cases: {rotations} rotations, checksum {check}");
+}

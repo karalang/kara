@@ -1,0 +1,8 @@
+"abcdefghijklmnopqrstuvwxyz" -> [3, 60]
+"bbbcccdddaaa" -> [2, 4]
+"a" -> [1, 10]
+"abcdefghij" -> [1, 100]
+"abcdefghijk" -> [2, 10]
+"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" -> [1, 100]
+"zyzyzyzyzyzyzyzyzyzy" -> [2, 95]
+300 random strings: 2045 lines in all, checksum 139324782

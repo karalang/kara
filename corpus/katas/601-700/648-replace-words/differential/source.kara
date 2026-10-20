@@ -23,7 +23,7 @@ fn replace_words_star(dictionary: Vec[String], sentence: String) -> String {
         ends[node] = true;
     }
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let bytes = word.bytes();
         let mut node = 0;
         let mut length = 0;
@@ -55,7 +55,7 @@ fn replace_words_prefixes(dictionary: Vec[String], sentence: String) -> String {
         }
     }
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for k in 1..word.len().min(longest) + 1 {
             let prefix = word.slice(0, k).to_string();
@@ -75,7 +75,7 @@ fn replace_words_shortest(dictionary: Vec[String], sentence: String) -> String {
     let mut roots = dictionary.clone();
     roots.sort_by(|a, b| a.len().cmp(b.len()));
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for root in roots.iter() {
             if word.starts_with(root) {
@@ -92,7 +92,7 @@ fn replace_words_shortest(dictionary: Vec[String], sentence: String) -> String {
 
 fn replace_words_every(dictionary: Vec[String], sentence: String) -> String {
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for root in dictionary.iter() {
             if root.len() < replaced.len() and word.starts_with(root) {
@@ -142,7 +142,7 @@ fn is_prefix(root: String, word: String, k: i64) -> bool {
 // The definition: each word's prefixes tried from one letter up, each
 // against every root, the first that is a root replacing the word.
 fn definition(dictionary: Vec[String], sentence: String) -> String {
-    let words = sentence.split(" ");
+    let words: Vec[Str] = sentence.split(" ").collect();
     let mut out = String.new();
     for i in 0..words.len() {
         if i > 0 {
@@ -204,7 +204,7 @@ fn main() {
         let want = definition(dictionary, sentence);
         for which in 0..4 {
             let got = answer(which, dictionary, sentence);
-            let parts = got.split(" ");
+            let parts: Vec[Str] = got.split(" ").collect();
             // P2: one word out for each word in, each a prefix of its word.
             let mut shaped = parts.len() == words.len();
             // P4: each word replaced on its own gives the same word.

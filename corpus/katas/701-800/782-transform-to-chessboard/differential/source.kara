@@ -1,0 +1,479 @@
+// LeetCode #782: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random boards.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn moves_to_chessboard_star(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    for r in 0..n {
+        for c in 0..n {
+            if board[0][0] ^ board[r][0] ^ board[0][c] ^ board[r][c] == 1 {
+                return -1;
+            }
+        }
+    }
+    let mut row_ones = 0;
+    let mut col_ones = 0;
+    let mut row_off = 0;
+    let mut col_off = 0;
+    for i in 0..n {
+        row_ones += board[0][i];
+        col_ones += board[i][0];
+        if board[i][0] == i % 2 {
+            row_off += 1;
+        }
+        if board[0][i] == i % 2 {
+            col_off += 1;
+        }
+    }
+    if row_ones != n / 2 and row_ones != (n + 1) / 2 {
+        return -1;
+    }
+    if col_ones != n / 2 and col_ones != (n + 1) / 2 {
+        return -1;
+    }
+    if n % 2 == 1 {
+        // Only one pattern has the right count; its places off are even.
+        if row_off % 2 == 1 {
+            row_off = n - row_off;
+        }
+        if col_off % 2 == 1 {
+            col_off = n - col_off;
+        }
+    } else {
+        if n - row_off < row_off {
+            row_off = n - row_off;
+        }
+        if n - col_off < col_off {
+            col_off = n - col_off;
+        }
+    }
+    (row_off + col_off) / 2
+}
+
+// ---- masks arm ------------------------------------------------------
+
+// The swaps to make `line` alternate, or -1 when no alternate line has
+// its counts.
+fn swaps_to_alternate_masks(line: Vec[i64]) -> i64 {
+    let n = line.len();
+    let mut best = -1;
+    for first in 0..2 {
+        // The alternate line starting with `first`.
+        let mut ones_want = 0;
+        let mut ones_have = 0;
+        let mut off = 0;
+        for i in 0..n {
+            let want = (first + i) % 2;
+            ones_want += want;
+            ones_have += line[i];
+            if line[i] != want {
+                off += 1;
+            }
+        }
+        if ones_want == ones_have and (best == -1 or off / 2 < best) {
+            best = off / 2;
+        }
+    }
+    best
+}
+
+fn moves_to_chessboard_masks(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let full = (1 << n) - 1;
+    let mut masks: Vec[i64] = Vec.new();
+    for r in 0..n {
+        let mut m = 0;
+        for c in 0..n {
+            m = m * 2 + board[r][c];
+        }
+        masks.push(m);
+    }
+    let first = masks[0];
+    let mut kinds: Vec[i64] = Vec.new();
+    for r in 0..n {
+        if masks[r] == first {
+            kinds.push(0);
+        } else if masks[r] == first ^ full {
+            kinds.push(1);
+        } else {
+            return -1;
+        }
+    }
+    let mut bits: Vec[i64] = Vec.new();
+    for c in 0..n {
+        bits.push((first >> (n - 1 - c)) & 1);
+    }
+    let rows = swaps_to_alternate_masks(kinds);
+    let cols = swaps_to_alternate_masks(bits);
+    if rows == -1 or cols == -1 {
+        return -1;
+    }
+    rows + cols
+}
+
+// ---- swapping arm ---------------------------------------------------
+
+fn make_alternate_swapping(line: Vec[i64]) -> i64 {
+    let n = line.len();
+    let mut best = -1;
+    for first in 0..2 {
+        let mut work = line.clone();
+        let mut ones = 0;
+        let mut ones_want = 0;
+        for i in 0..n {
+            ones += work[i];
+            ones_want += (first + i) % 2;
+        }
+        if ones != ones_want {
+            continue;
+        }
+        let mut swaps = 0;
+        let mut zero_at = 0;
+        let mut one_at = 0;
+        loop {
+            while zero_at < n and not (work[zero_at] == 0 and (first + zero_at) % 2 == 1) {
+                zero_at += 1;
+            }
+            while one_at < n and not (work[one_at] == 1 and (first + one_at) % 2 == 0) {
+                one_at += 1;
+            }
+            if zero_at == n or one_at == n {
+                break;
+            }
+            work.swap(zero_at, one_at);
+            swaps += 1;
+        }
+        if best == -1 or swaps < best {
+            best = swaps;
+        }
+    }
+    best
+}
+
+fn moves_to_chessboard_swapping(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let mut kinds: Vec[i64] = Vec.new();
+    for r in 0..n {
+        let mut same = true;
+        let mut flipped = true;
+        for c in 0..n {
+            if board[r][c] != board[0][c] {
+                same = false;
+            } else {
+                flipped = false;
+            }
+        }
+        if same {
+            kinds.push(0);
+        } else if flipped {
+            kinds.push(1);
+        } else {
+            return -1;
+        }
+    }
+    let rows = make_alternate_swapping(kinds);
+    let cols = make_alternate_swapping(board[0].clone());
+    if rows == -1 or cols == -1 {
+        return -1;
+    }
+    rows + cols
+}
+
+// ---- cycles arm -----------------------------------------------------
+
+// The swaps that carry out the permutation taking `line` to the
+// alternate line starting with `first`; -1 when the counts differ.
+fn swaps_for_cycles(line: Vec[i64], first: i64) -> i64 {
+    let n = line.len();
+    let mut to: Vec[i64] = Vec.filled(n, 0);
+    let mut zeros_off: Vec[i64] = Vec.new();
+    let mut ones_off: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if line[i] == (first + i) % 2 {
+            to[i] = i;
+        } else if line[i] == 0 {
+            zeros_off.push(i);
+        } else {
+            ones_off.push(i);
+        }
+    }
+    if zeros_off.len() != ones_off.len() {
+        return -1;
+    }
+    for k in 0..zeros_off.len() {
+        to[zeros_off[k]] = ones_off[k];
+        to[ones_off[k]] = zeros_off[k];
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut cycles = 0;
+    for i in 0..n {
+        if not seen[i] {
+            cycles += 1;
+            let mut j = i;
+            while not seen[j] {
+                seen[j] = true;
+                j = to[j];
+            }
+        }
+    }
+    n - cycles
+}
+
+fn fewest_cycles(line: Vec[i64]) -> i64 {
+    let a = swaps_for_cycles(line, 0);
+    let b = swaps_for_cycles(line, 1);
+    if a == -1 {
+        b
+    } else if b == -1 or a < b {
+        a
+    } else {
+        b
+    }
+}
+
+fn moves_to_chessboard_cycles(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let mut kinds: Vec[i64] = Vec.new();
+    for r in 0..n {
+        let mut differ = 0;
+        for c in 0..n {
+            if board[r][c] != board[0][c] {
+                differ += 1;
+            }
+        }
+        if differ == 0 {
+            kinds.push(0);
+        } else if differ == n {
+            kinds.push(1);
+        } else {
+            return -1;
+        }
+    }
+    let rows = fewest_cycles(kinds);
+    let cols = fewest_cycles(board[0].clone());
+    if rows == -1 or cols == -1 {
+        return -1;
+    }
+    rows + cols
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, board: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        moves_to_chessboard_star(board)
+    } else if which == 1 {
+        moves_to_chessboard_masks(board)
+    } else if which == 2 {
+        moves_to_chessboard_swapping(board)
+    } else {
+        moves_to_chessboard_cycles(board)
+    }
+}
+
+fn cell(code: i64, n: i64, r: i64, c: i64) -> i64 {
+    (code >> (r * n + c)) & 1
+}
+
+// The board coded as bits, cell (r, c) at bit r * n + c, with rows a and
+// b swapped (by_rows) or columns a and b.
+fn swapped(code: i64, n: i64, by_rows: bool, a: i64, b: i64) -> i64 {
+    let mut out = 0;
+    for r in 0..n {
+        for c in 0..n {
+            let (fr, fc) = if by_rows {
+                (if r == a { b } else if r == b { a } else { r }, c)
+            } else {
+                (r, if c == a { b } else if c == b { a } else { c })
+            };
+            out = out | (cell(code, n, fr, fc) << (r * n + c));
+        }
+    }
+    out
+}
+
+// The definition: breadth first search over every board reached by
+// swapping two rows or two columns, until a chessboard turns up.
+fn definition(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let mut start = 0;
+    let mut chess = 0;
+    for r in 0..n {
+        for c in 0..n {
+            start = start | (board[r][c] << (r * n + c));
+            chess = chess | (((r + c) % 2) << (r * n + c));
+        }
+    }
+    let other = chess ^ ((1 << (n * n)) - 1);
+    let mut seen: Set[i64] = Set.new();
+    let mut level: Vec[i64] = [start];
+    seen.insert(start);
+    let mut moves = 0;
+    while level.len() > 0 {
+        let mut next: Vec[i64] = Vec.new();
+        for code in level.iter() {
+            if *code == chess or *code == other {
+                return moves;
+            }
+            for a in 0..n {
+                for b in a + 1..n {
+                    for by_rows in [true, false] {
+                        let to = swapped(*code, n, by_rows, a, b);
+                        if not seen.contains(to) {
+                            seen.insert(to);
+                            next.push(to);
+                        }
+                    }
+                }
+            }
+        }
+        level = next;
+        moves += 1;
+    }
+    -1
+}
+
+fn make_board(seed: mut ref i64, n: i64, kind: i64) -> Vec[Vec[i64]] {
+    // kind 0: a chessboard with its rows and columns shuffled; kind 1:
+    // that with one cell flipped; kind 2: a random first row, and every
+    // other row it or its flip at random, so only the counts can be
+    // wrong; kind 3: every cell random.
+    let mut row_of: Vec[i64] = Vec.new();
+    let mut col_of: Vec[i64] = Vec.new();
+    for i in 0..n {
+        row_of.push(i);
+        col_of.push(i);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        row_of.swap(i, next_random(mut seed) % (i + 1));
+        col_of.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(if kind == 3 { next_random(mut seed) % 2 } else { (row_of[r] + col_of[c]) % 2 });
+        }
+        board.push(row);
+    }
+    if kind == 1 {
+        let r = next_random(mut seed) % n;
+        let c = next_random(mut seed) % n;
+        board[r][c] = 1 - board[r][c];
+    } else if kind == 2 {
+        for c in 0..n {
+            board[0][c] = next_random(mut seed) % 2;
+        }
+        for r in 1..n {
+            let flip = next_random(mut seed) % 2;
+            for c in 0..n {
+                board[r][c] = board[0][c] ^ flip;
+            }
+        }
+    }
+    board
+}
+
+fn transposed(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = board.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(board[c][r]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn flipped(board: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in board.iter() {
+        let mut copy: Vec[i64] = Vec.new();
+        for v in row.iter() {
+            copy.push(1 - *v);
+        }
+        out.push(copy);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7820;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut solvable = 0;
+    for case in 0..cases {
+        // 1,300 boards of 1 to 4 squares a side and 60 of 5, where the
+        // definition's search is cheap enough, then 240 of 6 to 30,
+        // LeetCode's most. A quarter of each kind.
+        let n = if case < 1300 { 1 + next_random(mut seed) % 4 } else if case < 1360 { 5 } else { 6 + next_random(mut seed) % 25 };
+        let small = n <= 5;
+        let board = make_board(mut seed, n, case % 4);
+        let want = if small { definition(board) } else { answer_with(0, board) };
+        if want >= 0 {
+            solvable += 1;
+        }
+        // For P4, one swap of two rows and one of two columns.
+        let mut moved = board.clone();
+        if n > 1 {
+            moved.swap(next_random(mut seed) % n, next_random(mut seed) % n);
+            let a = next_random(mut seed) % n;
+            let b = next_random(mut seed) % n;
+            for r in 0..n {
+                moved[r].swap(a, b);
+            }
+        }
+        for which in 0..arms {
+            let got = answer_with(which, board);
+            // P1: the definition's answer, on the small boards.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the board transposed gives the same answer.
+            checks += 1;
+            if answer_with(which, transposed(board)) != got {
+                fails[1] += 1;
+            }
+            // P3: every cell flipped gives the same answer: the flip of a
+            // chessboard is a chessboard.
+            checks += 1;
+            if answer_with(which, flipped(board)) != got {
+                fails[2] += 1;
+            }
+            // P4: after a swap of two rows and one of two columns the
+            // board is solvable exactly when it was, in at most two moves
+            // more or fewer.
+            checks += 1;
+            let after = answer_with(which, moved);
+            if (after == -1) != (got == -1) or after - got > 2 or got - after > 2 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} boards ({solvable} solvable), {arms} arms, {checks} checks, {failures} failures");
+}

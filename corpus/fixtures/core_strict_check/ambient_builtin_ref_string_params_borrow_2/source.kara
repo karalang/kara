@@ -1,0 +1,17 @@
+fn main() {
+    let path = "x.txt".to_string();
+    match fs.write(path, "abc".to_string()) {
+        Ok(_) => println("ok"),
+        Err(_) => println("err"),
+    }
+    println(f"{path}");
+    let dir = ".".to_string();
+    let names = match fs.read_dir(dir) {
+        Ok(ns) => ns.len(),
+        Err(e) => {
+            println(f"cannot list {dir}: {e}");
+            0
+        }
+    };
+    println(f"{names > 0} {dir}");
+}

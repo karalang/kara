@@ -20,10 +20,10 @@ fn turns(b: Slice[u8], i: i64, j: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
     if memo[i][j] >= 0 {
         return memo[i][j];
     }
-    let mut best = 1 + turns(b, i + 1, j, memo);
+    let mut best = 1 + turns(b, i + 1, j, mut memo);
     for k in i + 1..j + 1 {
         if b[k] == b[i] {
-            best = best.min(turns(b, i + 1, k - 1, memo) + turns(b, k, j, memo));
+            best = best.min(turns(b, i + 1, k - 1, mut memo) + turns(b, k, j, mut memo));
         }
     }
     memo[i][j] = best;

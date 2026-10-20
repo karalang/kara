@@ -1,0 +1,75 @@
+// LeetCode 765 — Couples Holding Hands, greedy swaps.
+//
+// Go through the couches in order. If the person in a couch's first seat
+// is not sitting with their partner, swap the partner into the second seat.
+// Each such swap seats one couple for good and is never wasted, so the
+// count is the least possible. A table of where each person sits makes
+// every swap O(1), so O(n) in all. The row is taken owned, since the
+// swaps rearrange it.
+
+fn min_swaps_couples(row: own Vec[i64]) -> i64 {
+    let mut row = row;
+    let mut seat_of: Vec[i64] = Vec.new();
+    for _ in 0..row.len() {
+        seat_of.push(0);
+    }
+    for i in 0..row.len() {
+        seat_of[row[i]] = i;
+    }
+    let mut swaps = 0;
+    let mut i = 0;
+    while i < row.len() {
+        let partner = row[i] ^ 1;
+        if row[i + 1] != partner {
+            let j = seat_of[partner];
+            let moved = row[i + 1];
+            row[j] = moved;
+            seat_of[moved] = j;
+            row[i + 1] = partner;
+            seat_of[partner] = i + 1;
+            swaps += 1;
+        }
+        i += 2;
+    }
+    swaps
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(row: Vec[i64]) {
+    let swaps = min_swaps_couples(row.clone());
+    println(f"{row} -> {swaps}");
+}
+
+fn main() {
+    show([0, 2, 1, 3]);
+    show([3, 2, 0, 1]);
+    show([0, 1]);
+    show([1, 0]);
+    show([0, 2, 4, 1, 3, 5]);
+    show([5, 4, 2, 6, 3, 1, 0, 7]);
+    show([0, 3, 2, 5, 4, 7, 6, 9, 8, 1]);
+    let mut seed = 765;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let couples = 1 + next_random(mut seed) % 30;
+        let mut row: Vec[i64] = Vec.new();
+        for p in 0..2 * couples {
+            row.push(p);
+        }
+        for i in 0..2 * couples {
+            let j = i + next_random(mut seed) % (2 * couples - i);
+            row.swap(i, j);
+        }
+        let swaps = min_swaps_couples(row);
+        total += swaps;
+        check = (check * 31 + swaps) % 1000000007;
+    }
+    println(f"300 random rows: {total} swaps in all, checksum {check}");
+}

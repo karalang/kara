@@ -26,8 +26,8 @@ fn walk(node: Option[TreeNode], depth: i64, place: i64, firsts: mut ref Vec[i64]
                 firsts.push(place);
             }
             let offset = place - firsts[depth];
-            let left = walk(n.left, depth + 1, offset * 2, firsts);
-            let right = walk(n.right, depth + 1, offset * 2 + 1, firsts);
+            let left = walk(n.left, depth + 1, offset * 2, mut firsts);
+            let right = walk(n.right, depth + 1, offset * 2 + 1, mut firsts);
             (offset + 1).max(left).max(right)
         }
     }

@@ -1,0 +1,502 @@
+// LeetCode #803: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random walls.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn hit_bricks_star(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut left = grid.clone();
+    for k in 0..hits.len() {
+        let (r, c) = hits[k];
+        left[r][c] = 0;
+    }
+    let roof = rows * cols;
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    for i in 0..roof + 1 {
+        parent.push(i);
+        size.push(1);
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            if left[r][c] == 1 {
+                join_star(r, c, rows, cols, left, mut parent, mut size);
+            }
+        }
+    }
+    let mut fallen: Vec[i64] = Vec.new();
+    for _ in 0..hits.len() {
+        fallen.push(0);
+    }
+    let mut k = hits.len() - 1;
+    while k >= 0 {
+        let (r, c) = hits[k];
+        if grid[r][c] == 1 {
+            let before = size[find_star(mut parent, roof)];
+            left[r][c] = 1;
+            join_star(r, c, rows, cols, left, mut parent, mut size);
+            let after = size[find_star(mut parent, roof)];
+            fallen[k] = (after - before - 1).max(0);
+        }
+        k -= 1;
+    }
+    fallen
+}
+
+// Join the brick at (r, c) to the roof if it is in the top row, and to
+// each brick next to it.
+fn join_star(r: i64, c: i64, rows: i64, cols: i64, left: Vec[Vec[i64]], parent: mut ref Vec[i64], size: mut ref Vec[i64]) {
+    let here = r * cols + c;
+    if r == 0 {
+        union_star(mut parent, mut size, here, rows * cols);
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    for d in 0..4 {
+        let nr = r + dr[d];
+        let nc = c + dc[d];
+        if nr >= 0 and nr < rows and nc >= 0 and nc < cols and left[nr][nc] == 1 {
+            union_star(mut parent, mut size, here, nr * cols + nc);
+        }
+    }
+}
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn union_star(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let ra = find_star(mut parent, a);
+    let rb = find_star(mut parent, b);
+    if ra == rb {
+        return;
+    }
+    if size[ra] < size[rb] {
+        parent[ra] = rb;
+        size[rb] += size[ra];
+    } else {
+        parent[rb] = ra;
+        size[ra] += size[rb];
+    }
+}
+
+// ---- flood arm ------------------------------------------------------
+
+fn hit_bricks_flood(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut wall = grid.clone();
+    let mut fallen: Vec[i64] = Vec.new();
+    for k in 0..hits.len() {
+        let (r, c) = hits[k];
+        if wall[r][c] == 0 {
+            fallen.push(0);
+            continue;
+        }
+        wall[r][c] = 0;
+        let mut held: Vec[bool] = Vec.new();
+        for _ in 0..rows * cols {
+            held.push(false);
+        }
+        let mut queue: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            if wall[0][c] == 1 {
+                held[c] = true;
+                queue.push(c);
+            }
+        }
+        let mut head = 0;
+        while head < queue.len() {
+            let cell = queue[head];
+            head += 1;
+            let (r, c) = (cell / cols, cell % cols);
+            let dr = [-1, 1, 0, 0];
+            let dc = [0, 0, -1, 1];
+            for d in 0..4 {
+                let nr = r + dr[d];
+                let nc = c + dc[d];
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and wall[nr][nc] == 1 and not held[nr * cols + nc] {
+                    held[nr * cols + nc] = true;
+                    queue.push(nr * cols + nc);
+                }
+            }
+        }
+        let mut count = 0;
+        for r in 0..rows {
+            for c in 0..cols {
+                if wall[r][c] == 1 and not held[r * cols + c] {
+                    wall[r][c] = 0;
+                    count += 1;
+                }
+            }
+        }
+        fallen.push(count);
+    }
+    fallen
+}
+
+// ---- local arm ------------------------------------------------------
+
+fn hit_bricks_local(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut wall = grid.clone();
+    let mut fallen: Vec[i64] = Vec.new();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    for k in 0..hits.len() {
+        let (r, c) = hits[k];
+        if wall[r][c] == 0 {
+            fallen.push(0);
+            continue;
+        }
+        wall[r][c] = 0;
+        let mut count = 0;
+        for d in 0..4 {
+            let sr = r + dr[d];
+            let sc = c + dc[d];
+            if sr < 0 or sr >= rows or sc < 0 or sc >= cols or wall[sr][sc] == 0 {
+                continue;
+            }
+            let group = group_of_local(wall, sr, sc);
+            let mut up = false;
+            for cell in group.iter() {
+                if cell < cols {
+                    up = true;
+                }
+            }
+            if not up {
+                for cell in group.iter() {
+                    wall[cell / cols][cell % cols] = 0;
+                }
+                count += group.len();
+            }
+        }
+        fallen.push(count);
+    }
+    fallen
+}
+
+// The cells, as r · cols + c, of the bricks joined to the one at
+// (r, c).
+fn group_of_local(wall: Vec[Vec[i64]], r: i64, c: i64) -> Vec[i64] {
+    let rows = wall.len();
+    let cols = wall[0].len();
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..rows * cols {
+        seen.push(false);
+    }
+    let mut group: Vec[i64] = Vec.new();
+    seen[r * cols + c] = true;
+    group.push(r * cols + c);
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut head = 0;
+    while head < group.len() {
+        let cell = group[head];
+        head += 1;
+        let (r, c) = (cell / cols, cell % cols);
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and wall[nr][nc] == 1 and not seen[nr * cols + nc] {
+                seen[nr * cols + nc] = true;
+                group.push(nr * cols + nc);
+            }
+        }
+    }
+    group
+}
+
+// ---- grow arm -------------------------------------------------------
+
+fn hit_bricks_grow(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    // 0 no brick, 1 a brick not held, 2 a brick held up.
+    let mut wall = grid.clone();
+    for k in 0..hits.len() {
+        let (r, c) = hits[k];
+        wall[r][c] = 0;
+    }
+    for c in 0..cols {
+        if wall[0][c] == 1 {
+            hold_grow(mut wall, 0, c);
+        }
+    }
+    let mut fallen: Vec[i64] = Vec.new();
+    for _ in 0..hits.len() {
+        fallen.push(0);
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut k = hits.len() - 1;
+    while k >= 0 {
+        let (r, c) = hits[k];
+        k -= 1;
+        if grid[r][c] == 0 {
+            continue;
+        }
+        wall[r][c] = 1;
+        let mut held = r == 0;
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and wall[nr][nc] == 2 {
+                held = true;
+            }
+        }
+        if held {
+            fallen[k + 1] = hold_grow(mut wall, r, c) - 1;
+        }
+    }
+    fallen
+}
+
+// Mark held the brick at (r, c) and every brick not yet held joined to
+// it, and return how many were marked.
+fn hold_grow(wall: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    let rows = wall.len();
+    let cols = wall[0].len();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    wall[r][c] = 2;
+    stack.push((r, c));
+    let mut count = 0;
+    while let Some((r, c)) = stack.pop() {
+        count += 1;
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and wall[nr][nc] == 1 {
+                wall[nr][nc] = 2;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    if which == 0 {
+        hit_bricks_star(grid, hits)
+    } else if which == 1 {
+        hit_bricks_flood(grid, hits)
+    } else if which == 2 {
+        hit_bricks_local(grid, hits)
+    } else {
+        hit_bricks_grow(grid, hits)
+    }
+}
+
+// The bricks of `grid`, less those at the first `count` hits, that a
+// walk through bricks from the top row reaches, as 1s in a wall.
+fn reached(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)], count: i64) -> Vec[Vec[i64]] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut open = grid.clone();
+    for k in 0..count {
+        let (r, c) = hits[k];
+        open[r][c] = 0;
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(0);
+        }
+        out.push(row);
+    }
+    // Sweep until nothing new is reached: a brick is reached when it is
+    // in the top row or next to a reached brick.
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if open[r][c] == 0 or out[r][c] == 1 {
+                    continue;
+                }
+                let near = r == 0 or (r > 0 and out[r - 1][c] == 1) or (r + 1 < rows and out[r + 1][c] == 1) or (c > 0 and out[r][c - 1] == 1) or (c + 1 < cols and out[r][c + 1] == 1);
+                if near {
+                    out[r][c] = 1;
+                    grew = true;
+                }
+            }
+        }
+    }
+    out
+}
+
+// The definition. A fallen brick held nothing up, so whether a brick
+// still stands after hit k turns only on the wall less the first k + 1
+// hits: it stands while a walk through those bricks reaches it from the
+// top row. Each brick falls at the first hit after which it is not
+// reached, and is counted there unless that hit was on the brick
+// itself.
+fn definition(grid: Vec[Vec[i64]], hits: Vec[(i64, i64)]) -> Vec[i64] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut gone: Vec[bool] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            gone.push(grid[r][c] == 0);
+        }
+    }
+    let mut fallen: Vec[i64] = Vec.new();
+    for k in 0..hits.len() {
+        let up = reached(grid, hits, k + 1);
+        let (hr, hc) = hits[k];
+        let mut count = 0;
+        for r in 0..rows {
+            for c in 0..cols {
+                if not gone[r * cols + c] and up[r][c] == 0 {
+                    gone[r * cols + c] = true;
+                    if r != hr or c != hc {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        fallen.push(count);
+    }
+    fallen
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8030;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    for case in 0..cases {
+        // kind 0: three cells in four are bricks; kind 1: two in four;
+        // kind 2: every cell a brick; kind 3: one or two columns, tall.
+        let kind = case % 4;
+        let rows = if kind == 3 { 2 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 7 };
+        let cols = if kind == 3 { 1 + next_random(mut seed) % 2 } else { 1 + next_random(mut seed) % 7 };
+        let fill = if kind == 0 { 3 } else if kind == 1 { 2 } else if kind == 2 { 4 } else { 3 };
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(if next_random(mut seed) % 4 < fill { 1 } else { 0 });
+            }
+            grid.push(row);
+        }
+        let mut empty: Vec[(i64, i64)] = Vec.new();
+        let grid = reached(grid, empty, 0);
+        let mut cells: Vec[i64] = Vec.new();
+        for j in 0..rows * cols {
+            cells.push(j);
+        }
+        for j in 1..rows * cols {
+            let t = next_random(mut seed) % (j + 1);
+            let x = cells[j];
+            cells[j] = cells[t];
+            cells[t] = x;
+        }
+        let count = 1 + next_random(mut seed) % (rows * cols);
+        let mut hits: Vec[(i64, i64)] = Vec.new();
+        let mut mirror: Vec[(i64, i64)] = Vec.new();
+        for j in 0..count {
+            hits.push((cells[j] / cols, cells[j] % cols));
+            mirror.push((cells[j] / cols, cols - 1 - cells[j] % cols));
+        }
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        let mut bricks = 0;
+        for r in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..cols {
+                row.push(grid[r][cols - 1 - c]);
+                bricks += grid[r][c];
+            }
+            flipped.push(row);
+        }
+        let end = reached(grid, hits, count);
+        let mut standing = 0;
+        for r in 0..rows {
+            for c in 0..cols {
+                standing += end[r][c];
+            }
+        }
+        let half = count / 2;
+        let mut rest: Vec[(i64, i64)] = Vec.new();
+        for j in half..count {
+            rest.push(hits[j]);
+        }
+        let later = reached(grid, hits, half);
+        let want = definition(grid, hits);
+        for f in want.iter() {
+            total += f;
+        }
+        for which in 0..arms {
+            let got = answer_with(which, grid, hits);
+            // P1: the definition's counts.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the wall and the hits mirrored left to right.
+            checks += 1;
+            if answer_with(which, flipped, mirror) != got {
+                fails[1] += 1;
+            }
+            // P3: one count a hit, none below zero; a hit on a cell with
+            // no brick at the start counts none; and the bricks that fell
+            // and those still standing at the end are all the bricks but
+            // the ones the hits knocked out, at most one a hit.
+            checks += 1;
+            let mut sum = 0;
+            let mut bounded = got.len() == count;
+            if bounded {
+                for j in 0..count {
+                    let (r, c) = hits[j];
+                    if got[j] < 0 or (grid[r][c] == 0 and got[j] != 0) {
+                        bounded = false;
+                    }
+                    sum += got[j];
+                }
+            }
+            if not bounded or sum + standing > bricks or sum + standing < bricks - count {
+                fails[2] += 1;
+            }
+            // P4: the second half of the hits, played on the wall the
+            // first half leaves, counts as the second half did.
+            checks += 1;
+            let mut tail: Vec[i64] = Vec.new();
+            for j in half..got.len() {
+                tail.push(got[j]);
+            }
+            if answer_with(which, later, rest) != tail {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} fell), {arms} arms, {checks} checks, {failures} failures");
+}

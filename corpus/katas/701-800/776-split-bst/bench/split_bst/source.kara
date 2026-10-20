@@ -1,0 +1,107 @@
+// Benchmark for #776: Split BST -- the ★ arm (recursive).
+//
+// A node no greater than the target belongs to the small tree with its
+// whole left subtree; only its right subtree needs splitting, and that
+// subtree's small part becomes its new right child. A greater node is the
+// mirror image. O(height) time and stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn split_bst(root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    let Some(node) = root else {
+        return (None, None);
+    };
+    if node.val <= target {
+        let (small, large) = split_bst(node.right, target);
+        node.right = small;
+        (Some(node), large)
+    } else {
+        let (small, large) = split_bst(node.left, target);
+        node.left = large;
+        (small, Some(node))
+    }
+}
+
+// ---- benchmark --------------------------------------------------------
+
+// Inserts v into the search tree rooted at root (v not already there)
+// and returns the root.
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(fresh);
+                    break;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(fresh);
+                    break;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+// Every value times its depth, the root at depth 1.
+fn weigh(root: Option[TreeNode], depth: i64) -> i64 {
+    match root {
+        Some(node) => node.val * depth + weigh(node.left, depth + 1) + weigh(node.right, depth + 1),
+        None => 0,
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 orders of 50 distinct values from 0 to 1000 (LeetCode's limits),
+    // each with a target, drawn once. Each of 200,000 rounds inserts the
+    // next order's values into a fresh tree, splits it at its target and
+    // weighs both parts.
+    let count = 64;
+    let mut seed: i64 = 776;
+    let mut orders: Vec[Vec[i64]] = Vec.new();
+    let mut targets: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        let mut used: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < 50 {
+            let v = next_random(mut seed) % 1001;
+            if not used.contains(v) {
+                used.insert(v);
+                values.push(v);
+            }
+        }
+        orders.push(values);
+        targets.push(next_random(mut seed) % 1001);
+    }
+    let mut checksum: i64 = 0;
+    for round in 0..200000 {
+        let g = round % count;
+        let mut root: Option[TreeNode] = None;
+        for v in orders[g].iter() {
+            root = insert(root, v);
+        }
+        let (small, large) = split_bst(root, targets[g]);
+        checksum = (checksum * 31 + weigh(small, 1) + 3 * weigh(large, 1)) % 1000000007;
+    }
+    println(f"200000 rounds of 50 values: checksum {checksum}");
+}

@@ -1,0 +1,94 @@
+// LeetCode 794 — Valid Tic-Tac-Toe State: the bench.
+//
+// 4,096 boards are made once, half with each cell filled at random and
+// half by a random game of 0 to 9 moves that goes on past a line one
+// time in four. Each of 6,000,000 rounds asks the ★ arm whether the
+// next board can come up in a game.
+fn wins(cells: Vec[u8], mark: u8) -> bool {
+    let lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    for line in lines {
+        if cells[line[0]] == mark and cells[line[1]] == mark and cells[line[2]] == mark {
+            return true;
+        }
+    }
+    false
+}
+
+fn valid_tic_tac_toe(board: Vec[String]) -> bool {
+    let mut cells: Vec[u8] = Vec.new();
+    for row in board {
+        for b in row.bytes() {
+            cells.push(b);
+        }
+    }
+    let x = cells.iter().filter(|c| c == b'X').count();
+    let o = cells.iter().filter(|c| c == b'O').count();
+    if x != o and x != o + 1 {
+        return false;
+    }
+    if wins(cells, b'X') and x != o + 1 {
+        return false;
+    }
+    if wins(cells, b'O') and x != o {
+        return false;
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_board(seed: mut ref i64) -> Vec[String] {
+    let mut cells: Vec[char] = Vec.new();
+    for _ in 0..9 {
+        cells.push(' ');
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let marks = [' ', 'X', 'O'];
+        for i in 0..9 {
+            cells[i] = marks[next_random(mut seed) % 3];
+        }
+    } else {
+        let moves = next_random(mut seed) % 10;
+        let mut mover = 'X';
+        for _ in 0..moves {
+            let mut empty: Vec[i64] = Vec.new();
+            for i in 0..9 {
+                if cells[i] == ' ' {
+                    empty.push(i);
+                }
+            }
+            cells[empty[next_random(mut seed) % empty.len()]] = mover;
+            mover = if mover == 'X' { 'O' } else { 'X' };
+        }
+    }
+    let mut board: Vec[String] = Vec.new();
+    for r in 0..3 {
+        let mut row = String.new();
+        for c in 0..3 {
+            row.push(cells[r * 3 + c]);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn main() {
+    let mut seed = 794;
+    let mut boards: Vec[Vec[String]] = Vec.new();
+    for _ in 0..4096 {
+        boards.push(random_board(mut seed));
+    }
+    let rounds = 6000000;
+    let mut valid = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        if valid_tic_tac_toe(boards[r % 4096]) {
+            valid += 1;
+            check = (check * 131 + r % 4096) % 1000000007;
+        }
+    }
+    println(f"{rounds} boards: {valid} valid, checksum {check}");
+}

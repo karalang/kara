@@ -222,9 +222,9 @@ fn parents_of(root: Option[TreeNode], nums: Vec[i64]) -> Vec[String] {
 
 fn in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = node {
-        in_order(n.left, out);
+        in_order(n.left, mut out);
         out.push(n.val);
-        in_order(n.right, out);
+        in_order(n.right, mut out);
     }
 }
 

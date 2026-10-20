@@ -1,0 +1,223 @@
+// LeetCode #806: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn number_of_lines_star(widths: Vec[i64], s: String) -> (i64, i64) {
+    let mut lines = 1;
+    let mut width = 0;
+    for b in s.bytes() {
+        let w = widths[b - 97];
+        if width + w > 100 {
+            lines += 1;
+            width = w;
+        } else {
+            width += w;
+        }
+    }
+    (lines, width)
+}
+
+// ---- lines arm ------------------------------------------------------
+
+fn number_of_lines_lines(widths: Vec[i64], s: String) -> (i64, i64) {
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(String.new());
+    let mut width = 0;
+    for b in s.bytes() {
+        let w = widths[b - 97];
+        if width + w > 100 {
+            lines.push(String.new());
+            width = 0;
+        }
+        let last = lines.len() - 1;
+        lines[last].push(char_of_lines(b));
+        width += w;
+    }
+    let mut last_width = 0;
+    for b in lines[lines.len() - 1].bytes() {
+        last_width += widths[b - 97];
+    }
+    (lines.len(), last_width)
+}
+
+fn char_of_lines(b: i64) -> char {
+    "abcdefghijklmnopqrstuvwxyz".chars().nth(b - 97).unwrap()
+}
+
+// ---- recurse arm ----------------------------------------------------
+
+fn number_of_lines_recurse(widths: Vec[i64], s: String) -> (i64, i64) {
+    let letters: Vec[u8] = s.bytes().iter().collect();
+    write_recurse(widths, letters, 0, 1, 0)
+}
+
+fn write_recurse(widths: Vec[i64], letters: Vec[u8], i: i64, lines: i64, width: i64) -> (i64, i64) {
+    if i == letters.len() {
+        return (lines, width);
+    }
+    let w = widths[letters[i] - 97];
+    if width + w > 100 {
+        write_recurse(widths, letters, i + 1, lines + 1, w)
+    } else {
+        write_recurse(widths, letters, i + 1, lines, width + w)
+    }
+}
+
+// ---- fold arm -------------------------------------------------------
+
+fn number_of_lines_fold(widths: Vec[i64], s: String) -> (i64, i64) {
+    s.bytes().iter().map(|b| widths[b - 97]).fold((1, 0), |(lines, width), w| {
+        if width + w > 100 {
+            (lines + 1, w)
+        } else {
+            (lines, width + w)
+        }
+    })
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, widths: Vec[i64], s: String) -> (i64, i64) {
+    if which == 0 {
+        number_of_lines_star(widths, s)
+    } else if which == 1 {
+        number_of_lines_lines(widths, s)
+    } else if which == 2 {
+        number_of_lines_recurse(widths, s)
+    } else {
+        number_of_lines_fold(widths, s)
+    }
+}
+
+// The definition, from sums of the widths: before[i] is the width of
+// the first i letters. A line starting at letter p takes letters up to
+// the last q with before[q] - before[p] at most 100, found by halving;
+// the next line starts at q.
+fn definition(widths: Vec[i64], s: String) -> (i64, i64) {
+    let mut before: Vec[i64] = Vec.new();
+    before.push(0);
+    for b in s.bytes() {
+        let last = before[before.len() - 1];
+        before.push(last + widths[b - 97]);
+    }
+    let n = before.len() - 1;
+    let mut start = 0;
+    let mut lines = 0;
+    let mut width = 0;
+    while start < n {
+        let mut low = start + 1;
+        let mut high = n;
+        while low < high {
+            let mid = (low + high + 1) / 2;
+            if before[mid] - before[start] <= 100 {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        lines += 1;
+        width = before[low] - before[start];
+        start = low;
+    }
+    (lines, width)
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8060;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    for case in 0..cases {
+        // kind 0: widths 2 to 10, up to 100 letters; kind 1: every width
+        // 10, so that lines fill exactly; kind 2: widths 4, 5 and 10,
+        // which often add up to 100; kind 3: widths 9 and 10, up to 300
+        // letters.
+        let kind = case % 4;
+        let mut widths: Vec[i64] = Vec.new();
+        for _ in 0..26 {
+            let w = if kind == 0 {
+                2 + next_random(mut seed) % 9
+            } else if kind == 1 {
+                10
+            } else if kind == 2 {
+                [4, 5, 10][next_random(mut seed) % 3]
+            } else {
+                9 + next_random(mut seed) % 2
+            };
+            widths.push(w);
+        }
+        let length = 1 + next_random(mut seed) % if kind == 3 { 300 } else { 100 };
+        let mut s = String.new();
+        let mut turned_s = String.new();
+        for _ in 0..length {
+            let at = next_random(mut seed) % 26;
+            s.push_str(letters.slice(at, at + 1));
+            turned_s.push_str(letters.slice(25 - at, 26 - at));
+        }
+        let mut turned_widths: Vec[i64] = Vec.new();
+        for i in 0..26 {
+            turned_widths.push(widths[25 - i]);
+        }
+        let extra = next_random(mut seed) % 26;
+        let mut longer = s.clone();
+        longer.push_str(letters.slice(extra, extra + 1));
+        let want = definition(widths, s);
+        let (want_lines, _) = want;
+        total += want_lines;
+        let mut sum = 0;
+        for b in s.bytes() {
+            sum += widths[b - 97];
+        }
+        for which in 0..arms {
+            let got = answer_with(which, widths, s);
+            let (lines, width) = got;
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the last line holds 1 to 100 pixels, every line at
+            // most 100, so the lines hold at least the total; and every
+            // line but the last is more than 90 full, as the next letter
+            // did not fit, so they hold less than the total.
+            checks += 1;
+            if width < 1 or width > 100 or 100 * lines < sum or 91 * (lines - 1) + width > sum {
+                fails[1] += 1;
+            }
+            // P3: one more letter goes on the last line if it fits, and
+            // starts a new line if not.
+            checks += 1;
+            let w = widths[extra];
+            let next = if width + w > 100 { (lines + 1, w) } else { (lines, width + w) };
+            if answer_with(which, widths, longer) != next {
+                fails[2] += 1;
+            }
+            // P4: the alphabet turned round, a for z and z for a, with the
+            // widths turned round with it, the same answer.
+            checks += 1;
+            if answer_with(which, turned_widths, turned_s) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} lines), {arms} arms, {checks} checks, {failures} failures");
+}

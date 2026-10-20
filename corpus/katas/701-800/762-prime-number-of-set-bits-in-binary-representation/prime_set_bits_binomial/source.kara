@@ -1,0 +1,82 @@
+// LeetCode 762 — Prime Number of Set Bits in Binary Representation, by
+// counting with binomials.
+//
+// The numbers from 0 to `n` with exactly k set bits can be counted without
+// visiting them: walking `n`'s bits from the top, wherever `n` has a 1,
+// the numbers that agree above it and have a 0 there leave the bits below
+// free, C(i, k - ones so far) of them. The answer is that count up to
+// `right`, less the count up to `left - 1`, over every prime k.
+// O(bits^2), whatever the width of the range.
+
+fn count_up_to(n: i64, k: i64, choose: ref Vec[Vec[i64]]) -> i64 {
+    let mut count = 0;
+    let mut ones = 0;
+    let mut i = 62;
+    while i >= 0 {
+        if (n >> i) & 1 == 1 {
+            if k - ones >= 0 and k - ones <= i {
+                count += choose[i][k - ones];
+            }
+            ones += 1;
+        }
+        i -= 1;
+    }
+    if ones == k {
+        count += 1;
+    }
+    count
+}
+
+fn count_prime_set_bits(left: i64, right: i64) -> i64 {
+    let mut choose: Vec[Vec[i64]] = Vec.new();
+    for i in 0..63 {
+        let mut row: Vec[i64] = [1];
+        for j in 1..i + 1 {
+            let above = if j < i { choose[i - 1][j] } else { 0 };
+            row.push(choose[i - 1][j - 1] + above);
+        }
+        choose.push(row);
+    }
+    let mut count = 0;
+    for k in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61] {
+        count += count_up_to(right, k, choose) - count_up_to(left - 1, k, choose);
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+fn show(left: i64, right: i64) {
+    let count = count_prime_set_bits(left, right);
+    println(f"[{left}, {right}] -> {count}");
+}
+
+fn main() {
+    show(6, 10);
+    show(10, 15);
+    show(1, 1);
+    show(3, 3);
+    show(1, 10000);
+    show(990000, 1000000);
+    show(524287, 524288);
+    let mut seed = 762;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let left = 1 + wide_random(mut seed) % 1000000;
+        let right = left + wide_random(mut seed) % 10001;
+        let count = count_prime_set_bits(left, right);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 random ranges: {total} numbers counted, checksum {check}");
+}

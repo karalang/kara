@@ -1,0 +1,9 @@
+
+fn append_file(path: Str, text: Str) -> Result[(), IoError] {
+    fs.write(path, text)
+}
+fn main() {
+    let r: Result[(), IoError] = fs.write("y.txt", "a");
+    let r2 = if r.is_ok() { append_file("y.txt", "b") } else { fs.write("y.txt", "c") };
+    println(f"{r.is_ok()} {r2.is_ok()}");
+}

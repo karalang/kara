@@ -1,6 +1,6 @@
 
 fn main() {
-    let w = "a 3 b".split_whitespace();
+    let w: Vec[Str] = "a 3 b".split_whitespace().collect();
     let amount: Fn(i64) -> Result[i64, String] = |i: i64| {
         if w.len() <= i {
             return Err("missing".to_string());

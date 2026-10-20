@@ -1,0 +1,28 @@
+import std.path.{parent, file_name, extension, stem, join, normalize, is_absolute, components};
+fn show(o: Option[Str]) -> String {
+    match o {
+        Some(s) => f"[{s}]",
+        None => "none",
+    }
+}
+fn main() {
+    for p in ["a/b/c.txt", "a", "/a", "/", "", "a/b/", "a//b", "../x", "dir/.bashrc", "f.tar.gz", "f.", "a/.."].iter() {
+        println(f"{p}: {show(parent(p))} {show(file_name(p))} {show(extension(p))} {show(stem(p))} {is_absolute(p)}");
+    }
+    println(join("a", "b"));
+    println(join("a/", "b"));
+    println(join("a", "/etc"));
+    println(join("", "b"));
+    println(join("a", "../../x"));
+    for p in ["a/./b/../c", "/../a", "../../a/..", "a/b/../..", "/", "", ".//x//"].iter() {
+        println(f"{p} -> {normalize(p)}");
+    }
+    for p in ["/usr//lib/./x", "./a/b", "a/../b", "."].iter() {
+        let cs = components(p);
+        let mut line = String.new();
+        for c in cs.iter() {
+            line.push_str(f"<{c}>");
+        }
+        println(f"{p}: {line}");
+    }
+}

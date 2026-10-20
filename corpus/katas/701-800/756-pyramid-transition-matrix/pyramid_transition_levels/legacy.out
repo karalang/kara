@@ -1,0 +1,8 @@
+BCD with 4 triples -> true
+AAAA with 5 triples -> false
+AB with 1 triples -> true
+AB with 1 triples -> false
+AB with 0 triples -> false
+FFFFFF with 1 triples -> true
+ABCDEF with 1 triples -> false
+300 random pyramids: 61 can be built, checksum 650669207

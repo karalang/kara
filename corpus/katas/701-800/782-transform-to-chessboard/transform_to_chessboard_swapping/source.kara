@@ -1,0 +1,166 @@
+// LeetCode 782 — Transform to Chessboard, the swaps made.
+//
+// Check that every row is the first row or the first row flipped. Then
+// the rows are a line of two kinds and the columns a line of 0s and 1s
+// (the first row), and each line must become alternate. Try both
+// alternate lines with the right counts, and for each make the swaps:
+// walk the line with one finger on the next place wrongly holding a 0
+// and another on the next place wrongly holding a 1, and swap the two,
+// counting. Keep the fewer. O(n²).
+
+fn make_alternate(line: Vec[i64]) -> i64 {
+    let n = line.len();
+    let mut best = -1;
+    for first in 0..2 {
+        let mut work = line.clone();
+        let mut ones = 0;
+        let mut ones_want = 0;
+        for i in 0..n {
+            ones += work[i];
+            ones_want += (first + i) % 2;
+        }
+        if ones != ones_want {
+            continue;
+        }
+        let mut swaps = 0;
+        let mut zero_at = 0;
+        let mut one_at = 0;
+        loop {
+            while zero_at < n and not (work[zero_at] == 0 and (first + zero_at) % 2 == 1) {
+                zero_at += 1;
+            }
+            while one_at < n and not (work[one_at] == 1 and (first + one_at) % 2 == 0) {
+                one_at += 1;
+            }
+            if zero_at == n or one_at == n {
+                break;
+            }
+            work.swap(zero_at, one_at);
+            swaps += 1;
+        }
+        if best == -1 or swaps < best {
+            best = swaps;
+        }
+    }
+    best
+}
+
+fn moves_to_chessboard(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let mut kinds: Vec[i64] = Vec.new();
+    for r in 0..n {
+        let mut same = true;
+        let mut flipped = true;
+        for c in 0..n {
+            if board[r][c] != board[0][c] {
+                same = false;
+            } else {
+                flipped = false;
+            }
+        }
+        if same {
+            kinds.push(0);
+        } else if flipped {
+            kinds.push(1);
+        } else {
+            return -1;
+        }
+    }
+    let rows = make_alternate(kinds);
+    let cols = make_alternate(board[0].clone());
+    if rows == -1 or cols == -1 {
+        return -1;
+    }
+    rows + cols
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n chessboard with its rows and columns shuffled.
+fn shuffled_chessboard(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let mut row_of: Vec[i64] = Vec.new();
+    let mut col_of: Vec[i64] = Vec.new();
+    for i in 0..n {
+        row_of.push(i);
+        col_of.push(i);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        row_of.swap(i, next_random(mut seed) % (i + 1));
+        col_of.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push((row_of[r] + col_of[c]) % 2);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn show(board: Vec[Vec[i64]]) {
+    let answer = moves_to_chessboard(board);
+    println(f"{board} -> {answer}");
+}
+
+fn main() {
+    show([[0, 1, 1, 0], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 0, 1]]);
+    show([[0, 1], [1, 0]]);
+    show([[1, 0], [1, 0]]);
+    show([[0]]);
+    show([[1, 1, 0], [0, 0, 1], [0, 0, 1]]);
+    show([[1, 0, 1], [0, 1, 0], [0, 1, 0]]);
+    show([[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 0, 0], [0, 0, 1, 1]]);
+    show([[0, 1, 0, 1], [1, 0, 1, 0], [1, 0, 1, 0], [1, 0, 1, 0]]);
+    let mut seed = 782;
+    let big = shuffled_chessboard(mut seed, 30);
+    let answer = moves_to_chessboard(big);
+    println(f"shuffled 30 x 30 -> {answer}");
+    let mut broken = big.clone();
+    broken[17][11] = 1 - broken[17][11];
+    let answer = moves_to_chessboard(broken);
+    println(f"shuffled 30 x 30, one cell flipped -> {answer}");
+    let answer = moves_to_chessboard(shuffled_chessboard(mut seed, 29));
+    println(f"shuffled 29 x 29 -> {answer}");
+    let mut solvable = 0;
+    let mut moves = 0;
+    let mut check = 0;
+    for case in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let mut board = shuffled_chessboard(mut seed, n);
+        if case % 3 == 1 {
+            let r = next_random(mut seed) % n;
+            let c = next_random(mut seed) % n;
+            board[r][c] = 1 - board[r][c];
+        } else if case % 3 == 2 {
+            // Every row the first row or its flip, at random, so only the
+            // counts can be wrong.
+            for r in 1..n {
+                if next_random(mut seed) % 2 == 0 {
+                    for c in 0..n {
+                        board[r][c] = 1 - board[0][c];
+                    }
+                } else {
+                    for c in 0..n {
+                        board[r][c] = board[0][c];
+                    }
+                }
+            }
+        }
+        let answer = moves_to_chessboard(board);
+        if answer >= 0 {
+            solvable += 1;
+            moves += answer;
+        }
+        check = (check * 31 + answer + 2) % 1000000007;
+    }
+    println(f"300 random boards: {solvable} solvable in {moves} moves, checksum {check}");
+}

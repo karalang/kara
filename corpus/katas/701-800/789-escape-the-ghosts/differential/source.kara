@@ -1,0 +1,212 @@
+// LeetCode #789: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random boards.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn escape_ghosts_star(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let mine = target[0].abs() + target[1].abs();
+    for g in ghosts.iter() {
+        if (g[0] - target[0]).abs() + (g[1] - target[1]).abs() <= mine {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- all arm --------------------------------------------------------
+
+fn escape_ghosts_all(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let mine = target[0].abs() + target[1].abs();
+    ghosts.iter().all(|g| (g[0] - target[0]).abs() + (g[1] - target[1]).abs() > mine)
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn escape_ghosts_sorted(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let mine = target[0].abs() + target[1].abs();
+    let mut distances: Vec[i64] = ghosts.iter().map(|g| (g[0] - target[0]).abs() + (g[1] - target[1]).abs()).collect();
+    distances.sort();
+    distances[0] > mine
+}
+
+// ---- walk arm -------------------------------------------------------
+
+fn caught_walk(ghosts: Vec[Vec[i64]], x: i64, y: i64, moves: i64) -> bool {
+    for g in ghosts.iter() {
+        if (g[0] - x).abs() + (g[1] - y).abs() <= moves {
+            return true;
+        }
+    }
+    false
+}
+
+fn escape_ghosts_walk(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let (tx, ty) = (target[0], target[1]);
+    let mut x = 0;
+    let mut y = 0;
+    let mut moves = 0;
+    if caught_walk(ghosts, x, y, moves) {
+        return false;
+    }
+    while x != tx or y != ty {
+        if x != tx {
+            x += if tx > x { 1 } else { -1 };
+        } else {
+            y += if ty > y { 1 } else { -1 };
+        }
+        moves += 1;
+        if caught_walk(ghosts, x, y, moves) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    if which == 0 {
+        escape_ghosts_star(ghosts, target)
+    } else if which == 1 {
+        escape_ghosts_all(ghosts, target)
+    } else if which == 2 {
+        escape_ghosts_sorted(ghosts, target)
+    } else {
+        escape_ghosts_walk(ghosts, target)
+    }
+}
+
+// The definition, for small boards: the fewest moves from the target to
+// every square of a box around the board, by breadth-first search, and
+// you escape when every ghost needs more moves to the target than you.
+fn definition(ghosts: Vec[Vec[i64]], target: Vec[i64], reach: i64) -> bool {
+    let side = 2 * reach + 1;
+    let mut moves: Vec[i64] = Vec.new();
+    for _ in 0..side * side {
+        moves.push(-1);
+    }
+    let start = (target[0] + reach) * side + target[1] + reach;
+    moves[start] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(at) = queue.pop_front() {
+        let (x, y) = (at / side, at % side);
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx >= 0 and nx < side and ny >= 0 and ny < side and moves[nx * side + ny] == -1 {
+                moves[nx * side + ny] = moves[at] + 1;
+                queue.push_back(nx * side + ny);
+            }
+        }
+    }
+    let mine = moves[reach * side + reach];
+    for g in ghosts.iter() {
+        if moves[(g[0] + reach) * side + g[1] + reach] <= mine {
+            return false;
+        }
+    }
+    true
+}
+
+fn point(seed: mut ref i64, reach: i64) -> Vec[i64] {
+    [next_random(mut seed) % (2 * reach + 1) - reach, next_random(mut seed) % (2 * reach + 1) - reach]
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7890;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut escapes = 0;
+    for case in 0..cases {
+        // 1,200 small boards within 6 of you, then 360 within 200 with up
+        // to 100 ghosts and 40 within 10,000 with up to 3. Of the small
+        // ones, a quarter random, a quarter with a ghost exactly as far
+        // from the target as you, a quarter with every ghost one move
+        // farther, and a quarter with ghosts on the same squares.
+        let small = case < 1200;
+        let reach = if small { 6 } else if case < 1560 { 200 } else { 10000 };
+        let count = 1 + next_random(mut seed) % (if small { 6 } else if case < 1560 { 100 } else { 3 });
+        let target = point(mut seed, reach);
+        let mine = target[0].abs() + target[1].abs();
+        let kind = case % 4;
+        let mut ghosts: Vec[Vec[i64]] = Vec.new();
+        while ghosts.len() < count {
+            let g = point(mut seed, reach);
+            let far = (g[0] - target[0]).abs() + (g[1] - target[1]).abs();
+            if small and kind == 1 and ghosts.len() == 0 and far != mine {
+                continue;
+            }
+            if small and kind == 2 and far != mine + 1 {
+                continue;
+            }
+            if small and kind == 3 and ghosts.len() + 1 < count {
+                ghosts.push(g.clone());
+            }
+            ghosts.push(g);
+        }
+        let want = if small { definition(ghosts, target, reach + 1) } else { answer_with(0, ghosts, target) };
+        if want {
+            escapes += 1;
+        }
+        // For P2, the board turned a quarter about you, ghosts reversed.
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        let mut i = ghosts.len();
+        while i > 0 {
+            i -= 1;
+            turned.push([-ghosts[i][1], ghosts[i][0]]);
+        }
+        let turned_target = [-target[1], target[0]];
+        // For P3, the last ghost dropped.
+        let mut fewer = ghosts.clone();
+        fewer.pop();
+        // For P4, a ghost added on the target.
+        let mut waiting = ghosts.clone();
+        waiting.push(target.clone());
+        for which in 0..arms {
+            let got = answer_with(which, ghosts, target);
+            // P1: the definition's answer, on the small boards.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the board turned a quarter, ghosts in another order,
+            // gives the same answer.
+            checks += 1;
+            if answer_with(which, turned, turned_target) != got {
+                fails[1] += 1;
+            }
+            // P3: one ghost fewer never takes away an escape.
+            if fewer.len() > 0 {
+                checks += 1;
+                if got and not answer_with(which, fewer, target) {
+                    fails[2] += 1;
+                }
+            }
+            // P4: a ghost waiting on the target means no escape.
+            checks += 1;
+            if answer_with(which, waiting, target) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} boards ({escapes} escapes), {arms} arms, {checks} checks, {failures} failures");
+}

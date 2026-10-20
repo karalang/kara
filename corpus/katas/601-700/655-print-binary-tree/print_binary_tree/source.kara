@@ -39,8 +39,8 @@ fn place(node: Option[TreeNode], row: i64, column: i64, h: i64, grid: mut ref Ve
         grid[row][column] = f"{n.val}";
         if row < h {
             let step = 1 << (h - row - 1);
-            place(n.left, row + 1, column - step, h, grid);
-            place(n.right, row + 1, column + step, h, grid);
+            place(n.left, row + 1, column - step, h, mut grid);
+            place(n.right, row + 1, column + step, h, mut grid);
         }
     }
 }

@@ -1,0 +1,7 @@
+fn f(s: String, c: bool) -> i64 {
+    let t = if c { "xyz".to_string() } else { "q".to_string() };
+    let mut out = s;
+    out = t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), true)}"); }

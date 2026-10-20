@@ -1,0 +1,148 @@
+// LeetCode 773 — Sliding Puzzle, bidirectional breadth-first search.
+//
+// A board is the integer its six digits spell, row by row, so moving the
+// 0 is arithmetic on two digits. Search from the board and from 123450
+// at once, each time widening the smaller frontier by a whole level; the
+// first level to touch the other side's states gives the answer, the
+// least of its meetings. A board with no meeting cannot be solved.
+
+fn power_of_ten(p: i64) -> i64 {
+    let mut result = 1;
+    for _ in 0..p {
+        result *= 10;
+    }
+    result
+}
+
+// The states one move from `state`.
+fn moves(state: i64) -> Vec[i64] {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut zero = 0;
+    while state / power_of_ten(5 - zero) % 10 != 0 {
+        zero += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for next in neighbours[zero] {
+        let tile = state / power_of_ten(5 - *next) % 10;
+        out.push(state + tile * power_of_ten(5 - zero) - tile * power_of_ten(5 - *next));
+    }
+    out
+}
+
+fn sliding_puzzle(board: Vec[Vec[i64]]) -> i64 {
+    let mut start = 0;
+    for row in board {
+        for x in row {
+            start = start * 10 + *x;
+        }
+    }
+    let goal = 123450;
+    if start == goal {
+        return 0;
+    }
+    let mut near: Map[i64, i64] = Map.new();
+    let mut far: Map[i64, i64] = Map.new();
+    near.insert(start, 0);
+    far.insert(goal, 0);
+    let mut near_frontier: Vec[i64] = [start];
+    let mut far_frontier: Vec[i64] = [goal];
+    while near_frontier.len() > 0 and far_frontier.len() > 0 {
+        if near_frontier.len() > far_frontier.len() {
+            let swapped_maps = near;
+            near = far;
+            far = swapped_maps;
+            let swapped_frontiers = near_frontier;
+            near_frontier = far_frontier;
+            far_frontier = swapped_frontiers;
+        }
+        let mut best = -1;
+        let mut next_frontier: Vec[i64] = Vec.new();
+        for state in near_frontier {
+            let here = near.get(*state) ?? 0;
+            for next in moves(*state) {
+                match far.get(next) {
+                    Some(there) => {
+                        let total = here + 1 + *there;
+                        if best < 0 or total < best {
+                            best = total;
+                        }
+                    }
+                    None => {
+                        if not near.contains_key(next) {
+                            near.insert(next, here + 1);
+                            next_frontier.push(next);
+                        }
+                    }
+                }
+            }
+        }
+        if best >= 0 {
+            return best;
+        }
+        near_frontier = next_frontier;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(board: Vec[Vec[i64]]) {
+    let answer = sliding_puzzle(board);
+    println(f"{board} -> {answer}");
+}
+
+// The next order of `cells` in dictionary order; false after the last.
+fn next_order(cells: mut ref Vec[i64]) -> bool {
+    let mut i = cells.len() - 2;
+    while i >= 0 and cells[i] >= cells[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return false;
+    }
+    let mut j = cells.len() - 1;
+    while cells[j] <= cells[i] {
+        j -= 1;
+    }
+    cells.swap(i, j);
+    let mut lo = i + 1;
+    let mut hi = cells.len() - 1;
+    while lo < hi {
+        cells.swap(lo, hi);
+        lo += 1;
+        hi -= 1;
+    }
+    true
+}
+
+fn main() {
+    show([[1, 2, 3], [4, 0, 5]]);
+    show([[1, 2, 3], [5, 4, 0]]);
+    show([[4, 1, 2], [5, 0, 3]]);
+    show([[1, 2, 3], [4, 5, 0]]);
+    show([[3, 2, 4], [1, 5, 0]]);
+    show([[0, 1, 2], [3, 4, 5]]);
+    let mut cells: Vec[i64] = [0, 1, 2, 3, 4, 5];
+    let mut boards = 0;
+    let mut solvable = 0;
+    let mut total = 0;
+    let mut most = 0;
+    let mut check = 0;
+    loop {
+        let board = [[cells[0], cells[1], cells[2]], [cells[3], cells[4], cells[5]]];
+        let answer = sliding_puzzle(board);
+        boards += 1;
+        if answer >= 0 {
+            solvable += 1;
+            total += answer;
+            if answer > most {
+                most = answer;
+            }
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+        if not next_order(mut cells) {
+            break;
+        }
+    }
+    println(f"all {boards} boards: {solvable} solvable, {total} moves in all, at most {most}, checksum {check}");
+}

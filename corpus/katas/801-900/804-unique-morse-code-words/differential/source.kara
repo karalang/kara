@@ -1,0 +1,314 @@
+// LeetCode #804: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random lists of words.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn unique_morse_representations_star(words: Vec[String]) -> i64 {
+    let mut seen: Set[String] = Set.new();
+    for word in words.iter() {
+        seen.insert(morse_star(word));
+    }
+    seen.len()
+}
+
+// The word written in Morse code, its letters' codes run together.
+fn morse_star(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut out = String.new();
+    for b in word.bytes() {
+        out.push_str(codes[b - 97]);
+    }
+    out
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn unique_morse_representations_sorted(words: Vec[String]) -> i64 {
+    let mut written: Vec[String] = Vec.new();
+    for word in words.iter() {
+        written.push(morse_sorted(word));
+    }
+    written.sort();
+    let mut count = 0;
+    for i in 0..written.len() {
+        if i == 0 or written[i] != written[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The word written in Morse code, its letters' codes run together.
+fn morse_sorted(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut out = String.new();
+    for b in word.bytes() {
+        out.push_str(codes[b - 97]);
+    }
+    out
+}
+
+// ---- bits arm -------------------------------------------------------
+
+fn unique_morse_representations_bits(words: Vec[String]) -> i64 {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut keys: Vec[i64] = Vec.new();
+    for word in words.iter() {
+        let mut key = 1;
+        for b in word.bytes() {
+            for s in codes[b - 97].bytes() {
+                key = key * 2 + if s == 45 { 1 } else { 0 };
+            }
+        }
+        keys.push(key);
+    }
+    keys.sort();
+    let mut count = 0;
+    for i in 0..keys.len() {
+        if i == 0 or keys[i] != keys[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- pairs arm ------------------------------------------------------
+
+fn unique_morse_representations_pairs(words: Vec[String]) -> i64 {
+    let mut written: Vec[String] = Vec.new();
+    for word in words.iter() {
+        written.push(morse_pairs(word));
+    }
+    let mut count = 0;
+    for i in 0..written.len() {
+        let mut new = true;
+        for j in 0..i {
+            if written[j] == written[i] {
+                new = false;
+            }
+        }
+        if new {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The word written in Morse code, its letters' codes run together.
+fn morse_pairs(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut out = String.new();
+    for b in word.bytes() {
+        out.push_str(codes[b - 97]);
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, words: Vec[String]) -> i64 {
+    if which == 0 {
+        unique_morse_representations_star(words)
+    } else if which == 1 {
+        unique_morse_representations_sorted(words)
+    } else if which == 2 {
+        unique_morse_representations_bits(words)
+    } else {
+        unique_morse_representations_pairs(words)
+    }
+}
+
+// The dots (0) and dashes (1) of a word's Morse code, from the table of
+// the alphabet written out a second time as numbers.
+fn table() -> Vec[Vec[i64]] {
+    vec![
+        vec![0, 1], vec![1, 0, 0, 0], vec![1, 0, 1, 0], vec![1, 0, 0], vec![0],
+        vec![0, 0, 1, 0], vec![1, 1, 0], vec![0, 0, 0, 0], vec![0, 0], vec![0, 1, 1, 1],
+        vec![1, 0, 1], vec![0, 1, 0, 0], vec![1, 1], vec![1, 0], vec![1, 1, 1],
+        vec![0, 1, 1, 0], vec![1, 1, 0, 1], vec![0, 1, 0], vec![0, 0, 0], vec![1],
+        vec![0, 0, 1], vec![0, 0, 0, 1], vec![0, 1, 1], vec![1, 0, 0, 1], vec![1, 0, 1, 1],
+        vec![1, 1, 0, 0]
+    ]
+}
+
+fn symbols(word: String) -> Vec[i64] {
+    let table = table();
+    let mut out: Vec[i64] = Vec.new();
+    for b in word.bytes() {
+        for s in table[b - 97].iter() {
+            out.push(s);
+        }
+    }
+    out
+}
+
+// A word whose code is the given dots and dashes, cutting them into
+// letters at random: at each place, one of the letters whose code starts
+// there.
+fn parse(code: Vec[i64], seed: mut ref i64) -> String {
+    let table = table();
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut word = String.new();
+    let mut at = 0;
+    while at < code.len() {
+        let mut fits: Vec[i64] = Vec.new();
+        for letter in 0..26 {
+            let piece = table[letter].clone();
+            if at + piece.len() <= code.len() {
+                let mut same = true;
+                for k in 0..piece.len() {
+                    if code[at + k] != piece[k] {
+                        same = false;
+                    }
+                }
+                if same {
+                    fits.push(letter);
+                }
+            }
+        }
+        let letter = fits[next_random(mut seed) % fits.len()];
+        word.push_str(letters.slice(letter, letter + 1));
+        at += table[letter].len();
+    }
+    word
+}
+
+// The definition: the number of words whose dots and dashes differ from
+// those of every word before them.
+fn definition(words: Vec[String]) -> i64 {
+    let mut seen: Vec[Vec[i64]] = Vec.new();
+    for word in words.iter() {
+        let code = symbols(word);
+        if not seen.contains(code) {
+            seen.push(code);
+        }
+    }
+    seen.len()
+}
+
+// Each letter swapped for the letter whose code has every dot a dash and
+// every dash a dot, for the letters that have one.
+fn swapped(word: String) -> String {
+    let from = "etimansougrkwd";
+    let to = "teminaosgukrdw";
+    let mut out = String.new();
+    for b in word.bytes() {
+        let mut i = 0;
+        while from.bytes()[i] != b {
+            i += 1;
+        }
+        out.push_str(to.slice(i, i + 1));
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8040;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    let all = "abcdefghijklmnopqrstuvwxyz";
+    let short = "etiman";
+    let closed = "etimansougrkwd";
+    for case in 0..cases {
+        // kind 0: letters with codes of one or two dots and dashes, so
+        // that codes often match; kind 1: the letters whose codes turned
+        // over are letters too; kind 2: any letter; kind 3: words drawn
+        // from a pool of four, so that many words repeat.
+        let kind = case % 4;
+        let letters = if kind == 1 { closed.clone() } else if kind == 2 { all.clone() } else { short.clone() };
+        let count = 1 + next_random(mut seed) % 12;
+        // kind 2 instead cuts three random runs of dots and dashes into
+        // letters again and again, so that words of any letters share a
+        // code.
+        let mut runs: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..3 {
+            let mut run: Vec[i64] = Vec.new();
+            for _ in 0..1 + next_random(mut seed) % 12 {
+                run.push(next_random(mut seed) % 2);
+            }
+            runs.push(run);
+        }
+        let mut pool: Vec[String] = Vec.new();
+        for _ in 0..if kind == 3 { 4 } else { count } {
+            if kind == 2 {
+                pool.push(parse(runs[next_random(mut seed) % 3].clone(), mut seed));
+                continue;
+            }
+            let length = 1 + next_random(mut seed) % 6;
+            let mut word = String.new();
+            for _ in 0..length {
+                let at = next_random(mut seed) % letters.len();
+                word.push_str(letters.slice(at, at + 1));
+            }
+            pool.push(word);
+        }
+        let mut words: Vec[String] = Vec.new();
+        for j in 0..count {
+            if kind == 3 {
+                words.push(pool[next_random(mut seed) % 4].clone());
+            } else {
+                words.push(pool[j].clone());
+            }
+        }
+        let want = definition(words);
+        total += want;
+        let mut backwards: Vec[String] = Vec.new();
+        let mut twice: Vec[String] = Vec.new();
+        let mut turned: Vec[String] = Vec.new();
+        for j in 0..count {
+            backwards.push(words[count - 1 - j].clone());
+            twice.push(words[j].clone());
+            twice.push(words[j].clone());
+            if kind != 2 {
+                turned.push(swapped(words[j]));
+            }
+        }
+        for which in 0..arms {
+            let got = answer_with(which, words);
+            // P1: the definition's count.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: between 1 and the number of words, and the same with
+            // the words in the other order.
+            checks += 1;
+            if got < 1 or got > count or answer_with(which, backwards) != got {
+                fails[1] += 1;
+            }
+            // P3: every word given twice, the same count.
+            checks += 1;
+            if answer_with(which, twice) != got {
+                fails[2] += 1;
+            }
+            // P4: every dot made a dash and every dash a dot, by swapping
+            // letters, the same count; for the kinds whose letters all
+            // swap.
+            if kind != 2 {
+                checks += 1;
+                if answer_with(which, turned) != got {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} codes), {arms} arms, {checks} checks, {failures} failures");
+}

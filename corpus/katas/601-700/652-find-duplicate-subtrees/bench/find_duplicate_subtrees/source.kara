@@ -24,7 +24,7 @@ fn number(
     match node {
         None => 0,
         Some(n) => {
-            let key = (n.val, number(n.left, ids, counts, found), number(n.right, ids, counts, found));
+            let key = (n.val, number(n.left, mut ids, mut counts, mut found), number(n.right, mut ids, mut counts, mut found));
             let id = match ids.get(key) {
                 Some(i) => *i,
                 None => {

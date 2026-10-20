@@ -1,0 +1,10 @@
+
+struct D { a: i64, c: bool }
+struct E { a: i64, c: bool }
+
+fn other() -> E { E { a: 1, c: true } }
+
+fn main() {
+    let d = D { a: 5, ..other() };
+    println(f"{d.a}");
+}

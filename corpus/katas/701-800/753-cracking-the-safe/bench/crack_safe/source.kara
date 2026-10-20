@@ -1,0 +1,66 @@
+// LeetCode 753 — Cracking the Safe, bench: the ★ arm (an Euler circuit
+// by Hierholzer's method) on every safe the constraints allow, again and
+// again.
+
+fn crack_safe(n: i64, k: i64) -> String {
+    let mut nodes = 1;
+    for _ in 0..n - 1 {
+        nodes *= k;
+    }
+    let mut used: Vec[i64] = Vec.new();
+    for _ in 0..nodes {
+        used.push(0);
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((0, -1));
+    let mut digits: Vec[i64] = Vec.new();
+    while stack.len() > 0 {
+        let (node, digit) = stack[stack.len() - 1];
+        if used[node] < k {
+            let d = used[node];
+            used[node] += 1;
+            stack.push(((node * k + d) % nodes, d));
+        } else {
+            stack.pop();
+            if digit >= 0 {
+                digits.push(digit);
+            }
+        }
+    }
+    let mut out = String.new();
+    for _ in 0..n - 1 {
+        out.push('0');
+    }
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push((b'0' + digits[i] as u8) as char);
+        i -= 1;
+    }
+    out
+}
+
+fn main() {
+    let rounds = 2000;
+    let mut safes = 0;
+    let mut digits = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for n in 1..5 {
+            for k in 1..11 {
+                let mut total = 1;
+                for _ in 0..n {
+                    total *= k;
+                }
+                if total <= 4096 {
+                    safes += 1;
+                    let text = crack_safe(n, k);
+                    digits += text.len();
+                    for b in text.bytes() {
+                        check = (check * 31 + b as i64) % 1000000007;
+                    }
+                }
+            }
+        }
+    }
+    println(f"{safes} safes: {digits} digits in all, checksum {check}");
+}

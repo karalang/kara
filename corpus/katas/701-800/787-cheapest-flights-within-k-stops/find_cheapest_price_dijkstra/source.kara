@@ -1,0 +1,105 @@
+// LeetCode 787 — Cheapest Flights Within K Stops, Dijkstra over (city,
+// flights taken).
+//
+// The state is a city and how many flights reached it. A smallest-first
+// `PriorityQueue` of (cost, city, flights) settles states cheapest first,
+// so the first time the destination comes out its cost is the answer. A
+// state is skipped when its city was already settled with no more
+// flights, since that way was cheaper and has as many flights left.
+// O(k · e log(k · e)).
+
+fn find_cheapest_price(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let mut out: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n {
+        out.push(Vec.new());
+    }
+    for f in flights.iter() {
+        out[f[0]].push((f[1], f[2]));
+    }
+    // fewest[c]: the fewest flights with which c has been settled.
+    let mut fewest: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        fewest.push(i64.MAX);
+    }
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    queue.push((0, src, 0));
+    while let Some((spent, city, used)) = queue.pop() {
+        if city == dst {
+            return spent;
+        }
+        if used >= fewest[city] or used == k + 1 {
+            continue;
+        }
+        fewest[city] = used;
+        for (to, price) in out[city].iter() {
+            queue.push((spent + *price, *to, used + 1));
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// m different flights between n cities, none from a city to itself, at
+// prices from 1 to top.
+fn random_flights(seed: mut ref i64, n: i64, m: i64, top: i64) -> Vec[Vec[i64]] {
+    let mut taken: Set[i64] = Set.new();
+    let mut flights: Vec[Vec[i64]] = Vec.new();
+    while flights.len() < m {
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
+        if from != to and not taken.contains(from * n + to) {
+            taken.insert(from * n + to);
+            flights.push([from, to, 1 + next_random(mut seed) % top]);
+        }
+    }
+    flights
+}
+
+fn show(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) {
+    let answer = find_cheapest_price(n, flights, src, dst, k);
+    println(f"n = {n}, flights = {flights}, {src} to {dst}, k = {k} -> {answer}");
+}
+
+fn main() {
+    show(4, [[0, 1, 100], [1, 2, 100], [2, 0, 100], [1, 3, 600], [2, 3, 200]], 0, 3, 1);
+    show(3, [[0, 1, 100], [1, 2, 100], [0, 2, 500]], 0, 2, 1);
+    show(3, [[0, 1, 100], [1, 2, 100], [0, 2, 500]], 0, 2, 0);
+    show(3, [[0, 1, 100], [1, 0, 100]], 0, 2, 2);
+    show(4, [[0, 1, 1], [0, 2, 5], [1, 2, 1], [2, 3, 1]], 0, 3, 1);
+    show(5, [[0, 1, 5], [1, 2, 5], [0, 3, 2], [3, 1, 2], [1, 4, 1]], 0, 2, 2);
+    let mut chain: Vec[Vec[i64]] = Vec.new();
+    for i in 0..99 {
+        chain.push([i, i + 1, 1]);
+    }
+    chain.push([0, 99, 1000]);
+    for k in [0, 97, 98, 99] {
+        let answer = find_cheapest_price(100, chain, 0, 99, k);
+        println(f"a chain of 100 cities and one direct flight, k = {k} -> {answer}");
+    }
+    let mut seed = 787;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 99;
+        let m = next_random(mut seed) % (n * (n - 1) / 2).min(5 * n) + 1;
+        let flights = random_flights(mut seed, n, m, 10000);
+        let src = next_random(mut seed) % n;
+        let mut dst = next_random(mut seed) % n;
+        if dst == src {
+            dst = (dst + 1) % n;
+        }
+        let k = next_random(mut seed) % n;
+        let answer = find_cheapest_price(n, flights, src, dst, k);
+        if answer != -1 {
+            found += 1;
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"300 random networks: {found} with a way, checksum {check}");
+}

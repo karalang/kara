@@ -1,0 +1,25 @@
+
+fn show(o: Option[i64]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn show8(o: Option[i8]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn showu8(o: Option[u8]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn main() {
+    let cases = ["0", "12", "-12", "+7", " 12", "12\n", "", "-", "1a", "999999999999999999", "9223372036854775807", "9223372036854775808", "-9223372036854775808", "127", "128", "255", "256", "-0", "007"];
+    for c in cases {
+        println(f"[{c}] {show(i64.parse(c).ok())} {show8(i8.parse(c).ok())} {showu8(u8.parse(c).ok())}");
+    }
+}

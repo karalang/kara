@@ -22,7 +22,7 @@ fn sink_star(land: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
         return 0;
     }
     land[r][c] = 0;
-    1 + sink_star(land, r + 1, c) + sink_star(land, r - 1, c) + sink_star(land, r, c + 1) + sink_star(land, r, c - 1)
+    1 + sink_star(mut land, r + 1, c) + sink_star(mut land, r - 1, c) + sink_star(mut land, r, c + 1) + sink_star(mut land, r, c - 1)
 }
 
 // ---- bfs arm -----------------------------------------------------------
@@ -78,8 +78,8 @@ fn find_unionfind(parent: mut ref Vec[i64], x: i64) -> i64 {
 }
 
 fn join_unionfind(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
-    let mut x = find_unionfind(parent, a);
-    let mut y = find_unionfind(parent, b);
+    let mut x = find_unionfind(mut parent, a);
+    let mut y = find_unionfind(mut parent, b);
     if x == y {
         return;
     }

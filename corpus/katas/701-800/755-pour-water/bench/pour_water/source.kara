@@ -1,0 +1,50 @@
+// LeetCode 755 — Pour Water, bench: the ★ arm (one drop at a time) on
+// random landscapes of 100 columns.
+
+fn pour_water(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut h = heights.clone();
+    let n = h.len();
+    for _ in 0..volume {
+        let mut best = k;
+        for d in [-1, 1] {
+            let mut i = k;
+            while i + d >= 0 and i + d < n and h[i + d] <= h[i] {
+                if h[i + d] < h[best] {
+                    best = i + d;
+                }
+                i += d;
+            }
+            if best != k {
+                break;
+            }
+        }
+        h[best] += 1;
+    }
+    h
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 6000;
+    let mut seed = 755;
+    let mut water = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let mut heights: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            heights.push(next_random(mut seed) % 100);
+        }
+        let volume = 2000;
+        let k = next_random(mut seed) % 100;
+        let after = pour_water(heights, volume, k);
+        for x in after.iter() {
+            water += *x;
+            check = (check * 31 + *x) % 1000000007;
+        }
+    }
+    println(f"{rounds} landscapes of 100 columns, 2000 drops each: {water} units in all, checksum {check}");
+}

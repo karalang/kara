@@ -1,0 +1,10 @@
+insert [4, 2, 6, 1, 3] -> 1
+insert [1, 0, 48, 12, 49] -> 1
+insert [0, 100000] -> 100000
+insert [10, 5, 15, 9, 11] -> 1
+insert [90, 69, 49, 89, 52] -> 1
+insert [1, 2, 3, 4, 5, 7] -> 1
+insert [50, 40, 30, 20, 10, 11] -> 1
+an ascending chain of 100 -> 999
+100 random values -> 6
+300 random trees: gaps sum to 3342, checksum 756365773

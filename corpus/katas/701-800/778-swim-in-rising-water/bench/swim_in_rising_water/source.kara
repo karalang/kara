@@ -1,0 +1,92 @@
+// Benchmark for #778: Swim in Rising Water -- the ★ arm (Dijkstra on the
+// highest square).
+//
+// At time t every square of elevation at most t is under water, and the
+// swimmer moves freely between such neighbours. So the answer is the
+// least, over all ways from the top left to the bottom right, of the
+// highest square on the way. Dijkstra with that highest square as a
+// way's cost: a smallest-first `PriorityQueue` of (highest so far,
+// square) settles the squares in order of their cost, and the bottom
+// right's cost is the answer. O(n² log n).
+fn swim_in_water(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut done: Vec[bool] = Vec.filled(n * n, false);
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((grid[0][0], 0));
+    while let Some((t, at)) = queue.pop() {
+        if done[at] {
+            continue;
+        }
+        done[at] = true;
+        let r = at / n;
+        let c = at % n;
+        if r == n - 1 and c == n - 1 {
+            return t;
+        }
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < n and nc >= 0 and nc < n and not done[nr * n + nc] {
+                let h = grid[nr][nc];
+                queue.push((if h > t { h } else { t }, nr * n + nc));
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 grids of 50 by 50 squares (LeetCode's most), built once. Half
+    // hold 0 to 2,499 in a random order; a quarter lay them along the
+    // rows, every other row backwards, and a quarter along the rows all
+    // forwards, each of those with 50 random pairs of values traded.
+    // Then 3,000 rounds each answer the next grid.
+    let count = 64;
+    let n = 50;
+    let mut seed: i64 = 778;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for g in 0..count {
+        let mut values: Vec[i64] = Vec.new();
+        for r in 0..n {
+            for c in 0..n {
+                values.push(if g % 4 == 2 and r % 2 == 1 { r * n + n - 1 - c } else { r * n + c });
+            }
+        }
+        if g % 4 < 2 {
+            let mut i = n * n - 1;
+            while i > 0 {
+                values.swap(i, next_random(mut seed) % (i + 1));
+                i -= 1;
+            }
+        } else {
+            for _ in 0..50 {
+                let i = next_random(mut seed) % (n * n);
+                let j = next_random(mut seed) % (n * n);
+                values.swap(i, j);
+            }
+        }
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for r in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..n {
+                row.push(values[r * n + c]);
+            }
+            grid.push(row);
+        }
+        grids.push(grid);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..3000 {
+        let g = (round * 7) % count;
+        let answer = swim_in_water(grids[g]);
+        total += answer;
+        checksum = (checksum * 31 + answer + g) % 1000000007;
+    }
+    println(f"3000 rounds of 50 x 50 grids: answers sum to {total}, checksum {checksum}");
+}

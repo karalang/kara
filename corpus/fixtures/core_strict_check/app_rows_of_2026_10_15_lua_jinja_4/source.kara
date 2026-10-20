@@ -1,0 +1,25 @@
+enum V { Text(String), Int(i64) }
+fn show(v: ref V) -> String {
+    match v {
+        V.Text(s) => s.clone(),
+        V.Int(i) => f"{i}",
+    }
+}
+fn describe(v: own V) -> String {
+    match v {
+        V.Text(s) => s,
+        V.Int(_) => show(v),
+    }
+}
+fn first_text(v: own V) -> String {
+    if let V.Text(s) = v {
+        return s;
+    }
+    show(v)
+}
+fn main() {
+    println(describe(V.Text("a".to_string())));
+    println(describe(V.Int(7)));
+    println(first_text(V.Text("b".to_string())));
+    println(first_text(V.Int(8)));
+}

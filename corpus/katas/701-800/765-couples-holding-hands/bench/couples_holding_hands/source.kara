@@ -1,0 +1,56 @@
+// LeetCode 765 — Couples Holding Hands: benchmark, the ★ arm.
+//
+// 1,000,000 random rows of 60 seats, the most LeetCode allows.
+
+fn min_swaps_couples(row: own Vec[i64]) -> i64 {
+    let mut row = row;
+    let mut seat_of: Vec[i64] = Vec.new();
+    for _ in 0..row.len() {
+        seat_of.push(0);
+    }
+    for i in 0..row.len() {
+        seat_of[row[i]] = i;
+    }
+    let mut swaps = 0;
+    let mut i = 0;
+    while i < row.len() {
+        let partner = row[i] ^ 1;
+        if row[i + 1] != partner {
+            let j = seat_of[partner];
+            let moved = row[i + 1];
+            row[j] = moved;
+            seat_of[moved] = j;
+            row[i + 1] = partner;
+            seat_of[partner] = i + 1;
+            swaps += 1;
+        }
+        i += 2;
+    }
+    swaps
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 1000000;
+    let mut seed = 765;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let mut row: Vec[i64] = Vec.new();
+        for p in 0..60 {
+            row.push(p);
+        }
+        for i in 0..60 {
+            let j = i + next_random(mut seed) % (60 - i);
+            row.swap(i, j);
+        }
+        let swaps = min_swaps_couples(row);
+        total += swaps;
+        check = (check * 31 + swaps) % 1000000007;
+    }
+    println(f"{rounds} rows of 60 seats: {total} swaps in all, checksum {check}");
+}

@@ -1,0 +1,166 @@
+// LeetCode 797 — All Paths From Source to Target, paths from each node.
+//
+// The paths from a node to n - 1 are the node followed by each path
+// from each of its next nodes, and the only path from n - 1 is itself.
+// Work them out once for each node, keeping them, so a node reached by
+// many routes is not walked again. O(2^n · n).
+fn all_paths_source_target(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = graph.len();
+    let mut known: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut done: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        known.push(Vec.new());
+        done.push(false);
+    }
+    paths_from(graph, 0, mut known, mut done);
+    known[0].clone()
+}
+
+fn paths_from(graph: Vec[Vec[i64]], node: i64, known: mut ref Vec[Vec[Vec[i64]]], done: mut ref Vec[bool]) {
+    if done[node] {
+        return;
+    }
+    let mut here: Vec[Vec[i64]] = Vec.new();
+    if node == graph.len() - 1 {
+        let mut alone: Vec[i64] = Vec.new();
+        alone.push(node);
+        here.push(alone);
+    } else {
+        for next in graph[node].iter() {
+            paths_from(graph, *next, mut known, mut done);
+            for rest in known[*next].iter() {
+                let mut path: Vec[i64] = Vec.new();
+                path.push(node);
+                for v in rest.iter() {
+                    path.push(*v);
+                }
+                here.push(path);
+            }
+        }
+    }
+    known[node] = here;
+    done[node] = true;
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The paths in increasing order, as the arms may give them in any.
+fn sorted(paths: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out = paths.clone();
+    out.sort();
+    out
+}
+
+fn text(paths: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..paths.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str("[");
+        for j in 0..paths[i].len() {
+            if j > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(f"{paths[i][j]}");
+        }
+        out.push_str("]");
+    }
+    out.push_str("]");
+    out
+}
+
+fn checksum(paths: Vec[Vec[i64]]) -> i64 {
+    let mut check = 0;
+    for path in paths.iter() {
+        for v in path.iter() {
+            check = (check * 131 + *v + 1) % 1000000007;
+        }
+        check = (check * 131) % 1000000007;
+    }
+    check
+}
+
+fn show(graph: Vec[Vec[i64]]) {
+    let paths = sorted(all_paths_source_target(graph));
+    println(f"{text(graph)} -> {text(paths)}");
+}
+
+// Every edge from a lower node to a higher one: 2^(n - 2) paths.
+fn complete(n: i64) -> Vec[Vec[i64]] {
+    let mut graph: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut out: Vec[i64] = Vec.new();
+        for j in i + 1..n {
+            out.push(j);
+        }
+        graph.push(out);
+    }
+    graph
+}
+
+fn main() {
+    show(vec![vec![1, 2], vec![3], vec![3], vec![]]);
+    show(vec![vec![4, 3, 1], vec![3, 2, 4], vec![3], vec![4], vec![]]);
+    show(vec![vec![1], vec![]]);
+    show(vec![vec![], vec![]]);
+    show(vec![vec![2], vec![], vec![1]]);
+    let all = sorted(all_paths_source_target(complete(15)));
+    println(f"every edge on 15 nodes: {all.len()} paths, checksum {checksum(all)}");
+    let mut seed = 797;
+    let mut count = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        // A random order of the nodes with each edge going from earlier
+        // in it to later, so there is no cycle.
+        let n = 2 + next_random(mut seed) % 11;
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..n {
+            order.push(i);
+        }
+        for i in 1..n {
+            let j = next_random(mut seed) % (i + 1);
+            let t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+        // 0 before n - 1, so that most graphs have a path; nodes may
+        // still come before 0 or after n - 1.
+        let mut at_first = 0;
+        let mut at_last = 0;
+        for i in 0..n {
+            if order[i] == 0 {
+                at_first = i;
+            }
+            if order[i] == n - 1 {
+                at_last = i;
+            }
+        }
+        if at_last < at_first {
+            order[at_first] = n - 1;
+            order[at_last] = 0;
+        }
+        let chance = 1 + next_random(mut seed) % 4;
+        let mut graph: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            graph.push(Vec.new());
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if next_random(mut seed) % 5 < chance {
+                    graph[order[a]].push(order[b]);
+                }
+            }
+        }
+        let paths = sorted(all_paths_source_target(graph));
+        count += paths.len();
+        check = (check * 1000003 + checksum(paths)) % 1000000007;
+    }
+    println(f"300 random graphs: {count} paths, checksum {check}");
+}

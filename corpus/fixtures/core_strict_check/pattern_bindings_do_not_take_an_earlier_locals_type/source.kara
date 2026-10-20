@@ -1,0 +1,11 @@
+fn main() {
+    for r in 0..2 {
+        let p: Vec[i64] = vec![r];
+        println(f"{p.len()}");
+    }
+    for p in 0..4 {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+}

@@ -1,0 +1,42 @@
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Skip1[I, T] {
+    it: I,
+    started: bool,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Skip1[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if not self.started {
+            self.started = true;
+            self.it.next()?;
+        }
+        self.it.next()
+    }
+}
+
+fn skip1[I: Iterator[Item = T], T](it: own I) -> Skip1[I, T] {
+    Skip1 { it: it, started: false }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    for x in skip1(VecIter { items: v, pos: 0 }) {
+        println(f"{x + 1}");
+    }
+}

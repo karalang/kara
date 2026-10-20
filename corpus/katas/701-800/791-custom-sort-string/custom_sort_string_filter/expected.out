@@ -1,0 +1,8 @@
+order = "cba", s = "abcd" -> "cbad"
+order = "bcafg", s = "abcd" -> "bcad"
+order = "kqep", s = "pekeq" -> "kqeep"
+order = "z", s = "zzazbz" -> "zzzzab"
+order = "abcdefghijklmnopqrstuvwxyz", s = "thequickbrownfoxjumpsoverthelazydog" -> "abcdeeefghhijklmnoooopqrrsttuuvwxyz"
+order = "zyxwvutsrqponmlkjihgfedcba", s = "thequickbrownfoxjumpsoverthelazydog" -> "zyxwvuuttsrrqpoooonmlkjihhgfeeedcba"
+order = "xy", s = "hello" -> "hello"
+300 random strings: 31372 letters, checksum 808691838

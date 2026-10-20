@@ -1,0 +1,70 @@
+// LeetCode 793 — Preimage Size of Factorial Zeroes Function, two
+// searches.
+//
+// The number of x with f(x) = k, f(x) the zeroes at the end of x!, is
+// the least x with f(x) at least k + 1 less the least x with f(x) at
+// least k, each found by binary search; the answer then comes out as 0
+// or 5 without being told so. O(log² k).
+fn zeroes(x: i64) -> i64 {
+    let mut count = 0;
+    let mut p = x / 5;
+    while p > 0 {
+        count += p;
+        p /= 5;
+    }
+    count
+}
+
+// The least x with f(x) at least `k`.
+fn least_with(k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 5 * k + 5;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if zeroes(mid) < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn preimage_size_fzf(k: i64) -> i64 {
+    least_with(k + 1) - least_with(k)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(k: i64) {
+    println(f"k = {k} -> {preimage_size_fzf(k)}");
+}
+
+fn main() {
+    show(0);
+    show(5);
+    show(3);
+    show(6);
+    show(11);
+    show(29);
+    show(30);
+    show(1000000000);
+    let mut seed = 793;
+    let mut fives = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        // k up to a billion, made of two random numbers.
+        let k = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001;
+        let answer = preimage_size_fzf(k);
+        if answer == 5 {
+            fives += 1;
+        }
+        check = (check * 131 + k % 1000 + answer) % 1000000007;
+    }
+    println(f"300 random k: {fives} with five, checksum {check}");
+}

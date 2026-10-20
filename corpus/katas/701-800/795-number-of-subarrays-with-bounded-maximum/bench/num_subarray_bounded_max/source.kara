@@ -1,0 +1,54 @@
+// LeetCode 795 — Number of Subarrays with Bounded Maximum: the bench.
+//
+// 16 arrays of 100,000 numbers up to a billion, LeetCode's largest, are
+// made once. Each of 8,000 rounds counts the subarrays of one of
+// them whose maximum lies in a random range, with the ★ arm's one
+// pass.
+fn num_subarray_bounded_max(nums: Vec[i64], left: i64, right: i64) -> i64 {
+    let mut too_big = -1;
+    let mut in_range = -1;
+    let mut count = 0;
+    for i in 0..nums.len() {
+        if nums[i] > right {
+            too_big = i;
+        } else if nums[i] >= left {
+            in_range = i;
+        }
+        if in_range > too_big {
+            count += in_range - too_big;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn big_random(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001
+}
+
+fn main() {
+    let mut seed = 795;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..16 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..100000 {
+            nums.push(big_random(mut seed));
+        }
+        arrays.push(nums);
+    }
+    let rounds = 8000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let a = big_random(mut seed);
+        let b = big_random(mut seed);
+        let count = num_subarray_bounded_max(arrays[r % 16], a.min(b), a.max(b));
+        total += count;
+        check = (check * 131 + count % 1000000007) % 1000000007;
+    }
+    println(f"{rounds} rounds of 100000 numbers: {total} subarrays, checksum {check}");
+}

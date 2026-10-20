@@ -1,0 +1,177 @@
+// LeetCode 782 — Transform to Chessboard, a permutation and its cycles.
+//
+// Each row of a chessboard alternates, and the rows alternate between
+// the two kinds. So check every row against the first row and its flip,
+// then build the permutation that puts the rows in place: a row already
+// where the target wants its kind stays, and the misplaced rows of each
+// kind go, in order, to the places the other kind's misplaced rows hold.
+// The same for the columns by the first row's bits. The swaps that carry
+// out a permutation are its length less its number of cycles. Try each
+// target the counts allow and keep the fewest. O(n²).
+
+// The swaps that carry out the permutation taking `line` to the
+// alternate line starting with `first`; -1 when the counts differ.
+fn swaps_for(line: Vec[i64], first: i64) -> i64 {
+    let n = line.len();
+    let mut to: Vec[i64] = Vec.filled(n, 0);
+    let mut zeros_off: Vec[i64] = Vec.new();
+    let mut ones_off: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if line[i] == (first + i) % 2 {
+            to[i] = i;
+        } else if line[i] == 0 {
+            zeros_off.push(i);
+        } else {
+            ones_off.push(i);
+        }
+    }
+    if zeros_off.len() != ones_off.len() {
+        return -1;
+    }
+    for k in 0..zeros_off.len() {
+        to[zeros_off[k]] = ones_off[k];
+        to[ones_off[k]] = zeros_off[k];
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut cycles = 0;
+    for i in 0..n {
+        if not seen[i] {
+            cycles += 1;
+            let mut j = i;
+            while not seen[j] {
+                seen[j] = true;
+                j = to[j];
+            }
+        }
+    }
+    n - cycles
+}
+
+fn fewest(line: Vec[i64]) -> i64 {
+    let a = swaps_for(line, 0);
+    let b = swaps_for(line, 1);
+    if a == -1 {
+        b
+    } else if b == -1 or a < b {
+        a
+    } else {
+        b
+    }
+}
+
+fn moves_to_chessboard(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let mut kinds: Vec[i64] = Vec.new();
+    for r in 0..n {
+        let mut differ = 0;
+        for c in 0..n {
+            if board[r][c] != board[0][c] {
+                differ += 1;
+            }
+        }
+        if differ == 0 {
+            kinds.push(0);
+        } else if differ == n {
+            kinds.push(1);
+        } else {
+            return -1;
+        }
+    }
+    let rows = fewest(kinds);
+    let cols = fewest(board[0].clone());
+    if rows == -1 or cols == -1 {
+        return -1;
+    }
+    rows + cols
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n chessboard with its rows and columns shuffled.
+fn shuffled_chessboard(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let mut row_of: Vec[i64] = Vec.new();
+    let mut col_of: Vec[i64] = Vec.new();
+    for i in 0..n {
+        row_of.push(i);
+        col_of.push(i);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        row_of.swap(i, next_random(mut seed) % (i + 1));
+        col_of.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push((row_of[r] + col_of[c]) % 2);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn show(board: Vec[Vec[i64]]) {
+    let answer = moves_to_chessboard(board);
+    println(f"{board} -> {answer}");
+}
+
+fn main() {
+    show([[0, 1, 1, 0], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 0, 1]]);
+    show([[0, 1], [1, 0]]);
+    show([[1, 0], [1, 0]]);
+    show([[0]]);
+    show([[1, 1, 0], [0, 0, 1], [0, 0, 1]]);
+    show([[1, 0, 1], [0, 1, 0], [0, 1, 0]]);
+    show([[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 0, 0], [0, 0, 1, 1]]);
+    show([[0, 1, 0, 1], [1, 0, 1, 0], [1, 0, 1, 0], [1, 0, 1, 0]]);
+    let mut seed = 782;
+    let big = shuffled_chessboard(mut seed, 30);
+    let answer = moves_to_chessboard(big);
+    println(f"shuffled 30 x 30 -> {answer}");
+    let mut broken = big.clone();
+    broken[17][11] = 1 - broken[17][11];
+    let answer = moves_to_chessboard(broken);
+    println(f"shuffled 30 x 30, one cell flipped -> {answer}");
+    let answer = moves_to_chessboard(shuffled_chessboard(mut seed, 29));
+    println(f"shuffled 29 x 29 -> {answer}");
+    let mut solvable = 0;
+    let mut moves = 0;
+    let mut check = 0;
+    for case in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let mut board = shuffled_chessboard(mut seed, n);
+        if case % 3 == 1 {
+            let r = next_random(mut seed) % n;
+            let c = next_random(mut seed) % n;
+            board[r][c] = 1 - board[r][c];
+        } else if case % 3 == 2 {
+            // Every row the first row or its flip, at random, so only the
+            // counts can be wrong.
+            for r in 1..n {
+                if next_random(mut seed) % 2 == 0 {
+                    for c in 0..n {
+                        board[r][c] = 1 - board[0][c];
+                    }
+                } else {
+                    for c in 0..n {
+                        board[r][c] = board[0][c];
+                    }
+                }
+            }
+        }
+        let answer = moves_to_chessboard(board);
+        if answer >= 0 {
+            solvable += 1;
+            moves += answer;
+        }
+        check = (check * 31 + answer + 2) % 1000000007;
+    }
+    println(f"300 random boards: {solvable} solvable in {moves} moves, checksum {check}");
+}

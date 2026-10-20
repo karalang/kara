@@ -1,0 +1,104 @@
+// LeetCode 774 — Minimize Max Distance to Gas Station, shares first.
+//
+// Give gap g floor(g * k / total) stations, which uses at most k. Its
+// longest piece U = a / b can only be longer than the answer, so in any
+// best cutting gap g has at least ceil(g / U) = ceil(g * b / a) pieces.
+// Start every gap there, then hand out the stations still left one at a
+// time to the gap with the longest pieces, compared exactly by cross-
+// multiplying. O(n log n) beyond the shares, as few stations are left.
+
+struct Share {
+    length: i64,
+    pieces: i64,
+}
+
+impl PartialEq for Share {
+    fn eq(ref self, other: ref Share) -> bool {
+        self.length * other.pieces == other.length * self.pieces
+    }
+}
+
+impl Eq for Share {}
+
+impl PartialOrd for Share {
+    fn partial_cmp(ref self, other: ref Share) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Share {
+    // The heap gives the least first, so a longer piece is less.
+    fn cmp(ref self, other: ref Share) -> Ordering {
+        (other.length * self.pieces).cmp(self.length * other.pieces)
+    }
+}
+
+fn minmax_gas_dist(stations: Vec[i64], k: i64) -> f64 {
+    let total = stations[stations.len() - 1] - stations[0];
+    // The longest piece of the proportional cutting, as a / b.
+    let mut a = 0;
+    let mut b = 1;
+    for i in 1..stations.len() {
+        let g = stations[i] - stations[i - 1];
+        let pieces = g * k / total + 1;
+        if g * b > a * pieces {
+            a = g;
+            b = pieces;
+        }
+    }
+    let mut left = k;
+    let mut heap: PriorityQueue[Share] = PriorityQueue.new();
+    for i in 1..stations.len() {
+        let g = stations[i] - stations[i - 1];
+        let pieces = (g * b + a - 1) / a;
+        left -= pieces - 1;
+        heap.push(Share { length: g, pieces: pieces });
+    }
+    for _ in 0..left {
+        let mut top = heap.pop().unwrap();
+        top.pieces += 1;
+        heap.push(top);
+    }
+    let top = heap.pop().unwrap();
+    top.length as f64 / top.pieces as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(stations: Vec[i64], k: i64) {
+    let answer = minmax_gas_dist(stations, k);
+    println(f"{stations}, k = {k} -> {answer:.5}");
+}
+
+fn main() {
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 9);
+    show([23, 24, 36, 39, 46, 56, 57, 65, 84, 98], 1);
+    show([0, 100], 3);
+    show([0, 10, 20], 1);
+    show([0, 1], 31);
+    show([0, 1], 63);
+    show([0, 7, 100000000], 1000000);
+    show([0, 3, 4, 10, 11, 20], 5);
+    let mut seed = 774;
+    let mut total = 0.0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 10 + next_random(mut seed) % 51;
+        let spread = if next_random(mut seed) % 4 == 0 { 1000000 } else { 1000 };
+        let mut stations: Vec[i64] = [next_random(mut seed) % 100];
+        for _ in 1..n {
+            let last = stations[stations.len() - 1];
+            stations.push(last + 1 + next_random(mut seed) % spread);
+        }
+        let k = 1 + next_random(mut seed) % 2000;
+        let answer = minmax_gas_dist(stations, k);
+        total += answer;
+        check = (check * 31 + (answer * 1000000.0) as i64) % 1000000007;
+    }
+    println(f"300 random cases: answers sum to {total:.5}, checksum {check}");
+}

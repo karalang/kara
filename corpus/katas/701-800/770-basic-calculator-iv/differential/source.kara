@@ -1,0 +1,855 @@
+// LeetCode #770: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random expressions.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct Reader_star {
+    tokens: Vec[String],
+    at: i64,
+    known: Map[String, i64],
+}
+
+fn tokenize_star(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn joined_star(names: Vec[String]) -> String {
+    let mut key = String.new();
+    for i in 0..names.len() {
+        if i > 0 {
+            key.push('*');
+        }
+        key.push_str(names[i]);
+    }
+    key
+}
+
+fn names_of_star(key: String) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    if key.len() > 0 {
+        for name in key.split("*") {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn add_into_star(total: mut ref Map[String, i64], p: Map[String, i64], sign: i64) {
+    for (key, coef) in p {
+        let sum = (total.get(key) ?? 0) + sign * coef;
+        total.insert(key.clone(), sum);
+    }
+}
+
+fn multiply_star(a: Map[String, i64], b: Map[String, i64]) -> Map[String, i64] {
+    let mut product: Map[String, i64] = Map.new();
+    for (ka, ca) in a {
+        for (kb, cb) in b {
+            let mut names = names_of_star(ka);
+            for name in names_of_star(kb).into_iter() {
+                names.push(name);
+            }
+            names.sort();
+            let key = joined_star(names);
+            let sum = (product.get(key) ?? 0) + ca * cb;
+            product.insert(key, sum);
+        }
+    }
+    product
+}
+
+impl Reader_star {
+    fn peek(self) -> String {
+        if self.at < self.tokens.len() { self.tokens[self.at].clone() } else { String.new() }
+    }
+
+    fn expression(mut ref self) -> Map[String, i64] {
+        let mut total = self.term();
+        while self.peek() == "+" or self.peek() == "-" {
+            let sign = if self.peek() == "+" { 1 } else { -1 };
+            self.at += 1;
+            let next = self.term();
+            add_into_star(mut total, next, sign);
+        }
+        total
+    }
+
+    fn term(mut ref self) -> Map[String, i64] {
+        let mut product = self.factor();
+        while self.peek() == "*" {
+            self.at += 1;
+            let next = self.factor();
+            product = multiply_star(product, next);
+        }
+        product
+    }
+
+    fn factor(mut ref self) -> Map[String, i64] {
+        let token = self.peek();
+        self.at += 1;
+        let mut p: Map[String, i64] = Map.new();
+        if token == "(" {
+            p = self.expression();
+            self.at += 1;
+        } else if token.chars().next().unwrap().is_ascii_digit() {
+            p.insert(String.new(), i64.parse(token).unwrap());
+        } else {
+            match self.known.get(token) {
+                Some(value) => {
+                    p.insert(String.new(), *value);
+                }
+                None => {
+                    p.insert(token, 1);
+                }
+            }
+        }
+        p
+    }
+}
+
+fn basic_calculator_iv_star(expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    let mut known: Map[String, i64] = Map.new();
+    for i in 0..evalvars.len() {
+        known.insert(evalvars[i].clone(), evalints[i]);
+    }
+    let mut parser = Reader_star { tokens: tokenize_star(expression), at: 0, known: known };
+    let poly = parser.expression();
+    // highest degree first, then by the variables, the constant last
+    let mut terms: Vec[(i64, String, i64)] = Vec.new();
+    for (key, coef) in poly {
+        if coef != 0 {
+            terms.push((-names_of_star(key).len(), key.clone(), coef));
+        }
+    }
+    terms.sort();
+    let mut answer: Vec[String] = Vec.new();
+    for (_, key, coef) in terms {
+        if key.len() == 0 {
+            answer.push(f"{coef}");
+        } else {
+            answer.push(f"{coef}*{key}");
+        }
+    }
+    answer
+}
+
+// ---- postfix arm ----------------------------------------------------
+
+fn tokenize_postfix(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn joined_postfix(names: Vec[String]) -> String {
+    let mut key = String.new();
+    for i in 0..names.len() {
+        if i > 0 {
+            key.push('*');
+        }
+        key.push_str(names[i]);
+    }
+    key
+}
+
+fn names_of_postfix(key: String) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    if key.len() > 0 {
+        for name in key.split("*") {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn add_into_postfix(total: mut ref Map[String, i64], p: Map[String, i64], sign: i64) {
+    for (key, coef) in p {
+        let sum = (total.get(key) ?? 0) + sign * coef;
+        total.insert(key.clone(), sum);
+    }
+}
+
+fn multiply_postfix(a: Map[String, i64], b: Map[String, i64]) -> Map[String, i64] {
+    let mut product: Map[String, i64] = Map.new();
+    for (ka, ca) in a {
+        for (kb, cb) in b {
+            let mut names = names_of_postfix(ka);
+            for name in names_of_postfix(kb).into_iter() {
+                names.push(name);
+            }
+            names.sort();
+            let key = joined_postfix(names);
+            let sum = (product.get(key) ?? 0) + ca * cb;
+            product.insert(key, sum);
+        }
+    }
+    product
+}
+
+fn binding_postfix(op: String) -> i64 {
+    if op == "*" { 2 } else if op == "(" { 0 } else { 1 }
+}
+
+fn basic_calculator_iv_postfix(expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    let mut known: Map[String, i64] = Map.new();
+    for i in 0..evalvars.len() {
+        known.insert(evalvars[i].clone(), evalints[i]);
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut ops: Vec[String] = Vec.new();
+    for token in tokenize_postfix(expression).into_iter() {
+        if token == "(" {
+            ops.push(token);
+        } else if token == ")" {
+            while ops[ops.len() - 1] != "(" {
+                out.push(ops.pop().unwrap());
+            }
+            ops.pop();
+        } else if token == "+" or token == "-" or token == "*" {
+            while ops.len() > 0 and binding_postfix(ops[ops.len() - 1]) >= binding_postfix(token) {
+                out.push(ops.pop().unwrap());
+            }
+            ops.push(token);
+        } else {
+            out.push(token);
+        }
+    }
+    while ops.len() > 0 {
+        out.push(ops.pop().unwrap());
+    }
+    let mut stack: Vec[Map[String, i64]] = Vec.new();
+    for token in out {
+        if token == "+" or token == "-" or token == "*" {
+            let b = stack.pop().unwrap();
+            let mut a = stack.pop().unwrap();
+            if token == "*" {
+                stack.push(multiply_postfix(a, b));
+            } else {
+                add_into_postfix(mut a, b, if token == "+" { 1 } else { -1 });
+                stack.push(a);
+            }
+        } else {
+            let mut p: Map[String, i64] = Map.new();
+            if token.chars().next().unwrap().is_ascii_digit() {
+                p.insert(String.new(), i64.parse(token).unwrap());
+            } else {
+                match known.get(token) {
+                    Some(value) => {
+                        p.insert(String.new(), *value);
+                    }
+                    None => {
+                        p.insert(token.clone(), 1);
+                    }
+                }
+            }
+            stack.push(p);
+        }
+    }
+    let poly = stack.pop().unwrap();
+    // highest degree first, then by the variables, the constant last
+    let mut terms: Vec[(i64, String, i64)] = Vec.new();
+    for (key, coef) in poly {
+        if coef != 0 {
+            terms.push((-names_of_postfix(key).len(), key.clone(), coef));
+        }
+    }
+    terms.sort();
+    let mut answer: Vec[String] = Vec.new();
+    for (_, key, coef) in terms {
+        if key.len() == 0 {
+            answer.push(f"{coef}");
+        } else {
+            answer.push(f"{coef}*{key}");
+        }
+    }
+    answer
+}
+
+// ---- tree arm -------------------------------------------------------
+
+shared enum Expr_tree {
+    Num(i64),
+    Var(String),
+    Op(String, Expr_tree, Expr_tree),
+}
+
+struct Tokens_tree {
+    list: Vec[String],
+    at: i64,
+}
+
+fn tokenize_tree(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn joined_tree(names: Vec[String]) -> String {
+    let mut key = String.new();
+    for i in 0..names.len() {
+        if i > 0 {
+            key.push('*');
+        }
+        key.push_str(names[i]);
+    }
+    key
+}
+
+fn names_of_tree(key: String) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    if key.len() > 0 {
+        for name in key.split("*") {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+// Everything up to the first operator binding more loosely than `min`.
+fn parse_tree(t: mut ref Tokens_tree, min: i64) -> Expr_tree {
+    let mut left = atom_tree(mut t);
+    while t.at < t.list.len() {
+        let op = t.list[t.at].clone();
+        let power = if op == "*" { 2 } else if op == "+" or op == "-" { 1 } else { 0 };
+        if power == 0 or power < min {
+            break;
+        }
+        t.at += 1;
+        let right = parse_tree(mut t, power + 1);
+        left = Expr_tree.Op(op, left, right);
+    }
+    left
+}
+
+fn atom_tree(t: mut ref Tokens_tree) -> Expr_tree {
+    let token = t.list[t.at].clone();
+    t.at += 1;
+    if token == "(" {
+        let inside = parse_tree(mut t, 1);
+        t.at += 1;
+        inside
+    } else if token.chars().next().unwrap().is_ascii_digit() {
+        Expr_tree.Num(i64.parse(token).unwrap())
+    } else {
+        Expr_tree.Var(token)
+    }
+}
+
+// Sorts the terms, adds up those with the same variables and drops zeros.
+fn normal_tree(terms: own Vec[(String, i64)]) -> Vec[(String, i64)] {
+    let mut terms = terms;
+    terms.sort();
+    let mut out: Vec[(String, i64)] = Vec.new();
+    for (key, coef) in terms {
+        if out.len() > 0 and out[out.len() - 1].0 == key {
+            let last = out.len() - 1;
+            out[last].1 += coef;
+        } else {
+            out.push((key.clone(), coef));
+        }
+    }
+    let mut kept: Vec[(String, i64)] = Vec.new();
+    for (key, coef) in out {
+        if coef != 0 {
+            kept.push((key.clone(), coef));
+        }
+    }
+    kept
+}
+
+fn plus_tree(a: Vec[(String, i64)], b: Vec[(String, i64)], sign: i64) -> Vec[(String, i64)] {
+    let mut out: Vec[(String, i64)] = Vec.new();
+    let mut (i, j) = (0, 0);
+    while i < a.len() or j < b.len() {
+        if j == b.len() or (i < a.len() and a[i].0 < b[j].0) {
+            out.push(a[i].clone());
+            i += 1;
+        } else if i == a.len() or b[j].0 < a[i].0 {
+            out.push((b[j].0.clone(), sign * b[j].1));
+            j += 1;
+        } else {
+            let coef = a[i].1 + sign * b[j].1;
+            if coef != 0 {
+                out.push((a[i].0.clone(), coef));
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    out
+}
+
+fn times_tree(a: Vec[(String, i64)], b: Vec[(String, i64)]) -> Vec[(String, i64)] {
+    let mut terms: Vec[(String, i64)] = Vec.new();
+    for (ka, ca) in a {
+        for (kb, cb) in b {
+            let mut names: Vec[String] = Vec.new();
+            for part in [ka, kb] {
+                if part.len() > 0 {
+                    for name in part.split("*") {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+            names.sort();
+            terms.push((joined_tree(names), ca * cb));
+        }
+    }
+    normal_tree(terms)
+}
+
+fn evaluate_tree(e: Expr_tree, known: Map[String, i64]) -> Vec[(String, i64)] {
+    match e {
+        Expr_tree.Num(n) => normal_tree([(String.new(), n)]),
+        Expr_tree.Var(name) => match known.get(name) {
+            Some(value) => normal_tree([(String.new(), *value)]),
+            None => [(name.clone(), 1)],
+        },
+        Expr_tree.Op(op, a, b) => {
+            let pa = evaluate_tree(a, known);
+            let pb = evaluate_tree(b, known);
+            if op == "*" {
+                times_tree(pa, pb)
+            } else {
+                plus_tree(pa, pb, if op == "+" { 1 } else { -1 })
+            }
+        }
+    }
+}
+
+fn basic_calculator_iv_tree(expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    let mut known: Map[String, i64] = Map.new();
+    for i in 0..evalvars.len() {
+        known.insert(evalvars[i].clone(), evalints[i]);
+    }
+    let mut t = Tokens_tree { list: tokenize_tree(expression), at: 0 };
+    let tree = parse_tree(mut t, 1);
+    // highest degree first, then by the variables, the constant last
+    let mut terms: Vec[(i64, String, i64)] = Vec.new();
+    for (key, coef) in evaluate_tree(tree, known) {
+        let degree = if key.len() == 0 { 0 } else { key.split("*").count() };
+        terms.push((-degree, key.clone(), coef));
+    }
+    terms.sort();
+    let mut answer: Vec[String] = Vec.new();
+    for (_, key, coef) in terms {
+        if key.len() == 0 {
+            answer.push(f"{coef}");
+        } else {
+            answer.push(f"{coef}*{key}");
+        }
+    }
+    answer
+}
+
+// ---- two-stack arm --------------------------------------------------
+
+fn tokenize_stacks(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn joined_stacks(names: Vec[String]) -> String {
+    let mut key = String.new();
+    for i in 0..names.len() {
+        if i > 0 {
+            key.push('*');
+        }
+        key.push_str(names[i]);
+    }
+    key
+}
+
+fn tightness_stacks(op: String) -> i64 {
+    if op == "*" { 2 } else if op == "(" { 0 } else { 1 }
+}
+
+fn apply_stacks(values: mut ref Vec[Vec[(Vec[String], i64)]], op: String) {
+    let b = values.pop().unwrap();
+    let a = values.pop().unwrap();
+    let mut out: Vec[(Vec[String], i64)] = Vec.new();
+    if op == "*" {
+        for (na, ca) in a {
+            for (nb, cb) in b {
+                let mut names = na.clone();
+                for name in nb {
+                    names.push(name.clone());
+                }
+                names.sort();
+                out.push((names, ca * cb));
+            }
+        }
+    } else {
+        let sign = if op == "+" { 1 } else { -1 };
+        for (names, coef) in a {
+            out.push((names.clone(), coef));
+        }
+        for (names, coef) in b {
+            out.push((names.clone(), sign * coef));
+        }
+    }
+    values.push(out);
+}
+
+fn basic_calculator_iv_stacks(expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    let mut known: Map[String, i64] = Map.new();
+    for i in 0..evalvars.len() {
+        known.insert(evalvars[i].clone(), evalints[i]);
+    }
+    let mut values: Vec[Vec[(Vec[String], i64)]] = Vec.new();
+    let mut ops: Vec[String] = Vec.new();
+    for token in tokenize_stacks(expression).into_iter() {
+        if token == "(" {
+            ops.push(token);
+        } else if token == ")" {
+            while ops[ops.len() - 1] != "(" {
+                apply_stacks(mut values, ops.pop().unwrap());
+            }
+            ops.pop();
+        } else if token == "+" or token == "-" or token == "*" {
+            while ops.len() > 0 and tightness_stacks(ops[ops.len() - 1]) >= tightness_stacks(token) {
+                apply_stacks(mut values, ops.pop().unwrap());
+            }
+            ops.push(token);
+        } else if token.chars().next().unwrap().is_ascii_digit() {
+            values.push([(Vec.new(), i64.parse(token).unwrap())]);
+        } else {
+            match known.get(token) {
+                Some(value) => values.push([(Vec.new(), *value)]),
+                None => values.push([([token.clone()], 1)]),
+            }
+        }
+    }
+    while ops.len() > 0 {
+        apply_stacks(mut values, ops.pop().unwrap());
+    }
+    // equal terms added up: sorted by degree, highest first, then by the
+    // variables, so that equal terms sit together and in answer order
+    let mut terms: Vec[(i64, String, i64)] = Vec.new();
+    for (names, coef) in values.pop().unwrap() {
+        terms.push((-names.len(), joined_stacks(names), coef));
+    }
+    terms.sort();
+    let mut answer: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < terms.len() {
+        let mut coef = 0;
+        let mut j = i;
+        while j < terms.len() and terms[j].1 == terms[i].1 {
+            coef += terms[j].2;
+            j += 1;
+        }
+        if coef != 0 {
+            let key = terms[i].1.clone();
+            if key.len() == 0 {
+                answer.push(f"{coef}");
+            } else {
+                answer.push(f"{coef}*{key}");
+            }
+        }
+        i = j;
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+fn answer_with(which: i64, expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    if which == 0 {
+        basic_calculator_iv_star(expression, evalvars, evalints)
+    } else if which == 1 {
+        basic_calculator_iv_postfix(expression, evalvars, evalints)
+    } else if which == 2 {
+        basic_calculator_iv_tree(expression, evalvars, evalints)
+    } else {
+        basic_calculator_iv_stacks(expression, evalvars, evalints)
+    }
+}
+
+// A random expression of about `size` leaves over the variables a to d,
+// x and y, and numbers up to 9, with + - * and brackets.
+fn random_expression(seed: mut ref i64, size: i64) -> String {
+    if size <= 1 {
+        let pick = next_random(mut seed) % 9;
+        if pick < 3 {
+            return f"{next_random(mut seed) % 10}";
+        }
+        let names = ["a", "b", "c", "d", "x", "y"];
+        return names[pick - 3].to_string();
+    }
+    let left = 1 + next_random(mut seed) % (size - 1);
+    let a = random_expression(mut seed, left);
+    let b = random_expression(mut seed, size - left);
+    let ops = [" + ", " - ", " * "];
+    let op = ops[next_random(mut seed) % 3].to_string();
+    if next_random(mut seed) % 3 == 0 {
+        f"({a}{op}{b})"
+    } else {
+        f"{a}{op}{b}"
+    }
+}
+
+const MODULUS: i64 = 1000000007;
+
+// The expression's value modulo the prime, read token by token with the usual
+// precedence, each variable given its value in `at`.
+fn value_of(tokens: Vec[String], i: mut ref i64, at: Map[String, i64]) -> i64 {
+    let mut total = term_of(tokens, mut i, at);
+    while *i < tokens.len() and (tokens[*i] == "+" or tokens[*i] == "-") {
+        let plus = tokens[*i] == "+";
+        *i += 1;
+        let t = term_of(tokens, mut i, at);
+        total = if plus { (total + t) % MODULUS } else { (total - t + MODULUS) % MODULUS };
+    }
+    total
+}
+
+fn term_of(tokens: Vec[String], i: mut ref i64, at: Map[String, i64]) -> i64 {
+    let mut product = factor_of(tokens, mut i, at);
+    while *i < tokens.len() and tokens[*i] == "*" {
+        *i += 1;
+        product = product * factor_of(tokens, mut i, at) % MODULUS;
+    }
+    product
+}
+
+fn factor_of(tokens: Vec[String], i: mut ref i64, at: Map[String, i64]) -> i64 {
+    let token = tokens[*i].clone();
+    *i += 1;
+    if token == "(" {
+        let v = value_of(tokens, mut i, at);
+        *i += 1;
+        v
+    } else if token.chars().next().unwrap().is_ascii_digit() {
+        i64.parse(token).unwrap() % MODULUS
+    } else {
+        at.get(token) ?? 0
+    }
+}
+
+// The answer read back as a polynomial and evaluated at `at`, modulo the prime.
+fn answer_value(answer: Vec[String], at: Map[String, i64]) -> i64 {
+    let mut total = 0;
+    for t in answer {
+        let mut product = 1;
+        let mut first = true;
+        for part in t.split("*") {
+            if first {
+                product = (i64.parse(part).unwrap() % MODULUS + MODULUS) % MODULUS;
+                first = false;
+            } else {
+                product = product * (at.get(part) ?? 0) % MODULUS;
+            }
+        }
+        total = (total + product) % MODULUS;
+    }
+    total
+}
+
+// Whether the answer is in LeetCode's form: no zero coefficient, each
+// term's variables sorted, and the terms by degree, highest first, then
+// by their variables, with none repeated.
+fn canonical(answer: Vec[String]) -> bool {
+    let mut previous: (i64, String) = (-1, String.new());
+    for i in 0..answer.len() {
+        let parts: Vec[String] = answer[i].split("*").map(|s| s.to_string()).collect();
+        if parts[0] == "0" {
+            return false;
+        }
+        let mut names: Vec[String] = Vec.new();
+        for k in 1..parts.len() {
+            names.push(parts[k].clone());
+        }
+        for k in 1..names.len() {
+            if names[k - 1] > names[k] {
+                return false;
+            }
+        }
+        let key = (-names.len(), names.join("*"));
+        if i > 0 and key <= previous {
+            return false;
+        }
+        previous = key;
+    }
+    true
+}
+
+fn tokens_of(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7700;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1800;
+    let mut terms = 0;
+    for case in 0..cases {
+        // up to 8 leaves, then up to 20
+        let size = if case < 1500 { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 20 };
+        let e = random_expression(mut seed, size);
+        let f = random_expression(mut seed, 1 + next_random(mut seed) % 6);
+        let mut evalvars: Vec[String] = Vec.new();
+        let mut evalints: Vec[i64] = Vec.new();
+        for name in ["x", "y"] {
+            if next_random(mut seed) % 2 == 0 {
+                evalvars.push(name.to_string());
+                evalints.push(next_random(mut seed) % 21 - 10);
+            }
+        }
+        // five random points, the given values kept
+        let mut points: Vec[Map[String, i64]] = Vec.new();
+        for _ in 0..5 {
+            let mut at: Map[String, i64] = Map.new();
+            for name in ["a", "b", "c", "d", "x", "y"] {
+                at.insert(name.to_string(), wide_random(mut seed) % MODULUS);
+            }
+            for k in 0..evalvars.len() {
+                at.insert(evalvars[k].clone(), (evalints[k] + MODULUS) % MODULUS);
+            }
+            points.push(at);
+        }
+        let tokens = tokens_of(e);
+        for which in 0..arms {
+            let answer = answer_with(which, e, evalvars, evalints);
+            if which == 0 {
+                terms += answer.len();
+            }
+            // P1: the answer, read back, has the expression's value at
+            // each point.
+            checks += 1;
+            let mut agree = true;
+            for at in points {
+                let mut i = 0;
+                if answer_value(answer, at) != value_of(tokens, mut i, at) {
+                    agree = false;
+                }
+            }
+            if not agree {
+                fails[0] += 1;
+            }
+            // P2: the answer is in LeetCode's form.
+            checks += 1;
+            if not canonical(answer) {
+                fails[1] += 1;
+            }
+            // P3: E - (E) is zero, an empty answer.
+            checks += 1;
+            if answer_with(which, f"{e} - ({e})", evalvars, evalints).len() != 0 {
+                fails[2] += 1;
+            }
+            // P4: the two sides of + and * may be exchanged.
+            checks += 1;
+            let sum = answer_with(which, f"({e}) + ({f})", evalvars, evalints);
+            let product = answer_with(which, f"({e}) * ({f})", evalvars, evalints);
+            if answer_with(which, f"({f}) + ({e})", evalvars, evalints) != sum or answer_with(which, f"({f}) * ({e})", evalvars, evalints) != product {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} expressions ({terms} terms), {arms} arms, {checks} checks, {failures} failures");
+}

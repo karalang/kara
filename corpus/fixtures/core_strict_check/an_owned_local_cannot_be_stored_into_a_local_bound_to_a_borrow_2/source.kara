@@ -1,0 +1,21 @@
+fn f(s: String) -> i64 {
+    let t = "xyz".to_string();
+    let mut out = s;
+    out = ref t;
+    out.len()
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+fn last(head: Node) -> i64 {
+    let mut node = ref head;
+    while let Some(n) = node.next {
+        node = n;
+    }
+    node.val
+}
+
+fn main() {
+    let l = Node { val: 1, next: Some(Node { val: 2, next: None }) };
+    println(f"{f("a".to_string())} {last(l)}");
+}

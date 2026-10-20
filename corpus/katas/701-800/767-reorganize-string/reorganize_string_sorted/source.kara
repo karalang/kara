@@ -1,0 +1,114 @@
+// LeetCode 767 — Reorganize String, sorted by frequency and interleaved.
+//
+// Sort the letters so that the most common come first, each letter's
+// copies kept together, then write the sorted string into places 0, 2, 4
+// and so on, then 1, 3, 5. If the first letter is too common for that,
+// the check at the end finds two neighbours equal and there is no answer.
+// O(n log n).
+
+fn reorganize_string(s: String) -> String {
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    let mut letters: Vec[(i64, u8)] = Vec.new();
+    for b in s.bytes() {
+        letters.push((-counts[b as i64 - 97], b));
+    }
+    letters.sort();
+    let n = letters.len();
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        out.push(0);
+    }
+    let half = (n + 1) / 2;
+    for i in 0..n {
+        let place = if i < half { 2 * i } else { 2 * (i - half) + 1 };
+        out[place] = letters[i].1;
+    }
+    for i in 1..n {
+        if out[i] == out[i - 1] {
+            return String.new();
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// What the answer is: none, or a rearrangement of `s` with no two
+// neighbours equal. The arms may choose different rearrangements.
+fn verdict(s: String, answer: String) -> String {
+    if answer.len() == 0 {
+        return "none".to_string();
+    }
+    let mut counts = [0; 26];
+    for b in s.bytes() {
+        counts[b as i64 - 97] += 1;
+    }
+    for b in answer.bytes() {
+        counts[b as i64 - 97] -= 1;
+    }
+    let mut prev: u8 = 0;
+    let mut ok = answer.len() == s.len();
+    for b in answer.bytes() {
+        if b == prev {
+            ok = false;
+        }
+        prev = b;
+    }
+    for k in 0..26 {
+        if counts[k] != 0 {
+            ok = false;
+        }
+    }
+    if ok { "rearranged".to_string() } else { f"WRONG {answer}" }
+}
+
+fn show(s: String) {
+    let answer = reorganize_string(s);
+    let v = verdict(s, answer);
+    println(f"{s} -> {v}");
+}
+
+fn main() {
+    show("aab");
+    show("aaab");
+    show("a");
+    show("aa");
+    show("ab");
+    show("aaabb");
+    show("aaabbb");
+    show("vvvlo");
+    show("aaaabbbcc");
+    show("aaaaabbbc");
+    show("aaaaaabbc");
+    let mut seed = 767;
+    let mut possible = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let letters = 1 + next_random(mut seed) % 5;
+        let mut bytes: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            // letter 0 drawn about twice as often as the others
+            let k = next_random(mut seed) % (letters + 1);
+            bytes.push((97 + if k == letters { 0 } else { k }) as u8);
+        }
+        let s = String.from_utf8(bytes).unwrap();
+        let answer = reorganize_string(s);
+        let v = verdict(s, answer);
+        if v == "rearranged" {
+            possible += 1;
+        } else if v != "none" {
+            println(f"{s} -> {v}");
+        }
+        check = (check * 31 + answer.len() + round) % 1000000007;
+    }
+    println(f"300 random strings: {possible} rearranged, checksum {check}");
+}

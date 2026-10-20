@@ -1,0 +1,53 @@
+// LeetCode 763 — Partition Labels: benchmark, the ★ arm.
+//
+// 100,000 random strings of 500 letters, the most LeetCode allows, whose
+// letters drift through the alphabet so that each falls into many parts.
+
+fn partition_labels(s: String) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut last: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        last.push(0);
+    }
+    for i in 0..chars.len() {
+        last[chars[i] as i64 - 'a' as i64] = i;
+    }
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = 0;
+    let mut end = 0;
+    for i in 0..chars.len() {
+        end = end.max(last[chars[i] as i64 - 'a' as i64]);
+        if i == end {
+            sizes.push(end - start + 1);
+            start = i + 1;
+        }
+    }
+    sizes
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100000;
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut seed = 763;
+    let mut parts = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let width = 1 + next_random(mut seed) % 4;
+        let mut s = String.new();
+        for i in 0..500 {
+            let k = (i * 26 / 500 + next_random(mut seed) % width).min(25);
+            s.push_str(letters[k..k + 1]);
+        }
+        let sizes = partition_labels(s);
+        parts += sizes.len();
+        for size in sizes.iter() {
+            check = (check * 31 + *size) % 1000000007;
+        }
+    }
+    println(f"{rounds} strings of 500 letters: {parts} parts, checksum {check}");
+}

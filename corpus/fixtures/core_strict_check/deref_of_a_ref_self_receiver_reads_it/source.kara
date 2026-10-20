@@ -1,0 +1,13 @@
+trait Twice { fn twice(ref self) -> i64; }
+impl Twice for i64 {
+    fn twice(ref self) -> i64 { *self * 2 }
+}
+#[derive(Copy, Clone)]
+struct W { n: i64 }
+impl Twice for W {
+    fn twice(ref self) -> i64 { let w = *self; w.n * 2 }
+}
+fn main() {
+    let x: i64 = 21;
+    println(f"{x.twice()} {W { n: 4 }.twice()}");
+}

@@ -1,0 +1,52 @@
+// Benchmark for #781: Rabbits in Forest -- the ★ arm (groups counted by
+// answer).
+//
+// A rabbit that answers v has v others of its colour, so its colour has
+// v + 1 rabbits in all. Rabbits that give different answers have
+// different colours, and up to v + 1 rabbits answering v can share one.
+// So c rabbits answering v need at least ceil(c / (v + 1)) colours, each
+// of v + 1 rabbits, and that many suffice. Count the answers in a `Map`
+// and add the groups up. O(n).
+fn num_rabbits(answers: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for a in answers.iter() {
+        *count.entry(*a).or_insert(0) += 1;
+    }
+    let mut total = 0;
+    for (v, c) in count.iter() {
+        let size = *v + 1;
+        total += (*c + size - 1) / size * size;
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 forests of 1,000 answers (LeetCode's most), built once: a third
+    // of them answer below 10, a third below 100 and a third below 1,000.
+    // Then 50,000 rounds each count the next forest.
+    let count = 64;
+    let mut seed: i64 = 781;
+    let mut forests: Vec[Vec[i64]] = Vec.new();
+    for g in 0..count {
+        let top = if g % 3 == 0 { 10 } else if g % 3 == 1 { 100 } else { 1000 };
+        let mut answers: Vec[i64] = Vec.new();
+        for _ in 0..1000 {
+            answers.push(next_random(mut seed) % top);
+        }
+        forests.push(answers);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..50000 {
+        let g = (round * 7) % count;
+        let rabbits = num_rabbits(forests[g]);
+        total += rabbits;
+        checksum = (checksum * 31 + rabbits + g) % 1000000007;
+    }
+    println(f"50000 rounds of 1000 answers: {total} rabbits, checksum {checksum}");
+}

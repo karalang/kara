@@ -1,0 +1,43 @@
+import std.iter.{DoubleEndedIterator};
+
+struct Count {
+    lo: i64,
+    hi: i64,
+}
+
+impl Iterator for Count {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi {
+            return None;
+        }
+        self.lo += 1;
+        Some(self.lo - 1)
+    }
+}
+
+impl DoubleEndedIterator for Count {
+    fn next_back(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi {
+            return None;
+        }
+        self.hi -= 1;
+        Some(self.hi)
+    }
+}
+
+fn last_of[I: DoubleEndedIterator](it: own I) -> Option[I.Item] {
+    let mut it = it;
+    it.next_back()
+}
+
+fn main() {
+    let mut c = Count { lo: 0, hi: 4 };
+    println(f"{c.next_back()} {c.next()}");
+    for x in Count { lo: 0, hi: 3 }.rev() {
+        println(f"{x}");
+    }
+    println(f"{last_of(Count { lo: 1, hi: 9 })}");
+    let v = vec![1, 2, 3];
+    println(f"{last_of(v.iter())}");
+}

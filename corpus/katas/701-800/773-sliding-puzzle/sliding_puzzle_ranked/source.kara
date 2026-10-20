@@ -1,0 +1,134 @@
+// LeetCode 773 — Sliding Puzzle, breadth-first search over ranks.
+//
+// Number the 720 orders of the six cells by their Lehmer code, so that a
+// board is an index into a table of distances. Search outward from the
+// board's rank, turning each rank back into cells to move the 0, until
+// the solved board's rank is reached. O(6! * 6).
+
+fn rank_of(cells: Vec[i64]) -> i64 {
+    let mut rank = 0;
+    for i in 0..6 {
+        let mut smaller = 0;
+        for j in i + 1..6 {
+            if cells[j] < cells[i] {
+                smaller += 1;
+            }
+        }
+        rank = rank * (6 - i) + smaller;
+    }
+    rank
+}
+
+fn cells_of(rank: i64) -> Vec[i64] {
+    let mut digits = [0; 6];
+    let mut rest = rank;
+    for i in 0..6 {
+        digits[5 - i] = rest % (i + 1);
+        rest = rest / (i + 1);
+    }
+    let mut unused: Vec[i64] = [0, 1, 2, 3, 4, 5];
+    let mut cells: Vec[i64] = Vec.new();
+    for i in 0..6 {
+        cells.push(unused.remove(digits[i]));
+    }
+    cells
+}
+
+fn sliding_puzzle(board: Vec[Vec[i64]]) -> i64 {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut cells: Vec[i64] = Vec.new();
+    for row in board {
+        for x in row {
+            cells.push(*x);
+        }
+    }
+    let goal = rank_of([1, 2, 3, 4, 5, 0]);
+    let start = rank_of(cells);
+    let mut distance = [-1; 720];
+    distance[start] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(rank) = queue.pop_front() {
+        if rank == goal {
+            return distance[rank];
+        }
+        let here = cells_of(rank);
+        let mut zero = 0;
+        while here[zero] != 0 {
+            zero += 1;
+        }
+        for next in neighbours[zero] {
+            let mut moved = here.clone();
+            moved.swap(zero, *next);
+            let r = rank_of(moved);
+            if distance[r] < 0 {
+                distance[r] = distance[rank] + 1;
+                queue.push_back(r);
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(board: Vec[Vec[i64]]) {
+    let answer = sliding_puzzle(board);
+    println(f"{board} -> {answer}");
+}
+
+// The next order of `cells` in dictionary order; false after the last.
+fn next_order(cells: mut ref Vec[i64]) -> bool {
+    let mut i = cells.len() - 2;
+    while i >= 0 and cells[i] >= cells[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return false;
+    }
+    let mut j = cells.len() - 1;
+    while cells[j] <= cells[i] {
+        j -= 1;
+    }
+    cells.swap(i, j);
+    let mut lo = i + 1;
+    let mut hi = cells.len() - 1;
+    while lo < hi {
+        cells.swap(lo, hi);
+        lo += 1;
+        hi -= 1;
+    }
+    true
+}
+
+fn main() {
+    show([[1, 2, 3], [4, 0, 5]]);
+    show([[1, 2, 3], [5, 4, 0]]);
+    show([[4, 1, 2], [5, 0, 3]]);
+    show([[1, 2, 3], [4, 5, 0]]);
+    show([[3, 2, 4], [1, 5, 0]]);
+    show([[0, 1, 2], [3, 4, 5]]);
+    let mut cells: Vec[i64] = [0, 1, 2, 3, 4, 5];
+    let mut boards = 0;
+    let mut solvable = 0;
+    let mut total = 0;
+    let mut most = 0;
+    let mut check = 0;
+    loop {
+        let board = [[cells[0], cells[1], cells[2]], [cells[3], cells[4], cells[5]]];
+        let answer = sliding_puzzle(board);
+        boards += 1;
+        if answer >= 0 {
+            solvable += 1;
+            total += answer;
+            if answer > most {
+                most = answer;
+            }
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+        if not next_order(mut cells) {
+            break;
+        }
+    }
+    println(f"all {boards} boards: {solvable} solvable, {total} moves in all, at most {most}, checksum {check}");
+}

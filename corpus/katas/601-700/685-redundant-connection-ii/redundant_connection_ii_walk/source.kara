@@ -104,20 +104,20 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         name.swap(i, j);
         i -= 1;
     }
     let mut up: Vec[i64] = vec![0; n + 1];
     let mut edges: Vec[(i64, i64)] = Vec.new();
     for v in 1..n {
-        let a = name[next_random(seed) % v];
+        let a = name[next_random(mut seed) % v];
         up[name[v]] = a;
         edges.push((a, name[v]));
     }
     loop {
-        let a = 1 + next_random(seed) % n;
-        let b = 1 + next_random(seed) % n;
+        let a = 1 + next_random(mut seed) % n;
+        let b = 1 + next_random(mut seed) % n;
         if a != b and up[b] != a {
             edges.push((a, b));
             break;
@@ -125,7 +125,7 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
     }
     let mut k = n - 1;
     while k > 0 {
-        let j = next_random(seed) % (k + 1);
+        let j = next_random(mut seed) % (k + 1);
         edges.swap(k, j);
         k -= 1;
     }

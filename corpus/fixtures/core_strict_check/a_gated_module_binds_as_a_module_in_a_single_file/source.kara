@@ -1,0 +1,14 @@
+import std.path;
+
+fn show(path: Str) {
+    println(path.len());
+}
+
+fn main() {
+    let p = "/a/b/c.txt";
+    println(path.parent(p) ?? "none");
+    println(path.file_name(p) ?? "none");
+    show(p);
+    let path = "x";
+    println(path.len());
+}

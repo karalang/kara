@@ -1,0 +1,47 @@
+
+fn never[T](x: T) -> bool {
+    false
+}
+fn count[T](v: ref Vec[T], keep: Fn(T) -> bool) -> i64 {
+    let mut n: i64 = 0;
+    for x in v.iter() {
+        if not keep(x) {
+            n += 1;
+        }
+    }
+    n
+}
+fn main0() {
+    let v: Vec[char] = vec!['a', 'b'];
+    println(f"{count(v, never)}");
+}
+fn len_of[T](v: ref Vec[T]) -> i64 { v.len() as i64 }
+fn same[T](x: own T) -> T { x }
+fn is_big(x: i64) -> bool { x > 10 }
+fn apply(f: Fn(ref Vec[i64]) -> i64, v: Vec[i64]) -> i64 { f(v) }
+fn twice(f: Fn(i64) -> i64, x: i64) -> i64 { f(f(x)) }
+fn main1() {
+    let g: Fn(i64) -> bool = is_big;
+    let k: Fn(char) -> char = same;
+    println(f"{apply(len_of, vec![1, 2, 3])} {twice(same, 4)} {g(11)} {k('z')}");
+}
+fn keep_all[T](x: ref T) -> bool { true }
+fn count_kept[T](v: ref Vec[T], keep: Fn(ref T) -> bool) -> i64 {
+    let mut n: i64 = 0;
+    for x in v.iter() {
+        if keep(x) { n += 1; }
+    }
+    n
+}
+fn wrap[T: Clone](x: ref T) -> Vec[T] { vec![x.clone(), x.clone()] }
+fn main2() {
+    let v: Vec[String] = vec!["a".to_string(), "bb".to_string()];
+    let w: Fn(ref String) -> Vec[String] = wrap;
+    let s = "q".to_string();
+    println(f"{count_kept(v, keep_all)} {w(s).len()} {s}");
+}
+fn main() {
+    main0();
+    main1();
+    main2();
+}

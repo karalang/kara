@@ -1,0 +1,12 @@
+aab -> rearranged
+aaab -> none
+a -> rearranged
+aa -> none
+ab -> rearranged
+aaabb -> rearranged
+aaabbb -> rearranged
+vvvlo -> rearranged
+aaaabbbcc -> rearranged
+aaaaabbbc -> rearranged
+aaaaaabbc -> none
+300 random strings: 177 rearranged, checksum 684726375

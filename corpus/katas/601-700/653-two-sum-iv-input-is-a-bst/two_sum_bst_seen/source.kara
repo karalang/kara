@@ -23,7 +23,7 @@ fn walk(node: Option[TreeNode], k: i64, seen: mut ref Set[i64]) -> bool {
                 return true;
             }
             seen.insert(n.val);
-            walk(n.left, k, seen) or walk(n.right, k, seen)
+            walk(n.left, k, mut seen) or walk(n.right, k, mut seen)
         }
     }
 }

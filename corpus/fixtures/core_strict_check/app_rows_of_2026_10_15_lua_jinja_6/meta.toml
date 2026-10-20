@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::app_rows_of_2026_10_15_lua_jinja"
+dedup_of = ["tests/core_strict_check.rs::parse_of_a_field_borrows_it"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "db0aa9a19"
+extracted_src = "415f9f6f"
+model_rev = "583cfb0d"
+model_src = "415f9f6f"

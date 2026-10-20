@@ -22,7 +22,7 @@ fn sink(land: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
         return 0;
     }
     land[r][c] = 0;
-    1 + sink(land, r + 1, c) + sink(land, r - 1, c) + sink(land, r, c + 1) + sink(land, r, c - 1)
+    1 + sink(mut land, r + 1, c) + sink(mut land, r - 1, c) + sink(mut land, r, c + 1) + sink(mut land, r, c - 1)
 }
 
 // ---- harness ---------------------------------------------------------------

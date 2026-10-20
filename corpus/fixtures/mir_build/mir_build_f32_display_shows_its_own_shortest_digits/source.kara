@@ -1,0 +1,14 @@
+
+fn main() {
+    let z: f32 = 0.1;
+    let w: f32 = 3.0;
+    let big: f32 = 16777216.0;
+    let d: f64 = 0.1;
+    println(f"{z} {w} {big} {d}");
+    println(z.to_string());
+    println(f"[{z:.3}]");
+    let v: Vec[f32] = [0.1, 0.2, 1.5];
+    println(f"{v}");
+    let x = z * 3.0;
+    println(f"{x}");
+}

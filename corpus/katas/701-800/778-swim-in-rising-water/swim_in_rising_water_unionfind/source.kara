@@ -1,0 +1,136 @@
+// LeetCode 778 — Swim in Rising Water, union-find as the water rises.
+//
+// The elevations are 0 to n² - 1, each once, so the water reaches one
+// new square at each time. Flood the squares in that order, joining
+// each to its flooded neighbours in a disjoint-set forest, and the
+// answer is the time at which the two corners first share a set.
+// O(n² α(n²)).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn swim_in_water(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut square_of: Vec[i64] = Vec.filled(n * n, 0);
+    for r in 0..n {
+        for c in 0..n {
+            square_of[grid[r][c]] = r * n + c;
+        }
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    for i in 0..n * n {
+        parent.push(i);
+        size.push(1);
+    }
+    let mut flooded: Vec[bool] = Vec.filled(n * n, false);
+    for t in 0..n * n {
+        let at = square_of[t];
+        flooded[at] = true;
+        let r = at / n;
+        let c = at % n;
+        for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < n and nc >= 0 and nc < n and flooded[nr * n + nc] {
+                let a = find(mut parent, at);
+                let b = find(mut parent, nr * n + nc);
+                if a != b {
+                    if size[a] < size[b] {
+                        parent[a] = b;
+                        size[b] += size[a];
+                    } else {
+                        parent[b] = a;
+                        size[a] += size[b];
+                    }
+                }
+            }
+        }
+        if flooded[0] and flooded[n * n - 1] and find(mut parent, 0) == find(mut parent, n * n - 1) {
+            return t;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid holding 0 to n² - 1 in a random order.
+fn random_grid(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 0..n * n {
+        values.push(v);
+    }
+    let mut i = n * n - 1;
+    while i > 0 {
+        values.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(values[r * n + c]);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// 0 to n² - 1 laid along the rows, every other row backwards.
+fn snake(n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(if r % 2 == 0 { r * n + c } else { r * n + n - 1 - c });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    let answer = swim_in_water(grid);
+    println(f"{grid} -> {answer}");
+}
+
+fn main() {
+    show([[0, 2], [1, 3]]);
+    show([[0, 1, 2, 3, 4], [24, 23, 22, 21, 5], [12, 13, 14, 15, 16], [11, 17, 18, 19, 20], [10, 9, 8, 7, 6]]);
+    show([[0]]);
+    show([[3, 0], [1, 2]]);
+    show([[0, 3], [2, 1]]);
+    show([[0, 8, 7], [1, 6, 5], [2, 3, 4]]);
+    show([[0, 7, 8], [6, 1, 2], [5, 4, 3]]);
+    let mut seed = 778;
+    let answer = swim_in_water(random_grid(mut seed, 50));
+    println(f"random 50 x 50 -> {answer}");
+    let answer = swim_in_water(snake(50));
+    println(f"snake 50 x 50 -> {answer}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let answer = swim_in_water(random_grid(mut seed, n));
+        total += answer;
+        check = (check * 31 + answer * 50 + n) % 1000000007;
+    }
+    println(f"300 random grids: answers sum to {total}, checksum {check}");
+}

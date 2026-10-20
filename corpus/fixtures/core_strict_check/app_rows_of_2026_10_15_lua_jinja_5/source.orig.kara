@@ -1,0 +1,31 @@
+enum V { Text(String), Int(i64) }
+fn show(v: ref V) -> String {
+    match v {
+        V.Text(s) => s.clone(),
+        V.Int(i) => f"{i}",
+    }
+}
+fn a(v: own V) -> String {
+    let r = match v {
+        V.Text(s) => s,
+        V.Int(_) => "i".to_string(),
+    };
+    r + show(v)
+}
+fn b(v: own V) -> String {
+    if let V.Text(s) = v {
+        println(s);
+    }
+    show(v)
+}
+fn c(v: own V) -> String {
+    match v {
+        V.Text(s) => { let t = s; show(v) + t }
+        V.Int(_) => show(v),
+    }
+}
+fn main() {
+    println(a(V.Int(1)));
+    println(b(V.Int(1)));
+    println(c(V.Int(1)));
+}

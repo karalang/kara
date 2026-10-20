@@ -1,0 +1,268 @@
+// LeetCode #763: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn partition_labels_star(s: String) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut last: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        last.push(0);
+    }
+    for i in 0..chars.len() {
+        last[chars[i] as i64 - 'a' as i64] = i;
+    }
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = 0;
+    let mut end = 0;
+    for i in 0..chars.len() {
+        end = end.max(last[chars[i] as i64 - 'a' as i64]);
+        if i == end {
+            sizes.push(end - start + 1);
+            start = i + 1;
+        }
+    }
+    sizes
+}
+
+// ---- interval arm ---------------------------------------------------
+
+fn partition_labels_intervals(s: String) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut first: Map[char, i64] = Map.new();
+    let mut last: Map[char, i64] = Map.new();
+    for i in 0..chars.len() {
+        if not first.contains_key(chars[i]) {
+            first.insert(chars[i], i);
+        }
+        last.insert(chars[i], i);
+    }
+    let mut spans: Vec[(i64, i64)] = Vec.new();
+    for (letter, at) in first.iter() {
+        spans.push((*at, last[*letter]));
+    }
+    spans.sort();
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = spans[0].0;
+    let mut end = spans[0].1;
+    for span in spans.iter() {
+        if span.0 > end {
+            sizes.push(end - start + 1);
+            start = span.0;
+        }
+        end = end.max(span.1);
+    }
+    sizes.push(end - start + 1);
+    sizes
+}
+
+// ---- counting arm ---------------------------------------------------
+
+fn partition_labels_counts(s: String) -> Vec[i64] {
+    let mut remaining: Map[char, i64] = Map.new();
+    for c in s.chars() {
+        remaining.insert(c, remaining.get(c).unwrap_or(0) + 1);
+    }
+    let mut seen: Set[char] = Set.new();
+    let mut open = 0;
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut size = 0;
+    for c in s.chars() {
+        if not seen.contains(c) {
+            seen.insert(c);
+            open += 1;
+        }
+        let left = remaining[c] - 1;
+        remaining.insert(c, left);
+        if left == 0 {
+            open -= 1;
+        }
+        size += 1;
+        if open == 0 {
+            sizes.push(size);
+            size = 0;
+        }
+    }
+    sizes
+}
+
+// ---- mask arm -------------------------------------------------------
+
+fn partition_labels_masks(s: String) -> Vec[i64] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut before: Vec[i64] = Vec.new();
+    let mut so_far = 0;
+    for i in 0..n {
+        so_far |= 1 << (bytes[i] - 97) as i64;
+        before.push(so_far);
+    }
+    let mut after: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        after.push(0);
+    }
+    for i in (0..n).rev() {
+        after[i] = after[i + 1] | (1 << (bytes[i] - 97) as i64);
+    }
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = 0;
+    for i in 0..n {
+        if before[i] & after[i + 1] == 0 {
+            sizes.push(i - start + 1);
+            start = i + 1;
+        }
+    }
+    sizes
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: String) -> Vec[i64] {
+    if which == 0 {
+        partition_labels_star(s)
+    } else if which == 1 {
+        partition_labels_intervals(s)
+    } else if which == 2 {
+        partition_labels_counts(s)
+    } else {
+        partition_labels_masks(s)
+    }
+}
+
+fn random_letters(n: i64, width: i64, seed: mut ref i64) -> String {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut s = String.new();
+    for i in 0..n {
+        let k = (i * 26 / n + next_random(mut seed) % width).min(25);
+        s.push_str(letters[k..k + 1]);
+    }
+    s
+}
+
+// The definition: a part may end after position i when no letter appears
+// both up to i and after it, and ending a part at every such place gives
+// the most parts.
+fn definition(s: ref String) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = 0;
+    for i in 0..n {
+        let mut shared = false;
+        for a in 0..i + 1 {
+            for b in i + 1..n {
+                if chars[a] == chars[b] {
+                    shared = true;
+                }
+            }
+        }
+        if not shared {
+            sizes.push(i - start + 1);
+            start = i + 1;
+        }
+    }
+    sizes
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7630;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut parts = 0;
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    for case in 0..cases {
+        // up to 40 letters for the definition, then up to 500
+        let n = if case < small { 1 + next_random(mut seed) % 40 } else { 1 + next_random(mut seed) % 500 };
+        let width = 1 + next_random(mut seed) % 4;
+        let s = random_letters(n, width, mut seed);
+        let chars: Vec[char] = s.chars().collect();
+        let mut reversed = String.new();
+        for i in (0..n).rev() {
+            reversed.push(chars[i]);
+        }
+        // a random renaming of the letters
+        let mut order: Vec[i64] = Vec.new();
+        for k in 0..26 {
+            order.push(k);
+        }
+        for k in 0..26 {
+            let j = k + next_random(mut seed) % (26 - k);
+            order.swap(k, j);
+        }
+        let mut renamed = String.new();
+        for c in s.bytes() {
+            let k = order[(c - 97) as i64];
+            renamed.push_str(letters[k..k + 1]);
+        }
+        let want = if case < small { definition(s) } else { Vec.new() };
+        for which in 0..arms {
+            let got = answer_with(which, s.clone());
+            if which == 0 {
+                parts += got.len();
+            }
+            // P1: the definition's answer.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: a partition: positive sizes adding up to n, and no
+            // letter in two parts.
+            checks += 1;
+            let mut ok = true;
+            let mut part_of: Vec[i64] = Vec.new();
+            for _ in 0..26 {
+                part_of.push(-1);
+            }
+            let mut at = 0;
+            for p in 0..got.len() {
+                if got[p] <= 0 or at + got[p] > n {
+                    ok = false;
+                    break;
+                }
+                for i in at..at + got[p] {
+                    let k = chars[i] as i64 - 'a' as i64;
+                    if part_of[k] >= 0 and part_of[k] != p {
+                        ok = false;
+                    }
+                    part_of[k] = p;
+                }
+                at += got[p];
+            }
+            if not ok or at != n {
+                fails[1] += 1;
+            }
+            // P3: the string reversed has the parts reversed.
+            checks += 1;
+            let mut back = answer_with(which, reversed.clone());
+            back.reverse();
+            if back != got {
+                fails[2] += 1;
+            }
+            // P4: renaming the letters one to one changes nothing.
+            checks += 1;
+            if answer_with(which, renamed.clone()) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} strings ({parts} parts), {arms} arms, {checks} checks, {failures} failures");
+}

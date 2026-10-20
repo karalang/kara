@@ -20,7 +20,7 @@ fn main() {
     let add = make(5);
     println(f"{add(1)}");
     let mut total = 0;
-    let mut bump = mut ref || {
+    let mut bump = || {
         total += 1;
     };
     bump();

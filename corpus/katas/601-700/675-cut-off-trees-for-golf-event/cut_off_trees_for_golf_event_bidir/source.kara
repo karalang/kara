@@ -95,7 +95,7 @@ fn random_forest(seed: mut ref i64, rows: i64, cols: i64, walls: i64, trees: i64
     for r in 0..rows {
         let mut row: Vec[i64] = Vec.new();
         for c in 0..cols {
-            let k = next_random(seed) % 100;
+            let k = next_random(mut seed) % 100;
             if (r > 0 or c > 0) and k < walls {
                 row.push(0);
             } else {
@@ -109,7 +109,7 @@ fn random_forest(seed: mut ref i64, rows: i64, cols: i64, walls: i64, trees: i64
     }
     let mut i = spots.len();
     while i > 1 {
-        let j = next_random(seed) % i;
+        let j = next_random(mut seed) % i;
         i -= 1;
         spots.swap(i, j);
     }

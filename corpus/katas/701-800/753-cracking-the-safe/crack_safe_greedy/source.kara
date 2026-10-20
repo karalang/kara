@@ -1,0 +1,119 @@
+// LeetCode 753 — Cracking the Safe, prefer the largest digit.
+//
+// Martin's rule (1934): start from n zeros and always type the largest
+// digit whose new code has not been typed yet; stop when no digit is
+// left. It never gets stuck early, so the text holds every code once.
+// The last n digits are kept as a number below k^n, and a `Vec[bool]`
+// marks the codes typed. O(k^n x k).
+
+fn crack_safe(n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let mut typed_code: Vec[bool] = Vec.new();
+    for _ in 0..total {
+        typed_code.push(false);
+    }
+    typed_code[0] = true;
+    let mut code = 0;
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push('0');
+    }
+    let mut going = true;
+    while going {
+        going = false;
+        let mut d = k - 1;
+        while d >= 0 {
+            let next = (code * k + d) % total;
+            if not typed_code[next] {
+                typed_code[next] = true;
+                code = next;
+                out.push((b'0' + d as u8) as char);
+                going = true;
+                break;
+            }
+            d -= 1;
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// What the answer is, judged: its length against the shortest possible,
+// k^n + n - 1, and whether every code appears in it exactly once.
+fn judged(text: String, n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let bytes = text.bytes();
+    let mut seen: Vec[i64] = Vec.new();
+    for _ in 0..total {
+        seen.push(0);
+    }
+    let mut bad = 0;
+    let mut i = 0;
+    while i + n <= bytes.len() {
+        let mut code = 0;
+        for j in i..i + n {
+            let d = (bytes[j] - b'0') as i64;
+            if d < 0 or d >= k {
+                bad += 1;
+            }
+            code = code * k + d;
+        }
+        if code >= 0 and code < total {
+            seen[code] += 1;
+        }
+        i += 1;
+    }
+    let mut once = 0;
+    for c in seen.iter() {
+        if *c == 1 {
+            once += 1;
+        }
+    }
+    let shortest = total + n - 1;
+    let size = if text.len() == shortest { "shortest" } else { "NOT SHORTEST" };
+    let codes = if once == total and bad == 0 { "every code once" } else { "CODES WRONG" };
+    f"{text.len()} digits, {size}, {codes}"
+}
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k}: {judged(crack_safe(n, k), n, k)}");
+}
+
+fn main() {
+    show(1, 2);
+    show(2, 2);
+    show(1, 1);
+    show(4, 1);
+    show(1, 10);
+    show(3, 2);
+    show(2, 10);
+    show(3, 10);
+    show(4, 8);
+    let mut safes = 0;
+    let mut digits = 0;
+    let mut good = 0;
+    for n in 1..5 {
+        for k in 1..11 {
+            let mut total = 1;
+            for _ in 0..n {
+                total *= k;
+            }
+            if total <= 4096 {
+                safes += 1;
+                let text = crack_safe(n, k);
+                digits += text.len();
+                if judged(text, n, k).ends_with("shortest, every code once") {
+                    good += 1;
+                }
+            }
+        }
+    }
+    println(f"all {safes} safes: {digits} digits in all, {good} shortest with every code once");
+}

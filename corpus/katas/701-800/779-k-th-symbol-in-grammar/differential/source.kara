@@ -1,0 +1,150 @@
+// LeetCode #779: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on every symbol of the small rows and random places in the large ones.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn kth_grammar_star(n: i64, k: i64) -> i64 {
+    (k - 1).count_ones() % 2
+}
+
+// ---- parent arm -----------------------------------------------------
+
+fn kth_grammar_parent(n: i64, k: i64) -> i64 {
+    if n == 1 {
+        return 0;
+    }
+    let up = kth_grammar_parent(n - 1, (k + 1) / 2);
+    if k % 2 == 1 { up } else { 1 - up }
+}
+
+// ---- halves arm -----------------------------------------------------
+
+fn kth_grammar_halves(n: i64, k: i64) -> i64 {
+    let mut row = n;
+    let mut at = k;
+    let mut flipped = 0;
+    while row > 1 {
+        let half = 1 << (row - 2);
+        if at > half {
+            at -= half;
+            flipped = 1 - flipped;
+        }
+        row -= 1;
+    }
+    flipped
+}
+
+// ---- kernighan arm --------------------------------------------------
+
+fn kth_grammar_kernighan(n: i64, k: i64) -> i64 {
+    let mut x = k - 1;
+    let mut symbol = 0;
+    while x != 0 {
+        x = x & (x - 1);
+        symbol = 1 - symbol;
+    }
+    symbol
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64, k: i64) -> i64 {
+    if which == 0 {
+        kth_grammar_star(n, k)
+    } else if which == 1 {
+        kth_grammar_parent(n, k)
+    } else if which == 2 {
+        kth_grammar_halves(n, k)
+    } else {
+        kth_grammar_kernighan(n, k)
+    }
+}
+
+// The definition: row 1 is "0", and each row after it is the one before
+// with every 0 replaced by "01" and every 1 by "10".
+fn rows_up_to(last: i64) -> Vec[String] {
+    let mut rows: Vec[String] = Vec.new();
+    rows.push(String.from("0"));
+    for _ in 1..last {
+        let mut next = String.new();
+        for c in rows[rows.len() - 1].chars() {
+            next.push_str(if c == '0' { "01" } else { "10" });
+        }
+        rows.push(next);
+    }
+    rows
+}
+
+// A random k from 1 to `count`.
+fn random_k(seed: mut ref i64, count: i64) -> i64 {
+    let high = next_random(mut seed);
+    let low = next_random(mut seed);
+    1 + (high * 32768 + low) % count
+}
+
+fn main() {
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    // P1: every symbol of rows 1 to 13 is the definition's.
+    let rows = rows_up_to(13);
+    let mut ones = 0;
+    for n in 1..14 {
+        let row = rows[n - 1].bytes();
+        for k in 1..row.len() + 1 {
+            let want = if row[k - 1] == b'1' { 1 } else { 0 };
+            ones += want;
+            for which in 0..arms {
+                checks += 1;
+                if answer_with(which, n, k) != want {
+                    fails[0] += 1;
+                }
+            }
+        }
+    }
+    // P2 to P4 on 3,000 random places in rows 2 to 30, LeetCode's most,
+    // each k from the first half of its row.
+    let mut seed = 7790;
+    let queries = 3000;
+    for _ in 0..queries {
+        let n = 2 + next_random(mut seed) % 29;
+        let half = 1 << (n - 2);
+        let k = random_k(mut seed, half);
+        for which in 0..arms {
+            let got = answer_with(which, n, k);
+            // P2: the first half of row n is row n - 1.
+            checks += 1;
+            if got != answer_with(which, n - 1, k) {
+                fails[1] += 1;
+            }
+            // P3: the second half of row n is the first half flipped.
+            checks += 1;
+            if answer_with(which, n, k + half) != 1 - got {
+                fails[2] += 1;
+            }
+            // P4: symbol k of row n - 1 makes symbols 2k - 1 and 2k of
+            // row n, the first the same and the second the other one.
+            checks += 1;
+            let parent = answer_with(which, n - 1, k);
+            if answer_with(which, n, 2 * k - 1) != parent or answer_with(which, n, 2 * k) != 1 - parent {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}rows 1 to 13 ({ones} ones) and {queries} random places, {arms} arms, {checks} checks, {failures} failures");
+}

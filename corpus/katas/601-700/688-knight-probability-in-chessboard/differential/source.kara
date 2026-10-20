@@ -78,14 +78,14 @@ fn chance_memo(n: i64, left: i64, r: i64, c: i64, memo: mut ref Vec[f64]) -> f64
     if memo[at] >= 0.0 {
         return memo[at];
     }
-    let sum = chance_memo(n, left - 1, r + 2, c + 1, memo)
-        + chance_memo(n, left - 1, r + 1, c + 2, memo)
-        + chance_memo(n, left - 1, r - 1, c + 2, memo)
-        + chance_memo(n, left - 1, r - 2, c + 1, memo)
-        + chance_memo(n, left - 1, r - 2, c - 1, memo)
-        + chance_memo(n, left - 1, r - 1, c - 2, memo)
-        + chance_memo(n, left - 1, r + 1, c - 2, memo)
-        + chance_memo(n, left - 1, r + 2, c - 1, memo);
+    let sum = chance_memo(n, left - 1, r + 2, c + 1, mut memo)
+        + chance_memo(n, left - 1, r + 1, c + 2, mut memo)
+        + chance_memo(n, left - 1, r - 1, c + 2, mut memo)
+        + chance_memo(n, left - 1, r - 2, c + 1, mut memo)
+        + chance_memo(n, left - 1, r - 2, c - 1, mut memo)
+        + chance_memo(n, left - 1, r - 1, c - 2, mut memo)
+        + chance_memo(n, left - 1, r + 1, c - 2, mut memo)
+        + chance_memo(n, left - 1, r + 2, c - 1, mut memo);
     memo[at] = sum / 8.0;
     sum / 8.0
 }

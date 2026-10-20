@@ -1,0 +1,8 @@
+fn glue(lines: ref Vec[String], sep: Str) -> String { lines.join(sep) }
+fn main() {
+    let v = vec!["a".to_string(), "b".to_string()];
+    println(glue(v, ", "));
+    let s = "+".to_string();
+    let parts: Vec[Str] = "x,y".split(",").collect();
+    println(parts.join(s.as_str()));
+}

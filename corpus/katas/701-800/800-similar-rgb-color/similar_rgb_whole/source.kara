@@ -1,0 +1,92 @@
+// LeetCode 800 — Similar RGB Color, every shorthand colour.
+//
+// Try all 4,096 shorthand colours #XYZ, work out each one's similarity,
+// minus the sum of the squared differences of the three parts, and keep
+// the first with the highest. O(16^3).
+fn similar_rgb(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let b = color.bytes();
+    let mut parts: Vec[i64] = Vec.new();
+    for p in 0..3 {
+        parts.push(hex(b[1 + 2 * p]) * 16 + hex(b[2 + 2 * p]));
+    }
+    let mut best = (0, 0, 0);
+    let mut best_score = -1000000;
+    for x in 0..16 {
+        for y in 0..16 {
+            for z in 0..16 {
+                let dx = 17 * x - parts[0];
+                let dy = 17 * y - parts[1];
+                let dz = 17 * z - parts[2];
+                let score = -(dx * dx + dy * dy + dz * dz);
+                if score > best_score {
+                    best_score = score;
+                    best = (x, y, z);
+                }
+            }
+        }
+    }
+    let (x, y, z) = best;
+    let mut out = String.new();
+    out.push('#');
+    for k in [x, y, z] {
+        let d = digits.bytes()[k] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+fn hex(c: u8) -> i64 {
+    "0123456789abcdef".find((c as char).to_string()).unwrap_or(0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(color: Str) {
+    println(f"{color} -> {similar_rgb(color)}");
+}
+
+fn main() {
+    show("#09f166");
+    show("#4e3fe1");
+    show("#000000");
+    show("#ffffff");
+    show("#080808");
+    show("#090909");
+    show("#f7f7f7");
+    show("#123456");
+    show("#abcdef");
+    let digits = "0123456789abcdef";
+    let mut seed = 800;
+    let mut same = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Any colour, or every other time one with each part's two
+        // digits alike, which is its own answer.
+        let mut color = String.new();
+        color.push('#');
+        for _ in 0..3 {
+            let d = digits.bytes()[next_random(mut seed) % 16] as char;
+            color.push(d);
+            if i % 2 == 0 {
+                color.push(digits.bytes()[next_random(mut seed) % 16] as char);
+            } else {
+                color.push(d);
+            }
+        }
+        let got = similar_rgb(color);
+        if got == color {
+            same += 1;
+        }
+        for c in got.bytes() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+    }
+    println(f"300 random colours: {same} already shorthand, checksum {check}");
+}

@@ -1,0 +1,73 @@
+// LeetCode 791 — Custom Sort String, a stable sort by rank.
+//
+// Give each letter its place in order, and 26 to the letters order does
+// not name, then sort the letters of s by that rank with the library's
+// stable sort, so letters of equal rank keep their order in s.
+// O(n log n).
+fn custom_sort_string(order: String, s: String) -> String {
+    let mut rank: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        rank.push(26);
+    }
+    let mut place = 0;
+    for c in order.chars() {
+        rank[(c as i64) - ('a' as i64)] = place;
+        place += 1;
+    }
+    let mut letters: Vec[char] = s.chars().collect();
+    letters.sort_by(|a, b| rank[(a as i64) - ('a' as i64)].cmp(rank[(b as i64) - ('a' as i64)]));
+    let mut out = String.new();
+    for c in letters.iter() {
+        out.push(*c);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(order: String, s: String) {
+    let answer = custom_sort_string(order, s);
+    println(f"order = \"{order}\", s = \"{s}\" -> \"{answer}\"");
+}
+
+fn main() {
+    show("cba", "abcd");
+    show("bcafg", "abcd");
+    show("kqep", "pekeq");
+    show("z", "zzazbz");
+    show("abcdefghijklmnopqrstuvwxyz", "thequickbrownfoxjumpsoverthelazydog");
+    show("zyxwvutsrqponmlkjihgfedcba", "thequickbrownfoxjumpsoverthelazydog");
+    show("xy", "hello");
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 791;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        // order: a random number of different letters in a random order.
+        let mut pool = letters.clone();
+        let mut i = 25;
+        while i > 0 {
+            pool.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let mut order = String.new();
+        for j in 0..1 + next_random(mut seed) % 26 {
+            order.push(pool[j]);
+        }
+        let mut s = String.new();
+        for _ in 0..1 + next_random(mut seed) % 200 {
+            s.push(letters[next_random(mut seed) % 26]);
+        }
+        let answer = custom_sort_string(order, s);
+        total += answer.len();
+        for b in answer.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {total} letters, checksum {check}");
+}

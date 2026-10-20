@@ -1,0 +1,12 @@
+import std.time.{Instant, Duration};
+
+fn main() {
+    let a = Instant.now();
+    let b = a + Duration.ms(1500);
+    let d = b - a;
+    let mut t = a;
+    t += Duration.secs(2);
+    println(f"{d.as_ms()} {b > a} {a == a} {(t - a).as_ms()} {(t - b).as_ms()}");
+    let z = a - a;
+    println(f"{z.as_ms()} {a + z == a}");
+}

@@ -1,0 +1,43 @@
+
+fn show(r: Result[(), IoError]) -> String {
+    match r { Ok(_) => "ok".to_string(), Err(e) => match e { IoError.NotFound => "notfound".to_string(), IoError.AlreadyExists => "exists".to_string(), IoError.InvalidInput => "invalid".to_string(), _ => "other".to_string() } }
+}
+fn kind(m: Metadata) -> String {
+    f"{m.len} file={m.is_file} dir={m.is_dir} link={m.is_symlink}"
+}
+fn main() {
+    fs.create_dir("DIR/t").unwrap();
+    fs.write("DIR/t/a.txt", "hello").unwrap();
+    println(show(fs.symlink("a.txt", "DIR/t/l")));
+    println(show(fs.symlink("a.txt", "DIR/t/l")));
+    println(fs.read_link("DIR/t/l").unwrap());
+    match fs.read_link("DIR/t/a.txt") { Ok(_) => println("?"), Err(IoError.InvalidInput) => println("not a link"), Err(_) => println("other") }
+    println(kind(fs.metadata("DIR/t/l").unwrap()));
+    match fs.symlink_metadata("DIR/t/l") { Ok(m) => println(f"file={m.is_file} dir={m.is_dir} link={m.is_symlink}"), Err(_) => println("err") }
+    println(kind(fs.symlink_metadata("DIR/t/a.txt").unwrap()));
+    println(show(fs.symlink("missing", "DIR/t/d")));
+    println(f"{fs.exists("DIR/t/d")}");
+    match fs.metadata("DIR/t/d") { Ok(_) => println("?"), Err(IoError.NotFound) => println("dangling"), Err(_) => println("other") }
+    match fs.symlink_metadata("DIR/t/d") { Ok(m) => println(f"link={m.is_symlink}"), Err(_) => println("err") }
+    println(fs.read_link("DIR/t/d").unwrap());
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o755)));
+    println(f"{fs.metadata("DIR/t/a.txt").unwrap().mode == 0o755}");
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o640)));
+    let m = fs.metadata("DIR/t/a.txt").unwrap().mode;
+    println(f"{m == 0o640} {m}");
+    println(show(fs.set_permissions("DIR/t/a.txt", -1)));
+    println(show(fs.set_permissions("DIR/t/a.txt", 0o10000)));
+    println(show(fs.set_permissions("DIR/t/nope", 0o644)));
+    println(show(fs.set_modified("DIR/t/a.txt", 1759311000123)));
+    println(fs.metadata("DIR/t/a.txt").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t/a.txt", -5000)));
+    println(fs.metadata("DIR/t/a.txt").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t", 1000)));
+    println(fs.metadata("DIR/t").unwrap().modified_ms);
+    println(show(fs.set_modified("DIR/t/nope", 0)));
+    println(show(fs.set_permissions("DIR/t", 0o700)));
+    println(fs.metadata("DIR/t").unwrap().mode);
+    println(show(fs.remove_file("DIR/t/l")));
+    println(f"{fs.exists("DIR/t/l")} {fs.exists("DIR/t/a.txt")}");
+    println(show(fs.remove_dir_all("DIR/t")));
+}

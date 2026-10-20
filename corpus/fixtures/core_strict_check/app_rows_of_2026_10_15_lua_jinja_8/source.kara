@@ -1,0 +1,34 @@
+enum E { F(i64, String), G(i64) }
+struct A { es: Vec[E] }
+impl A {
+    fn add(mut ref self, e: own E) -> i64 {
+        self.es.push(e);
+        self.es.len() - 1
+    }
+}
+struct P { i: i64, bad: String }
+impl P {
+    fn next_name(mut ref self) -> Result[String, String] {
+        self.i += 1;
+        Ok(f"n{self.i}")
+    }
+    fn run(mut ref self, tree: mut ref A) -> Result[i64, String] {
+        let mut e: i64 = 0;
+        loop {
+            if self.i < 2 {
+                let name = self.next_name()?;
+                if self.bad == "" {
+                    self.bad = f"bad {name}";
+                }
+                e = tree.add(E.F(e, name));
+            } else {
+                return Ok(e);
+            }
+        }
+    }
+}
+fn main() {
+    let mut p = P { i: 0, bad: String.new() };
+    let mut a = A { es: Vec.new() };
+    println(f"{p.run(mut a).unwrap()} {p.bad}");
+}

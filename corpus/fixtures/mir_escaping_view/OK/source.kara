@@ -1,0 +1,24 @@
+
+struct Holder { f: Fn() -> i64 }
+fn mk() -> Holder {
+    let s = "abc".to_string();
+    let t = s.clone();
+    Holder { f: || t.len() as i64 }
+}
+fn local() -> i64 {
+    let s = "abcd".to_string();
+    let r = ref s;
+    let f = || r.len() as i64;
+    f()
+}
+fn keep(v: mut ref Vec[i64]) {
+    let s = "abc".to_string();
+    let r = ref s;
+    v.retain(|x| x < r.len() as i64);
+}
+fn main() {
+    let h = mk();
+    let mut v = vec![1, 5];
+    keep(mut v);
+    println(f"{(h.f)()} {local()} {v.len()}");
+}

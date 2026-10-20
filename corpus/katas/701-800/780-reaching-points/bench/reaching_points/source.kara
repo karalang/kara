@@ -1,0 +1,79 @@
+// Benchmark for #780: Reaching Points -- the ★ arm (backwards by
+// remainders).
+//
+// A move takes (x, y) to (x, x + y) or (x + y, y), so it makes one
+// coordinate larger by the other. Run backwards from (tx, ty) there is
+// at most one move to undo: the larger coordinate came from adding the
+// smaller one. Undo a run of such moves at once by taking the larger
+// coordinate modulo the smaller, stopping when it would pass below the
+// start; then the start is reached exactly when the other coordinate
+// matches and the larger is the start's plus a whole number of the
+// smaller. O(log max(tx, ty)).
+fn reaching_points(sx: i64, sy: i64, tx: i64, ty: i64) -> bool {
+    let mut x = tx;
+    let mut y = ty;
+    while x > sx and y > sy and x != y {
+        if x > y {
+            x %= y;
+        } else {
+            y %= x;
+        }
+    }
+    if x == sx and y == sy {
+        return true;
+    }
+    if x == sx and y > sy {
+        return (y - sy) % x == 0;
+    }
+    if y == sy and x > sx {
+        return (x - sx) % y == 0;
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1,024 queries, built once. Each start is 1 to 1,000 in each
+    // coordinate, and each end is walked from a start by random moves
+    // until a coordinate passes 500,000,000 (LeetCode allows up to
+    // 1,000,000,000). Half the ends are walked from their own start, a
+    // quarter have their y lowered by one after, and a quarter are
+    // walked from the start with its x one higher. Then 15,000 rounds
+    // each answer all of them.
+    let count = 1024;
+    let mut seed: i64 = 780;
+    let mut queries: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for q in 0..count {
+        let sx = 1 + next_random(mut seed) % 1000;
+        let sy = 1 + next_random(mut seed) % 1000;
+        let mut a = if q % 4 == 3 { sx + 1 } else { sx };
+        let mut b = sy;
+        while a <= 500000000 and b <= 500000000 {
+            if next_random(mut seed) % 2 == 0 {
+                a += b;
+            } else {
+                b += a;
+            }
+        }
+        if q % 4 == 2 {
+            b -= 1;
+        }
+        queries.push((sx, sy, a, b));
+    }
+    let mut yes: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..15000 {
+        for i in 0..count {
+            let (sx, sy, tx, ty) = queries[i];
+            if reaching_points(sx, sy, tx, ty) {
+                yes += 1;
+                checksum = (checksum * 31 + i + round) % 1000000007;
+            }
+        }
+    }
+    println(f"15000 rounds of 1024 queries: {yes} reachable, checksum {checksum}");
+}

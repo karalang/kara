@@ -1,0 +1,15 @@
+fn main() {
+    let mut seen = [false; 100001];
+    let mut n = 0;
+    for i in 0..100001 {
+        if i % 7 == 0 {
+            seen[i] = true;
+        }
+    }
+    for i in 0..100001 {
+        if seen[i] {
+            n += 1;
+        }
+    }
+    println(f"{n} {seen.len()}");
+}

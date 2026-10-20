@@ -1,0 +1,14 @@
+fn f(s: String, n: i64) -> i64 {
+    let t = match n {
+        0 => "zero".to_string(),
+        1 => { "one".to_string() }
+        _ => return -1,
+    };
+    let mut out = s;
+    out = t;
+    out.len()
+}
+
+fn main() {
+    println(f"{f("ab".to_string(), 0)}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/805-split-array-with-same-average/split_array.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:set"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "db0aa9a19"
+extracted_src = "1644b6a5"
+model_rev = "583cfb0d"
+model_src = "1644b6a5"

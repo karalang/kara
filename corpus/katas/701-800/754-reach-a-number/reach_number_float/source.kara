@@ -1,0 +1,62 @@
+// LeetCode 754 — Reach a Number, from the square root.
+//
+// The fewest moves whose sum 1 + ... + k reaches t = |target| solve
+// k(k + 1) / 2 >= t, so k starts near (sqrt(8t + 1) - 1) / 2, found
+// with an `f64` square root and corrected by a step either way in case
+// rounding missed. From there at most two more moves make the excess
+// even, since among k, k + 1 and k + 2 the sum's parity changes. O(1).
+
+fn reach_number(target: i64) -> i64 {
+    let t = target.abs();
+    let k = (((8 * t + 1) as f64).sqrt() - 1.0) / 2.0;
+    let mut n = k as i64;
+    while n * (n + 1) / 2 < t {
+        n += 1;
+    }
+    while n > 0 and (n - 1) * n / 2 >= t {
+        n -= 1;
+    }
+    while (n * (n + 1) / 2 - t) % 2 != 0 {
+        n += 1;
+    }
+    n
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(target: i64) {
+    println(f"target = {target} -> {reach_number(target)}");
+}
+
+fn main() {
+    show(2);
+    show(3);
+    show(1);
+    show(-1);
+    show(4);
+    show(5);
+    show(-6);
+    show(1000000000);
+    show(-1000000000);
+    show(999961560);
+    show(999961561);
+    let mut seed = 754;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let mut target = next_random(mut seed) * 32768 + next_random(mut seed);
+        target = target % 1000000000 + 1;
+        if next_random(mut seed) % 2 == 0 {
+            target = -target;
+        }
+        let moves = reach_number(target);
+        total += moves;
+        check = (check * 31 + moves) % 1000000007;
+    }
+    println(f"1000 random targets: {total} moves in all, checksum {check}");
+}

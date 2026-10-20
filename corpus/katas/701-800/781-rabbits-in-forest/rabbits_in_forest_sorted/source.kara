@@ -1,0 +1,69 @@
+// LeetCode 781 — Rabbits in Forest, a sorted scan.
+//
+// Sort the answers, so equal answers sit together, and walk them: a
+// rabbit answering v opens a new colour of v + 1 rabbits unless the
+// colour opened last is for the same answer and still has room. O(n log
+// n).
+
+fn num_rabbits(answers: Vec[i64]) -> i64 {
+    let mut sorted = answers.clone();
+    sorted.sort();
+    let mut total = 0;
+    let mut room = 0;
+    for i in 0..sorted.len() {
+        if i > 0 and sorted[i] == sorted[i - 1] and room > 0 {
+            room -= 1;
+        } else {
+            total += sorted[i] + 1;
+            room = sorted[i];
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(answers: Vec[i64]) {
+    let total = num_rabbits(answers);
+    println(f"{answers} -> {total}");
+}
+
+fn main() {
+    show([1, 1, 2]);
+    show([10, 10, 10]);
+    show([0]);
+    show([0, 0, 0]);
+    show([1, 0, 1, 0, 1]);
+    show([2, 2, 2, 2, 1, 1, 1]);
+    show([3, 1, 3, 1, 3, 3, 3]);
+    let mut seed = 781;
+    let mut many: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        many.push(next_random(mut seed) % 1000);
+    }
+    let total = num_rabbits(many);
+    println(f"1000 answers below 1000 -> {total}");
+    let total = num_rabbits(Vec.filled(1000, 999));
+    println(f"1000 answers of 999 -> {total}");
+    let total = num_rabbits(Vec.filled(1000, 0));
+    println(f"1000 answers of 0 -> {total}");
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let top = 1 + next_random(mut seed) % 10;
+        let mut answers: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            answers.push(next_random(mut seed) % top);
+        }
+        let total = num_rabbits(answers);
+        sum += total;
+        check = (check * 31 + total) % 1000000007;
+    }
+    println(f"300 random forests: {sum} rabbits, checksum {check}");
+}

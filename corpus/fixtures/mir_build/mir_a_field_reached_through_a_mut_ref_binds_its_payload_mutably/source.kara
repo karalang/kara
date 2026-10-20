@@ -1,0 +1,45 @@
+
+enum Value { Text(String), List(Vec[String]) }
+struct Item { value: Value }
+enum St { Idle, Count(i64), Named(String) }
+struct M { state: St, tag: String }
+
+fn add(it: mut ref Item) {
+    match it.value {
+        Value.List(q) => q.push("x".to_string()),
+        Value.Text(_) => {}
+    }
+}
+
+fn step(m: mut ref M) {
+    match m.state {
+        St.Idle => m.state = St.Count(1),
+        St.Count(n) => {
+            m.state = St.Named(f"c{n}");
+            println(f"was {n}");
+        }
+        St.Named(s) => {
+            s.push_str("!");
+            println(f"{s} {m.tag}");
+        }
+    }
+}
+
+fn main() {
+    let mut items: Map[String, Item] = Map.new();
+    items.insert("k".to_string(), Item { value: Value.List(Vec.new()) });
+    let it = items.get_mut("k".to_string()).unwrap();
+    match it.value {
+        Value.List(q) => q.push("x".to_string()),
+        Value.Text(_) => {}
+    }
+    add(mut items.get_mut("k".to_string()).unwrap());
+    match items.get("k".to_string()).unwrap().value {
+        Value.List(q) => println(f"{q.len()}"),
+        Value.Text(_) => {}
+    }
+    let mut m = M { state: St.Idle, tag: "t".to_string() };
+    step(mut m);
+    step(mut m);
+    step(mut m);
+}

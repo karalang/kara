@@ -1,0 +1,8 @@
+fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
+fn h() -> Result[(Str, (i64, Str)), String] { Ok(("c", (1, "d"))) }
+
+fn main() {
+    let (x, y) = g().unwrap();
+    let (z, (n, w)) = h().unwrap();
+    println(f"{x}{y}{z}{n}{w}");
+}

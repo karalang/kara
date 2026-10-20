@@ -30,10 +30,10 @@ fn walk_star(grid: ref Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64, c: i
     }
     seen[r][c] = true;
     path.push(step);
-    walk_star(grid, seen, r + 1, c, 'd', path);
-    walk_star(grid, seen, r - 1, c, 'u', path);
-    walk_star(grid, seen, r, c + 1, 'r', path);
-    walk_star(grid, seen, r, c - 1, 'l', path);
+    walk_star(grid, mut seen, r + 1, c, 'd', mut path);
+    walk_star(grid, mut seen, r - 1, c, 'u', mut path);
+    walk_star(grid, mut seen, r, c + 1, 'r', mut path);
+    walk_star(grid, mut seen, r, c - 1, 'l', mut path);
     path.push('b');
 }
 

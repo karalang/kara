@@ -1,0 +1,16 @@
+struct IoError { code: i64 }
+
+struct Field { n: i64 }
+
+fn a(f: ref Field, k: i64) -> i64 {
+    if k == 0 { f.n } else { b(f, k - 1) }
+}
+
+fn b(f: ref Field, k: i64) -> i64 {
+    a(f, k)
+}
+
+fn main() {
+    let e: IoError = "x";
+    println(f"{a(Field { n: 3 }, 2)} {e.code}");
+}

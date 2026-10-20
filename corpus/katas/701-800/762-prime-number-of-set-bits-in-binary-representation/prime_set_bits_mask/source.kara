@@ -1,0 +1,53 @@
+// LeetCode 762 — Prime Number of Set Bits in Binary Representation, with
+// a mask of primes.
+//
+// `count_ones` counts a number's set bits, and 665772 has bit k set
+// exactly when k is a prime up to 19 (2, 3, 5, 7, 11, 13, 17 and 19), so
+// shifting it right by the count leaves the answer in its lowest bit.
+// O(right - left).
+
+fn count_prime_set_bits(left: i64, right: i64) -> i64 {
+    let primes = 665772;
+    let mut count = 0;
+    for n in left..right + 1 {
+        count += (primes >> n.count_ones() as i64) & 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+fn show(left: i64, right: i64) {
+    let count = count_prime_set_bits(left, right);
+    println(f"[{left}, {right}] -> {count}");
+}
+
+fn main() {
+    show(6, 10);
+    show(10, 15);
+    show(1, 1);
+    show(3, 3);
+    show(1, 10000);
+    show(990000, 1000000);
+    show(524287, 524288);
+    let mut seed = 762;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let left = 1 + wide_random(mut seed) % 1000000;
+        let right = left + wide_random(mut seed) % 10001;
+        let count = count_prime_set_bits(left, right);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 random ranges: {total} numbers counted, checksum {check}");
+}

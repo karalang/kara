@@ -1,0 +1,99 @@
+// LeetCode 805 — Split Array With Same Average, meeting in the middle.
+//
+// Multiply every number by n and take away the total: the parts then
+// have the same average exactly when one of them sums to 0, and the
+// whole array always does, so the question is whether some nonempty
+// part that is not the whole sums to 0. Find every sum of a nonempty
+// part of the first half, keeping those that are not the whole first
+// half; then for each nonempty part of the second half, look for its
+// sum to be 0 or the opposite of a kept sum. O(2^(n/2) · n).
+fn split_array_same_average(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    if n < 2 {
+        return false;
+    }
+    let total = nums.iter().sum();
+    let mut v: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        v.push(x * n - total);
+    }
+    let left = n / 2;
+    let right = n - left;
+    let mut kept: Set[i64] = Set.new();
+    for mask in 1..1 << left {
+        let mut sum = 0;
+        for i in 0..left {
+            if mask & (1 << i) != 0 {
+                sum += v[i];
+            }
+        }
+        if sum == 0 {
+            return true;
+        }
+        if mask != (1 << left) - 1 {
+            kept.insert(sum);
+        }
+    }
+    for mask in 1..1 << right {
+        let mut sum = 0;
+        for i in 0..right {
+            if mask & (1 << i) != 0 {
+                sum += v[left + i];
+            }
+        }
+        if sum == 0 or kept.contains(-sum) {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out.push_str("]");
+    println(f"{out} -> {split_array_same_average(nums)}");
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    show(vec![3, 1]);
+    show(vec![5]);
+    show(vec![0, 0]);
+    show(vec![4, 4, 4, 4]);
+    show(vec![0, 13, 13, 7, 5, 0, 10, 19, 5]);
+    show(vec![10000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9999]);
+    show(vec![2, 0, 5, 6, 16, 12, 15, 12, 4]);
+    let mut seed = 805;
+    let mut yes = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Up to 16 numbers below a cap of 4 to 400, so that both answers
+        // come up.
+        let n = 1 + next_random(mut seed) % 16;
+        let cap = 4 * (1 + next_random(mut seed) % 100);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % cap);
+        }
+        let can = split_array_same_average(nums);
+        if can {
+            yes += 1;
+        }
+        check = (check * 131 + if can { 1 } else { 2 } + i) % 1000000007;
+    }
+    println(f"300 random arrays: {yes} can be split, checksum {check}");
+}

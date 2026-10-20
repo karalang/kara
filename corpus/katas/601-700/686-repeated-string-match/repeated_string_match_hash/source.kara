@@ -70,7 +70,7 @@ fn word(code: i64, len: i64, letters: i64) -> String {
 fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
     let mut s = String.new();
     for _ in 0..len {
-        s.push(((97 + next_random(seed) % letters) as u8) as char);
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
     }
     s
 }

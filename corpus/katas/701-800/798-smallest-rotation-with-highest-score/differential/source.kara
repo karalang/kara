@@ -1,0 +1,257 @@
+// LeetCode #798: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random arrays.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn best_rotation_star(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut change: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        change.push(0);
+    }
+    for i in 0..n {
+        let first = (i + 1) % n;
+        let last = (i - nums[i] + n) % n;
+        change[first] += 1;
+        change[last + 1] -= 1;
+        if first > last {
+            // The run wraps past n - 1, so last + 1 comes before first
+            // and the two marks take 1 off the gap between its two
+            // pieces; adding 1 everywhere makes that 0 and the pieces 1.
+            change[0] += 1;
+            change[n] -= 1;
+        }
+    }
+    let mut best = 0;
+    let mut best_score = -1;
+    let mut score = 0;
+    for k in 0..n {
+        score += change[k];
+        if score > best_score {
+            best_score = score;
+            best = k;
+        }
+    }
+    best
+}
+
+// ---- running arm ----------------------------------------------------
+
+fn best_rotation_running(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut at_edge: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        at_edge.push(0);
+    }
+    let mut score = 0;
+    for i in 0..n {
+        at_edge[(i - nums[i] + n) % n] += 1;
+        if nums[i] <= i {
+            score += 1;
+        }
+    }
+    let mut best = 0;
+    let mut best_score = score;
+    for k in 0..n - 1 {
+        score = score - at_edge[k] + 1;
+        if score > best_score {
+            best_score = score;
+            best = k + 1;
+        }
+    }
+    best
+}
+
+// ---- count arm ------------------------------------------------------
+
+fn best_rotation_count(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    let mut best_score = -1;
+    for k in 0..n {
+        let mut score = 0;
+        for i in 0..n {
+            if (i - k + n) % n >= nums[i] {
+                score += 1;
+            }
+        }
+        if score > best_score {
+            best_score = score;
+            best = k;
+        }
+    }
+    best
+}
+
+// ---- turn arm -------------------------------------------------------
+
+fn best_rotation_turn(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut ring: VecDeque[i64] = VecDeque.new();
+    for x in nums.iter() {
+        ring.push_back(*x);
+    }
+    let mut best = 0;
+    let mut best_score = -1;
+    for k in 0..n {
+        let mut score = 0;
+        for j in 0..n {
+            if ring[j] <= j {
+                score += 1;
+            }
+        }
+        if score > best_score {
+            best_score = score;
+            best = k;
+        }
+        if let Some(front) = ring.pop_front() {
+            ring.push_back(front);
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        best_rotation_star(nums)
+    } else if which == 1 {
+        best_rotation_running(nums)
+    } else if which == 2 {
+        best_rotation_count(nums)
+    } else {
+        best_rotation_turn(nums)
+    }
+}
+
+// nums[k], ..., nums[n - 1], nums[0], ..., nums[k - 1].
+fn rotated(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in k..nums.len() {
+        out.push(nums[i]);
+    }
+    for i in 0..k {
+        out.push(nums[i]);
+    }
+    out
+}
+
+// The score of rotation k: the numbers no greater than their index.
+fn score(nums: Vec[i64], k: i64) -> i64 {
+    let turned = rotated(nums, k);
+    let mut points = 0;
+    for j in 0..turned.len() {
+        if turned[j] <= j {
+            points += 1;
+        }
+    }
+    points
+}
+
+// The definition: score every rotation and take the first of the best.
+fn definition(nums: Vec[i64]) -> i64 {
+    let mut scores: Vec[i64] = Vec.new();
+    for k in 0..nums.len() {
+        scores.push(score(nums, k));
+    }
+    let mut top = scores[0];
+    for s in scores.iter() {
+        if *s > top {
+            top = *s;
+        }
+    }
+    let mut k = 0;
+    while scores[k] != top {
+        k += 1;
+    }
+    k
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7980;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    for case in 0..cases {
+        // kind 0: numbers anywhere below n; kind 1: numbers below 3;
+        // kind 2: numbers within 3 of n - 1; kind 3: only 0, or 0 and
+        // n - 1, so that many rotations tie.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        let few = 1 + next_random(mut seed) % 2;
+        for _ in 0..n {
+            let x = if kind == 0 {
+                next_random(mut seed) % n
+            } else if kind == 1 {
+                next_random(mut seed) % 3
+            } else if kind == 2 {
+                n - 1 - next_random(mut seed) % 3
+            } else {
+                next_random(mut seed) % few * (n - 1)
+            };
+            nums.push(if x < 0 { 0 } else if x > n - 1 { n - 1 } else { x });
+        }
+        let want = definition(nums);
+        total += want;
+        let top = score(nums, want);
+        let r = next_random(mut seed) % n;
+        let turned = rotated(nums, r);
+        let j = next_random(mut seed) % n;
+        let mut lowered = nums.clone();
+        if lowered[j] > 0 {
+            lowered[j] -= 1;
+        }
+        let lowered_top = score(lowered, definition(lowered));
+        let mut sum = 0;
+        for x in nums.iter() {
+            sum += n - *x;
+        }
+        for which in 0..arms {
+            let got = answer_with(which, nums);
+            // P1: the definition's rotation.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the best rotation of nums turned by r, taken back by r,
+            // is a best rotation of nums.
+            checks += 1;
+            if score(nums, (answer_with(which, turned) + r) % n) != top {
+                fails[1] += 1;
+            }
+            // P3: lowering a number takes nothing from the best score,
+            // and the rotation found for it scores the most.
+            checks += 1;
+            let found = score(lowered, answer_with(which, lowered));
+            if found < top or found != lowered_top {
+                fails[2] += 1;
+            }
+            // P4: the rotation is one of 0 to n - 1 and scores at least
+            // the average over all rotations.
+            checks += 1;
+            if got < 0 or got >= n or score(nums, got) * n < sum {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases (rotations adding up to {total}), {arms} arms, {checks} checks, {failures} failures");
+}

@@ -1,0 +1,362 @@
+// LeetCode #802: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random graphs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn eventual_safe_nodes_star(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    // 0 not seen yet, 1 grey (on the search or unsafe), 2 black (safe).
+    let mut colour: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        colour.push(0);
+    }
+    let mut safe: Vec[i64] = Vec.new();
+    for node in 0..n {
+        if is_safe_star(graph, node, mut colour) {
+            safe.push(node);
+        }
+    }
+    safe
+}
+
+fn is_safe_star(graph: Vec[Vec[i64]], node: i64, colour: mut ref Vec[i64]) -> bool {
+    if colour[node] != 0 {
+        return colour[node] == 2;
+    }
+    colour[node] = 1;
+    for next in graph[node].iter() {
+        if not is_safe_star(graph, next, mut colour) {
+            return false;
+        }
+    }
+    colour[node] = 2;
+    true
+}
+
+// ---- peel arm -------------------------------------------------------
+
+fn eventual_safe_nodes_peel(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    let mut into: Vec[Vec[i64]] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        into.push(Vec.new());
+    }
+    for a in 0..n {
+        left.push(graph[a].len());
+        for b in graph[a].iter() {
+            into[b].push(a);
+        }
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    for a in 0..n {
+        if left[a] == 0 {
+            queue.push(a);
+        }
+    }
+    let mut safe: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        safe.push(false);
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+        safe[node] = true;
+        for before in into[node].iter() {
+            left[before] -= 1;
+            if left[before] == 0 {
+                queue.push(before);
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for a in 0..n {
+        if safe[a] {
+            out.push(a);
+        }
+    }
+    out
+}
+
+// ---- fixed arm ------------------------------------------------------
+
+fn eventual_safe_nodes_fixed(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    let mut safe: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        safe.push(false);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for a in 0..n {
+            if safe[a] {
+                continue;
+            }
+            let mut all = true;
+            for b in graph[a].iter() {
+                if not safe[b] {
+                    all = false;
+                }
+            }
+            if all {
+                safe[a] = true;
+                changed = true;
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for a in 0..n {
+        if safe[a] {
+            out.push(a);
+        }
+    }
+    out
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn eventual_safe_nodes_stack(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    // 0 not seen yet, 1 grey (on the search or unsafe), 2 black (safe).
+    let mut colour: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        colour.push(0);
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    let mut tried: Vec[i64] = Vec.new();
+    for start in 0..n {
+        if colour[start] != 0 {
+            continue;
+        }
+        colour[start] = 1;
+        stack.push(start);
+        tried.push(0);
+        while stack.len() > 0 {
+            let top = stack.len() - 1;
+            let node = stack[top];
+            if tried[top] == graph[node].len() {
+                colour[node] = 2;
+                stack.pop();
+                tried.pop();
+                continue;
+            }
+            let next = graph[node][tried[top]];
+            tried[top] += 1;
+            if colour[next] == 0 {
+                colour[next] = 1;
+                stack.push(next);
+                tried.push(0);
+            } else if colour[next] == 1 {
+                stack.clear();
+                tried.clear();
+            }
+        }
+    }
+    let mut safe: Vec[i64] = Vec.new();
+    for a in 0..n {
+        if colour[a] == 2 {
+            safe.push(a);
+        }
+    }
+    safe
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, graph: Vec[Vec[i64]]) -> Vec[i64] {
+    if which == 0 {
+        eventual_safe_nodes_star(graph)
+    } else if which == 1 {
+        eventual_safe_nodes_peel(graph)
+    } else if which == 2 {
+        eventual_safe_nodes_fixed(graph)
+    } else {
+        eventual_safe_nodes_stack(graph)
+    }
+}
+
+// The definition. A node is unsafe when some walk from it never ends,
+// and a walk of n steps on n nodes must pass some node twice, so it
+// has gone round a cycle and can go round it for ever. So a node is
+// safe exactly when no walk of n steps starts there. Count the steps:
+// can[v] says whether a walk of k steps starts at v, for k = 0 to n.
+fn definition(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    let mut can: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        can.push(true);
+    }
+    for _ in 0..n {
+        let mut longer: Vec[bool] = Vec.new();
+        for v in 0..n {
+            let mut any = false;
+            for w in graph[v].iter() {
+                if can[w] {
+                    any = true;
+                }
+            }
+            longer.push(any);
+        }
+        can = longer;
+    }
+    let mut safe: Vec[i64] = Vec.new();
+    for v in 0..n {
+        if not can[v] {
+            safe.push(v);
+        }
+    }
+    safe
+}
+
+// Every node v renamed n - 1 - v, each list of edges kept in order.
+fn renamed(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = graph.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for v in 0..n {
+        let old = graph[n - 1 - v].clone();
+        let mut edges: Vec[i64] = Vec.new();
+        for i in 0..old.len() {
+            edges.push(n - 1 - old[old.len() - 1 - i]);
+        }
+        out.push(edges);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8020;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    for case in 0..cases {
+        // kind 0: few edges; kind 1: many; kind 2: edges only forward
+        // in a random order of the nodes, so no cycle and every node
+        // safe; kind 3: few edges, then a cycle through a node to itself
+        // at a node or two.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 12;
+        let mut order: Vec[i64] = Vec.new();
+        let mut place: Vec[i64] = Vec.new();
+        for i in 0..n {
+            order.push(i);
+            place.push(0);
+        }
+        for i in 1..n {
+            let j = next_random(mut seed) % (i + 1);
+            let t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+        for i in 0..n {
+            place[order[i]] = i;
+        }
+        let chance = if kind == 1 { 4 } else { 1 + next_random(mut seed) % 2 };
+        let mut loops: Vec[i64] = Vec.new();
+        if kind == 3 {
+            loops.push(next_random(mut seed) % n);
+            loops.push(next_random(mut seed) % n);
+        }
+        let mut graph: Vec[Vec[i64]] = Vec.new();
+        for a in 0..n {
+            let mut out: Vec[i64] = Vec.new();
+            for b in 0..n {
+                let wanted = if kind == 2 {
+                    place[a] < place[b] and next_random(mut seed) % n < chance
+                } else if kind == 3 and a == b and loops.contains(a) {
+                    true
+                } else {
+                    next_random(mut seed) % (2 * n) < chance
+                };
+                if wanted {
+                    out.push(b);
+                }
+            }
+            graph.push(out);
+        }
+        let want = definition(graph);
+        total += want.len();
+        let mut flipped: Vec[i64] = Vec.new();
+        for i in 0..want.len() {
+            flipped.push(n - 1 - want[want.len() - 1 - i]);
+        }
+        let mut more = graph.clone();
+        for a in 0..n {
+            more[a].push(n);
+        }
+        more.push(Vec.new());
+        let mut grown = want.clone();
+        grown.push(n);
+        for which in 0..arms {
+            let got = answer_with(which, graph);
+            // P1: the definition's nodes.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: in increasing order; every edge out of a node in the
+            // answer leads into it, and every node left out has an edge
+            // to another left out.
+            checks += 1;
+            let mut inside: Vec[bool] = Vec.new();
+            for _ in 0..n {
+                inside.push(false);
+            }
+            let mut sound = true;
+            for k in 0..got.len() {
+                if got[k] < 0 or got[k] >= n or (k > 0 and got[k - 1] >= got[k]) {
+                    sound = false;
+                } else {
+                    inside[got[k]] = true;
+                }
+            }
+            if sound {
+                for a in 0..n {
+                    let mut out_of = false;
+                    for b in graph[a].iter() {
+                        if not inside[b] {
+                            out_of = true;
+                        }
+                    }
+                    if inside[a] == out_of {
+                        sound = false;
+                    }
+                }
+            }
+            if not sound {
+                fails[1] += 1;
+            }
+            // P3: with the nodes renamed v to n - 1 - v, the answer is
+            // the old one renamed.
+            checks += 1;
+            if answer_with(which, renamed(graph)) != flipped {
+                fails[2] += 1;
+            }
+            // P4: a new node with no edges out, and an edge to it from
+            // every node, adds just the new node.
+            checks += 1;
+            if answer_with(which, more) != grown {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} safe), {arms} arms, {checks} checks, {failures} failures");
+}

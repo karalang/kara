@@ -1,0 +1,16 @@
+
+struct Bag[T] { items: Vec[T], n: i64 }
+struct Holder[I] { v: I }
+fn hold[I](x: own I) -> Holder[I] { Holder { v: x } }
+fn first[I](a: own I, b: own I) -> I { a }
+fn main() {
+    let h: Holder[Bag[String]] = hold(Bag { items: Vec.new(), n: 0 });
+    println(f"{h.v.items.len()} {h.v.n}");
+    let mut v: Vec[String] = Vec.new();
+    v.push("x");
+    let b = first(Bag { items: Vec.new(), n: 4 }, Bag { items: v, n: 5 });
+    println(f"{b.items.len()} {b.n}");
+    let mut c = Bag { items: Vec.new(), n: 2 };
+    c.items.push("y");
+    println(f"{c.items.len()} {c.items[0]} {c.n}");
+}

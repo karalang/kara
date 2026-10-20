@@ -1,0 +1,21 @@
+struct P { toks: Vec[i64], out: Vec[i64] }
+impl P {
+    fn add(mut ref self, v: i64) -> i64 {
+        self.out.push(v);
+        self.out.len() - 1
+    }
+    fn simple(mut ref self) -> i64 {
+        let t = ref self.toks[0];
+        if *t == 1 {
+            self.add(10);
+        }
+        if *t == 3 {
+            return self.add(5) + *t;
+        }
+        *t
+    }
+}
+fn main() {
+    let mut p = P { toks: vec![2, 1], out: Vec.new() };
+    println(f"{p.simple()}");
+}

@@ -33,9 +33,9 @@ fn find_target_star(root: Option[TreeNode], k: i64) -> bool {
 
 fn in_order_star(node: Option[TreeNode], values: mut ref Vec[i64]) {
     if let Some(n) = node {
-        in_order_star(n.left, values);
+        in_order_star(n.left, mut values);
         values.push(n.val);
-        in_order_star(n.right, values);
+        in_order_star(n.right, mut values);
     }
 }
 
@@ -54,7 +54,7 @@ fn walk_seen(node: Option[TreeNode], k: i64, seen: mut ref Set[i64]) -> bool {
                 return true;
             }
             seen.insert(n.val);
-            walk_seen(n.left, k, seen) or walk_seen(n.right, k, seen)
+            walk_seen(n.left, k, mut seen) or walk_seen(n.right, k, mut seen)
         }
     }
 }
@@ -134,13 +134,13 @@ fn push_right_stacks(node: Option[TreeNode], stack: mut ref Vec[TreeNode]) {
 // The next value up; the walks cross before either runs out.
 fn next_rising_stacks(stack: mut ref Vec[TreeNode]) -> i64 {
     let n = stack.pop().unwrap();
-    push_left_stacks(n.right, stack);
+    push_left_stacks(n.right, mut stack);
     n.val
 }
 
 fn next_falling_stacks(stack: mut ref Vec[TreeNode]) -> i64 {
     let n = stack.pop().unwrap();
-    push_right_stacks(n.left, stack);
+    push_right_stacks(n.left, mut stack);
     n.val
 }
 

@@ -1,0 +1,8 @@
+s = "abcde", goal = "cdeab" -> true
+s = "abcde", goal = "abced" -> false
+s = "a", goal = "a" -> true
+s = "aa", goal = "a" -> false
+s = "abab", goal = "baba" -> true
+s = "abc", goal = "abc" -> true
+s = "aab", goal = "abb" -> false
+300 random cases: 143 rotations, checksum 376637129

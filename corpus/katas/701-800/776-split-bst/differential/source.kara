@@ -1,0 +1,316 @@
+// LeetCode #776: differential -- the four arms against the definition.
+//
+// Copies of the four arms, sharing the ★ arm's TreeNode, held to four
+// properties on random search trees.
+
+// ---- ★ arm ----------------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn split_bst_star(root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    let Some(node) = root else {
+        return (None, None);
+    };
+    if node.val <= target {
+        let (small, large) = split_bst_star(node.right, target);
+        node.right = small;
+        (Some(node), large)
+    } else {
+        let (small, large) = split_bst_star(node.left, target);
+        node.left = large;
+        (small, Some(node))
+    }
+}
+
+// ---- topdown arm ----------------------------------------------------
+
+fn split_bst_topdown(root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    let small_head = TreeNode { val: 0, left: None, right: None };
+    let large_head = TreeNode { val: 0, left: None, right: None };
+    let mut small_tail = small_head;
+    let mut large_tail = large_head;
+    let mut cursor = root;
+    while let Some(node) = cursor {
+        if node.val <= target {
+            cursor = node.right;
+            small_tail.right = Some(node);
+            small_tail = node;
+        } else {
+            cursor = node.left;
+            large_tail.left = Some(node);
+            large_tail = node;
+        }
+    }
+    small_tail.right = None;
+    large_tail.left = None;
+    (small_head.right, large_head.left)
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn split_bst_stack(root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    let mut path: Vec[TreeNode] = Vec.new();
+    let mut cursor = root;
+    while let Some(node) = cursor {
+        cursor = if node.val <= target { node.right } else { node.left };
+        path.push(node);
+    }
+    let mut small: Option[TreeNode] = None;
+    let mut large: Option[TreeNode] = None;
+    while let Some(node) = path.pop() {
+        if node.val <= target {
+            node.right = small;
+            small = Some(node);
+        } else {
+            node.left = large;
+            large = Some(node);
+        }
+    }
+    (small, large)
+}
+
+// ---- copying arm ----------------------------------------------------
+
+fn split_bst_copying(root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    let Some(node) = root else {
+        return (None, None);
+    };
+    if node.val <= target {
+        let (small, large) = split_bst_copying(node.right, target);
+        (Some(TreeNode { val: node.val, left: node.left, right: small }), large)
+    } else {
+        let (small, large) = split_bst_copying(node.left, target);
+        (small, Some(TreeNode { val: node.val, left: large, right: node.right }))
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn split_with(which: i64, root: Option[TreeNode], target: i64) -> (Option[TreeNode], Option[TreeNode]) {
+    if which == 0 {
+        split_bst_star(root, target)
+    } else if which == 1 {
+        split_bst_topdown(root, target)
+    } else if which == 2 {
+        split_bst_stack(root, target)
+    } else {
+        split_bst_copying(root, target)
+    }
+}
+
+// Inserts v into the search tree rooted at root (v not already there)
+// and returns the root.
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(fresh);
+                    break;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(fresh);
+                    break;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+fn tree_of(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    root
+}
+
+// LeetCode's level-order form, `null` for a missing child, trailing nulls
+// left off. With `mirrored`, of the tree's mirror image: children swapped
+// and every value negated.
+fn level_order(root: Option[TreeNode], mirrored: bool) -> String {
+    let mut items: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if mirrored {
+                    items.push((-node.val).to_string());
+                    queue.push_back(node.right);
+                    queue.push_back(node.left);
+                } else {
+                    items.push(node.val.to_string());
+                    queue.push_back(node.left);
+                    queue.push_back(node.right);
+                }
+            }
+            None => items.push(String.from("null")),
+        }
+    }
+    while items.len() > 0 and items[items.len() - 1] == "null" {
+        items.pop();
+    }
+    f"[{items.join(",")}]"
+}
+
+// Each value's parent's value, -1 for a root, into parent; the values in
+// order into order.
+fn record(root: Option[TreeNode], up: i64, parent: mut ref Map[i64, i64], order: mut ref Vec[i64]) {
+    if let Some(node) = root {
+        record(node.left, node.val, mut parent, mut order);
+        parent.insert(node.val, up);
+        order.push(node.val);
+        record(node.right, node.val, mut parent, mut order);
+    }
+}
+
+// The definition: in the split, a node's parent is its nearest ancestor
+// in the original tree on the same side of the target, and a node with
+// none is the root of its side.
+fn expected_parents(root: Option[TreeNode], target: i64, small_up: i64, large_up: i64, want: mut ref Map[i64, i64]) {
+    if let Some(node) = root {
+        if node.val <= target {
+            want.insert(node.val, small_up);
+            expected_parents(node.left, target, node.val, large_up, mut want);
+            expected_parents(node.right, target, node.val, large_up, mut want);
+        } else {
+            want.insert(node.val, large_up);
+            expected_parents(node.left, target, small_up, node.val, mut want);
+            expected_parents(node.right, target, small_up, node.val, mut want);
+        }
+    }
+}
+
+// P1: the split is the definition's: the same parents, every small value
+// at most the target and every large one above it, each side in order.
+fn matches_definition(values: Vec[i64], target: i64, small: Option[TreeNode], large: Option[TreeNode]) -> bool {
+    let mut want: Map[i64, i64] = Map.new();
+    expected_parents(tree_of(values), target, -1, -1, mut want);
+    let mut got: Map[i64, i64] = Map.new();
+    let mut small_order: Vec[i64] = Vec.new();
+    let mut large_order: Vec[i64] = Vec.new();
+    record(small, -1, mut got, mut small_order);
+    record(large, -1, mut got, mut large_order);
+    if got.len() != want.len() or small_order.len() + large_order.len() != values.len() {
+        return false;
+    }
+    for (v, up) in want.iter() {
+        if got.get(v) != Some(up) {
+            return false;
+        }
+    }
+    for i in 0..small_order.len() {
+        if small_order[i] > target or (i > 0 and small_order[i - 1] >= small_order[i]) {
+            return false;
+        }
+    }
+    for i in 0..large_order.len() {
+        if large_order[i] <= target or (i > 0 and large_order[i - 1] >= large_order[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7760;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1300;
+    let mut small_nodes = 0;
+    for case in 0..cases {
+        // 1,200 trees of 1 to 50 distinct values from 0 to 1000, LeetCode's
+        // limits, then 100 of up to 250 values from 0 to 5000.
+        let big = case >= 1200;
+        let n = if big { 51 + next_random(mut seed) % 200 } else { 1 + next_random(mut seed) % 50 };
+        let span = if big { 5001 } else { 1001 };
+        let mut used: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < n {
+            let v = next_random(mut seed) % span;
+            if not used.contains(v) {
+                used.insert(v);
+                values.push(v);
+            }
+        }
+        let mut negated: Vec[i64] = Vec.new();
+        let mut floor = -1;
+        let target = next_random(mut seed) % span;
+        for v in values.iter() {
+            negated.push(-v);
+            if v <= target {
+                small_nodes += 1;
+                if v > floor {
+                    floor = v;
+                }
+            }
+        }
+        let lower = if target > 0 { next_random(mut seed) % (target + 1) } else { 0 };
+        let higher = target + next_random(mut seed) % (span - target);
+        for which in 0..arms {
+            let (small, large) = split_with(which, tree_of(values), target);
+            let small_text = level_order(small, false);
+            let large_text = level_order(large, false);
+            // P1: the definition's split.
+            checks += 1;
+            if not matches_definition(values, target, small, large) {
+                fails[0] += 1;
+            }
+            // P2: splitting a part again at a target on its own side is
+            // splitting the whole tree there.
+            checks += 1;
+            let (low, _) = split_with(which, small, lower);
+            let (want_low, _) = split_with(which, tree_of(values), lower);
+            let (_, high) = split_with(which, large, higher);
+            let (_, want_high) = split_with(which, tree_of(values), higher);
+            if level_order(low, false) != level_order(want_low, false) or level_order(high, false) != level_order(want_high, false) {
+                fails[1] += 1;
+            }
+            // P3: the mirror image split at -target - 1 gives the mirror
+            // images of the two parts, swapped.
+            checks += 1;
+            let (small_m, large_m) = split_with(which, tree_of(negated), -target - 1);
+            if level_order(large_m, true) != small_text or level_order(small_m, true) != large_text {
+                fails[2] += 1;
+            }
+            // P4: the target lowered to the largest value at most it, or
+            // below every value, gives the same split.
+            checks += 1;
+            let (small_f, large_f) = split_with(which, tree_of(values), floor);
+            if level_order(small_f, false) != small_text or level_order(large_f, false) != large_text {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} trees ({small_nodes} small nodes), {arms} arms, {checks} checks, {failures} failures");
+}

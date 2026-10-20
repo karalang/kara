@@ -33,7 +33,7 @@ script's decimal digits, `str.isdigit`, `isdecimal`, `isalpha` and
 `isspace` (from tables `gen_kara.py` writes out of `unicodedata`), the
 `idna` codec's ASCII path, `uuid.UUID`, SHA-256 and base58.
 
-The run writes `data/jobs.tsv`, 719 calls across the validators, and the
+The run writes `data/jobs.tsv`, 744 calls across the validators, and the
 two report inputs:
 - `signups.tsv`: 40 signups whose username, email, website, country, card
   and IBAN are checked one by one, the card's brand found, and the address

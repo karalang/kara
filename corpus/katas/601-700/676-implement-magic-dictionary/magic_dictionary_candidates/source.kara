@@ -96,10 +96,10 @@ fn repeated(s: String, n: i64) -> String {
 // A word of 1 to `most` letters, each one of the first `letters` of the
 // alphabet.
 fn random_word(seed: mut ref i64, most: i64, letters: i64) -> String {
-    let n = 1 + next_random(seed) % most;
+    let n = 1 + next_random(mut seed) % most;
     let mut s = String.new();
     for _ in 0..n {
-        s.push(((97 + next_random(seed) % letters) as u8) as char);
+        s.push(((97 + next_random(mut seed) % letters) as u8) as char);
     }
     s
 }

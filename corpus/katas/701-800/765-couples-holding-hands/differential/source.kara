@@ -1,0 +1,290 @@
+// LeetCode #765: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random rows.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn min_swaps_couples_star(row: own Vec[i64]) -> i64 {
+    let mut row = row;
+    let mut seat_of: Vec[i64] = Vec.new();
+    for _ in 0..row.len() {
+        seat_of.push(0);
+    }
+    for i in 0..row.len() {
+        seat_of[row[i]] = i;
+    }
+    let mut swaps = 0;
+    let mut i = 0;
+    while i < row.len() {
+        let partner = row[i] ^ 1;
+        if row[i + 1] != partner {
+            let j = seat_of[partner];
+            let moved = row[i + 1];
+            row[j] = moved;
+            seat_of[moved] = j;
+            row[i + 1] = partner;
+            seat_of[partner] = i + 1;
+            swaps += 1;
+        }
+        i += 2;
+    }
+    swaps
+}
+
+// ---- union-find arm -------------------------------------------------
+
+fn find_unionfind(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn min_swaps_couples_unionfind(row: Vec[i64]) -> i64 {
+    let couples = row.len() / 2;
+    let mut parent: Vec[i64] = Vec.new();
+    for k in 0..couples {
+        parent.push(k);
+    }
+    let mut groups = couples;
+    for couch in 0..couples {
+        let a = find_unionfind(mut parent, row[2 * couch] / 2);
+        let b = find_unionfind(mut parent, row[2 * couch + 1] / 2);
+        if a != b {
+            parent[a] = b;
+            groups -= 1;
+        }
+    }
+    couples - groups
+}
+
+// ---- graph arm ------------------------------------------------------
+
+fn visit_graph(couch: i64, links: ref Vec[Vec[i64]], seen: mut ref Vec[bool]) {
+    seen[couch] = true;
+    for next in links[couch].iter() {
+        if not seen[*next] {
+            visit_graph(*next, links, mut seen);
+        }
+    }
+}
+
+fn min_swaps_couples_graph(row: Vec[i64]) -> i64 {
+    let couches = row.len() / 2;
+    // where each couple's two members sit, as couches
+    let mut sits: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..couches {
+        sits.push(Vec.new());
+    }
+    for seat in 0..row.len() {
+        sits[row[seat] / 2].push(seat / 2);
+    }
+    let mut links: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..couches {
+        links.push(Vec.new());
+    }
+    for couple in sits.iter() {
+        links[couple[0]].push(couple[1]);
+        links[couple[1]].push(couple[0]);
+    }
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..couches {
+        seen.push(false);
+    }
+    let mut cycles = 0;
+    for couch in 0..couches {
+        if not seen[couch] {
+            visit_graph(couch, links, mut seen);
+            cycles += 1;
+        }
+    }
+    couches - cycles
+}
+
+// ---- chain arm ------------------------------------------------------
+
+fn min_swaps_couples_chains(row: Vec[i64]) -> i64 {
+    let mut seat_of: Vec[i64] = Vec.new();
+    for _ in 0..row.len() {
+        seat_of.push(0);
+    }
+    for i in 0..row.len() {
+        seat_of[row[i]] = i;
+    }
+    let mut done: Vec[bool] = Vec.new();
+    for _ in 0..row.len() / 2 {
+        done.push(false);
+    }
+    let mut swaps = 0;
+    for start in 0..row.len() / 2 {
+        if done[start] {
+            continue;
+        }
+        let mut length = 0;
+        let mut seat = 2 * start;
+        loop {
+            done[seat / 2] = true;
+            length += 1;
+            // the neighbour on this couch, then where their partner sits
+            let partner_seat = seat_of[row[seat ^ 1] ^ 1];
+            if partner_seat / 2 == start {
+                break;
+            }
+            seat = partner_seat;
+        }
+        swaps += length - 1;
+    }
+    swaps
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, row: own Vec[i64]) -> i64 {
+    if which == 0 {
+        min_swaps_couples_star(row)
+    } else if which == 1 {
+        min_swaps_couples_unionfind(row)
+    } else if which == 2 {
+        min_swaps_couples_graph(row)
+    } else {
+        min_swaps_couples_chains(row)
+    }
+}
+
+fn seated(row: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < row.len() {
+        if row[i] / 2 != row[i + 1] / 2 {
+            return false;
+        }
+        i += 2;
+    }
+    true
+}
+
+// Whether some `depth` swaps of any two people seat every couple.
+fn within(row: mut ref Vec[i64], depth: i64) -> bool {
+    if seated(row) {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    for i in 0..row.len() {
+        for j in i + 1..row.len() {
+            row.swap(i, j);
+            let found = within(mut row, depth - 1);
+            row.swap(i, j);
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The definition: the fewest swaps, of any two people at all, after which
+// every couple shares a couch, found by searching ever deeper.
+fn definition(row: ref Vec[i64]) -> i64 {
+    let mut trial = row.clone();
+    let mut depth = 0;
+    while not within(mut trial, depth) {
+        depth += 1;
+    }
+    depth
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7650;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut total = 0;
+    for case in 0..cases {
+        // up to 4 couples for the definition, then up to 30
+        let couples = if case < small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 30 };
+        let n = 2 * couples;
+        let mut row: Vec[i64] = Vec.new();
+        for p in 0..n {
+            row.push(p);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            row.swap(i, j);
+        }
+        // the couples renumbered and some partners' numbers exchanged
+        let mut order: Vec[i64] = Vec.new();
+        let mut flip: Vec[i64] = Vec.new();
+        for k in 0..couples {
+            order.push(k);
+            flip.push(next_random(mut seed) % 2);
+        }
+        for k in 0..couples {
+            let j = k + next_random(mut seed) % (couples - k);
+            order.swap(k, j);
+        }
+        let mut renamed: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            let p = row[i];
+            renamed.push(2 * order[p / 2] + (p % 2 ^ flip[p / 2]));
+            reversed.push(row[n - 1 - i]);
+        }
+        let mut swapped = row.clone();
+        swapped.swap(next_random(mut seed) % n, next_random(mut seed) % n);
+        let want = if case < small { definition(row) } else { 0 };
+        for which in 0..arms {
+            let got = answer_with(which, row.clone());
+            if which == 0 {
+                total += got;
+            }
+            // P1: the definition's answer.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: renumbering the couples, and their two members, changes
+            // nothing.
+            checks += 1;
+            if answer_with(which, renamed.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: the row read backwards has the same answer.
+            checks += 1;
+            if answer_with(which, reversed.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: one swap of any two people changes the answer by at most 1.
+            checks += 1;
+            let after = answer_with(which, swapped.clone());
+            if after > got + 1 or after < got - 1 {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} rows ({total} swaps), {arms} arms, {checks} checks, {failures} failures");
+}

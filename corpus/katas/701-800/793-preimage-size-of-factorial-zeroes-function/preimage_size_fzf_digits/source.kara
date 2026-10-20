@@ -1,0 +1,60 @@
+// LeetCode 793 — Preimage Size of Factorial Zeroes Function, in the
+// counts' own number system.
+//
+// f(x), the zeroes at the end of x!, gains (5^i - 1) / 4 = 1, 6, 31,
+// 156, ... over each block of 5^i numbers from 0. So every count f
+// reaches is a sum of those block sizes with each used at most four
+// times, and a count that needs one of them five times is jumped over.
+// Going from the largest block size not above k down, k is reached
+// unless some block size goes into what is left of it five times; then
+// there is no x, and otherwise five. O(log k).
+fn preimage_size_fzf(k: i64) -> i64 {
+    let mut size = 1;
+    while size * 5 + 1 <= k {
+        size = size * 5 + 1;
+    }
+    let mut rest = k;
+    while size > 0 {
+        if rest / size == 5 {
+            return 0;
+        }
+        rest %= size;
+        size = (size - 1) / 5;
+    }
+    5
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(k: i64) {
+    println(f"k = {k} -> {preimage_size_fzf(k)}");
+}
+
+fn main() {
+    show(0);
+    show(5);
+    show(3);
+    show(6);
+    show(11);
+    show(29);
+    show(30);
+    show(1000000000);
+    let mut seed = 793;
+    let mut fives = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        // k up to a billion, made of two random numbers.
+        let k = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001;
+        let answer = preimage_size_fzf(k);
+        if answer == 5 {
+            fives += 1;
+        }
+        check = (check * 131 + k % 1000 + answer) % 1000000007;
+    }
+    println(f"300 random k: {fives} with five, checksum {check}");
+}

@@ -1,0 +1,53 @@
+// LeetCode 779 — K-th Symbol in Grammar, the ones in k - 1.
+//
+// Row 1 is 0, and each row is the one before with every 0 replaced by 01
+// and every 1 by 10. So symbol k of row n (from 1) sits under symbol
+// (k + 1) / 2 of row n - 1, and is that symbol for an odd k and the other
+// one for an even k. Going up from k - 1 in binary, each step drops the
+// last bit and flips the symbol when that bit is 1: the symbol is the
+// parity of the 1 bits in k - 1, and row n does not matter beyond
+// holding k. O(1).
+
+fn kth_grammar(n: i64, k: i64) -> i64 {
+    (k - 1).count_ones() % 2
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64) {
+    let answer = kth_grammar(n, k);
+    println(f"n = {n}, k = {k} -> {answer}");
+}
+
+fn main() {
+    show(1, 1);
+    show(2, 1);
+    show(2, 2);
+    show(30, 1);
+    show(30, 536870912);
+    show(30, 536870911);
+    show(30, 268435457);
+    for n in 1..6 {
+        let mut row = String.new();
+        for k in 1..(1 << (n - 1)) + 1 {
+            row.push_str(f"{kth_grammar(n, k)}");
+        }
+        println(f"row {n}: {row}");
+    }
+    let mut seed = 779;
+    let mut ones = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % (1 << (n - 1));
+        let answer = kth_grammar(n, k);
+        ones += answer;
+        check = (check * 3 + answer + 1) % 1000000007;
+    }
+    println(f"1000 random queries: {ones} ones, checksum {check}");
+}

@@ -1,0 +1,354 @@
+// LeetCode #785: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random graphs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_bipartite_star(graph: Vec[Vec[i64]]) -> bool {
+    let n = graph.len();
+    let mut colour: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        colour.push(-1);
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for start in 0..n {
+        if colour[start] != -1 {
+            continue;
+        }
+        colour[start] = 0;
+        queue.push_back(start);
+        while let Some(u) = queue.pop_front() {
+            for v in graph[u].iter() {
+                if colour[*v] == -1 {
+                    colour[*v] = 1 - colour[u];
+                    queue.push_back(*v);
+                } else if colour[*v] == colour[u] {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- dfs arm --------------------------------------------------------
+
+fn paint_dfs(graph: Vec[Vec[i64]], u: i64, c: i64, colour: mut ref Vec[i64]) -> bool {
+    colour[u] = c;
+    for v in graph[u].iter() {
+        if colour[*v] == c {
+            return false;
+        }
+        if colour[*v] == -1 and not paint_dfs(graph, *v, 1 - c, mut colour) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_bipartite_dfs(graph: Vec[Vec[i64]]) -> bool {
+    let n = graph.len();
+    let mut colour: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        colour.push(-1);
+    }
+    for u in 0..n {
+        if colour[u] == -1 and not paint_dfs(graph, u, 0, mut colour) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- neighbours arm -------------------------------------------------
+
+fn find_neighbours(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn is_bipartite_neighbours(graph: Vec[Vec[i64]]) -> bool {
+    let n = graph.len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..n {
+        parent.push(i);
+    }
+    for u in 0..n {
+        let edges = graph[u].len();
+        for k in 0..edges {
+            let v = graph[u][k];
+            if find_neighbours(mut parent, u) == find_neighbours(mut parent, v) {
+                return false;
+            }
+            let first = find_neighbours(mut parent, graph[u][0]);
+            let here = find_neighbours(mut parent, v);
+            parent[here] = first;
+        }
+    }
+    true
+}
+
+// ---- parity arm -----------------------------------------------------
+
+struct Forest_parity {
+    parent: Vec[i64],
+    flip: Vec[i64],
+}
+
+// The root of x, with every node on the way pointed straight at it and
+// its flip made relative to the root.
+fn root_of_parity(f: mut ref Forest_parity, x: i64) -> i64 {
+    let p = f.parent[x];
+    if p == x {
+        return x;
+    }
+    let root = root_of_parity(mut f, p);
+    f.flip[x] = f.flip[x] ^ f.flip[p];
+    f.parent[x] = root;
+    root
+}
+
+fn is_bipartite_parity(graph: Vec[Vec[i64]]) -> bool {
+    let n = graph.len();
+    let mut f = Forest_parity { parent: Vec.new(), flip: Vec.new() };
+    for i in 0..n {
+        f.parent.push(i);
+        f.flip.push(0);
+    }
+    for u in 0..n {
+        for v in graph[u].iter() {
+            let ru = root_of_parity(mut f, u);
+            let rv = root_of_parity(mut f, *v);
+            if ru == rv {
+                if f.flip[u] == f.flip[*v] {
+                    return false;
+                }
+            } else {
+                f.parent[ru] = rv;
+                f.flip[ru] = f.flip[u] ^ f.flip[*v] ^ 1;
+            }
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, graph: Vec[Vec[i64]]) -> bool {
+    if which == 0 {
+        is_bipartite_star(graph)
+    } else if which == 1 {
+        is_bipartite_dfs(graph)
+    } else if which == 2 {
+        is_bipartite_neighbours(graph)
+    } else {
+        is_bipartite_parity(graph)
+    }
+}
+
+// The definition: some way of putting every node on one of two sides
+// has every edge going across. Tried for every subset of the nodes.
+fn definition(graph: Vec[Vec[i64]]) -> bool {
+    let n = graph.len();
+    for mask in 0..(1 << n) {
+        let mut across = true;
+        for u in 0..n {
+            for v in graph[u].iter() {
+                if (mask >> u) & 1 == (mask >> *v) & 1 {
+                    across = false;
+                }
+            }
+        }
+        if across {
+            return true;
+        }
+    }
+    false
+}
+
+fn from_edges(n: i64, edges: Vec[(i64, i64)]) -> Vec[Vec[i64]] {
+    let mut graph: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        graph.push(Vec.new());
+    }
+    for (a, b) in edges.iter() {
+        graph[*a].push(*b);
+        graph[*b].push(*a);
+    }
+    graph
+}
+
+fn edges_of(graph: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for u in 0..graph.len() {
+        for v in graph[u].iter() {
+            if u < *v {
+                edges.push((u, *v));
+            }
+        }
+    }
+    edges
+}
+
+fn shuffle(seed: mut ref i64, items: mut ref Vec[i64]) {
+    let mut i = items.len() - 1;
+    while i > 0 {
+        items.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+}
+
+fn make_graph(seed: mut ref i64, n: i64, kind: i64) -> Vec[Vec[i64]] {
+    // kind 0: edges only across a random split of the nodes; kind 1: that
+    // and one edge inside a side; kind 2: any pair joined; kind 3: a
+    // random tree with one more edge, which closes a cycle of either
+    // length. The chance of an edge gives about 1 to 3 edges a node.
+    let mut side: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        side.push(next_random(mut seed) % 2);
+    }
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    if kind == 3 {
+        for i in 1..n {
+            edges.push((next_random(mut seed) % i, i));
+        }
+        if n > 2 {
+            let a = next_random(mut seed) % n;
+            let b = next_random(mut seed) % n;
+            let mut joined = a == b;
+            for (x, y) in edges.iter() {
+                if (*x == a and *y == b) or (*x == b and *y == a) {
+                    joined = true;
+                }
+            }
+            if not joined {
+                edges.push((a, b));
+            }
+        }
+        return from_edges(n, edges);
+    }
+    let per_mille = (1000 + next_random(mut seed) % 2000) * (if kind == 2 { 1 } else { 2 }) / n.max(2);
+    for a in 0..n {
+        for b in a + 1..n {
+            if (kind == 2 or side[a] != side[b]) and next_random(mut seed) % 1000 < per_mille {
+                edges.push((a, b));
+            }
+        }
+    }
+    if kind == 1 and n > 2 {
+        let a = next_random(mut seed) % n;
+        let mut b = (a + 1) % n;
+        while b != a and side[b] != side[a] {
+            b = (b + 1) % n;
+        }
+        if b != a {
+            edges.push((a, b));
+        }
+    }
+    from_edges(n, edges)
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7850;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut yes = 0;
+    for case in 0..cases {
+        // 1,200 graphs of 1 to 12 nodes, where the definition's search
+        // is cheap, then 400 of 13 to 100, LeetCode's most. A quarter of
+        // each kind.
+        let n = if case < 1200 { 1 + next_random(mut seed) % 12 } else { 13 + next_random(mut seed) % 88 };
+        let small = n <= 12;
+        let graph = make_graph(mut seed, n, case % 4);
+        let want = if small { definition(graph) } else { answer_with(0, graph) };
+        if want {
+            yes += 1;
+        }
+        // For P2, the nodes renamed in a random order and every list
+        // shuffled.
+        let mut name: Vec[i64] = Vec.new();
+        for i in 0..n {
+            name.push(i);
+        }
+        shuffle(mut seed, mut name);
+        let mut renamed: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            renamed.push(Vec.new());
+        }
+        for u in 0..n {
+            let mut list: Vec[i64] = Vec.new();
+            for v in graph[u].iter() {
+                list.push(name[*v]);
+            }
+            shuffle(mut seed, mut list);
+            renamed[name[u]] = list;
+        }
+        // For P3, every edge split in two by a new node in its middle.
+        let edges = edges_of(graph);
+        let mut halves: Vec[(i64, i64)] = Vec.new();
+        for k in 0..edges.len() {
+            let (a, b) = edges[k];
+            halves.push((a, n + k));
+            halves.push((n + k, b));
+        }
+        let split = from_edges(n + edges.len(), halves);
+        // For P4, a triangle on three new nodes after the others.
+        let mut with_triangle = edges.clone();
+        with_triangle.push((n, n + 1));
+        with_triangle.push((n + 1, n + 2));
+        with_triangle.push((n + 2, n));
+        let triangle = from_edges(n + 3, with_triangle);
+        for which in 0..arms {
+            let got = answer_with(which, graph);
+            // P1: the definition's answer, on the small graphs.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: renaming the nodes gives the same answer.
+            checks += 1;
+            if answer_with(which, renamed) != got {
+                fails[1] += 1;
+            }
+            // P3: with every edge split in two the graph is bipartite:
+            // the old nodes on one side, the new on the other.
+            checks += 1;
+            if not answer_with(which, split) {
+                fails[2] += 1;
+            }
+            // P4: a triangle anywhere makes it not bipartite.
+            checks += 1;
+            if answer_with(which, triangle) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} graphs ({yes} bipartite), {arms} arms, {checks} checks, {failures} failures");
+}

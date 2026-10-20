@@ -1,0 +1,25 @@
+
+fn words(text: ref String) -> Result[Vec[String], String] {
+    Ok(text.split_whitespace().map(|p| p.to_string()).collect())
+}
+fn evens(v: ref Vec[i64]) -> Option[Vec[i64]] {
+    if v.is_empty() {
+        return None;
+    }
+    return Some(v.iter().filter(|x| *x % 2 == 0).map(|x| *x).collect());
+}
+fn uniq(v: ref Vec[i64]) -> Result[Set[i64], String] {
+    Ok(v.iter().map(|x| *x).collect())
+}
+fn upper(s: ref String) -> Option[String] {
+    Some(s.chars().map(|c| c.to_ascii_uppercase()).collect())
+}
+fn main() {
+    match words("a b c".to_string()) {
+        Ok(v) => println(f"{v.len()} {v[2]}"),
+        Err(e) => println(e),
+    }
+    let v: Vec[i64] = vec![1, 2, 4, 2];
+    let s = "ab".to_string();
+    println(f"{evens(v).unwrap().len()} {uniq(v).unwrap().len()} {upper(s).unwrap()}");
+}

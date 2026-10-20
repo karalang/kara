@@ -1,0 +1,87 @@
+// LeetCode 805 — Split Array With Same Average, picking numbers.
+//
+// For each size k up to n / 2 whose wanted sum k · total / n is a whole
+// number, search for k numbers that make it: sort the numbers, and pick
+// them in increasing order, stopping as soon as the sum passes the
+// wanted one and skipping a number equal to the one just tried at the
+// same step. Exponential at worst, quick on small inputs.
+fn split_array_same_average(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let total = nums.iter().sum();
+    let mut sorted = nums.clone();
+    sorted.sort();
+    for k in 1..n / 2 + 1 {
+        if total * k % n == 0 and pick(sorted, 0, k, total * k / n) {
+            return true;
+        }
+    }
+    false
+}
+
+// Whether `count` of sorted[from..] sum to `want`.
+fn pick(sorted: Vec[i64], from: i64, count: i64, want: i64) -> bool {
+    if count == 0 {
+        return want == 0;
+    }
+    let mut i = from;
+    while i < sorted.len() {
+        if sorted[i] * count > want {
+            return false;
+        }
+        if (i == from or sorted[i] != sorted[i - 1]) and pick(sorted, i + 1, count - 1, want - sorted[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out.push_str("]");
+    println(f"{out} -> {split_array_same_average(nums)}");
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    show(vec![3, 1]);
+    show(vec![5]);
+    show(vec![0, 0]);
+    show(vec![4, 4, 4, 4]);
+    show(vec![0, 13, 13, 7, 5, 0, 10, 19, 5]);
+    show(vec![10000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9999]);
+    show(vec![2, 0, 5, 6, 16, 12, 15, 12, 4]);
+    let mut seed = 805;
+    let mut yes = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Up to 16 numbers below a cap of 4 to 400, so that both answers
+        // come up.
+        let n = 1 + next_random(mut seed) % 16;
+        let cap = 4 * (1 + next_random(mut seed) % 100);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % cap);
+        }
+        let can = split_array_same_average(nums);
+        if can {
+            yes += 1;
+        }
+        check = (check * 131 + if can { 1 } else { 2 } + i) % 1000000007;
+    }
+    println(f"300 random arrays: {yes} can be split, checksum {check}");
+}

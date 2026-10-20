@@ -1,0 +1,82 @@
+// LeetCode 774 — Minimize Max Distance to Gas Station, bisection.
+//
+// For a distance d, a gap g needs floor(g / d) new stations for every
+// piece to be shorter than d, so d can be beaten when the gaps need at
+// most k between them. Bisect d a hundred times, from just over the
+// longest gap down. The answer is some gap cut into equal pieces, so
+// finish by cutting each gap into the fewest pieces shorter than the
+// bound found and taking the longest piece: that is the exact quotient.
+// O(n log(1/eps)).
+
+fn minmax_gas_dist(stations: Vec[i64], k: i64) -> f64 {
+    let mut lo = 0.0;
+    let mut hi = 0.0;
+    for i in 1..stations.len() {
+        let gap = (stations[i] - stations[i - 1]) as f64;
+        if gap > hi {
+            hi = gap;
+        }
+    }
+    hi += 1.0;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let mut needed = 0;
+        for i in 1..stations.len() {
+            needed += ((stations[i] - stations[i - 1]) as f64 / mid) as i64;
+        }
+        if needed <= k {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let mut longest = 0.0;
+    for i in 1..stations.len() {
+        let gap = (stations[i] - stations[i - 1]) as f64;
+        let piece = gap / ((gap / hi) as i64 + 1) as f64;
+        if piece > longest {
+            longest = piece;
+        }
+    }
+    longest
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(stations: Vec[i64], k: i64) {
+    let answer = minmax_gas_dist(stations, k);
+    println(f"{stations}, k = {k} -> {answer:.5}");
+}
+
+fn main() {
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 9);
+    show([23, 24, 36, 39, 46, 56, 57, 65, 84, 98], 1);
+    show([0, 100], 3);
+    show([0, 10, 20], 1);
+    show([0, 1], 31);
+    show([0, 1], 63);
+    show([0, 7, 100000000], 1000000);
+    show([0, 3, 4, 10, 11, 20], 5);
+    let mut seed = 774;
+    let mut total = 0.0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 10 + next_random(mut seed) % 51;
+        let spread = if next_random(mut seed) % 4 == 0 { 1000000 } else { 1000 };
+        let mut stations: Vec[i64] = [next_random(mut seed) % 100];
+        for _ in 1..n {
+            let last = stations[stations.len() - 1];
+            stations.push(last + 1 + next_random(mut seed) % spread);
+        }
+        let k = 1 + next_random(mut seed) % 2000;
+        let answer = minmax_gas_dist(stations, k);
+        total += answer;
+        check = (check * 31 + (answer * 1000000.0) as i64) % 1000000007;
+    }
+    println(f"300 random cases: answers sum to {total:.5}, checksum {check}");
+}

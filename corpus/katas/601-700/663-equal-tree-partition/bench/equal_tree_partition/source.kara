@@ -26,7 +26,7 @@ fn subtree_sum(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let s = n.val + subtree_sum(n.left, sums) + subtree_sum(n.right, sums);
+            let s = n.val + subtree_sum(n.left, mut sums) + subtree_sum(n.right, mut sums);
             sums.push(s);
             s
         }

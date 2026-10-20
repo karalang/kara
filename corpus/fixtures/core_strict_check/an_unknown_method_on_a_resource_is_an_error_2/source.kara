@@ -1,0 +1,5 @@
+fn main() {
+    let t = Clock.now();
+    let w = Clock.wall_ns();
+    println("ran");
+}

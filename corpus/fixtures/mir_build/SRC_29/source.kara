@@ -1,7 +1,15 @@
 
+enum V { T(String), L(Vec[String]) }
+struct It { v: V, n: i64 }
+fn first(v: ref Vec[It]) -> ref It { ref v[0] }
 fn main() {
-    let mut m: SortedMap[String, String] = SortedMap.new();
-    m.insert("a".to_string(), "1".to_string());
-    let v = m.get("a").unwrap_or(String.new());
-    println(f"{v}");
+    let mut m: Map[String, It] = Map.new();
+    m.insert("b".to_string(), It { v: V.L(vec!["p".to_string(), "q".to_string()]), n: 4 });
+    let t = match m.get("b").unwrap().v { V.T(_) => 1, V.L(q) => q.len() };
+    let xs: Vec[It] = vec![It { v: V.T("qq".to_string()), n: 1 }];
+    let u = match first(xs).v { V.T(s) => s.len(), V.L(q) => q.len() };
+    let o: Option[ref It] = Some(first(xs));
+    let w = match o.unwrap().v { V.T(_) => 1, V.L(_) => 2 };
+    if let V.T(s) = first(xs).v { println(s); }
+    println(f"{t} {u} {w} {xs.len()} {m.len()}");
 }

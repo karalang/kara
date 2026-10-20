@@ -1,0 +1,225 @@
+// LeetCode #754: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on small, near-boundary and random targets.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn reach_number_star(target: i64) -> i64 {
+    let t = target.abs();
+    let mut k = 0;
+    let mut sum = 0;
+    while sum < t or (sum - t) % 2 != 0 {
+        k += 1;
+        sum += k;
+    }
+    k
+}
+
+// ---- square-root arm ------------------------------------------------
+
+fn reach_number_float(target: i64) -> i64 {
+    let t = target.abs();
+    let k = (((8 * t + 1) as f64).sqrt() - 1.0) / 2.0;
+    let mut n = k as i64;
+    while n * (n + 1) / 2 < t {
+        n += 1;
+    }
+    while n > 0 and (n - 1) * n / 2 >= t {
+        n -= 1;
+    }
+    while (n * (n + 1) / 2 - t) % 2 != 0 {
+        n += 1;
+    }
+    n
+}
+
+// ---- Newton arm -----------------------------------------------------
+
+fn floor_sqrt_newton(m: i64) -> i64 {
+    if m < 2 {
+        return m;
+    }
+    let mut x = m;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + m / x) / 2;
+    }
+    x
+}
+
+fn reach_number_newton(target: i64) -> i64 {
+    let t = target.abs();
+    let mut k = (floor_sqrt_newton(8 * t + 1) - 1) / 2;
+    if k * (k + 1) / 2 < t {
+        k += 1;
+    }
+    let excess = k * (k + 1) / 2 - t;
+    if excess % 2 == 0 {
+        k
+    } else if k % 2 == 0 {
+        k + 1
+    } else {
+        k + 2
+    }
+}
+
+// ---- bisect arm -----------------------------------------------------
+
+fn reach_number_bisect(target: i64) -> i64 {
+    let t = target.abs();
+    let mut low = 0;
+    let mut high = 100000;
+    while low < high {
+        let mid = (low + high) / 2;
+        if mid * (mid + 1) / 2 >= t {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let mut k = low;
+    while (k * (k + 1) / 2 - t) % 2 != 0 {
+        k += 1;
+    }
+    k
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, target: i64) -> i64 {
+    if which == 0 {
+        reach_number_star(target)
+    } else if which == 1 {
+        reach_number_float(target)
+    } else if which == 2 {
+        reach_number_newton(target)
+    } else {
+        reach_number_bisect(target)
+    }
+}
+
+// The definition, for small targets: the set of positions after k moves,
+// grown one move at a time (move k goes either way), until the target is
+// in it.
+fn definition(target: i64) -> i64 {
+    let mut at: Set[i64] = Set.new();
+    at.insert(0);
+    let mut k = 0;
+    while not at.contains(target) {
+        k += 1;
+        let mut next: Set[i64] = Set.new();
+        for p in at.iter() {
+            next.insert(p + k);
+            next.insert(p - k);
+        }
+        at = next;
+    }
+    k
+}
+
+fn sum_to(n: i64) -> i64 {
+    n * (n + 1) / 2
+}
+
+// Whether n moves can end exactly at the target: flip moves from the
+// largest down while the half-excess allows, then add up the signed walk.
+fn walk_reaches(n: i64, target: i64) -> bool {
+    if n < 0 {
+        return false;
+    }
+    let t = target.abs();
+    let over = sum_to(n) - t;
+    if over < 0 or over % 2 != 0 {
+        return false;
+    }
+    let mut flip = over / 2;
+    let mut at = 0;
+    let mut i = n;
+    while i >= 1 {
+        if i <= flip {
+            flip -= i;
+            at -= i;
+        } else {
+            at += i;
+        }
+        i -= 1;
+    }
+    flip == 0 and at == t
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7540;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut targets = 0;
+    let mut moves = 0;
+    for case in 0..2800 {
+        let mut target = 0;
+        let mut want = -1;
+        if case < 800 {
+            // every target from -400 to 400 but 0, against the definition
+            target = if case < 400 { case - 400 } else { case - 399 };
+            want = definition(target);
+        } else if case < 1800 {
+            // within 3 of a sum 1 + ... + k, where rounding is most likely
+            // to go wrong
+            let k = 1 + next_random(mut seed) % 44721;
+            target = sum_to(k) + next_random(mut seed) % 7 - 3;
+            if target < 1 or target > 1000000000 {
+                target = 1 + next_random(mut seed) % 1000;
+            }
+        } else {
+            target = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000 + 1;
+        }
+        if case >= 800 and next_random(mut seed) % 2 == 0 {
+            target = -target;
+        }
+        targets += 1;
+        for which in 0..arms {
+            let got = answer_with(which, target);
+            if which == 0 {
+                moves += got;
+            }
+            // P1: the definition's answer (the 800 small targets).
+            if want != -1 {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the mirrored target takes as many moves.
+            checks += 1;
+            if answer_with(which, -target) != got {
+                fails[1] += 1;
+            }
+            // P3: a walk of that many moves, signs chosen from the largest
+            // move down, ends on the target.
+            checks += 1;
+            if not walk_reaches(got, target) {
+                fails[2] += 1;
+            }
+            // P4: no walk of one, two or three fewer moves does; with
+            // fewer than that the sum is already too small.
+            checks += 1;
+            if walk_reaches(got - 1, target) or walk_reaches(got - 2, target) or walk_reaches(got - 3, target) or (got >= 4 and sum_to(got - 4) >= target.abs()) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{targets} targets ({moves} moves in all), {arms} arms, {checks} checks, {failures} failures");
+}

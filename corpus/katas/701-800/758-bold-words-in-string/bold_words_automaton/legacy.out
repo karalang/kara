@@ -1,0 +1,11 @@
+[ab, bc] aabcd -> a<b>abc</b>d
+[ab, cb] aabcd -> a<b>ab</b>cd
+[] abc -> abc
+[abc] abc -> <b>abc</b>
+[ab, cd] abcd -> <b>abcd</b>
+[aa] aaa -> <b>aaa</b>
+[zz] abc -> abc
+[b] abcba -> a<b>b</b>c<b>b</b>a
+[abcdefghij] abc -> abc
+[e, cde, bcdef] abcdefg -> a<b>bcdef</b>g
+300 random strings: 6586 bold runs, 46102 tag characters, checksum 652996456

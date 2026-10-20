@@ -1,0 +1,77 @@
+// LeetCode 789 — Escape The Ghosts, walking one shortest way.
+//
+// Walk to the target along the x axis first and then the y axis, one
+// step a move, and at each point ask whether some ghost could be there
+// by then, its distance to the point at most the moves made. If none can
+// on this way, none can on any. O(g · d) for a distance d to the target.
+fn caught(ghosts: Vec[Vec[i64]], x: i64, y: i64, moves: i64) -> bool {
+    for g in ghosts.iter() {
+        if (g[0] - x).abs() + (g[1] - y).abs() <= moves {
+            return true;
+        }
+    }
+    false
+}
+
+fn escape_ghosts(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let (tx, ty) = (target[0], target[1]);
+    let mut x = 0;
+    let mut y = 0;
+    let mut moves = 0;
+    if caught(ghosts, x, y, moves) {
+        return false;
+    }
+    while x != tx or y != ty {
+        if x != tx {
+            x += if tx > x { 1 } else { -1 };
+        } else {
+            y += if ty > y { 1 } else { -1 };
+        }
+        moves += 1;
+        if caught(ghosts, x, y, moves) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ghosts: Vec[Vec[i64]], target: Vec[i64]) {
+    let answer = escape_ghosts(ghosts, target);
+    println(f"ghosts = {ghosts}, target = {target} -> {answer}");
+}
+
+fn main() {
+    show([[1, 0], [0, 3]], [0, 1]);
+    show([[1, 0]], [2, 0]);
+    show([[2, 0]], [1, 0]);
+    show([[5, 0], [-10, 8]], [3, 7]);
+    show([[0, 0]], [0, 0]);
+    show([[1, 1]], [0, 0]);
+    show([[-1, 0], [0, 1], [-1, 0], [0, 1], [-1, 0]], [0, 0]);
+    show([[10000, 10000], [-10000, -10000]], [10000, -10000]);
+    show([[10000, 10000], [-10000, -10000]], [9999, -10000]);
+    let mut seed = 789;
+    let mut escapes = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 10;
+        let mut ghosts: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..count {
+            ghosts.push([next_random(mut seed) % 41 - 20, next_random(mut seed) % 41 - 20]);
+        }
+        let target = [next_random(mut seed) % 41 - 20, next_random(mut seed) % 41 - 20];
+        let answer = escape_ghosts(ghosts, target);
+        if answer {
+            escapes += 1;
+        }
+        check = (check * 31 + (if answer { 7 } else { 3 }) + count) % 1000000007;
+    }
+    println(f"300 random boards: {escapes} escapes, checksum {check}");
+}

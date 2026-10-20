@@ -1,0 +1,131 @@
+// LeetCode 783 — Minimum Distance Between BST Nodes, ancestor bounds.
+//
+// In a search tree two values next to each other in order are always an
+// ancestor and its descendant: a node's predecessor is the largest value
+// of its left subtree or, when it has none, the nearest ancestor it lies
+// to the right of. So walk down carrying the nearest ancestor below the
+// node (`low`) and the nearest above it (`high`): every pair of
+// neighbours in order is a node and one of its bounds, and the smallest
+// gap to a bound is the answer. O(n) time and O(height) stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The smallest gap in the subtree at `node` to a bound, with -1 for a
+// bound that does not exist.
+fn closest(node: Option[TreeNode], low: i64, high: i64) -> i64 {
+    let Some(n) = node else {
+        return i64.MAX;
+    };
+    let mut best = i64.MAX;
+    if low != -1 {
+        best = best.min(n.val - low);
+    }
+    if high != -1 {
+        best = best.min(high - n.val);
+    }
+    best = best.min(closest(n.left, low, n.val));
+    best.min(closest(n.right, n.val, high))
+}
+
+fn min_diff_in_bst(root: Option[TreeNode]) -> i64 {
+    closest(root, -1, -1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let Some(r) = root else {
+        return Some(TreeNode { val: v, left: None, right: None });
+    };
+    let mut at = r;
+    loop {
+        if v < at.val {
+            match at.left {
+                Some(l) => {
+                    at = l;
+                }
+                None => {
+                    at.left = Some(TreeNode { val: v, left: None, right: None });
+                    break;
+                }
+            }
+        } else {
+            match at.right {
+                Some(c) => {
+                    at = c;
+                }
+                None => {
+                    at.right = Some(TreeNode { val: v, left: None, right: None });
+                    break;
+                }
+            }
+        }
+    }
+    Some(r)
+}
+
+// The search tree made by inserting the values in the order given.
+fn build(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values.iter() {
+        root = insert(root, *v);
+    }
+    root
+}
+
+// n distinct values from 0 to `top`, in a random order.
+fn random_values(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut taken: Set[i64] = Set.new();
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < n {
+        let v = (next_random(mut seed) * 32768 + next_random(mut seed)) % (top + 1);
+        if not taken.contains(v) {
+            taken.insert(v);
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn show(values: Vec[i64]) {
+    let answer = min_diff_in_bst(build(values));
+    println(f"insert {values} -> {answer}");
+}
+
+fn main() {
+    show([4, 2, 6, 1, 3]);
+    show([1, 0, 48, 12, 49]);
+    show([0, 100000]);
+    show([10, 5, 15, 9, 11]);
+    show([90, 69, 49, 89, 52]);
+    show([1, 2, 3, 4, 5, 7]);
+    show([50, 40, 30, 20, 10, 11]);
+    let mut seed = 783;
+    let mut chain: Vec[i64] = Vec.new();
+    for i in 0..100 {
+        chain.push(i * 1000 + if i == 63 { 1 } else { 0 });
+    }
+    let answer = min_diff_in_bst(build(chain));
+    println(f"an ascending chain of 100 -> {answer}");
+    let answer = min_diff_in_bst(build(random_values(mut seed, 100, 100000)));
+    println(f"100 random values -> {answer}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 99;
+        let top = n - 1 + next_random(mut seed) % 2000;
+        let answer = min_diff_in_bst(build(random_values(mut seed, n, top)));
+        total += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"300 random trees: gaps sum to {total}, checksum {check}");
+}

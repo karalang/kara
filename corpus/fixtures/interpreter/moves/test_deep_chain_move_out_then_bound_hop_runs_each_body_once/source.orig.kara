@@ -1,0 +1,17 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}/{self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+struct Inner { r: R, q: R }
+struct Deep { g: Inner, z: i64 }
+struct Outer { h: Inner, k: R }
+struct OuterD { h: Deep, k: R }
+fn main() {
+    println("bound");     { let o: Outer = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x: R = o.h.r; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("renamed");   { let o: Outer = Outer { h: Inner { r: mk(4), q: mk(5) }, k: mk(6) }; let x: R = o.h.r; let Outer { h: hh, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("two_outs");  { let o: Outer = Outer { h: Inner { r: mk(7), q: mk(8) }, k: mk(9) }; let x: R = o.h.r; let y: R = o.h.q; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("deep");      { let o: OuterD = OuterD { h: Deep { g: Inner { r: mk(10), q: mk(11) }, z: 1 }, k: mk(12) }; let x: R = o.h.g.r; let OuterD { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("wild");      { let o: Outer = Outer { h: Inner { r: mk(13), q: mk(14) }, k: mk(15) }; let x: R = o.h.r; let Outer { h: _, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("nosplit");   { let o: Outer = Outer { h: Inner { r: mk(16), q: mk(17) }, k: mk(18) }; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("nestedpat"); { let o: Outer = Outer { h: Inner { r: mk(19), q: mk(20) }, k: mk(21) }; let Outer { h: Inner { r, q }, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("end");
+}

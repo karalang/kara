@@ -1,0 +1,122 @@
+// LeetCode 753 — Cracking the Safe, from Lyndon words.
+//
+// A Lyndon word is a string strictly smaller than each of its rotations.
+// Writing out, in lexicographic order, every Lyndon word whose length
+// divides n gives a de Bruijn sequence: a cycle of k^n digits in which
+// every n-digit code appears once (Fredricksen, Kessler and Maiorana).
+// The recursion below generates those words in order. The cycle, with
+// its first n-1 digits written again at the end (going round it again
+// when it is shorter than that, as it is for k = 1), is the answer.
+// O(k^n).
+
+fn lyndon(t: i64, p: i64, n: i64, k: i64, a: mut ref Vec[i64], out: mut ref Vec[i64]) {
+    if t > n {
+        if n % p == 0 {
+            for i in 1..p + 1 {
+                out.push(a[i]);
+            }
+        }
+    } else {
+        a[t] = a[t - p];
+        lyndon(t + 1, p, n, k, mut a, mut out);
+        for j in a[t - p] + 1..k {
+            a[t] = j;
+            lyndon(t + 1, t, n, k, mut a, mut out);
+        }
+    }
+}
+
+fn crack_safe(n: i64, k: i64) -> String {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        a.push(0);
+    }
+    let mut cycle: Vec[i64] = Vec.new();
+    lyndon(1, 1, n, k, mut a, mut cycle);
+    let mut out = String.new();
+    for d in cycle.iter() {
+        out.push_str(f"{d}");
+    }
+    for i in 0..n - 1 {
+        out.push_str(f"{cycle[i % cycle.len()]}");
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// What the answer is, judged: its length against the shortest possible,
+// k^n + n - 1, and whether every code appears in it exactly once.
+fn judged(text: String, n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let bytes = text.bytes();
+    let mut seen: Vec[i64] = Vec.new();
+    for _ in 0..total {
+        seen.push(0);
+    }
+    let mut bad = 0;
+    let mut i = 0;
+    while i + n <= bytes.len() {
+        let mut code = 0;
+        for j in i..i + n {
+            let d = (bytes[j] - b'0') as i64;
+            if d < 0 or d >= k {
+                bad += 1;
+            }
+            code = code * k + d;
+        }
+        if code >= 0 and code < total {
+            seen[code] += 1;
+        }
+        i += 1;
+    }
+    let mut once = 0;
+    for c in seen.iter() {
+        if *c == 1 {
+            once += 1;
+        }
+    }
+    let shortest = total + n - 1;
+    let size = if text.len() == shortest { "shortest" } else { "NOT SHORTEST" };
+    let codes = if once == total and bad == 0 { "every code once" } else { "CODES WRONG" };
+    f"{text.len()} digits, {size}, {codes}"
+}
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k}: {judged(crack_safe(n, k), n, k)}");
+}
+
+fn main() {
+    show(1, 2);
+    show(2, 2);
+    show(1, 1);
+    show(4, 1);
+    show(1, 10);
+    show(3, 2);
+    show(2, 10);
+    show(3, 10);
+    show(4, 8);
+    let mut safes = 0;
+    let mut digits = 0;
+    let mut good = 0;
+    for n in 1..5 {
+        for k in 1..11 {
+            let mut total = 1;
+            for _ in 0..n {
+                total *= k;
+            }
+            if total <= 4096 {
+                safes += 1;
+                let text = crack_safe(n, k);
+                digits += text.len();
+                if judged(text, n, k).ends_with("shortest, every code once") {
+                    good += 1;
+                }
+            }
+        }
+    }
+    println(f"all {safes} safes: {digits} digits in all, {good} shortest with every code once");
+}

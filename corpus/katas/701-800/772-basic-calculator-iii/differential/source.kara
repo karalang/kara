@@ -1,0 +1,441 @@
+// LeetCode #772: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random expressions.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct Cursor_star {
+    bytes: Vec[u8],
+    at: i64,
+}
+
+impl Cursor_star {
+    fn peek(self) -> u8 {
+        if self.at < self.bytes.len() { self.bytes[self.at] } else { 0 }
+    }
+
+    fn sum(mut ref self) -> i64 {
+        let mut value = self.term();
+        loop {
+            let op = self.peek();
+            if op != b'+' and op != b'-' {
+                return value;
+            }
+            self.at += 1;
+            let right = self.term();
+            value = if op == b'+' { value + right } else { value - right };
+        }
+    }
+
+    fn term(mut ref self) -> i64 {
+        let mut value = self.factor();
+        loop {
+            let op = self.peek();
+            if op != b'*' and op != b'/' {
+                return value;
+            }
+            self.at += 1;
+            let right = self.factor();
+            value = if op == b'*' { value * right } else { value / right };
+        }
+    }
+
+    fn factor(mut ref self) -> i64 {
+        if self.peek() == b'(' {
+            self.at += 1;
+            let value = self.sum();
+            self.at += 1;
+            return value;
+        }
+        let mut value = 0;
+        while self.peek() >= b'0' and self.peek() <= b'9' {
+            value = value * 10 + (self.peek() - b'0') as i64;
+            self.at += 1;
+        }
+        value
+    }
+}
+
+fn calculate_star(s: String) -> i64 {
+    let mut cursor = Cursor_star { bytes: s.bytes().to_vec(), at: 0 };
+    cursor.sum()
+}
+
+// ---- postfix arm ----------------------------------------------------
+
+enum Token_postfix {
+    Num(i64),
+    Op(u8),
+}
+
+fn binding_postfix(op: u8) -> i64 {
+    if op == b'*' or op == b'/' { 2 } else if op == b'+' or op == b'-' { 1 } else { 0 }
+}
+
+fn apply_postfix(a: i64, op: u8, b: i64) -> i64 {
+    if op == b'+' {
+        a + b
+    } else if op == b'-' {
+        a - b
+    } else if op == b'*' {
+        a * b
+    } else {
+        a / b
+    }
+}
+
+fn calculate_postfix(s: String) -> i64 {
+    let bytes = s.bytes();
+    let mut postfix: Vec[Token_postfix] = Vec.new();
+    let mut ops: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' and c <= b'9' {
+            let mut n = 0;
+            while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+                n = n * 10 + (bytes[i] - b'0') as i64;
+                i += 1;
+            }
+            postfix.push(Token_postfix.Num(n));
+            continue;
+        }
+        if c == b'(' {
+            ops.push(c);
+        } else if c == b')' {
+            while ops[ops.len() - 1] != b'(' {
+                postfix.push(Token_postfix.Op(ops.pop().unwrap()));
+            }
+            ops.pop();
+        } else {
+            while ops.len() > 0 and binding_postfix(ops[ops.len() - 1]) >= binding_postfix(c) {
+                postfix.push(Token_postfix.Op(ops.pop().unwrap()));
+            }
+            ops.push(c);
+        }
+        i += 1;
+    }
+    while ops.len() > 0 {
+        postfix.push(Token_postfix.Op(ops.pop().unwrap()));
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    for token in postfix.into_iter() {
+        match token {
+            Token_postfix.Num(n) => stack.push(n),
+            Token_postfix.Op(op) => {
+                let b = stack.pop().unwrap();
+                let a = stack.pop().unwrap();
+                stack.push(apply_postfix(a, op, b));
+            }
+        }
+    }
+    stack[0]
+}
+
+// ---- frames arm -----------------------------------------------------
+
+struct Frame_frames {
+    terms: Vec[i64],
+    op: u8,
+}
+
+fn place_frames(frame: mut ref Frame_frames, n: i64) {
+    if frame.op == b'+' {
+        frame.terms.push(n);
+    } else if frame.op == b'-' {
+        frame.terms.push(-n);
+    } else {
+        let top = frame.terms.pop().unwrap();
+        frame.terms.push(if frame.op == b'*' { top * n } else { top / n });
+    }
+}
+
+fn calculate_frames(s: String) -> i64 {
+    let bytes = s.bytes();
+    let mut frames: Vec[Frame_frames] = Vec.new();
+    frames.push(Frame_frames { terms: Vec.new(), op: b'+' });
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' and c <= b'9' {
+            let mut n = 0;
+            while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+                n = n * 10 + (bytes[i] - b'0') as i64;
+                i += 1;
+            }
+            let last = frames.len() - 1;
+            place_frames(mut frames[last], n);
+            continue;
+        }
+        if c == b'(' {
+            frames.push(Frame_frames { terms: Vec.new(), op: b'+' });
+        } else if c == b')' {
+            let inner = frames.pop().unwrap();
+            let mut n = 0;
+            for term in inner.terms {
+                n += *term;
+            }
+            let last = frames.len() - 1;
+            place_frames(mut frames[last], n);
+        } else {
+            let last = frames.len() - 1;
+            frames[last].op = c;
+        }
+        i += 1;
+    }
+    let mut total = 0;
+    for term in frames[0].terms {
+        total += *term;
+    }
+    total
+}
+
+// ---- reduce arm -----------------------------------------------------
+
+enum Token_reduce {
+    Num(i64),
+    Op(u8),
+    Open,
+    Close,
+}
+
+impl Token_reduce {
+    fn is_open(self) -> bool {
+        match self {
+            Token_reduce.Open => true,
+            _ => false,
+        }
+    }
+
+    fn is_close(self) -> bool {
+        match self {
+            Token_reduce.Close => true,
+            _ => false,
+        }
+    }
+}
+
+fn tokenize_reduce(s: String) -> Vec[Token_reduce] {
+    let bytes = s.bytes();
+    let mut tokens: Vec[Token_reduce] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' and c <= b'9' {
+            let mut n = 0;
+            while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+                n = n * 10 + (bytes[i] - b'0') as i64;
+                i += 1;
+            }
+            tokens.push(Token_reduce.Num(n));
+            continue;
+        }
+        if c == b'(' {
+            tokens.push(Token_reduce.Open);
+        } else if c == b')' {
+            tokens.push(Token_reduce.Close);
+        } else {
+            tokens.push(Token_reduce.Op(c));
+        }
+        i += 1;
+    }
+    tokens
+}
+
+// The value of tokens[from..to], numbers and operators with no bracket.
+fn flat_value_reduce(tokens: Vec[Token_reduce], from: i64, to: i64) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut signs: Vec[u8] = Vec.new();
+    let mut op = b'+';
+    for k in from..to {
+        match tokens[k] {
+            Token_reduce.Num(n) => {
+                if op == b'*' or op == b'/' {
+                    let last = values.len() - 1;
+                    values[last] = if op == b'*' { values[last] * n } else { values[last] / n };
+                } else {
+                    values.push(n);
+                    signs.push(op);
+                }
+            }
+            Token_reduce.Op(o) => op = o,
+            _ => {}
+        }
+    }
+    let mut total = 0;
+    for j in 0..values.len() {
+        total = if signs[j] == b'+' { total + values[j] } else { total - values[j] };
+    }
+    total
+}
+
+fn calculate_reduce(s: String) -> i64 {
+    let mut tokens = tokenize_reduce(s);
+    loop {
+        let mut close = 0;
+        while close < tokens.len() and not tokens[close].is_close() {
+            close += 1;
+        }
+        if close == tokens.len() {
+            return flat_value_reduce(tokens, 0, tokens.len());
+        }
+        let mut open = close - 1;
+        while not tokens[open].is_open() {
+            open -= 1;
+        }
+        let value = flat_value_reduce(tokens, open + 1, close);
+        let mut next: Vec[Token_reduce] = Vec.new();
+        let mut k = 0;
+        for token in tokens.into_iter() {
+            if k == open {
+                next.push(Token_reduce.Num(value));
+            } else if k < open or k > close {
+                next.push(token);
+            }
+            k += 1;
+        }
+        tokens = next;
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: String) -> i64 {
+    if which == 0 {
+        calculate_star(s)
+    } else if which == 1 {
+        calculate_postfix(s)
+    } else if which == 2 {
+        calculate_frames(s)
+    } else {
+        calculate_reduce(s)
+    }
+}
+
+// A random expression tree, written three ways: with brackets where
+// needed and sometimes where not, with every operator bracketed, and
+// with brackets only where needed. `value` is the definition: the tree
+// evaluated bottom up, division truncating toward zero. `level` is how
+// loosely the outermost operator binds (1 for + and -, 2 for * and /,
+// 3 for none); `valid` says no division by zero and every value fits in
+// 32 bits.
+struct Piece {
+    text: String,
+    full: String,
+    least: String,
+    value: i64,
+    level: i64,
+    valid: bool,
+}
+
+fn random_piece(seed: mut ref i64, leaves: i64) -> Piece {
+    if leaves == 1 {
+        let n = if next_random(mut seed) % 4 == 0 { next_random(mut seed) % 1000 } else { next_random(mut seed) % 10 };
+        return Piece { text: f"{n}", full: f"{n}", least: f"{n}", value: n, level: 3, valid: true };
+    }
+    let left_leaves = 1 + next_random(mut seed) % (leaves - 1);
+    let left = random_piece(mut seed, left_leaves);
+    let right = random_piece(mut seed, leaves - left_leaves);
+    let op = b"+-*/"[next_random(mut seed) % 4];
+    let level = if op == b'+' or op == b'-' { 1 } else { 2 };
+    // The left side needs brackets if it binds more loosely; the right
+    // side also if it binds as loosely, unless the operator is +.
+    let left_needs = left.level < level;
+    let right_needs = right.level < level or (right.level == level and op != b'+');
+    let left_text = if left_needs or next_random(mut seed) % 4 == 0 { f"({left.text})" } else { left.text.clone() };
+    let right_text = if right_needs or next_random(mut seed) % 4 == 0 { f"({right.text})" } else { right.text.clone() };
+    let left_least = if left_needs { f"({left.least})" } else { left.least.clone() };
+    let right_least = if right_needs { f"({right.least})" } else { right.least.clone() };
+    let mut valid = left.valid and right.valid;
+    let mut value = 0;
+    if not valid {
+        // One side is invalid, so the whole is; its value is not needed.
+    } else if op == b'+' {
+        value = left.value + right.value;
+    } else if op == b'-' {
+        value = left.value - right.value;
+    } else if op == b'*' {
+        value = left.value * right.value;
+    } else if right.value == 0 {
+        valid = false;
+    } else {
+        value = left.value / right.value;
+    }
+    if value < -2147483648 or value > 2147483647 {
+        valid = false;
+    }
+    let c = op as char;
+    Piece {
+        text: f"{left_text}{c}{right_text}",
+        full: f"({left.full}){c}({right.full})",
+        least: f"{left_least}{c}{right_least}",
+        value: value,
+        level: level,
+        valid: valid,
+    }
+}
+
+fn valid_piece(seed: mut ref i64, most: i64) -> Piece {
+    loop {
+        let leaves = 1 + next_random(mut seed) % most;
+        let piece = random_piece(mut seed, leaves);
+        if piece.valid {
+            return piece;
+        }
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7720;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1800;
+    let mut length = 0;
+    for case in 0..cases {
+        let e = valid_piece(mut seed, if case < 1500 { 10 } else { 30 });
+        let f = valid_piece(mut seed, 6);
+        length += e.text.len();
+        let difference = f"({e.text})-({f.text})";
+        let product = f"({e.text})*({f.text})";
+        for which in 0..arms {
+            let got = answer_with(which, e.text);
+            // P1: the definition's value.
+            checks += 1;
+            if got != e.value {
+                fails[0] += 1;
+            }
+            // P2: every operator bracketed changes nothing.
+            checks += 1;
+            if answer_with(which, e.full) != got {
+                fails[1] += 1;
+            }
+            // P3: brackets only where needed change nothing.
+            checks += 1;
+            if answer_with(which, e.least) != got {
+                fails[2] += 1;
+            }
+            // P4: a bracketed difference and product are those of the
+            // two answers.
+            checks += 1;
+            let g = answer_with(which, f.text);
+            if answer_with(which, difference) != got - g or answer_with(which, product) != got * g {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} expressions ({length} characters), {arms} arms, {checks} checks, {failures} failures");
+}

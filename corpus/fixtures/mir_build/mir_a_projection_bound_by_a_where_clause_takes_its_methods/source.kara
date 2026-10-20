@@ -1,0 +1,76 @@
+
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Pairwise[I: Iterator] {
+    it: I,
+    prev: Option[I.Item],
+}
+
+fn pairwise[I: Iterator](it: own I) -> Pairwise[I] {
+    Pairwise { it: it, prev: None }
+}
+
+impl[I: Iterator] Iterator for Pairwise[I] where I.Item: Clone {
+    type Item = (I.Item, I.Item);
+    fn next(mut ref self) -> Option[(I.Item, I.Item)] {
+        if self.prev.is_none() {
+            self.prev = self.it.next();
+        }
+        match self.it.next() {
+            Some(x) => {
+                let p = self.prev.take().unwrap();
+                self.prev = Some(x.clone());
+                Some((p, x))
+            }
+            None => None,
+        }
+    }
+}
+
+enum Slot[I: Iterator] {
+    Empty,
+    Held(I.Item),
+}
+
+fn first_slot[I: Iterator](it: own I) -> Slot[I] {
+    let mut it = it;
+    match it.next() {
+        Some(x) => Slot.Held(x),
+        None => Slot.Empty,
+    }
+}
+
+fn main() {
+    let words: Vec[String] = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let mut pw = pairwise(VecIter { items: words, pos: 0 });
+    while let Some((a, b)) = pw.next() {
+        println(f"{a}{b}");
+    }
+    let nums: Vec[i64] = vec![1, 2, 3, 4];
+    let mut nested = pairwise(pairwise(VecIter { items: nums, pos: 0 }));
+    while let Some(((a, b), (c, d))) = nested.next() {
+        println(f"{a}{b}-{c}{d}");
+    }
+    let s = first_slot(VecIter { items: vec!["z".to_string()], pos: 0 });
+    match s {
+        Slot.Held(x) => println(f"held {x}"),
+        Slot.Empty => println("empty"),
+    }
+    for (a, b) in pairwise(VecIter { items: vec![7, 8, 9], pos: 0 }) {
+        println(f"{a}+{b}={a + b}");
+    }
+}

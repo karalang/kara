@@ -29,7 +29,7 @@ fn subtree_sum_star(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let s = n.val + subtree_sum_star(n.left, sums) + subtree_sum_star(n.right, sums);
+            let s = n.val + subtree_sum_star(n.left, mut sums) + subtree_sum_star(n.right, mut sums);
             sums.push(s);
             s
         }
@@ -59,7 +59,7 @@ fn count_sums_count(node: Option[TreeNode], counts: mut ref Map[i64, i64]) -> i6
     match node {
         None => 0,
         Some(n) => {
-            let s = n.val + count_sums_count(n.left, counts) + count_sums_count(n.right, counts);
+            let s = n.val + count_sums_count(n.left, mut counts) + count_sums_count(n.right, mut counts);
             *counts.entry(s).or_insert(0) += 1;
             s
         }
@@ -190,8 +190,8 @@ fn negated(node: Option[TreeNode]) -> Option[TreeNode] {
 fn nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         out.push(n);
-        nodes(n.left, out);
-        nodes(n.right, out);
+        nodes(n.left, mut out);
+        nodes(n.right, mut out);
     }
 }
 
@@ -203,8 +203,8 @@ fn sum_without(node: Option[TreeNode], cut: i64, at: mut ref i64) -> i64 {
         Some(n) => {
             let here = *at;
             *at += 1;
-            let left = sum_without(n.left, cut, at);
-            let right = sum_without(n.right, cut, at);
+            let left = sum_without(n.left, cut, mut at);
+            let right = sum_without(n.right, cut, mut at);
             if here == cut { 0 } else { n.val + left + right }
         }
     }

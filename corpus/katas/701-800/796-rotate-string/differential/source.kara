@@ -1,0 +1,247 @@
+// LeetCode #796: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn rotate_string_star(s: Str, goal: Str) -> bool {
+    s.len() == goal.len() and f"{s}{s}".contains(goal)
+}
+
+// ---- shifts arm -----------------------------------------------------
+
+fn rotate_string_shifts(s: Str, goal: Str) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    let n = a.len();
+    if b.len() != n {
+        return false;
+    }
+    for k in 0..n {
+        let mut same = true;
+        for i in 0..n {
+            if b[i] != a[(i + k) % n] {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- KMP arm --------------------------------------------------------
+
+fn rotate_string_kmp(s: Str, goal: Str) -> bool {
+    let p = goal.bytes();
+    let m = p.len();
+    if s.len() != m {
+        return false;
+    }
+    let mut fail: Vec[i64] = Vec.new();
+    fail.push(0);
+    let mut k = 0;
+    for i in 1..m {
+        while k > 0 and p[i] != p[k] {
+            k = fail[k - 1];
+        }
+        if p[i] == p[k] {
+            k += 1;
+        }
+        fail.push(k);
+    }
+    let t = s.bytes();
+    let mut matched = 0;
+    for i in 0..2 * m {
+        let c = t[i % m];
+        while matched > 0 and c != p[matched] {
+            matched = fail[matched - 1];
+        }
+        if c == p[matched] {
+            matched += 1;
+        }
+        if matched == m {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- hash arm -------------------------------------------------------
+
+fn rotate_string_hash(s: Str, goal: Str) -> bool {
+    let t = s.bytes();
+    let p = goal.bytes();
+    let n = t.len();
+    if p.len() != n {
+        return false;
+    }
+    let modulus = 1000000007;
+    let base = 131;
+    // high: base^(n - 1), the weight of a window's first letter.
+    let mut high = 1;
+    for _ in 1..n {
+        high = high * base % modulus;
+    }
+    let mut want = 0;
+    let mut have = 0;
+    for i in 0..n {
+        want = (want * base + p[i] as i64) % modulus;
+        have = (have * base + t[i] as i64) % modulus;
+    }
+    for start in 0..n {
+        if have == want {
+            let mut same = true;
+            for i in 0..n {
+                if t[(start + i) % n] != p[i] {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return true;
+            }
+        }
+        // The window moves on: t[start] leaves, t[start + n], which is
+        // t[start] again, comes in.
+        let out = t[start] as i64 * high % modulus;
+        have = ((have - out + modulus) % modulus * base + t[start] as i64) % modulus;
+    }
+    false
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: Str, goal: Str) -> bool {
+    if which == 0 {
+        rotate_string_star(s, goal)
+    } else if which == 1 {
+        rotate_string_shifts(s, goal)
+    } else if which == 2 {
+        rotate_string_kmp(s, goal)
+    } else {
+        rotate_string_hash(s, goal)
+    }
+}
+
+// s with its first k letters moved to the end.
+fn rotated(s: Str, k: i64) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    for i in 0..chars.len() {
+        out.push(chars[(i + k) % chars.len()]);
+    }
+    out
+}
+
+// The definition: some number of moves of the first letter to the end,
+// from none to one fewer than the letters, turns s into goal.
+fn definition(s: Str, goal: Str) -> bool {
+    for k in 0..s.len() {
+        if rotated(s, k) == goal {
+            return true;
+        }
+    }
+    false
+}
+
+fn random_text(seed: mut ref i64, n: i64, letters: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7960;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut yes = 0;
+    for case in 0..cases {
+        // kind 0: a rotation of s; kind 1: a rotation with one letter
+        // changed; kind 2: any string as long; kind 3: s a short piece
+        // written several times, so that many rotations are the same,
+        // and goal a rotation of it or of the piece written differently.
+        let kind = case % 4;
+        let letters = 1 + next_random(mut seed) % 3;
+        let s = if kind == 3 {
+            let piece = random_text(mut seed, 1 + next_random(mut seed) % 4, letters);
+            let mut whole = String.new();
+            for _ in 0..1 + next_random(mut seed) % 6 {
+                whole.push_str(piece);
+            }
+            whole
+        } else {
+            random_text(mut seed, 1 + next_random(mut seed) % 30, letters)
+        };
+        let n = s.len();
+        // The binding's type is written out because the MIR backends do
+        // not yet take the `collect()` target from the other branch
+        // (B-2026-10-19-25); drop it once that is fixed.
+        let goal: String = if kind == 2 {
+            random_text(mut seed, n, letters)
+        } else {
+            let turned = rotated(s, next_random(mut seed) % n);
+            if kind == 1 or (kind == 3 and next_random(mut seed) % 2 == 0) {
+                let mut chars: Vec[char] = turned.chars().collect();
+                let at = next_random(mut seed) % n;
+                chars[at] = (97 + (chars[at] as i64 - 97 + 1) % 3) as u8 as char;
+                chars.iter().collect()
+            } else {
+                turned
+            }
+        };
+        let want = definition(s, goal);
+        if want {
+            yes += 1;
+        }
+        let k = next_random(mut seed) % n;
+        let goal_turned = rotated(goal, k);
+        let s_turned = rotated(s, k);
+        let longer = f"{goal}a";
+        for which in 0..arms {
+            let got = answer_with(which, s, goal);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: s is a rotation of goal just when goal is one of s.
+            checks += 1;
+            if answer_with(which, goal, s) != got {
+                fails[1] += 1;
+            }
+            // P3: turning goal any number of places keeps the answer.
+            checks += 1;
+            if answer_with(which, s, goal_turned) != got {
+                fails[2] += 1;
+            }
+            // P4: any rotation of s is one, and a goal one letter longer
+            // is not.
+            checks += 1;
+            if not answer_with(which, s, s_turned) or answer_with(which, s, longer) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({yes} rotations), {arms} arms, {checks} checks, {failures} failures");
+}

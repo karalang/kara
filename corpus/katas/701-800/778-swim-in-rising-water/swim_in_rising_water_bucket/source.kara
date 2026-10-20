@@ -1,0 +1,123 @@
+// LeetCode 778 — Swim in Rising Water, the flood grown time by time.
+//
+// Grow the swimmer's reach as the water rises. A square touching the
+// reach waits for its time; the elevations are 0 to n² - 1, each once,
+// so a table from elevation to square serves as the queue, one bucket a
+// time. At time t, if the square of elevation t waits (or is the top
+// left), it joins the reach, and so does every square it opens up below
+// the water, by a flood fill; the squares the fill touches above the
+// water start waiting. The answer is the time at which the reach takes
+// in the bottom right. O(n²).
+
+fn swim_in_water(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut square_of: Vec[i64] = Vec.filled(n * n, 0);
+    for r in 0..n {
+        for c in 0..n {
+            square_of[grid[r][c]] = r * n + c;
+        }
+    }
+    let mut waiting: Vec[bool] = Vec.filled(n * n, false);
+    let mut reached: Vec[bool] = Vec.filled(n * n, false);
+    waiting[0] = true;
+    for t in 0..n * n {
+        let first = square_of[t];
+        if not waiting[first] {
+            continue;
+        }
+        let mut stack: Vec[i64] = Vec.new();
+        reached[first] = true;
+        stack.push(first);
+        while let Some(at) = stack.pop() {
+            if at == n * n - 1 {
+                return t;
+            }
+            let r = at / n;
+            let c = at % n;
+            for (dr, dc) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < n and nc >= 0 and nc < n and not reached[nr * n + nc] {
+                    if grid[nr][nc] <= t {
+                        reached[nr * n + nc] = true;
+                        stack.push(nr * n + nc);
+                    } else {
+                        waiting[nr * n + nc] = true;
+                    }
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An n by n grid holding 0 to n² - 1 in a random order.
+fn random_grid(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 0..n * n {
+        values.push(v);
+    }
+    let mut i = n * n - 1;
+    while i > 0 {
+        values.swap(i, next_random(mut seed) % (i + 1));
+        i -= 1;
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(values[r * n + c]);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// 0 to n² - 1 laid along the rows, every other row backwards.
+fn snake(n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(if r % 2 == 0 { r * n + c } else { r * n + n - 1 - c });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    let answer = swim_in_water(grid);
+    println(f"{grid} -> {answer}");
+}
+
+fn main() {
+    show([[0, 2], [1, 3]]);
+    show([[0, 1, 2, 3, 4], [24, 23, 22, 21, 5], [12, 13, 14, 15, 16], [11, 17, 18, 19, 20], [10, 9, 8, 7, 6]]);
+    show([[0]]);
+    show([[3, 0], [1, 2]]);
+    show([[0, 3], [2, 1]]);
+    show([[0, 8, 7], [1, 6, 5], [2, 3, 4]]);
+    show([[0, 7, 8], [6, 1, 2], [5, 4, 3]]);
+    let mut seed = 778;
+    let answer = swim_in_water(random_grid(mut seed, 50));
+    println(f"random 50 x 50 -> {answer}");
+    let answer = swim_in_water(snake(50));
+    println(f"snake 50 x 50 -> {answer}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let answer = swim_in_water(random_grid(mut seed, n));
+        total += answer;
+        check = (check * 31 + answer * 50 + n) % 1000000007;
+    }
+    println(f"300 random grids: answers sum to {total}, checksum {check}");
+}

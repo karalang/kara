@@ -1,0 +1,63 @@
+// LeetCode 804 — Unique Morse Code Words: the bench.
+//
+// 64 lists of 100 words, LeetCode's most, are made once, each word 1 to
+// 12 letters long, the letters drawn from "etianm" half the time and
+// from the whole alphabet otherwise, so that some codes repeat. Each of
+// 100,000 rounds counts the codes of the next list with the ★ arm.
+fn unique_morse_representations(words: Vec[String]) -> i64 {
+    let mut seen: Set[String] = Set.new();
+    for word in words.iter() {
+        seen.insert(morse(word));
+    }
+    seen.len()
+}
+
+// The word written in Morse code, its letters' codes run together.
+fn morse(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut out = String.new();
+    for b in word.bytes() {
+        out.push_str(codes[b - 97]);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 804;
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let short = "etianm";
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..64 {
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..100 {
+            let length = 1 + next_random(mut seed) % 12;
+            let few = next_random(mut seed) % 2 == 0;
+            let mut word = String.new();
+            for _ in 0..length {
+                if few {
+                    let at = next_random(mut seed) % 6;
+                    word.push_str(short.slice(at, at + 1));
+                } else {
+                    let at = next_random(mut seed) % 26;
+                    word.push_str(letters.slice(at, at + 1));
+                }
+            }
+            words.push(word);
+        }
+        lists.push(words);
+    }
+    let rounds = 100000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let k = unique_morse_representations(lists[r % 64]);
+        total += k;
+        check = (check * 131 + k) % 1000000007;
+    }
+    println(f"{rounds} rounds of 100 words: {total} codes in all, checksum {check}");
+}

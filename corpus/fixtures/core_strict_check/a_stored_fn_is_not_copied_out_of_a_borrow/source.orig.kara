@@ -1,0 +1,12 @@
+fn dbl(x: i64) -> i64 { x * 2 }
+fn inc(x: i64) -> i64 { x + 1 }
+struct R { h: Fn(i64) -> i64 }
+fn main() {
+    let rs = vec![R { h: dbl }, R { h: inc }];
+    let mut t = 0;
+    for r in rs.iter() {
+        let h = r.h;
+        t += h(1000);
+    }
+    println(f"{t}");
+}

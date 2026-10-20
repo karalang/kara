@@ -1,0 +1,5 @@
+fn main() {
+    let opt: Option[Str] = None;
+    let s = opt ?? "";
+    println(f"[{s}]");
+}

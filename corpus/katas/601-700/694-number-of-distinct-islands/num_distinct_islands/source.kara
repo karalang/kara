@@ -33,10 +33,10 @@ fn walk(grid: ref Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64, c: i64, s
     }
     seen[r][c] = true;
     path.push(step);
-    walk(grid, seen, r + 1, c, 'd', path);
-    walk(grid, seen, r - 1, c, 'u', path);
-    walk(grid, seen, r, c + 1, 'r', path);
-    walk(grid, seen, r, c - 1, 'l', path);
+    walk(grid, mut seen, r + 1, c, 'd', mut path);
+    walk(grid, mut seen, r - 1, c, 'u', mut path);
+    walk(grid, mut seen, r, c + 1, 'r', mut path);
+    walk(grid, mut seen, r, c - 1, 'l', mut path);
     path.push('b');
 }
 

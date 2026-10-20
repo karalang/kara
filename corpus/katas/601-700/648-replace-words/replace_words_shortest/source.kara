@@ -8,7 +8,7 @@ fn replace_words(dictionary: Vec[String], sentence: String) -> String {
     let mut roots = dictionary.clone();
     roots.sort_by(|a, b| a.len().cmp(b.len()));
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for root in roots.iter() {
             if word.starts_with(root) {

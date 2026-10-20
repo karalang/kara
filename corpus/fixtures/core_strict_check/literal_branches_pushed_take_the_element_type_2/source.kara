@@ -1,0 +1,6 @@
+fn main() {
+    let c = true;
+    let mut v: Vec[u8] = Vec.new();
+    v.push(if c { 300 } else { 8 });
+    println(f"{v.len()}");
+}

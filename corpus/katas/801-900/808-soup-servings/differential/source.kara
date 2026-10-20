@@ -1,0 +1,234 @@
+// LeetCode #808: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random sizes.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn soup_servings_star(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    let mut p = Vec.filled(m + 1, Vec.filled(m + 1, 0.0));
+    for a in 0..m + 1 {
+        for b in 0..m + 1 {
+            p[a][b] = if a == 0 and b == 0 {
+                0.5
+            } else if a == 0 {
+                1.0
+            } else if b == 0 {
+                0.0
+            } else {
+                let pour = [(4, 0), (3, 1), (2, 2), (1, 3)];
+                let mut sum = 0.0;
+                for (da, db) in pour {
+                    sum += p[(a - da).max(0)][(b - db).max(0)];
+                }
+                0.25 * sum
+            };
+        }
+    }
+    p[m][m]
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn chance_memo(a: i64, b: i64, memo: mut ref Map[(i64, i64), f64]) -> f64 {
+    if a <= 0 and b <= 0 {
+        return 0.5;
+    }
+    if a <= 0 {
+        return 1.0;
+    }
+    if b <= 0 {
+        return 0.0;
+    }
+    if let Some(p) = memo.get((a, b)) {
+        return p;
+    }
+    let p = 0.25
+        * (chance_memo(a - 4, b, mut memo) + chance_memo(a - 3, b - 1, mut memo)
+            + chance_memo(a - 2, b - 2, mut memo) + chance_memo(a - 1, b - 3, mut memo));
+    memo.insert((a, b), p);
+    p
+}
+
+fn soup_servings_memo(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    let mut memo: Map[(i64, i64), f64] = Map.new();
+    chance_memo(m, m, mut memo)
+}
+
+// ---- forward arm ----------------------------------------------------
+
+fn soup_servings_forward(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    if m == 0 {
+        return 0.5;
+    }
+    let mut live = Vec.filled(m + 1, 0.0);
+    live[m] = 1.0;
+    let mut left = 2 * m;
+    let mut answer = 0.0;
+    while left > 0 {
+        let mut next = Vec.filled(m + 1, 0.0);
+        for a in 1..m + 1 {
+            let q = live[a] / 4.0;
+            if q == 0.0 {
+                continue;
+            }
+            let b = left - a;
+            for (da, db) in [(4, 0), (3, 1), (2, 2), (1, 3)] {
+                let x = a - da;
+                let y = b - db;
+                if x <= 0 and y <= 0 {
+                    answer += q / 2.0;
+                } else if x <= 0 {
+                    answer += q;
+                } else if y > 0 {
+                    next[x] += q;
+                }
+            }
+        }
+        live = next;
+        left -= 4;
+    }
+    answer
+}
+
+// ---- rolling arm ----------------------------------------------------
+
+fn at_rolling(rows: Vec[Vec[f64]], a: i64, b: i64) -> f64 {
+    if a <= 0 {
+        if b <= 0 { 0.5 } else { 1.0 }
+    } else if b <= 0 {
+        0.0
+    } else {
+        rows[a % 5][b]
+    }
+}
+
+fn soup_servings_rolling(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    let mut rows = Vec.filled(5, Vec.filled(m + 1, 0.0));
+    for a in 1..m + 1 {
+        for b in 1..m + 1 {
+            let p = 0.25
+                * (at_rolling(rows, a - 4, b) + at_rolling(rows, a - 3, b - 1) + at_rolling(rows, a - 2, b - 2)
+                    + at_rolling(rows, a - 1, b - 3));
+            rows[a % 5][b] = p;
+        }
+    }
+    at_rolling(rows, m, m)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64) -> f64 {
+    if which == 0 {
+        soup_servings_star(n)
+    } else if which == 1 {
+        soup_servings_memo(n)
+    } else if which == 2 {
+        soup_servings_forward(n)
+    } else {
+        soup_servings_rolling(n)
+    }
+}
+
+// The definition, by following every sequence of pours from a ml of A and
+// b of B, in ml, each pour a quarter as likely as the turn before it, and
+// adding up the chance of the endings that count. Every chance is a
+// quarter to a power, so for up to 8 servings the sums are exact.
+fn walk(a: i64, b: i64, weight: f64) -> f64 {
+    if a <= 0 and b <= 0 {
+        weight / 2.0
+    } else if a <= 0 {
+        weight
+    } else if b <= 0 {
+        0.0
+    } else {
+        let w = weight / 4.0;
+        walk(a - 100, b, w) + walk(a - 75, b - 25, w) + walk(a - 50, b - 50, w) + walk(a - 25, b - 75, w)
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8080;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut walked = 0;
+    for case in 0..cases {
+        // kind 0: up to 200 ml, against the definition; kind 1: up to
+        // 4800 ml; kind 2: 4400 to 6000 ml, around where the answer is
+        // taken as 1; kind 3: up to 10^9 ml.
+        let kind = case % 4;
+        let n = if kind == 0 {
+            next_random(mut seed) % 201
+        } else if kind == 1 {
+            next_random(mut seed) % 4801
+        } else if kind == 2 {
+            4400 + next_random(mut seed) % 1601
+        } else {
+            (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001
+        };
+        let want = if kind == 0 { walk(n, n, 1.0) } else { soup_servings_star(n) };
+        if kind == 0 {
+            walked += 1;
+        }
+        let m = (n + 24) / 25;
+        for which in 0..arms {
+            let got = answer_with(which, n);
+            // P1: the definition's answer exactly, up to 200 ml; past that,
+            // the ★ arm's to within 1e-12.
+            checks += 1;
+            if (kind == 0 and got != want) or (got - want).abs() > 1e-12 {
+                fails[0] += 1;
+            }
+            // P2: only the servings count matters: n ml and a whole number
+            // of servings, 25 * ceil(n / 25) ml, give the same answer, and
+            // so does one ml past the last whole serving below it.
+            checks += 1;
+            if m > 0 and (answer_with(which, 25 * m) != got or answer_with(which, 25 * (m - 1) + 1) != got) {
+                fails[1] += 1;
+            }
+            // P3: one more serving of each never makes the answer smaller.
+            checks += 1;
+            if answer_with(which, 25 * (m + 1)) < got - 1e-12 {
+                fails[2] += 1;
+            }
+            // P4: the answer is from 1/2 to 1; it is 1 past 4800 ml, and
+            // above 0.99999 from 4475 ml.
+            checks += 1;
+            if got < 0.5 or got > 1.0 or (n > 4800 and got != 1.0) or (n >= 4475 and got <= 0.99999) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({walked} walked), {arms} arms, {checks} checks, {failures} failures");
+}

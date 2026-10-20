@@ -1,0 +1,34 @@
+shared struct T { val: i64, mut left: Option[T], mut right: Option[T] }
+fn leaf(v: i64) -> Option[T] { Some(T { val: v, left: None, right: None }) }
+fn is_mirror(a: Option[T], b: Option[T]) -> bool {
+    match a {
+        None => { match b { None => true, Some(_) => false } }
+        Some(an) => { match b { None => false, Some(bn) => an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left) } }
+    }
+}
+fn first(a: Option[T]) -> T {
+    match a {
+        Some(x) => x,
+        None => T { val: 0, left: None, right: None }
+    }
+}
+fn cut(h: T) { h.left = None; }
+fn peek(a: Option[T], h: T) -> i64 {
+    match a {
+        Some(x) => { cut(h); x.val }
+        None => 0
+    }
+}
+fn fib(n: i64) -> i64 { if n < 2 { return n; } fib(n - 1) + fib(n - 2) }
+fn main() {
+    let l = T { val: 1, left: leaf(2), right: leaf(3) };
+    let r = T { val: 1, left: leaf(3), right: leaf(2) };
+    let root = T { val: 0, left: Some(l), right: Some(r) };
+    println(is_mirror(root.left, root.right));
+    println(is_mirror(root.left, root.left));
+    let f = first(root.left);
+    root.left = None;
+    println(f.val);
+    println(peek(f.left, f));
+    println(fib(20));
+}

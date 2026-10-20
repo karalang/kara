@@ -1,0 +1,119 @@
+// LeetCode 786 — K-th Smallest Prime Fraction, binary search on the
+// value.
+//
+// For a value x the fractions at most x can be counted with two pointers:
+// as the numerator moves right, the least denominator that keeps the
+// fraction at most x only moves right too. Binary search x in (0, 1)
+// until exactly k fractions are at most it; the largest of them is the
+// answer. The fractions are all different, since the numbers are 1 and
+// primes, so such an x exists. O(n log(1/ε)).
+
+fn kth_smallest_prime_fraction(arr: Vec[i64], k: i64) -> Vec[i64] {
+    let n = arr.len();
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    loop {
+        let mid = (lo + hi) / 2.0;
+        let mut count = 0;
+        let mut best_num = 0;
+        let mut best_den = 1;
+        let mut j = 1;
+        for i in 0..n - 1 {
+            while j < n and (arr[i] as f64) > mid * (arr[j] as f64) {
+                j += 1;
+            }
+            if j == n {
+                break;
+            }
+            count += n - j;
+            if arr[i] * best_den > best_num * arr[j] {
+                best_num = arr[i];
+                best_den = arr[j];
+            }
+        }
+        if count == k {
+            return [best_num, best_den];
+        }
+        if count < k {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The primes below `limit`, by the sieve of Eratosthenes.
+fn primes_below(limit: i64) -> Vec[i64] {
+    let mut composite: Vec[bool] = Vec.new();
+    for _ in 0..limit {
+        composite.push(false);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for p in 2..limit {
+        if not composite[p] {
+            out.push(p);
+            let mut m = p * p;
+            while m < limit {
+                composite[m] = true;
+                m += p;
+            }
+        }
+    }
+    out
+}
+
+fn show(arr: Vec[i64], k: i64) {
+    let answer = kth_smallest_prime_fraction(arr, k);
+    println(f"arr = {arr}, k = {k} -> {answer}");
+}
+
+fn main() {
+    show([1, 2, 3, 5], 3);
+    show([1, 7], 1);
+    show([1, 2, 3, 5], 1);
+    show([1, 2, 3, 5], 6);
+    show([1, 13, 17, 59], 4);
+    show([1, 2, 29989], 2);
+    let primes = primes_below(30000);
+    let mut arr: Vec[i64] = [1];
+    for t in 0..999 {
+        arr.push(primes[t]);
+    }
+    let all = 999 * 1000 / 2;
+    for k in [1, 2, 1000, 250000, all - 1, all] {
+        let answer = kth_smallest_prime_fraction(arr, k);
+        println(f"1 and the first 999 primes, k = {k} -> {answer}");
+    }
+    let mut seed = 786;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 2 + next_random(mut seed) % 59;
+        let mut taken: Set[i64] = Set.new();
+        let mut picked: Vec[i64] = Vec.new();
+        while picked.len() < n - 1 {
+            let p = primes[next_random(mut seed) % primes.len()];
+            if not taken.contains(p) {
+                taken.insert(p);
+                picked.push(p);
+            }
+        }
+        picked.sort();
+        let mut arr: Vec[i64] = [1];
+        for p in picked.iter() {
+            arr.push(*p);
+        }
+        let k = 1 + next_random(mut seed) % (n * (n - 1) / 2);
+        let answer = kth_smallest_prime_fraction(arr, k);
+        sum += answer[0] + answer[1];
+        check = (check * 31 + answer[0] * 7 + answer[1]) % 1000000007;
+    }
+    println(f"300 random arrays: terms sum to {sum}, checksum {check}");
+}

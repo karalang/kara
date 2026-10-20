@@ -1,0 +1,9 @@
+fn take(b: ref Slice[u8]) -> i64 {
+    b.len()
+}
+
+fn main() {
+    println(f"{take(Vec.new())}");
+    let v: Vec[u8] = Vec.new();
+    println(f"{take(v)}");
+}

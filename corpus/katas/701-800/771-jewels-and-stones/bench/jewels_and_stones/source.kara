@@ -1,0 +1,56 @@
+// LeetCode 771 — Jewels and Stones: benchmark, the ★ arm.
+//
+// 256 random pairs of 50 jewels and 50 stones, LeetCode's limit, drawn
+// from all 52 letters, built once. ROUNDS rounds each count the next
+// pair and fold the count into a checksum.
+
+const ROUNDS: i64 = 1000000;
+
+fn num_jewels_in_stones(jewels: String, stones: String) -> i64 {
+    let mut kinds: Set[char] = Set.new();
+    for c in jewels.chars() {
+        kinds.insert(c);
+    }
+    let mut count = 0;
+    for c in stones.chars() {
+        if kinds.contains(c) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random string of `n` letters from the first `kinds` of aAbBcC...
+fn random_letters(seed: mut ref i64, n: i64, kinds: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        let k = next_random(mut seed) % kinds;
+        let base = if k % 2 == 0 { 97 } else { 65 };
+        out.push((base + k / 2) as u8 as char);
+    }
+    out
+}
+
+fn main() {
+    let mut seed = 771;
+    let mut jewels: Vec[String] = Vec.new();
+    let mut stones: Vec[String] = Vec.new();
+    for _ in 0..256 {
+        jewels.push(random_letters(mut seed, 50, 52));
+        stones.push(random_letters(mut seed, 50, 52));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..ROUNDS {
+        let k = round % 256;
+        let count = num_jewels_in_stones(jewels[k], stones[k]);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"{ROUNDS} rounds of 50 jewels and 50 stones: {total} jewels in all, checksum {check}");
+}

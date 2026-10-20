@@ -1,0 +1,54 @@
+// LeetCode 760 — Find Anagram Mappings: benchmark, the ★ arm.
+//
+// 100,000 random pairs of lists of 100 values, the most LeetCode allows,
+// with values below 50 so that repeats are common.
+
+fn anagram_mappings(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut positions: Map[i64, Vec[i64]] = Map.new();
+    for j in 0..nums2.len() {
+        if positions.contains_key(nums2[j]) {
+            positions.get_mut(nums2[j]).unwrap().push(j);
+        } else {
+            positions.insert(nums2[j], [j]);
+        }
+    }
+    let mut used: Map[i64, i64] = Map.new();
+    let mut mapping: Vec[i64] = Vec.new();
+    for x in nums1.iter() {
+        let k = used.get(*x) ?? 0;
+        mapping.push(positions.get(*x).unwrap()[k]);
+        used.insert(*x, k + 1);
+    }
+    mapping
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 100000;
+    let mut seed = 760;
+    let mut fixed = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let mut nums1: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            nums1.push(next_random(mut seed) % 50);
+        }
+        let mut nums2 = nums1.clone();
+        for i in 0..100 {
+            let j = i + next_random(mut seed) % (100 - i);
+            nums2.swap(i, j);
+        }
+        let mapping = anagram_mappings(nums1, nums2);
+        for i in 0..100 {
+            if mapping[i] == i {
+                fixed += 1;
+            }
+            check = (check * 31 + mapping[i]) % 1000000007;
+        }
+    }
+    println(f"{rounds} pairs of 100 values: {fixed} mapped to their own index, checksum {check}");
+}

@@ -1,20 +1,20 @@
 
-struct A { ok: bool, s: String }
-
-fn mk(n: i64) -> A { A { ok: n > 1, s: "x".to_string() } }
+fn dbl(n: i64) -> i64 { n * 2 }
+fn inc(n: i64) -> i64 { n + 1 }
+fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 { f(x) }
 
 fn main() {
-    if mk(2).ok {
-        println("yes");
+    let fs: Vec[Fn(i64) -> i64] = vec![dbl, inc];
+    let mut t = 0;
+    for f in fs.iter() {
+        t += f(10);
     }
-    if mk(0).ok {
-        println("no");
-    } else {
-        println("else");
+    println(f"{t}");
+    let k = 3;
+    let gs: Vec[Fn(i64) -> i64] = vec![|x| x + k, dbl];
+    let mut u = 0;
+    for g in gs.iter() {
+        u += g(1);
     }
-    let mut i = 0;
-    while mk(3 - i).ok {
-        i += 1;
-    }
-    println(f"end {i}");
+    println(f"{u} {apply(fs[0], 7)}");
 }

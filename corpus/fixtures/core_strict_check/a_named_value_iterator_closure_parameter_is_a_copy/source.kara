@@ -1,0 +1,5 @@
+fn main() {
+    let w = "QqqQ";
+    let it = w.chars();
+    println(f"{it.filter(|c| *c == 'Q').count()}");
+}

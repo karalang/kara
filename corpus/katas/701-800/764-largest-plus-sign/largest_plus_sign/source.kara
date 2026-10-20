@@ -1,0 +1,94 @@
+// LeetCode 764 — Largest Plus Sign, with four run lengths.
+//
+// A plus of order k centred on a cell needs k ones running from it in
+// each of the four directions, counting the cell itself. Sweep each row
+// both ways and each column both ways, counting the ones in a run, and
+// keep at each cell the smallest of its four runs: that is the largest
+// order centred there. The answer is the largest over all cells. O(n^2).
+
+fn order_of_largest_plus_sign(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(n);
+        }
+        grid.push(row);
+    }
+    for mine in mines.iter() {
+        grid[mine[0]][mine[1]] = 0;
+    }
+    for i in 0..n {
+        let mut left = 0;
+        let mut right = 0;
+        let mut up = 0;
+        let mut down = 0;
+        for j in 0..n {
+            left = if grid[i][j] == 0 { 0 } else { left + 1 };
+            grid[i][j] = grid[i][j].min(left);
+            let k = n - 1 - j;
+            right = if grid[i][k] == 0 { 0 } else { right + 1 };
+            grid[i][k] = grid[i][k].min(right);
+            up = if grid[j][i] == 0 { 0 } else { up + 1 };
+            grid[j][i] = grid[j][i].min(up);
+            down = if grid[k][i] == 0 { 0 } else { down + 1 };
+            grid[k][i] = grid[k][i].min(down);
+        }
+    }
+    let mut best = 0;
+    for row in grid.iter() {
+        for order in row.iter() {
+            best = best.max(*order);
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` distinct random mines in an n x n grid.
+fn random_mines(n: i64, count: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut taken: Set[i64] = Set.new();
+    let mut mines: Vec[Vec[i64]] = Vec.new();
+    while mines.len() < count {
+        let r = next_random(mut seed) % n;
+        let c = next_random(mut seed) % n;
+        if not taken.contains(r * n + c) {
+            taken.insert(r * n + c);
+            mines.push([r, c]);
+        }
+    }
+    mines
+}
+
+fn show(n: i64, mines: Vec[Vec[i64]]) {
+    let order = order_of_largest_plus_sign(n, mines.clone());
+    println(f"n = {n}, mines {mines} -> {order}");
+}
+
+fn main() {
+    show(5, [[4, 2]]);
+    show(1, [[0, 0]]);
+    show(2, [[0, 0]]);
+    show(3, [[0, 0]]);
+    show(3, [[1, 1]]);
+    show(10, [[0, 0]]);
+    show(4, [[0, 1], [1, 3], [2, 0], [3, 2]]);
+    show(500, [[0, 0], [249, 250], [499, 499]]);
+    let mut seed = 764;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let count = 1 + next_random(mut seed) % (n * n / 4 + 1);
+        let order = order_of_largest_plus_sign(n, random_mines(n, count, mut seed));
+        total += order;
+        check = (check * 31 + order) % 1000000007;
+    }
+    println(f"300 random grids: orders adding up to {total}, checksum {check}");
+}

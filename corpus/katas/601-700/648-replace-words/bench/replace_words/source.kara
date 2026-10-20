@@ -20,7 +20,7 @@ fn replace_words(dictionary: Vec[String], sentence: String) -> String {
         ends[node] = true;
     }
     let mut out: Vec[String] = Vec.new();
-    for word in sentence.split(" ").iter() {
+    for word in sentence.split(" ") {
         let bytes = word.bytes();
         let mut node = 0;
         let mut length = 0;

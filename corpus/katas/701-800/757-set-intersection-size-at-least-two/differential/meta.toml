@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/757-set-intersection-size-at-least-two/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "db0aa9a19"
+extracted_src = "15f34a3e"
+model_rev = "583cfb0d"
+model_src = "15f34a3e"

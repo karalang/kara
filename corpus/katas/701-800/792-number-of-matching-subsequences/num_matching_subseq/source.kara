@@ -1,0 +1,97 @@
+// LeetCode 792 — Number of Matching Subsequences, every word at once.
+//
+// Walk s once with every word in hand. Each word waits in the bucket
+// of the next letter it needs; when s shows that letter, the bucket is
+// emptied and each word in it moves on one letter, into the bucket of
+// the letter after, or is done. O(|s| + total length of the words).
+fn num_matching_subseq(s: Str, words: Vec[String]) -> i64 {
+    // waiting[c]: (word, letters matched) for the words that need c next.
+    let mut waiting: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..26 {
+        waiting.push(Vec.new());
+    }
+    for i in 0..words.len() {
+        let first = words[i].bytes()[0];
+        waiting[(first - b'a') as i64].push((i, 0));
+    }
+    let mut count = 0;
+    for b in s.bytes() {
+        let moving = mem.take(mut waiting[(b - b'a') as i64]);
+        for (w, matched) in moving {
+            let word = words[w].bytes();
+            if matched + 1 == word.len() {
+                count += 1;
+            } else {
+                waiting[(word[matched + 1] - b'a') as i64].push((w, matched + 1));
+            }
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn show(s: Str, words: Vec[String]) {
+    let shown = words.clone();
+    let answer = num_matching_subseq(s, words);
+    println(f"s = \"{s}\", words = {shown} -> {answer}");
+}
+
+fn main() {
+    show("abcde", vec!["a", "bb", "acd", "ace"].iter().map(|w| w.to_string()).collect());
+    show("dsahjpjauf", vec!["ahjpjau", "ja", "ahbwzgqnuk", "tnmlanowax"].iter().map(|w| w.to_string()).collect());
+    show("a", vec!["a", "a", "b", "aa"].iter().map(|w| w.to_string()).collect());
+    show("aaaaa", vec!["a", "aa", "aaa", "aaaaa", "aaaaaa"].iter().map(|w| w.to_string()).collect());
+    show("abc", vec!["abc", "cba", "ac", "ca", "c"].iter().map(|w| w.to_string()).collect());
+    let mut seed = 792;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let letters = 1 + next_random(mut seed) % 26;
+        let s = random_word(mut seed, 1 + next_random(mut seed) % 300, letters);
+        let t = s.bytes();
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 50 {
+            let kind = next_random(mut seed) % 4;
+            if kind == 0 and words.len() > 0 {
+                // A repeat of an earlier word.
+                let again = words[next_random(mut seed) % words.len()].clone();
+                words.push(again);
+            } else if kind == 1 {
+                // A piece of s, letters kept one time in three, at most 50.
+                let mut word = String.new();
+                for b in t.iter() {
+                    if word.len() == 50 {
+                        break;
+                    }
+                    if next_random(mut seed) % 3 == 0 {
+                        word.push(*b as char);
+                    }
+                }
+                if word.len() == 0 {
+                    word.push(t[0] as char);
+                }
+                words.push(word);
+            } else {
+                words.push(random_word(mut seed, 1 + next_random(mut seed) % 8, letters));
+            }
+        }
+        let answer = num_matching_subseq(s, words);
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"300 random cases: {total} matching words, checksum {check}");
+}

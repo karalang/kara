@@ -1,0 +1,75 @@
+// LeetCode 784 — Letter Case Permutation: the bench.
+//
+// 64 strings of 12 characters, LeetCode's limit, are made once, each with
+// 6 to 11 letters and digits for the rest. Each round permutes the next
+// string with the ★ arm, backtracking, and folds the first and last byte
+// of every permutation into a checksum.
+
+fn permute(at: i64, buf: mut ref Vec[char], out: mut ref Vec[String]) {
+    if at == buf.len() {
+        let mut s = String.new();
+        for c in buf.iter() {
+            s.push(*c);
+        }
+        out.push(s);
+        return;
+    }
+    let c = buf[at];
+    if c.is_ascii_alphabetic() {
+        buf[at] = c.to_ascii_lowercase();
+        permute(at + 1, mut buf, mut out);
+        buf[at] = c.to_ascii_uppercase();
+        permute(at + 1, mut buf, mut out);
+        buf[at] = c;
+    } else {
+        permute(at + 1, mut buf, mut out);
+    }
+}
+
+fn letter_case_permutation(s: String) -> Vec[String] {
+    let mut buf: Vec[char] = s.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    permute(0, mut buf, mut out);
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let digits: Vec[char] = "0123456789".chars().collect();
+    let mut seed = 784;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..64 {
+        let wanted = 6 + next_random(mut seed) % 6;
+        let mut is_letter: Vec[bool] = Vec.new();
+        for i in 0..12 {
+            is_letter.push(i < wanted);
+        }
+        let mut i = 11;
+        while i > 0 {
+            is_letter.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let mut s = String.new();
+        for i in 0..12 {
+            s.push(if is_letter[i] { letters[next_random(mut seed) % 52] } else { digits[next_random(mut seed) % 10] });
+        }
+        strings.push(s);
+    }
+    let rounds = 20000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let all = letter_case_permutation(strings[r % 64].clone());
+        total += all.len();
+        for w in all.iter() {
+            let bytes = w.bytes();
+            check = (check * 31 + bytes[0] as i64 + 7 * bytes[11] as i64) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 12-character strings: {total} permutations, checksum {check}");
+}

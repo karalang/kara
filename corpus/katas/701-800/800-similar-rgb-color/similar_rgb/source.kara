@@ -1,0 +1,84 @@
+// LeetCode 800 — Similar RGB Color, each part rounded.
+//
+// A shorthand colour's parts are the doubled hex digits 0x00, 0x11, ...,
+// 0xff, the multiples of 17. The similarity is a sum over the three
+// parts, so each part is best on its own: the multiple of 17 nearest to
+// it, which is 17 times (part + 8) / 17. No part ties between two, as
+// halfway between two multiples of 17 is never a whole number. O(1).
+fn similar_rgb(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let part = hex_value(color, 1 + 2 * p);
+        let k = (part + 8) / 17;
+        let d = digits.bytes()[k] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+// The number written by the two hex digits of `color` at `at`.
+fn hex_value(color: Str, at: i64) -> i64 {
+    let b = color.bytes();
+    digit(b[at]) * 16 + digit(b[at + 1])
+}
+
+fn digit(c: u8) -> i64 {
+    if c >= 48 and c <= 57 {
+        c as i64 - 48
+    } else {
+        c as i64 - 97 + 10
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(color: Str) {
+    println(f"{color} -> {similar_rgb(color)}");
+}
+
+fn main() {
+    show("#09f166");
+    show("#4e3fe1");
+    show("#000000");
+    show("#ffffff");
+    show("#080808");
+    show("#090909");
+    show("#f7f7f7");
+    show("#123456");
+    show("#abcdef");
+    let digits = "0123456789abcdef";
+    let mut seed = 800;
+    let mut same = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Any colour, or every other time one with each part's two
+        // digits alike, which is its own answer.
+        let mut color = String.new();
+        color.push('#');
+        for _ in 0..3 {
+            let d = digits.bytes()[next_random(mut seed) % 16] as char;
+            color.push(d);
+            if i % 2 == 0 {
+                color.push(digits.bytes()[next_random(mut seed) % 16] as char);
+            } else {
+                color.push(d);
+            }
+        }
+        let got = similar_rgb(color);
+        if got == color {
+            same += 1;
+        }
+        for c in got.bytes() {
+            check = (check * 131 + c as i64) % 1000000007;
+        }
+    }
+    println(f"300 random colours: {same} already shorthand, checksum {check}");
+}

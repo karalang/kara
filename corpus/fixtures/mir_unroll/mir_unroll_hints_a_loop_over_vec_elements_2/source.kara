@@ -1,0 +1,7 @@
+fn main() {
+    let mut t = 0;
+    while t < 32 {
+        println(t);
+        t = t + 1;
+    }
+}

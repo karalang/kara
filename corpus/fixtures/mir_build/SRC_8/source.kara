@@ -8,6 +8,7 @@ fn main() {
     let t = "x,y,ab";
     let owned = String.from("ba,c");
     for c in days.iter() {
-        println(f"{t.find(c)} {t.split(c).len()} {owned.find(c)} {owned.split(c).len()}");
+        let sep = c.to_string();
+        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
     }
 }

@@ -1,10 +1,14 @@
-
 fn main() {
-    let s = "hi";
-    let up: String = s.chars().map(|c| c.to_ascii_uppercase()).collect();
-    let v: Vec[i64] = [3, 1, 3];
-    let w: Vec[i64] = v.iter().map(|x| x * 2).collect();
-    let st: Set[i64] = v.iter().map(|x| x).collect();
-    let m: Map[i64, i64] = v.iter().map(|x| (x, x + 1)).collect();
-    println(f"{up} {w.len()} {st.len()} {m.len()}");
+    let f: f64 = 1e22;
+    let w = f as i128;
+    println(f"{w}");
+    let g: f64 = -1e40;
+    println(f"{g as i128} {1e40 as i128} {(0.0 / 0.0) as i128}");
+    let z: f32 = 0.1;
+    println(f"{z}");
+    println(z.to_string());
+    let v: Vec[f32] = vec![0.1, 2.5, 1.0e-7];
+    println(f"{v}");
+    let d: f64 = 0.1;
+    println(f"{d} {z as f64}");
 }

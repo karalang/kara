@@ -1,0 +1,10 @@
+["O  ", "   ", "   "] -> false
+["XOX", " X ", "   "] -> false
+["XOX", "O O", "XOX"] -> true
+["   ", "   ", "   "] -> true
+["XXX", "OO ", "   "] -> true
+["XXX", "XOO", "OO "] -> false
+["XXX", "   ", "OOO"] -> false
+["XO ", "XO ", "XO "] -> false
+["XOX", "XOO", "XXO"] -> true
+300 random boards: 186 valid, checksum 895086378

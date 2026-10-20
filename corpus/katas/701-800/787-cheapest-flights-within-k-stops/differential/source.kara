@@ -1,0 +1,315 @@
+// LeetCode #787: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random networks.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn find_cheapest_price_star(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let unreached = i64.MAX;
+    let mut cost: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        cost.push(unreached);
+    }
+    cost[src] = 0;
+    for _ in 0..k + 1 {
+        let before = cost.clone();
+        for f in flights.iter() {
+            let (from, to, price) = (f[0], f[1], f[2]);
+            if before[from] != unreached and before[from] + price < cost[to] {
+                cost[to] = before[from] + price;
+            }
+        }
+    }
+    if cost[dst] == unreached { -1 } else { cost[dst] }
+}
+
+// ---- levels arm -----------------------------------------------------
+
+fn find_cheapest_price_levels(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let mut out: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n {
+        out.push(Vec.new());
+    }
+    for f in flights.iter() {
+        out[f[0]].push((f[1], f[2]));
+    }
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        best.push(i64.MAX);
+    }
+    best[src] = 0;
+    let mut level: VecDeque[(i64, i64)] = VecDeque.new();
+    level.push_back((src, 0));
+    for _ in 0..k + 1 {
+        let mut next: VecDeque[(i64, i64)] = VecDeque.new();
+        while let Some((city, spent)) = level.pop_front() {
+            for (to, price) in out[city].iter() {
+                if spent + *price < best[*to] {
+                    best[*to] = spent + *price;
+                    next.push_back((*to, spent + *price));
+                }
+            }
+        }
+        level = next;
+    }
+    if best[dst] == i64.MAX { -1 } else { best[dst] }
+}
+
+// ---- dijkstra arm ---------------------------------------------------
+
+fn find_cheapest_price_dijkstra(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let mut out: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n {
+        out.push(Vec.new());
+    }
+    for f in flights.iter() {
+        out[f[0]].push((f[1], f[2]));
+    }
+    // fewest[c]: the fewest flights with which c has been settled.
+    let mut fewest: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        fewest.push(i64.MAX);
+    }
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    queue.push((0, src, 0));
+    while let Some((spent, city, used)) = queue.pop() {
+        if city == dst {
+            return spent;
+        }
+        if used >= fewest[city] or used == k + 1 {
+            continue;
+        }
+        fewest[city] = used;
+        for (to, price) in out[city].iter() {
+            queue.push((spent + *price, *to, used + 1));
+        }
+    }
+    -1
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn cheapest_memo(out: Vec[Vec[(i64, i64)]], city: i64, left: i64, dst: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if city == dst {
+        return 0;
+    }
+    if left == 0 {
+        return -1;
+    }
+    if memo[city][left] != -2 {
+        return memo[city][left];
+    }
+    let mut best = -1;
+    for (to, price) in out[city].iter() {
+        let rest = cheapest_memo(out, *to, left - 1, dst, mut memo);
+        if rest != -1 and (best == -1 or *price + rest < best) {
+            best = *price + rest;
+        }
+    }
+    memo[city][left] = best;
+    best
+}
+
+fn find_cheapest_price_memo(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let mut out: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..n {
+        out.push(Vec.new());
+    }
+    for f in flights.iter() {
+        out[f[0]].push((f[1], f[2]));
+    }
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..k + 2 {
+            row.push(-2);
+        }
+        memo.push(row);
+    }
+    cheapest_memo(out, src, k + 1, dst, mut memo)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    if which == 0 {
+        find_cheapest_price_star(n, flights, src, dst, k)
+    } else if which == 1 {
+        find_cheapest_price_levels(n, flights, src, dst, k)
+    } else if which == 2 {
+        find_cheapest_price_dijkstra(n, flights, src, dst, k)
+    } else {
+        find_cheapest_price_memo(n, flights, src, dst, k)
+    }
+}
+
+// Every walk from `city` of at most `left` more flights, the cheapest
+// arrival at dst among them kept in `best` (-1 for none).
+fn walk(flights: Vec[Vec[i64]], city: i64, spent: i64, left: i64, dst: i64, best: mut ref i64) {
+    if city == dst and (*best == -1 or spent < *best) {
+        *best = spent;
+    }
+    if left == 0 {
+        return;
+    }
+    for f in flights.iter() {
+        if f[0] == city {
+            walk(flights, f[1], spent + f[2], left - 1, dst, mut best);
+        }
+    }
+}
+
+// The definition: the cheapest of all walks of at most k + 1 flights.
+fn definition(flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let mut best = -1;
+    walk(flights, src, 0, k + 1, dst, mut best);
+    best
+}
+
+// For the larger networks, where walking every way is too slow: the
+// cheapest walk of exactly f flights, worked out for f = 1 to k + 1 one
+// flight at a time from the walks of f - 1 flights, and the least of
+// those at dst.
+fn layered(n: i64, flights: Vec[Vec[i64]], src: i64, dst: i64, k: i64) -> i64 {
+    let none = -1;
+    let mut exact: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        exact.push(none);
+    }
+    exact[src] = 0;
+    let mut best = none;
+    for _ in 0..k + 1 {
+        let mut next: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            next.push(none);
+        }
+        for f in flights.iter() {
+            if exact[f[0]] != none and (next[f[1]] == none or exact[f[0]] + f[2] < next[f[1]]) {
+                next[f[1]] = exact[f[0]] + f[2];
+            }
+        }
+        if next[dst] != none and (best == none or next[dst] < best) {
+            best = next[dst];
+        }
+        exact = next;
+    }
+    best
+}
+
+fn make_network(seed: mut ref i64, n: i64, kind: i64) -> Vec[Vec[i64]] {
+    // kind 0: random flights at prices up to 10,000; kind 1: up to 10, so
+    // ties are common; kind 2: up to 3 flights out of each city on
+    // average; kind 3: a chain 0, 1, ..., n - 1 of cheap flights and dear
+    // random shortcuts, so the cheapest way needs the most stops.
+    let mut taken: Set[i64] = Set.new();
+    let mut flights: Vec[Vec[i64]] = Vec.new();
+    if kind == 3 {
+        for i in 0..n - 1 {
+            taken.insert(i * n + i + 1);
+            flights.push([i, i + 1, 1 + next_random(mut seed) % 10]);
+        }
+    }
+    let most = n * (n - 1);
+    let m = if kind == 2 { (3 * n).min(most) } else { next_random(mut seed) % (most.min(6 * n) + 1) };
+    let mut tries = 0;
+    while flights.len() < m and tries < 20 * m {
+        tries += 1;
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
+        if from != to and not taken.contains(from * n + to) {
+            taken.insert(from * n + to);
+            let price = if kind == 1 { 1 + next_random(mut seed) % 10 } else if kind == 3 { 50 + next_random(mut seed) % 1000 } else { 1 + next_random(mut seed) % 10000 };
+            flights.push([from, to, price]);
+        }
+    }
+    flights
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7870;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut found = 0;
+    for case in 0..cases {
+        // 1,200 networks of 2 to 6 cities with k up to 3, where walking
+        // every way is cheap, then 400 of 7 to 100 cities. A quarter of
+        // each kind.
+        let small = case < 1200;
+        let n = if small { 2 + next_random(mut seed) % 5 } else { 7 + next_random(mut seed) % 94 };
+        let kind = case % 4;
+        let flights = make_network(mut seed, n, kind);
+        let src = if kind == 3 { 0 } else { next_random(mut seed) % n };
+        let mut dst = if kind == 3 { n - 1 } else { next_random(mut seed) % n };
+        if dst == src {
+            dst = (dst + 1) % n;
+        }
+        let k = next_random(mut seed) % (if small { n.min(4) } else { n });
+        let want = if small { definition(flights, src, dst, k) } else { layered(n, flights, src, dst, k) };
+        if want != -1 {
+            found += 1;
+        }
+        // For P2, the flights in a random order.
+        let mut shuffled = flights.clone();
+        let mut i = shuffled.len() - 1;
+        while i > 0 {
+            shuffled.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        // For P4, a direct flight from src to dst when there is none.
+        let mut direct_free = true;
+        for f in flights.iter() {
+            if f[0] == src and f[1] == dst {
+                direct_free = false;
+            }
+        }
+        let direct_price = 1 + next_random(mut seed) % 10000;
+        let mut with_direct = flights.clone();
+        with_direct.push([src, dst, direct_price]);
+        for which in 0..arms {
+            let got = answer_with(which, n, flights, src, dst, k);
+            // P1: the definition's answer, every walk on the small
+            // networks and the walks flight by flight on the others.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the same flights in another order give the same answer.
+            checks += 1;
+            if answer_with(which, n, shuffled, src, dst, k) != got {
+                fails[1] += 1;
+            }
+            // P3: one more stop allowed is never worse.
+            checks += 1;
+            let more = answer_with(which, n, flights, src, dst, k + 1);
+            if got != -1 and (more == -1 or more > got) {
+                fails[2] += 1;
+            }
+            // P4: a direct flight gives the least of its price and the
+            // answer.
+            if direct_free {
+                checks += 1;
+                let expect = if got == -1 { direct_price } else { got.min(direct_price) };
+                if answer_with(which, n, with_direct, src, dst, k) != expect {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} networks ({found} with a way), {arms} arms, {checks} checks, {failures} failures");
+}

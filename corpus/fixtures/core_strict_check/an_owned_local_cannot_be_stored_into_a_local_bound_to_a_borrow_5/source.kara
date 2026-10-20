@@ -1,0 +1,12 @@
+fn f(s: String, v: Vec[String], c: bool) -> i64 {
+    let mut out = s;
+    let u = match c { true => ref v[0], false => ref v[1] };
+    out = u;
+    out.len()
+}
+fn g(s: String, t: own String) -> i64 {
+    let mut out = s;
+    out = ref t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), vec!["xyz".to_string(), "q".to_string()], true)} {g("ab".to_string(), "xyz".to_string())}"); }

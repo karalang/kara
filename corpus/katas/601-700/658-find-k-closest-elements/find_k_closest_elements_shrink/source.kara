@@ -40,7 +40,7 @@ fn show(arr: Vec[i64], k: i64, x: i64) {
 fn random_sorted(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
     let mut arr: Vec[i64] = Vec.new();
     for _ in 0..n {
-        arr.push(next_random(seed) % (2 * spread + 1) - spread);
+        arr.push(next_random(mut seed) % (2 * spread + 1) - spread);
     }
     arr.sort();
     arr

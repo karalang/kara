@@ -1,0 +1,51 @@
+// LeetCode 789 — Escape The Ghosts, the nearest ghost after sorting.
+//
+// Every ghost's distance to the target, collected and sorted; you escape
+// when the least of them is more than yours. O(g log g).
+fn escape_ghosts(ghosts: Vec[Vec[i64]], target: Vec[i64]) -> bool {
+    let mine = target[0].abs() + target[1].abs();
+    let mut distances: Vec[i64] = ghosts.iter().map(|g| (g[0] - target[0]).abs() + (g[1] - target[1]).abs()).collect();
+    distances.sort();
+    distances[0] > mine
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ghosts: Vec[Vec[i64]], target: Vec[i64]) {
+    let answer = escape_ghosts(ghosts, target);
+    println(f"ghosts = {ghosts}, target = {target} -> {answer}");
+}
+
+fn main() {
+    show([[1, 0], [0, 3]], [0, 1]);
+    show([[1, 0]], [2, 0]);
+    show([[2, 0]], [1, 0]);
+    show([[5, 0], [-10, 8]], [3, 7]);
+    show([[0, 0]], [0, 0]);
+    show([[1, 1]], [0, 0]);
+    show([[-1, 0], [0, 1], [-1, 0], [0, 1], [-1, 0]], [0, 0]);
+    show([[10000, 10000], [-10000, -10000]], [10000, -10000]);
+    show([[10000, 10000], [-10000, -10000]], [9999, -10000]);
+    let mut seed = 789;
+    let mut escapes = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 10;
+        let mut ghosts: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..count {
+            ghosts.push([next_random(mut seed) % 41 - 20, next_random(mut seed) % 41 - 20]);
+        }
+        let target = [next_random(mut seed) % 41 - 20, next_random(mut seed) % 41 - 20];
+        let answer = escape_ghosts(ghosts, target);
+        if answer {
+            escapes += 1;
+        }
+        check = (check * 31 + (if answer { 7 } else { 3 }) + count) % 1000000007;
+    }
+    println(f"300 random boards: {escapes} escapes, checksum {check}");
+}

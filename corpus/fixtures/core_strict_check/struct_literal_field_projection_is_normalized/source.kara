@@ -1,0 +1,36 @@
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct MapIt[I: Iterator] {
+    it: I,
+    f: Fn(own I.Item) -> I.Item,
+}
+
+impl[I: Iterator] Iterator for MapIt[I] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        let x = self.it.next()?;
+        Some((self.f)(x))
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let mut m = MapIt { it: VecIter { items: v, pos: 0 }, f: |x: i64| x * 10 };
+    while let Some(x) = m.next() {
+        println(f"{x}");
+    }
+}

@@ -1,0 +1,445 @@
+// LeetCode #773: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on every board.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn sliding_puzzle_star(board: Vec[Vec[i64]]) -> i64 {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut start = String.new();
+    for row in board {
+        for x in row {
+            start.push((48 + *x) as u8 as char);
+        }
+    }
+    let mut seen: Set[String] = Set.new();
+    seen.insert(start.clone());
+    let mut queue: VecDeque[(String, i64)] = VecDeque.new();
+    queue.push_back((start, 0));
+    loop {
+        match queue.pop_front() {
+            None => return -1,
+            Some((state, steps)) => {
+                if state == "123450" {
+                    return steps;
+                }
+                let bytes = state.bytes().to_vec();
+                let mut zero = 0;
+                while bytes[zero] != b'0' {
+                    zero += 1;
+                }
+                for next in neighbours[zero] {
+                    let mut moved = bytes.clone();
+                    moved.swap(zero, *next);
+                    let text = String.from_utf8(moved).unwrap();
+                    if not seen.contains(text) {
+                        seen.insert(text.clone());
+                        queue.push_back((text, steps + 1));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- ranked arm -----------------------------------------------------
+
+fn rank_of_ranked(cells: Vec[i64]) -> i64 {
+    let mut rank = 0;
+    for i in 0..6 {
+        let mut smaller = 0;
+        for j in i + 1..6 {
+            if cells[j] < cells[i] {
+                smaller += 1;
+            }
+        }
+        rank = rank * (6 - i) + smaller;
+    }
+    rank
+}
+
+fn cells_of_ranked(rank: i64) -> Vec[i64] {
+    let mut digits = [0; 6];
+    let mut rest = rank;
+    for i in 0..6 {
+        digits[5 - i] = rest % (i + 1);
+        rest = rest / (i + 1);
+    }
+    let mut unused: Vec[i64] = [0, 1, 2, 3, 4, 5];
+    let mut cells: Vec[i64] = Vec.new();
+    for i in 0..6 {
+        cells.push(unused.remove(digits[i]));
+    }
+    cells
+}
+
+fn sliding_puzzle_ranked(board: Vec[Vec[i64]]) -> i64 {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut cells: Vec[i64] = Vec.new();
+    for row in board {
+        for x in row {
+            cells.push(*x);
+        }
+    }
+    let goal = rank_of_ranked([1, 2, 3, 4, 5, 0]);
+    let start = rank_of_ranked(cells);
+    let mut distance = [-1; 720];
+    distance[start] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(start);
+    while let Some(rank) = queue.pop_front() {
+        if rank == goal {
+            return distance[rank];
+        }
+        let here = cells_of_ranked(rank);
+        let mut zero = 0;
+        while here[zero] != 0 {
+            zero += 1;
+        }
+        for next in neighbours[zero] {
+            let mut moved = here.clone();
+            moved.swap(zero, *next);
+            let r = rank_of_ranked(moved);
+            if distance[r] < 0 {
+                distance[r] = distance[rank] + 1;
+                queue.push_back(r);
+            }
+        }
+    }
+    -1
+}
+
+// ---- meet arm -------------------------------------------------------
+
+fn power_of_ten_meet(p: i64) -> i64 {
+    let mut result = 1;
+    for _ in 0..p {
+        result *= 10;
+    }
+    result
+}
+
+// The states one move from `state`.
+fn moves_meet(state: i64) -> Vec[i64] {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut zero = 0;
+    while state / power_of_ten_meet(5 - zero) % 10 != 0 {
+        zero += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for next in neighbours[zero] {
+        let tile = state / power_of_ten_meet(5 - *next) % 10;
+        out.push(state + tile * power_of_ten_meet(5 - zero) - tile * power_of_ten_meet(5 - *next));
+    }
+    out
+}
+
+fn sliding_puzzle_meet(board: Vec[Vec[i64]]) -> i64 {
+    let mut start = 0;
+    for row in board {
+        for x in row {
+            start = start * 10 + *x;
+        }
+    }
+    let goal = 123450;
+    if start == goal {
+        return 0;
+    }
+    let mut near: Map[i64, i64] = Map.new();
+    let mut far: Map[i64, i64] = Map.new();
+    near.insert(start, 0);
+    far.insert(goal, 0);
+    let mut near_frontier: Vec[i64] = [start];
+    let mut far_frontier: Vec[i64] = [goal];
+    while near_frontier.len() > 0 and far_frontier.len() > 0 {
+        if near_frontier.len() > far_frontier.len() {
+            let swapped_maps = near;
+            near = far;
+            far = swapped_maps;
+            let swapped_frontiers = near_frontier;
+            near_frontier = far_frontier;
+            far_frontier = swapped_frontiers;
+        }
+        let mut best = -1;
+        let mut next_frontier: Vec[i64] = Vec.new();
+        for state in near_frontier {
+            let here = near.get(*state) ?? 0;
+            for next in moves_meet(*state) {
+                match far.get(next) {
+                    Some(there) => {
+                        let total = here + 1 + *there;
+                        if best < 0 or total < best {
+                            best = total;
+                        }
+                    }
+                    None => {
+                        if not near.contains_key(next) {
+                            near.insert(next, here + 1);
+                            next_frontier.push(next);
+                        }
+                    }
+                }
+            }
+        }
+        if best >= 0 {
+            return best;
+        }
+        near_frontier = next_frontier;
+    }
+    -1
+}
+
+// ---- A* arm ---------------------------------------------------------
+
+fn power_of_ten_astar(p: i64) -> i64 {
+    let mut result = 1;
+    for _ in 0..p {
+        result *= 10;
+    }
+    result
+}
+
+fn digit_astar(state: i64, p: i64) -> i64 {
+    state / power_of_ten_astar(5 - p) % 10
+}
+
+// The sum over tiles 1 to 5 of rows plus columns from home, tile t's
+// home being cell t - 1.
+fn manhattan_astar(state: i64) -> i64 {
+    let mut total = 0;
+    for p in 0..6 {
+        let tile = digit_astar(state, p);
+        if tile != 0 {
+            total += (p / 3 - (tile - 1) / 3).abs() + (p % 3 - (tile - 1) % 3).abs();
+        }
+    }
+    total
+}
+
+fn sliding_puzzle_astar(board: Vec[Vec[i64]]) -> i64 {
+    let neighbours: Vec[Vec[i64]] = [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]];
+    let mut start = 0;
+    for row in board {
+        for x in row {
+            start = start * 10 + *x;
+        }
+    }
+    let mut best: Map[i64, i64] = Map.new();
+    best.insert(start, 0);
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    heap.push((manhattan_astar(start), 0, start));
+    while let Some((_, made, state)) = heap.pop() {
+        if state == 123450 {
+            return made;
+        }
+        if made > (best.get(state) ?? 0) {
+            continue;
+        }
+        let mut zero = 0;
+        while digit_astar(state, zero) != 0 {
+            zero += 1;
+        }
+        for next in neighbours[zero] {
+            let tile = digit_astar(state, *next);
+            let moved = state + tile * power_of_ten_astar(5 - zero) - tile * power_of_ten_astar(5 - *next);
+            let known = best.get(moved) ?? -1;
+            if known < 0 or made + 1 < known {
+                best.insert(moved, made + 1);
+                heap.push((made + 1 + manhattan_astar(moved), made + 1, moved));
+            }
+        }
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, cells: Vec[i64]) -> i64 {
+    let board = [[cells[0], cells[1], cells[2]], [cells[3], cells[4], cells[5]]];
+    if which == 0 {
+        sliding_puzzle_star(board)
+    } else if which == 1 {
+        sliding_puzzle_ranked(board)
+    } else if which == 2 {
+        sliding_puzzle_meet(board)
+    } else {
+        sliding_puzzle_astar(board)
+    }
+}
+
+// The cells read as a number in base 6, an index into the table.
+fn code(cells: Vec[i64]) -> i64 {
+    let mut c = 0;
+    for x in cells {
+        c = c * 6 + *x;
+    }
+    c
+}
+
+// The cells after the 0 swaps with cell `to`.
+fn moved(cells: Vec[i64], to: i64) -> Vec[i64] {
+    let mut out = cells.clone();
+    let mut zero = 0;
+    while out[zero] != 0 {
+        zero += 1;
+    }
+    out.swap(zero, to);
+    out
+}
+
+// The cells next to the 0's cell.
+fn moves_from(cells: Vec[i64]) -> Vec[i64] {
+    let mut zero = 0;
+    while cells[zero] != 0 {
+        zero += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    if zero % 3 > 0 {
+        out.push(zero - 1);
+    }
+    if zero % 3 < 2 {
+        out.push(zero + 1);
+    }
+    out.push((zero + 3) % 6);
+    out
+}
+
+// The definition: every board's distance from the solved one, found by
+// one breadth-first search outward from it; -1 for a board it never
+// reaches.
+fn distances() -> Vec[i64] {
+    let mut table: Vec[i64] = Vec.new();
+    for _ in 0..46656 {
+        table.push(-1);
+    }
+    let goal: Vec[i64] = [1, 2, 3, 4, 5, 0];
+    table[code(goal)] = 0;
+    let mut level: Vec[Vec[i64]] = [goal];
+    let mut depth = 0;
+    while level.len() > 0 {
+        depth += 1;
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for cells in level {
+            for to in moves_from(cells) {
+                let b = moved(cells, to);
+                if table[code(b)] < 0 {
+                    table[code(b)] = depth;
+                    next.push(b);
+                }
+            }
+        }
+        level = next;
+    }
+    table
+}
+
+fn inversions(cells: Vec[i64]) -> i64 {
+    let mut count = 0;
+    for i in 0..6 {
+        for j in i + 1..6 {
+            if cells[i] != 0 and cells[j] != 0 and cells[i] > cells[j] {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// The next order of `cells` in dictionary order; false after the last.
+fn next_order(cells: mut ref Vec[i64]) -> bool {
+    let mut i = cells.len() - 2;
+    while i >= 0 and cells[i] >= cells[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return false;
+    }
+    let mut j = cells.len() - 1;
+    while cells[j] <= cells[i] {
+        j -= 1;
+    }
+    cells.swap(i, j);
+    let mut lo = i + 1;
+    let mut hi = cells.len() - 1;
+    while lo < hi {
+        cells.swap(lo, hi);
+        lo += 1;
+        hi -= 1;
+    }
+    true
+}
+
+fn main() {
+    let arms = 4;
+    let table = distances();
+    let mut seed = 7730;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut boards = 0;
+    let mut total = 0;
+    let mut cells: Vec[i64] = [0, 1, 2, 3, 4, 5];
+    loop {
+        // P3 and P4 on every fourth board: a neighbour of it, and a board
+        // a random number of random moves from the solved one.
+        let sampled = boards % 4 == 0;
+        let options = moves_from(cells);
+        let neighbour = moved(cells, options[next_random(mut seed) % options.len()]);
+        let walk = 1 + next_random(mut seed) % 30;
+        let mut walked: Vec[i64] = [1, 2, 3, 4, 5, 0];
+        for _ in 0..walk {
+            let steps = moves_from(walked);
+            walked = moved(walked, steps[next_random(mut seed) % steps.len()]);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, cells);
+            if which == 0 and got > 0 {
+                total += got;
+            }
+            // P1: the definition's distance.
+            checks += 1;
+            if got != table[code(cells)] {
+                fails[0] += 1;
+            }
+            // P2: unsolvable exactly when the tiles, the 0 left out, are
+            // in an odd order.
+            checks += 1;
+            if (got < 0) != (inversions(cells) % 2 == 1) {
+                fails[1] += 1;
+            }
+            if sampled {
+                // P3: one move changes the answer by exactly one, or
+                // leaves the board unsolvable.
+                checks += 1;
+                let near = answer_with(which, neighbour);
+                if (got < 0) != (near < 0) or (got >= 0 and (got - near).abs() != 1) {
+                    fails[2] += 1;
+                }
+                // P4: a board k moves from solved needs at most k moves,
+                // and an even number exactly when k is even.
+                checks += 1;
+                let back = answer_with(which, walked);
+                if back < 0 or back > walk or (walk - back) % 2 != 0 {
+                    fails[3] += 1;
+                }
+            }
+        }
+        boards += 1;
+        if not next_order(mut cells) {
+            break;
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{boards} boards ({total} moves), {arms} arms, {checks} checks, {failures} failures");
+}

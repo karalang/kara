@@ -1,0 +1,9 @@
+
+fn mk() -> Vec[Fn() -> i64] {
+    let s = "abc".to_string();
+    let r = ref s;
+    let mut v: Vec[Fn() -> i64] = Vec.new();
+    v.push(|| r.len() as i64);
+    v
+}
+fn main() { let v = mk(); println(f"{(v[0])()}"); }

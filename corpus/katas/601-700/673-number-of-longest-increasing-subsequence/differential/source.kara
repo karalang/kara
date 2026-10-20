@@ -173,7 +173,7 @@ fn starting_at_memo(nums: Vec[i64], i: i64, memo: mut ref Vec[(i64, i64)], known
     let mut count = 1;
     for j in i + 1..nums.len() {
         if nums[j] > nums[i] {
-            let (l, c) = starting_at_memo(nums, j, memo, known);
+            let (l, c) = starting_at_memo(nums, j, mut memo, mut known);
             if l + 1 > len {
                 len = l + 1;
                 count = c;

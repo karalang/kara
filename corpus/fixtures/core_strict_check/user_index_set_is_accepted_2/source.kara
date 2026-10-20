@@ -1,0 +1,11 @@
+struct Sparse { keys: Vec[i64], vals: Vec[i64] }
+impl IndexSet[i64] for Sparse {
+    type Output = i64;
+    fn index_set(mut ref self, k: own i64, v: own i64) { self.keys.push(k); self.vals.push(v); }
+}
+fn main() {
+    let mut s = Sparse { keys: Vec.new(), vals: Vec.new() };
+    s[1] = "x";
+    s[2] += 1;
+    println(f"{s[1]}");
+}

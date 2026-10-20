@@ -1,0 +1,82 @@
+// LeetCode 763 — Partition Labels, with letter sets as bit masks.
+//
+// A part can end after position i exactly when no letter appears both up
+// to i and after it. Build the set of letters of every prefix and of every
+// suffix, as 26-bit masks, and cut wherever a prefix's set and the
+// following suffix's set have no bit in common. O(n).
+
+fn partition_labels(s: String) -> Vec[i64] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut before: Vec[i64] = Vec.new();
+    let mut so_far = 0;
+    for i in 0..n {
+        so_far |= 1 << (bytes[i] - 97) as i64;
+        before.push(so_far);
+    }
+    let mut after: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        after.push(0);
+    }
+    for i in (0..n).rev() {
+        after[i] = after[i + 1] | (1 << (bytes[i] - 97) as i64);
+    }
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut start = 0;
+    for i in 0..n {
+        if before[i] & after[i + 1] == 0 {
+            sizes.push(i - start + 1);
+            start = i + 1;
+        }
+    }
+    sizes
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random string of n letters whose letters drift through the alphabet,
+// so that it falls into several parts: the letter at i is drawn from a
+// window of `width` letters starting near i x 26 / n.
+fn random_letters(n: i64, width: i64, seed: mut ref i64) -> String {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut s = String.new();
+    for i in 0..n {
+        let k = (i * 26 / n + next_random(mut seed) % width).min(25);
+        s.push_str(letters[k..k + 1]);
+    }
+    s
+}
+
+fn show(s: String) {
+    let sizes = partition_labels(s.clone());
+    println(f"{s} -> {sizes}");
+}
+
+fn main() {
+    show("ababcbacadefegdehijhklij");
+    show("eccbbbbdec");
+    show("a");
+    show("abc");
+    show("abca");
+    show("aabbcc");
+    show("abacbdcedfeg");
+    show("zyxwvutsrqponmlkjihgfedcbaz");
+    let mut seed = 763;
+    let mut parts = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 500;
+        let width = 1 + next_random(mut seed) % 4;
+        let sizes = partition_labels(random_letters(n, width, mut seed));
+        parts += sizes.len();
+        for size in sizes.iter() {
+            check = (check * 31 + *size) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {parts} parts, checksum {check}");
+}

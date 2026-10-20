@@ -1,0 +1,270 @@
+// LeetCode #753: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on every safe the constraints allow.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn crack_safe_star(n: i64, k: i64) -> String {
+    let mut nodes = 1;
+    for _ in 0..n - 1 {
+        nodes *= k;
+    }
+    let mut used: Vec[i64] = Vec.new();
+    for _ in 0..nodes {
+        used.push(0);
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((0, -1));
+    let mut digits: Vec[i64] = Vec.new();
+    while stack.len() > 0 {
+        let (node, digit) = stack[stack.len() - 1];
+        if used[node] < k {
+            let d = used[node];
+            used[node] += 1;
+            stack.push(((node * k + d) % nodes, d));
+        } else {
+            stack.pop();
+            if digit >= 0 {
+                digits.push(digit);
+            }
+        }
+    }
+    let mut out = String.new();
+    for _ in 0..n - 1 {
+        out.push('0');
+    }
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push((b'0' + digits[i] as u8) as char);
+        i -= 1;
+    }
+    out
+}
+
+// ---- search arm -----------------------------------------------------
+
+fn search_recur(typed: mut ref String, seen: mut ref Set[String], n: i64, k: i64, total: i64) -> bool {
+    if seen.len() == total {
+        return true;
+    }
+    let tail = typed[typed.len() - (n - 1)..].to_string();
+    for d in 0..k {
+        let code = f"{tail}{d}";
+        if not seen.contains(code) {
+            seen.insert(code.clone());
+            typed.push_str(f"{d}");
+            if search_recur(mut typed, mut seen, n, k, total) {
+                return true;
+            }
+            *typed = typed[..typed.len() - 1].to_string();
+            seen.remove(code);
+        }
+    }
+    false
+}
+
+fn crack_safe_recur(n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let mut typed = String.new();
+    for _ in 0..n {
+        typed.push('0');
+    }
+    let mut seen: Set[String] = Set.new();
+    seen.insert(typed.clone());
+    search_recur(mut typed, mut seen, n, k, total);
+    typed
+}
+
+// ---- Lyndon arm -----------------------------------------------------
+
+fn lyndon_lyndon(t: i64, p: i64, n: i64, k: i64, a: mut ref Vec[i64], out: mut ref Vec[i64]) {
+    if t > n {
+        if n % p == 0 {
+            for i in 1..p + 1 {
+                out.push(a[i]);
+            }
+        }
+    } else {
+        a[t] = a[t - p];
+        lyndon_lyndon(t + 1, p, n, k, mut a, mut out);
+        for j in a[t - p] + 1..k {
+            a[t] = j;
+            lyndon_lyndon(t + 1, t, n, k, mut a, mut out);
+        }
+    }
+}
+
+fn crack_safe_lyndon(n: i64, k: i64) -> String {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        a.push(0);
+    }
+    let mut cycle: Vec[i64] = Vec.new();
+    lyndon_lyndon(1, 1, n, k, mut a, mut cycle);
+    let mut out = String.new();
+    for d in cycle.iter() {
+        out.push_str(f"{d}");
+    }
+    for i in 0..n - 1 {
+        out.push_str(f"{cycle[i % cycle.len()]}");
+    }
+    out
+}
+
+// ---- greedy arm -----------------------------------------------------
+
+fn crack_safe_greedy(n: i64, k: i64) -> String {
+    let mut total = 1;
+    for _ in 0..n {
+        total *= k;
+    }
+    let mut typed_code: Vec[bool] = Vec.new();
+    for _ in 0..total {
+        typed_code.push(false);
+    }
+    typed_code[0] = true;
+    let mut code = 0;
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push('0');
+    }
+    let mut going = true;
+    while going {
+        going = false;
+        let mut d = k - 1;
+        while d >= 0 {
+            let next = (code * k + d) % total;
+            if not typed_code[next] {
+                typed_code[next] = true;
+                code = next;
+                out.push((b'0' + d as u8) as char);
+                going = true;
+                break;
+            }
+            d -= 1;
+        }
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer_with(which: i64, n: i64, k: i64) -> String {
+    if which == 0 {
+        crack_safe_star(n, k)
+    } else if which == 1 {
+        crack_safe_recur(n, k)
+    } else if which == 2 {
+        crack_safe_lyndon(n, k)
+    } else {
+        crack_safe_greedy(n, k)
+    }
+}
+
+// The definition: an answer opens the safe if every one of the k^n codes
+// appears in it, read as strings off the text; it is shortest if it is
+// k^n + n - 1 digits long, since each new code costs at least one digit
+// after the first n.
+fn every_code(text: String, n: i64, k: i64) -> bool {
+    let mut windows: Set[String] = Set.new();
+    let mut i = 0;
+    while i + n <= text.len() {
+        windows.insert(text[i..i + n].to_string());
+        i += 1;
+    }
+    let mut codes: Vec[String] = Vec.new();
+    codes.push(String.new());
+    for _ in 0..n {
+        let mut longer: Vec[String] = Vec.new();
+        for c in codes.iter() {
+            for d in 0..k {
+                longer.push(f"{c}{d}");
+            }
+        }
+        codes = longer;
+    }
+    for c in codes.iter() {
+        if not windows.contains(c.clone()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn count_digit(text: String, upto: i64, d: u8) -> i64 {
+    let bytes = text.bytes();
+    let mut count = 0;
+    for i in 0..upto {
+        if bytes[i] == b'0' + d {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut safes = 0;
+    let mut digits = 0;
+    for n in 1..5 {
+        for k in 1..11 {
+            let mut total = 1;
+            for _ in 0..n {
+                total *= k;
+            }
+            if total > 4096 {
+                continue;
+            }
+            safes += 1;
+            digits += total + n - 1;
+            for which in 0..arms {
+                let got = answer_with(which, n, k);
+                // P1: shortest, k^n + n - 1 digits.
+                checks += 1;
+                if got.len() != total + n - 1 {
+                    fails[0] += 1;
+                }
+                // P2: every code in it (the definition).
+                checks += 1;
+                if not every_code(got.clone(), n, k) {
+                    fails[1] += 1;
+                }
+                // P3: it ends with its own first n - 1 digits, since a
+                // shortest answer is a cycle written out with its start
+                // repeated.
+                checks += 1;
+                if got.len() < n - 1 or got[got.len() - (n - 1)..].to_string() != got[..n - 1].to_string() {
+                    fails[2] += 1;
+                }
+                // P4: in its first k^n digits, the cycle, every digit
+                // appears k^(n-1) times, as each starts that many codes.
+                checks += 1;
+                let mut even = got.len() >= total;
+                if even {
+                    for d in 0..k {
+                        if count_digit(got.clone(), total, d as u8) != total / k {
+                            even = false;
+                        }
+                    }
+                }
+                if not even {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{safes} safes ({digits} digits in all), {arms} arms, {checks} checks, {failures} failures");
+}

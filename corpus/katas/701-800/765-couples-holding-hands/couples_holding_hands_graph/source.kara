@@ -1,0 +1,88 @@
+// LeetCode 765 — Couples Holding Hands, cycles in the couch graph.
+//
+// Join two couches when a couple is split between them. Every couch then
+// has two such links, counting a couple that shares a couch as a link to
+// itself, so the couches fall into cycles, and a cycle of k couches takes
+// k - 1 swaps. Build the graph and count the cycles with a depth-first
+// search. O(n).
+
+fn visit(couch: i64, links: ref Vec[Vec[i64]], seen: mut ref Vec[bool]) {
+    seen[couch] = true;
+    for next in links[couch].iter() {
+        if not seen[*next] {
+            visit(*next, links, mut seen);
+        }
+    }
+}
+
+fn min_swaps_couples(row: Vec[i64]) -> i64 {
+    let couches = row.len() / 2;
+    // where each couple's two members sit, as couches
+    let mut sits: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..couches {
+        sits.push(Vec.new());
+    }
+    for seat in 0..row.len() {
+        sits[row[seat] / 2].push(seat / 2);
+    }
+    let mut links: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..couches {
+        links.push(Vec.new());
+    }
+    for couple in sits.iter() {
+        links[couple[0]].push(couple[1]);
+        links[couple[1]].push(couple[0]);
+    }
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..couches {
+        seen.push(false);
+    }
+    let mut cycles = 0;
+    for couch in 0..couches {
+        if not seen[couch] {
+            visit(couch, links, mut seen);
+            cycles += 1;
+        }
+    }
+    couches - cycles
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(row: Vec[i64]) {
+    let swaps = min_swaps_couples(row.clone());
+    println(f"{row} -> {swaps}");
+}
+
+fn main() {
+    show([0, 2, 1, 3]);
+    show([3, 2, 0, 1]);
+    show([0, 1]);
+    show([1, 0]);
+    show([0, 2, 4, 1, 3, 5]);
+    show([5, 4, 2, 6, 3, 1, 0, 7]);
+    show([0, 3, 2, 5, 4, 7, 6, 9, 8, 1]);
+    let mut seed = 765;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let couples = 1 + next_random(mut seed) % 30;
+        let mut row: Vec[i64] = Vec.new();
+        for p in 0..2 * couples {
+            row.push(p);
+        }
+        for i in 0..2 * couples {
+            let j = i + next_random(mut seed) % (2 * couples - i);
+            row.swap(i, j);
+        }
+        let swaps = min_swaps_couples(row);
+        total += swaps;
+        check = (check * 31 + swaps) % 1000000007;
+    }
+    println(f"300 random rows: {total} swaps in all, checksum {check}");
+}

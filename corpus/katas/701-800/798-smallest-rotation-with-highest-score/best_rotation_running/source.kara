@@ -1,0 +1,77 @@
+// LeetCode 798 — Smallest Rotation with Highest Score, one rotation to
+// the next.
+//
+// Going from rotation k to k + 1 moves the front number to the back,
+// where it always scores as every number is below n, and moves every
+// other number down one place, so a number then at the index equal to
+// its value stops scoring. That is the number whose original index i
+// has i - nums[i] = k, mod n; count those for each k first. Then score
+// k + 1 is score k, less that count, plus one. O(n).
+fn best_rotation(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut at_edge: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        at_edge.push(0);
+    }
+    let mut score = 0;
+    for i in 0..n {
+        at_edge[(i - nums[i] + n) % n] += 1;
+        if nums[i] <= i {
+            score += 1;
+        }
+    }
+    let mut best = 0;
+    let mut best_score = score;
+    for k in 0..n - 1 {
+        score = score - at_edge[k] + 1;
+        if score > best_score {
+            best_score = score;
+            best = k + 1;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut text = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    println(f"nums = [{text}] -> {best_rotation(nums)}");
+}
+
+fn main() {
+    show(vec![2, 3, 1, 4, 0]);
+    show(vec![1, 3, 0, 2, 4]);
+    show(vec![0]);
+    show(vec![0, 0, 0, 0, 0]);
+    show(vec![4, 4, 4, 4, 4]);
+    show(vec![0, 1, 2, 3, 4]);
+    show(vec![4, 3, 2, 1, 0]);
+    show(vec![1, 0]);
+    let mut seed = 798;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let top = 1 + next_random(mut seed) % n;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % top);
+        }
+        let k = best_rotation(nums);
+        total += k;
+        check = (check * 131 + k + i) % 1000000007;
+    }
+    println(f"300 random arrays: rotations adding up to {total}, checksum {check}");
+}

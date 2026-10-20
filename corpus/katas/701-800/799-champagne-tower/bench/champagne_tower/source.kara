@@ -1,0 +1,52 @@
+// LeetCode 799 — Champagne Tower: the bench.
+//
+// 4,096 questions are made once: up to 10^9 cups, LeetCode's most,
+// poured into a tower and a glass asked about in rows 50 to 99, the
+// deepest LeetCode allows. Each of 81,920 rounds answers the next
+// question with the ★ arm, adding up the answers.
+fn champagne_tower(poured: i64, query_row: i64, query_glass: i64) -> f64 {
+    let mut row: Vec[f64] = Vec.new();
+    row.push(poured as f64);
+    for r in 0..query_row {
+        let mut below: Vec[f64] = Vec.new();
+        for _ in 0..r + 2 {
+            below.push(0.0);
+        }
+        for c in 0..r + 1 {
+            if row[c] > 1.0 {
+                let half = (row[c] - 1.0) / 2.0;
+                below[c] += half;
+                below[c + 1] += half;
+            }
+        }
+        row = below;
+    }
+    let got = row[query_glass];
+    if got > 1.0 { 1.0 } else { got }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 799;
+    let mut questions: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..4096 {
+        let poured = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001;
+        let row = 50 + next_random(mut seed) % 50;
+        let glass = next_random(mut seed) % (row + 1);
+        questions.push((poured, row, glass));
+    }
+    let rounds = 81920;
+    let mut total = 0.0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let (poured, row, glass) = questions[r % 4096];
+        let got = champagne_tower(poured, row, glass);
+        total += got;
+        check = (check * 31 + (got * 1000000.0) as i64) % 1000000007;
+    }
+    println(f"{rounds} glasses: {total:.5} cups in all, checksum {check}");
+}

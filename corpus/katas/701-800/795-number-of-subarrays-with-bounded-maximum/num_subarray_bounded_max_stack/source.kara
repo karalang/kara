@@ -1,0 +1,77 @@
+// LeetCode 795 — Number of Subarrays with Bounded Maximum, by which
+// number is the maximum.
+//
+// Give each subarray to its leftmost largest number. Number i is that
+// for the subarrays starting after the last number before it at least
+// as large and ending before the next number after it that is larger;
+// both are found with a stack of places whose numbers go down. Add up
+// the subarrays of the numbers in [left, right]. O(n).
+fn num_subarray_bounded_max(nums: Vec[i64], left: i64, right: i64) -> i64 {
+    let n = nums.len();
+    // before[i]: the last place before i with a number at least nums[i],
+    // or -1; after[i]: the first place after i with a larger number, or n.
+    let mut before: Vec[i64] = Vec.new();
+    let mut after: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        before.push(-1);
+        after.push(n);
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    for i in 0..n {
+        while stack.len() > 0 and nums[stack[stack.len() - 1]] < nums[i] {
+            let top = stack.pop().unwrap();
+            after[top] = i;
+        }
+        if stack.len() > 0 {
+            before[i] = stack[stack.len() - 1];
+        }
+        stack.push(i);
+    }
+    let mut count = 0;
+    for i in 0..n {
+        if nums[i] >= left and nums[i] <= right {
+            count += (i - before[i]) * (after[i] - i);
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], left: i64, right: i64) {
+    let shown = nums.clone();
+    let answer = num_subarray_bounded_max(nums, left, right);
+    println(f"nums = {shown}, left = {left}, right = {right} -> {answer}");
+}
+
+fn main() {
+    show(vec![2, 1, 4, 3], 2, 3);
+    show(vec![2, 9, 2, 5, 6], 2, 8);
+    show(vec![5], 5, 5);
+    show(vec![1, 1, 1], 2, 3);
+    show(vec![3, 3, 3, 3], 0, 1000000000);
+    show(vec![0, 1000000000, 0], 1000000000, 1000000000);
+    show(vec![7, 1, 7, 1, 7], 7, 7);
+    let mut seed = 795;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let top = 1 + next_random(mut seed) % 20;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % top);
+        }
+        let a = next_random(mut seed) % top;
+        let b = next_random(mut seed) % top;
+        let answer = num_subarray_bounded_max(nums, a.min(b), a.max(b));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random cases: {total} subarrays, checksum {check}");
+}

@@ -1,0 +1,12 @@
+target = 2 -> 3
+target = 3 -> 2
+target = 1 -> 1
+target = -1 -> 1
+target = 4 -> 3
+target = 5 -> 5
+target = -6 -> 3
+target = 1000000000 -> 44723
+target = -1000000000 -> 44723
+target = 999961560 -> 44720
+target = 999961561 -> 44721
+1000 random targets: 28193664 moves in all, checksum 257027131

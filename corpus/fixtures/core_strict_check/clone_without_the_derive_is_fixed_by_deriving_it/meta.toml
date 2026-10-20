@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::clone_without_the_derive_is_fixed_by_deriving_it"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "db0aa9a19"
+extracted_src = "16ab4c02"
+model_rev = "583cfb0d"
+model_src = "16ab4c02"

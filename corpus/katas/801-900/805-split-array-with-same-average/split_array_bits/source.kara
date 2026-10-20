@@ -1,0 +1,100 @@
+// LeetCode 805 — Split Array With Same Average, sums by size in bits.
+//
+// The sums-by-size table of the ★ arm with each size's sums kept as the
+// bits of a row of 64-bit words: bit s of row k says some k numbers sum
+// to s. Adding a number x ors row k - 1 shifted up by x into row k.
+// O(n² · sums / 64).
+fn split_array_same_average(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let total = nums.iter().sum();
+    let half = n / 2;
+    let words = total / 64 + 1;
+    let mut rows: Vec[Vec[u64]] = Vec.new();
+    for _ in 0..half + 1 {
+        let mut row: Vec[u64] = Vec.new();
+        for _ in 0..words {
+            row.push(0);
+        }
+        rows.push(row);
+    }
+    rows[0][0] = 1;
+    for x in nums.iter() {
+        let whole = x / 64;
+        let part = x % 64;
+        let mut k = half;
+        while k >= 1 {
+            // Row k |= row k - 1 shifted up by x bits, from the top word
+            // down so that nothing is shifted twice.
+            let mut w = words - 1;
+            while w >= whole {
+                let from = w - whole;
+                let mut bits = rows[k - 1][from] << part;
+                if part > 0 and from > 0 {
+                    bits = bits | (rows[k - 1][from - 1] >> (64 - part));
+                }
+                rows[k][w] = rows[k][w] | bits;
+                w -= 1;
+            }
+            k -= 1;
+        }
+    }
+    for k in 1..half + 1 {
+        if total * k % n == 0 {
+            let s = total * k / n;
+            if (rows[k][s / 64] >> (s % 64)) & 1 == 1 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out.push_str("]");
+    println(f"{out} -> {split_array_same_average(nums)}");
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    show(vec![3, 1]);
+    show(vec![5]);
+    show(vec![0, 0]);
+    show(vec![4, 4, 4, 4]);
+    show(vec![0, 13, 13, 7, 5, 0, 10, 19, 5]);
+    show(vec![10000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9999]);
+    show(vec![2, 0, 5, 6, 16, 12, 15, 12, 4]);
+    let mut seed = 805;
+    let mut yes = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Up to 16 numbers below a cap of 4 to 400, so that both answers
+        // come up.
+        let n = 1 + next_random(mut seed) % 16;
+        let cap = 4 * (1 + next_random(mut seed) % 100);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % cap);
+        }
+        let can = split_array_same_average(nums);
+        if can {
+            yes += 1;
+        }
+        check = (check * 131 + if can { 1 } else { 2 } + i) % 1000000007;
+    }
+    println(f"300 random arrays: {yes} can be split, checksum {check}");
+}

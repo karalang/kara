@@ -1,0 +1,8 @@
+import std.time;
+
+fn main() {
+    let d = time.Duration.ms(1500);
+    println(d.as_ms());
+    time.sleep(time.Duration.ms(1));
+    println("ok");
+}

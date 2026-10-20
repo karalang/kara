@@ -1,0 +1,20 @@
+shared struct Bag { mut items: Vec[i64] }
+fn add_all(src: Bag, dst: Bag) {
+    for x in src.items {
+        dst.items.push(x);
+    }
+}
+fn total(b: Bag) -> i64 {
+    let mut t = 0;
+    for x in b.items { t = t + x; }
+    t
+}
+fn main() {
+    let a = Bag { items: Vec.new() };
+    let b = Bag { items: Vec.new() };
+    let mut i = 0;
+    while i < 5 { a.items.push(i); i = i + 1; }
+    add_all(a, b);
+    add_all(a, b);
+    println(f"{b.items.len()} {total(b)} {total(a)}");
+}

@@ -1,0 +1,214 @@
+// LeetCode 770 — Basic Calculator IV, two stacks and unmerged terms.
+//
+// Evaluate as the tokens arrive with two stacks, one of operands and one
+// of operators: an operator first applies every operator waiting on its
+// stack that binds at least as tightly, and a closing bracket applies
+// everything back to its opening one. An operand here is a plain list of
+// terms, each its sorted variables and a coefficient, never merged while
+// the expression is evaluated: a sum joins two lists and a product forms
+// every pair. Equal terms are added up only once, at the end.
+
+fn tokenize(expression: String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+        } else {
+            if word.len() > 0 {
+                tokens.push(word.clone());
+                word = String.new();
+            }
+            if c != ' ' {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if word.len() > 0 {
+        tokens.push(word);
+    }
+    tokens
+}
+
+fn joined(names: Vec[String]) -> String {
+    let mut key = String.new();
+    for i in 0..names.len() {
+        if i > 0 {
+            key.push('*');
+        }
+        key.push_str(names[i]);
+    }
+    key
+}
+
+fn tightness(op: String) -> i64 {
+    if op == "*" { 2 } else if op == "(" { 0 } else { 1 }
+}
+
+fn apply(values: mut ref Vec[Vec[(Vec[String], i64)]], op: String) {
+    let b = values.pop().unwrap();
+    let a = values.pop().unwrap();
+    let mut out: Vec[(Vec[String], i64)] = Vec.new();
+    if op == "*" {
+        for (na, ca) in a {
+            for (nb, cb) in b {
+                let mut names = na.clone();
+                for name in nb {
+                    names.push(name.clone());
+                }
+                names.sort();
+                out.push((names, ca * cb));
+            }
+        }
+    } else {
+        let sign = if op == "+" { 1 } else { -1 };
+        for (names, coef) in a {
+            out.push((names.clone(), coef));
+        }
+        for (names, coef) in b {
+            out.push((names.clone(), sign * coef));
+        }
+    }
+    values.push(out);
+}
+
+fn basic_calculator_iv(expression: String, evalvars: Vec[String], evalints: Vec[i64]) -> Vec[String] {
+    let mut known: Map[String, i64] = Map.new();
+    for i in 0..evalvars.len() {
+        known.insert(evalvars[i].clone(), evalints[i]);
+    }
+    let mut values: Vec[Vec[(Vec[String], i64)]] = Vec.new();
+    let mut ops: Vec[String] = Vec.new();
+    for token in tokenize(expression).into_iter() {
+        if token == "(" {
+            ops.push(token);
+        } else if token == ")" {
+            while ops[ops.len() - 1] != "(" {
+                apply(mut values, ops.pop().unwrap());
+            }
+            ops.pop();
+        } else if token == "+" or token == "-" or token == "*" {
+            while ops.len() > 0 and tightness(ops[ops.len() - 1]) >= tightness(token) {
+                apply(mut values, ops.pop().unwrap());
+            }
+            ops.push(token);
+        } else if token.chars().next().unwrap().is_ascii_digit() {
+            values.push([(Vec.new(), i64.parse(token).unwrap())]);
+        } else {
+            match known.get(token) {
+                Some(value) => values.push([(Vec.new(), *value)]),
+                None => values.push([([token.clone()], 1)]),
+            }
+        }
+    }
+    while ops.len() > 0 {
+        apply(mut values, ops.pop().unwrap());
+    }
+    // equal terms added up: sorted by degree, highest first, then by the
+    // variables, so that equal terms sit together and in answer order
+    let mut terms: Vec[(i64, String, i64)] = Vec.new();
+    for (names, coef) in values.pop().unwrap() {
+        terms.push((-names.len(), joined(names), coef));
+    }
+    terms.sort();
+    let mut answer: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < terms.len() {
+        let mut coef = 0;
+        let mut j = i;
+        while j < terms.len() and terms[j].1 == terms[i].1 {
+            coef += terms[j].2;
+            j += 1;
+        }
+        if coef != 0 {
+            let key = terms[i].1.clone();
+            if key.len() == 0 {
+                answer.push(f"{coef}");
+            } else {
+                answer.push(f"{coef}*{key}");
+            }
+        }
+        i = j;
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn quoted(answer: Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..answer.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"\"{answer[i]}\"");
+    }
+    out.push_str("]");
+    out
+}
+
+fn show(expression: String, evalvars: Vec[String], evalints: Vec[i64]) {
+    let answer = basic_calculator_iv(expression, evalvars, evalints);
+    let shown = quoted(answer);
+    println(f"{expression} -> {shown}");
+}
+
+// A random expression of about `size` leaves over the variables a to d,
+// x and y, and numbers up to 9, with + - * and brackets.
+fn random_expression(seed: mut ref i64, size: i64) -> String {
+    if size <= 1 {
+        let pick = next_random(mut seed) % 9;
+        if pick < 3 {
+            return f"{next_random(mut seed) % 10}";
+        }
+        let names = ["a", "b", "c", "d", "x", "y"];
+        return names[pick - 3].to_string();
+    }
+    let left = 1 + next_random(mut seed) % (size - 1);
+    let a = random_expression(mut seed, left);
+    let b = random_expression(mut seed, size - left);
+    let ops = [" + ", " - ", " * "];
+    let op = ops[next_random(mut seed) % 3].to_string();
+    if next_random(mut seed) % 3 == 0 {
+        f"({a}{op}{b})"
+    } else {
+        f"{a}{op}{b}"
+    }
+}
+
+fn main() {
+    show("e + 8 - a + 5", ["e"], [1]);
+    show("e - 8 + temperature - pressure", ["e", "temperature"], [1, 12]);
+    show("(e + 8) * (e - 8)", [], []);
+    show("7 - 7", [], []);
+    show("a * b * c + b * a * c * 4", [], []);
+    show("((a - b) * (b - c) + (c - a)) * ((a - b) + (b - c) * (c - a))", [], []);
+    show("x * y - y * x + 0", [], []);
+    show("a * 0 + 12 * (b - b) - 3", ["b"], [5]);
+    let mut seed = 770;
+    let mut terms = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let size = 1 + next_random(mut seed) % 12;
+        let expression = random_expression(mut seed, size);
+        let mut evalvars: Vec[String] = Vec.new();
+        let mut evalints: Vec[i64] = Vec.new();
+        if next_random(mut seed) % 2 == 0 {
+            evalvars.push("x".to_string());
+            evalints.push(next_random(mut seed) % 7 - 3);
+        }
+        let answer = basic_calculator_iv(expression, evalvars, evalints);
+        terms += answer.len();
+        for t in answer {
+            for b in t.bytes() {
+                check = (check * 31 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random expressions: {terms} terms in all, checksum {check}");
+}

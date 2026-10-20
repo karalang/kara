@@ -1,0 +1,106 @@
+// LeetCode 780 — Reaching Points, the whole way back listed.
+//
+// Everything that reaches (tx, ty) lies on its one way back, which is
+// Euclid's algorithm with every subtraction kept: a list of runs, in
+// each of which one coordinate holds still at some value `fixed` while
+// the other falls by `fixed` at a time from `top` down to `bottom`. List
+// the runs first, then look for the start in them. O(log max(tx, ty)).
+
+#[derive(Clone, Copy)]
+struct Run {
+    x_moves: bool,
+    fixed: i64,
+    top: i64,
+    bottom: i64,
+}
+
+fn runs_back(tx: i64, ty: i64) -> Vec[Run] {
+    let mut runs: Vec[Run] = Vec.new();
+    let mut x = tx;
+    let mut y = ty;
+    while x != y {
+        if x > y {
+            // x falls by y while it stays positive.
+            let bottom = if x % y == 0 { y } else { x % y };
+            runs.push(Run { x_moves: true, fixed: y, top: x, bottom: bottom });
+            x = bottom;
+        } else {
+            let bottom = if y % x == 0 { x } else { y % x };
+            runs.push(Run { x_moves: false, fixed: x, top: y, bottom: bottom });
+            y = bottom;
+        }
+    }
+    runs
+}
+
+fn reaching_points(sx: i64, sy: i64, tx: i64, ty: i64) -> bool {
+    if sx == tx and sy == ty {
+        return true;
+    }
+    for run in runs_back(tx, ty).iter() {
+        let r = *run;
+        let (s_moving, s_fixed) = if r.x_moves { (sx, sy) } else { (sy, sx) };
+        if s_fixed == r.fixed and s_moving >= r.bottom and s_moving <= r.top and (r.top - s_moving) % r.fixed == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(sx: i64, sy: i64, tx: i64, ty: i64) {
+    let answer = reaching_points(sx, sy, tx, ty);
+    println(f"({sx}, {sy}) -> ({tx}, {ty}): {answer}");
+}
+
+// A point reached from (x, y) by `moves` random moves.
+fn walk(seed: mut ref i64, x: i64, y: i64, moves: i64) -> (i64, i64) {
+    let mut a = x;
+    let mut b = y;
+    for _ in 0..moves {
+        if next_random(mut seed) % 2 == 0 {
+            a += b;
+        } else {
+            b += a;
+        }
+    }
+    (a, b)
+}
+
+fn main() {
+    show(1, 1, 3, 5);
+    show(1, 1, 2, 2);
+    show(1, 1, 1, 1);
+    show(1, 1, 1000000000, 1);
+    show(1, 1, 1000000000, 999999999);
+    show(3, 7, 3, 4);
+    show(9, 5, 12, 8);
+    show(2, 4, 2, 1000000000);
+    show(2, 4, 2, 999999999);
+    show(35, 13, 960682455, 554650274);
+    show(35, 13, 960682455, 554650273);
+    let mut seed = 780;
+    let mut yes = 0;
+    let mut check = 0;
+    for case in 0..400 {
+        let sx = 1 + next_random(mut seed) % 20;
+        let sy = 1 + next_random(mut seed) % 20;
+        let (tx, ty) = if case % 2 == 0 {
+            walk(mut seed, sx, sy, next_random(mut seed) % 30)
+        } else {
+            (sx + next_random(mut seed) % 2000, sy + next_random(mut seed) % 2000)
+        };
+        let answer = reaching_points(sx, sy, tx, ty);
+        if answer {
+            yes += 1;
+        }
+        check = (check * 31 + if answer { tx % 1000 } else { ty % 1000 } + 1) % 1000000007;
+    }
+    println(f"400 random pairs: {yes} reachable, checksum {check}");
+}

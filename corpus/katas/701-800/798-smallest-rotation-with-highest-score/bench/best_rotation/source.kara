@@ -1,0 +1,64 @@
+// LeetCode 798 — Smallest Rotation with Highest Score: the bench.
+//
+// 16 arrays of 100,000 numbers, LeetCode's longest, are made once, each
+// number below a bound of 1 to 100,000 drawn for its array. Each of
+// 4,000 rounds finds the best rotation of the next one with the ★ arm.
+fn best_rotation(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut change: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        change.push(0);
+    }
+    for i in 0..n {
+        let first = (i + 1) % n;
+        let last = (i - nums[i] + n) % n;
+        change[first] += 1;
+        change[last + 1] -= 1;
+        if first > last {
+            // The run wraps past n - 1, so last + 1 comes before first
+            // and the two marks take 1 off the gap between its two
+            // pieces; adding 1 everywhere makes that 0 and the pieces 1.
+            change[0] += 1;
+            change[n] -= 1;
+        }
+    }
+    let mut best = 0;
+    let mut best_score = -1;
+    let mut score = 0;
+    for k in 0..n {
+        score += change[k];
+        if score > best_score {
+            best_score = score;
+            best = k;
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 100000;
+    let mut seed = 798;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..16 {
+        let top = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % n;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+        }
+        arrays.push(nums);
+    }
+    let rounds = 4000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let k = best_rotation(arrays[r % 16]);
+        total += k;
+        check = (check * 131 + k) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} numbers: rotations adding up to {total}, checksum {check}");
+}

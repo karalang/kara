@@ -172,8 +172,8 @@ fn special(levels: i64, val: i64, chance: i64, spread: i64, seed: mut ref i64) -
 fn all_values(root: Option[TreeNode], out: mut ref Vec[i64]) {
     if let Some(n) = root {
         out.push(n.val);
-        all_values(n.left, out);
-        all_values(n.right, out);
+        all_values(n.left, mut out);
+        all_values(n.right, mut out);
     }
 }
 

@@ -1,0 +1,199 @@
+// LeetCode 772 — Basic Calculator III, innermost brackets first.
+//
+// Read the expression into tokens. While a bracket is left, the first
+// closing bracket and the last opening one before it hold a flat run;
+// replace the three by the run's value. A flat run is evaluated in two
+// passes, * and / first, then + and -. O(n^2) in the worst case.
+
+enum Token {
+    Num(i64),
+    Op(u8),
+    Open,
+    Close,
+}
+
+impl Token {
+    fn is_open(self) -> bool {
+        match self {
+            Token.Open => true,
+            _ => false,
+        }
+    }
+
+    fn is_close(self) -> bool {
+        match self {
+            Token.Close => true,
+            _ => false,
+        }
+    }
+}
+
+fn tokenize(s: String) -> Vec[Token] {
+    let bytes = s.bytes();
+    let mut tokens: Vec[Token] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c >= b'0' and c <= b'9' {
+            let mut n = 0;
+            while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+                n = n * 10 + (bytes[i] - b'0') as i64;
+                i += 1;
+            }
+            tokens.push(Token.Num(n));
+            continue;
+        }
+        if c == b'(' {
+            tokens.push(Token.Open);
+        } else if c == b')' {
+            tokens.push(Token.Close);
+        } else {
+            tokens.push(Token.Op(c));
+        }
+        i += 1;
+    }
+    tokens
+}
+
+// The value of tokens[from..to], numbers and operators with no bracket.
+fn flat_value(tokens: Vec[Token], from: i64, to: i64) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut signs: Vec[u8] = Vec.new();
+    let mut op = b'+';
+    for k in from..to {
+        match tokens[k] {
+            Token.Num(n) => {
+                if op == b'*' or op == b'/' {
+                    let last = values.len() - 1;
+                    values[last] = if op == b'*' { values[last] * n } else { values[last] / n };
+                } else {
+                    values.push(n);
+                    signs.push(op);
+                }
+            }
+            Token.Op(o) => op = o,
+            _ => {}
+        }
+    }
+    let mut total = 0;
+    for j in 0..values.len() {
+        total = if signs[j] == b'+' { total + values[j] } else { total - values[j] };
+    }
+    total
+}
+
+fn calculate(s: String) -> i64 {
+    let mut tokens = tokenize(s);
+    loop {
+        let mut close = 0;
+        while close < tokens.len() and not tokens[close].is_close() {
+            close += 1;
+        }
+        if close == tokens.len() {
+            return flat_value(tokens, 0, tokens.len());
+        }
+        let mut open = close - 1;
+        while not tokens[open].is_open() {
+            open -= 1;
+        }
+        let value = flat_value(tokens, open + 1, close);
+        let mut next: Vec[Token] = Vec.new();
+        let mut k = 0;
+        for token in tokens.into_iter() {
+            if k == open {
+                next.push(Token.Num(value));
+            } else if k < open or k > close {
+                next.push(token);
+            }
+            k += 1;
+        }
+        tokens = next;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    let value = calculate(s);
+    println(f"\"{s}\" -> {value}");
+}
+
+// A random expression: its text, its value, how loosely its outermost
+// operator binds (1 for + and -, 2 for * and /, 3 for none), and whether
+// it is valid, with no division by zero and every value in 32 bits.
+struct Piece {
+    text: String,
+    value: i64,
+    level: i64,
+    valid: bool,
+}
+
+fn bracketed(p: Piece) -> String {
+    f"({p.text})"
+}
+
+fn random_piece(seed: mut ref i64, leaves: i64) -> Piece {
+    if leaves == 1 {
+        let n = if next_random(mut seed) % 4 == 0 { next_random(mut seed) % 1000 } else { next_random(mut seed) % 10 };
+        return Piece { text: f"{n}", value: n, level: 3, valid: true };
+    }
+    let left_leaves = 1 + next_random(mut seed) % (leaves - 1);
+    let left = random_piece(mut seed, left_leaves);
+    let right = random_piece(mut seed, leaves - left_leaves);
+    let op = b"+-*/"[next_random(mut seed) % 4];
+    let level = if op == b'+' or op == b'-' { 1 } else { 2 };
+    let left_text = if left.level < level or next_random(mut seed) % 4 == 0 { bracketed(left) } else { left.text.clone() };
+    let right_text = if right.level < level or (right.level == level and op != b'+') or next_random(mut seed) % 4 == 0 { bracketed(right) } else { right.text.clone() };
+    let mut valid = left.valid and right.valid;
+    let mut value = 0;
+    if op == b'+' {
+        value = left.value + right.value;
+    } else if op == b'-' {
+        value = left.value - right.value;
+    } else if op == b'*' {
+        value = left.value * right.value;
+    } else if right.value == 0 {
+        valid = false;
+    } else {
+        value = left.value / right.value;
+    }
+    if value < -2147483648 or value > 2147483647 {
+        valid = false;
+    }
+    Piece { text: f"{left_text}{op as char}{right_text}", value: value, level: level, valid: valid }
+}
+
+fn main() {
+    show("1+1");
+    show("6-4/2");
+    show("2*(5+5*2)/3+(6/2+8)");
+    show("0");
+    show("1-1-1");
+    show("8/3/2");
+    show("(1-8)/2");
+    show("2147483647");
+    show("((((7))))");
+    show("1*2-3/4+5*6-7*8+9/10");
+    show("2-(5-8)");
+    show("(0-7)*(0-6)/(2-9)");
+    let mut seed = 772;
+    let mut count = 0;
+    let mut length = 0;
+    let mut check = 0;
+    while count < 300 {
+        let piece = random_piece(mut seed, 1 + next_random(mut seed) % 12);
+        if not piece.valid {
+            continue;
+        }
+        let value = calculate(piece.text);
+        count += 1;
+        length += piece.text.len();
+        check = ((check * 31 + value) % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"300 random expressions, {length} characters: checksum {check}");
+}

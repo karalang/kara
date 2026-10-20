@@ -1,0 +1,128 @@
+// LeetCode 777 — Swap Adjacent in LR String, prefix counts.
+//
+// The letters with the X's taken out must be the same in both strings.
+// Then, since L's only move left and R's only move right and none passes
+// another, every prefix of end must hold at least as many L's as the same
+// prefix of start, and at most as many R's. O(n).
+
+fn can_transform(start: String, end: String) -> bool {
+    if start.len() != end.len() or start.replace("X", "") != end.replace("X", "") {
+        return false;
+    }
+    let s = start.bytes();
+    let e = end.bytes();
+    let mut ls = 0;
+    let mut le = 0;
+    let mut rs = 0;
+    let mut re = 0;
+    for i in 0..s.len() {
+        if s[i] == b'L' {
+            ls += 1;
+        } else if s[i] == b'R' {
+            rs += 1;
+        }
+        if e[i] == b'L' {
+            le += 1;
+        } else if e[i] == b'R' {
+            re += 1;
+        }
+        if le < ls or re > rs {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A string of n letters, each L, R or X with chances x_in_4 in 4 for X.
+fn random_text(seed: mut ref i64, n: i64, x_in_4: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        let r = next_random(mut seed) % 8;
+        if r < 2 * x_in_4 {
+            out.push('X');
+        } else if r % 2 == 0 {
+            out.push('L');
+        } else {
+            out.push('R');
+        }
+    }
+    out
+}
+
+// The text after up to `moves` random legal moves.
+fn moved(seed: mut ref i64, text: String, moves: i64) -> String {
+    let mut b = text.bytes().to_vec();
+    let n = b.len();
+    for _ in 0..moves {
+        if n < 2 {
+            break;
+        }
+        let i = next_random(mut seed) % (n - 1);
+        if b[i] == b'X' and b[i + 1] == b'L' {
+            b[i] = b'L';
+            b[i + 1] = b'X';
+        } else if b[i] == b'R' and b[i + 1] == b'X' {
+            b[i] = b'X';
+            b[i + 1] = b'R';
+        }
+    }
+    String.from_utf8(b).unwrap()
+}
+
+fn show(start: String, end: String) {
+    let answer = can_transform(start, end);
+    println(f"\"{start}\" -> \"{end}\": {answer}");
+}
+
+fn main() {
+    show(String.from("RXXLRXRXL"), String.from("XRLXXRRLX"));
+    show(String.from("X"), String.from("L"));
+    show(String.from("LXXLXRLXXL"), String.from("XLLXRXLXLX"));
+    show(String.from("XXXXXLXXXX"), String.from("LXXXXXXXXX"));
+    show(String.from("XXRXXLXXXX"), String.from("XXXXRXXLXX"));
+    show(String.from("RL"), String.from("LR"));
+    show(String.from("XL"), String.from("LX"));
+    show(String.from("RX"), String.from("XR"));
+    show(String.from("LX"), String.from("XL"));
+    show(String.from("XLR"), String.from("LXR"));
+    let mut seed = 777;
+    // The largest LeetCode allows, 10,000 letters, moved a long way; then
+    // the start with its first L that has an X after it moved a place
+    // right, which no move can do.
+    let big = random_text(mut seed, 10000, 2);
+    let far = moved(mut seed, big, 400000);
+    let answer = can_transform(big, far);
+    println(f"10000 letters, 400000 moves -> {answer}");
+    let mut wrong = big.bytes().to_vec();
+    let mut k = 0;
+    while not (wrong[k] == b'L' and wrong[k + 1] == b'X') {
+        k += 1;
+    }
+    wrong.swap(k, k + 1);
+    let answer = can_transform(big, String.from_utf8(wrong).unwrap());
+    println(f"10000 letters, an L a place right -> {answer}");
+    let mut yes = 0;
+    let mut check = 0;
+    for case in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let start = random_text(mut seed, n, 1 + next_random(mut seed) % 3);
+        let end = if case % 2 == 0 {
+            moved(mut seed, start, next_random(mut seed) % (4 * n))
+        } else {
+            random_text(mut seed, n, 2)
+        };
+        let answer = can_transform(start, end);
+        if answer {
+            yes += 1;
+        }
+        check = (check * 31 + if answer { n } else { 100 - n }) % 1000000007;
+    }
+    println(f"300 random pairs: {yes} reachable, checksum {check}");
+}

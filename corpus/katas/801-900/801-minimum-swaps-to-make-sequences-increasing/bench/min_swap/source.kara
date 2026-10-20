@@ -1,0 +1,68 @@
+// LeetCode 801 — Minimum Swaps To Make Sequences Increasing: the bench.
+//
+// 16 pairs of arrays of 100,000 numbers, LeetCode's longest, are made
+// once: two increasing arrays climbing by 1 or 2 a place up to about
+// 150,000, below LeetCode's 200,000, with each place swapped at random.
+// Each of 2,000 rounds finds the fewest swaps for the next pair with the
+// ★ arm.
+fn min_swap(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let mut keep = 0;
+    let mut swap = 1;
+    for i in 1..n {
+        let same = nums1[i - 1] < nums1[i] and nums2[i - 1] < nums2[i];
+        let cross = nums1[i - 1] < nums2[i] and nums2[i - 1] < nums1[i];
+        let mut next_keep = n + 1;
+        let mut next_swap = n + 1;
+        if same {
+            next_keep = keep;
+            next_swap = swap + 1;
+        }
+        if cross {
+            next_keep = next_keep.min(swap);
+            next_swap = next_swap.min(keep + 1);
+        }
+        keep = next_keep;
+        swap = next_swap;
+    }
+    keep.min(swap)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 100000;
+    let mut seed = 801;
+    let mut pairs: Vec[(Vec[i64], Vec[i64])] = Vec.new();
+    for _ in 0..16 {
+        let mut a: Vec[i64] = Vec.new();
+        let mut b: Vec[i64] = Vec.new();
+        let mut x = 0;
+        let mut y = 0;
+        for _ in 0..n {
+            x += 1 + next_random(mut seed) % 2;
+            y += 1 + next_random(mut seed) % 2;
+            if next_random(mut seed) % 2 == 0 {
+                a.push(x);
+                b.push(y);
+            } else {
+                a.push(y);
+                b.push(x);
+            }
+        }
+        pairs.push((a, b));
+    }
+    let rounds = 2000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let (a, b) = ref pairs[r % 16];
+        let k = min_swap(a, b);
+        total += k;
+        check = (check * 131 + k) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} places: {total} swaps in all, checksum {check}");
+}

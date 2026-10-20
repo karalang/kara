@@ -1,0 +1,59 @@
+// LeetCode 788 — Rotated Digits, turning the text.
+//
+// Write each number out, turn each character with a match, and count the
+// numbers whose turned text exists and differs from the original.
+// O(n log n).
+fn turned(c: char) -> Option[char] {
+    match c {
+        '0' => Some('0'),
+        '1' => Some('1'),
+        '8' => Some('8'),
+        '2' => Some('5'),
+        '5' => Some('2'),
+        '6' => Some('9'),
+        '9' => Some('6'),
+        _ => None,
+    }
+}
+
+fn rotated_digits(n: i64) -> i64 {
+    let mut good = 0;
+    for x in 1..n + 1 {
+        let text = f"{x}";
+        let mut out = String.new();
+        let mut valid = true;
+        for c in text.chars() {
+            match turned(c) {
+                Some(t) => out.push(t),
+                None => valid = false,
+            }
+        }
+        if valid and out != text {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    for n in [10, 1, 2, 9, 100, 857, 1000, 2019, 9999, 10000] {
+        println(f"n = {n} -> {rotated_digits(n)}");
+    }
+    let mut seed = 788;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10000;
+        let good = rotated_digits(n);
+        sum += good;
+        check = (check * 31 + good) % 1000000007;
+    }
+    println(f"300 random n: answers sum to {sum}, checksum {check}");
+}

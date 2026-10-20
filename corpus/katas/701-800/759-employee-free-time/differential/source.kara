@@ -1,0 +1,429 @@
+// LeetCode #759: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random schedules.
+
+// ---- ★ arm ----------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Interval_star {
+    start: i64,
+    end: i64,
+}
+
+fn employee_free_time_star(schedule: Vec[Vec[Interval_star]]) -> Vec[Interval_star] {
+    let mut all: Vec[Interval_star] = Vec.new();
+    for employee in schedule.iter() {
+        for interval in employee.iter() {
+            all.push(*interval);
+        }
+    }
+    all.sort_by(|x, y| x.start.cmp(y.start));
+    let mut free: Vec[Interval_star] = Vec.new();
+    let mut end = all[0].end;
+    for interval in all.iter() {
+        if interval.start > end {
+            free.push(Interval_star { start: end, end: interval.start });
+        }
+        if interval.end > end {
+            end = interval.end;
+        }
+    }
+    free
+}
+
+// ---- heap arm -------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Interval_heap {
+    start: i64,
+    end: i64,
+}
+
+fn employee_free_time_heap(schedule: Vec[Vec[Interval_heap]]) -> Vec[Interval_heap] {
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for e in 0..schedule.len() {
+        queue.push((schedule[e][0].start, e, 0));
+    }
+    let mut free: Vec[Interval_heap] = Vec.new();
+    let mut end = -1;
+    while let Some((start, e, i)) = queue.pop() {
+        if end >= 0 and start > end {
+            free.push(Interval_heap { start: end, end: start });
+        }
+        if schedule[e][i].end > end {
+            end = schedule[e][i].end;
+        }
+        if i + 1 < schedule[e].len() {
+            queue.push((schedule[e][i + 1].start, e, i + 1));
+        }
+    }
+    free
+}
+
+// ---- events arm -----------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Interval_events {
+    start: i64,
+    end: i64,
+}
+
+fn employee_free_time_events(schedule: Vec[Vec[Interval_events]]) -> Vec[Interval_events] {
+    // (time, 0 for a start or 1 for an end)
+    let mut events: Vec[(i64, i64)] = Vec.new();
+    for employee in schedule.iter() {
+        for interval in employee.iter() {
+            events.push((interval.start, 0));
+            events.push((interval.end, 1));
+        }
+    }
+    events.sort();
+    let mut free: Vec[Interval_events] = Vec.new();
+    let mut working = 0;
+    let mut idle_since = -1;
+    for (time, kind) in events.iter() {
+        if *kind == 0 {
+            if working == 0 and idle_since >= 0 {
+                free.push(Interval_events { start: idle_since, end: *time });
+            }
+            working += 1;
+        } else {
+            working -= 1;
+            if working == 0 {
+                idle_since = *time;
+            }
+        }
+    }
+    free
+}
+
+// ---- merge arm ------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Interval_merge {
+    start: i64,
+    end: i64,
+}
+
+fn add_merge(out: mut ref Vec[Interval_merge], next: Interval_merge) {
+    let last = out.len() - 1;
+    if out.len() > 0 and next.start <= out[last].end {
+        if next.end > out[last].end {
+            out[last].end = next.end;
+        }
+    } else {
+        out.push(next);
+    }
+}
+
+fn merge_merge(a: ref Vec[Interval_merge], b: ref Vec[Interval_merge]) -> Vec[Interval_merge] {
+    let mut out: Vec[Interval_merge] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        if j == b.len() or (i < a.len() and a[i].start <= b[j].start) {
+            add_merge(mut out, a[i]);
+            i += 1;
+        } else {
+            add_merge(mut out, b[j]);
+            j += 1;
+        }
+    }
+    out
+}
+
+fn employee_free_time_merge(schedule: Vec[Vec[Interval_merge]]) -> Vec[Interval_merge] {
+    let mut lists = schedule.clone();
+    while lists.len() > 1 {
+        let mut next: Vec[Vec[Interval_merge]] = Vec.new();
+        let mut k = 0;
+        while k + 1 < lists.len() {
+            next.push(merge_merge(lists[k], lists[k + 1]));
+            k += 2;
+        }
+        if k < lists.len() {
+            next.push(lists[k].clone());
+        }
+        lists = next;
+    }
+    let mut free: Vec[Interval_merge] = Vec.new();
+    for k in 1..lists[0].len() {
+        free.push(Interval_merge { start: lists[0][k - 1].end, end: lists[0][k].start });
+    }
+    free
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed);
+    high * 32768 + next_random(mut seed)
+}
+
+fn answer_with(which: i64, schedule: Vec[Vec[Interval_star]]) -> Vec[Interval_star] {
+    if which == 0 {
+        employee_free_time_star(schedule)
+    } else if which == 1 {
+        let mut s: Vec[Vec[Interval_heap]] = Vec.new();
+        for e in schedule.iter() {
+            let mut list: Vec[Interval_heap] = Vec.new();
+            for iv in e.iter() {
+                list.push(Interval_heap { start: iv.start, end: iv.end });
+            }
+            s.push(list);
+        }
+        let mut out: Vec[Interval_star] = Vec.new();
+        for iv in employee_free_time_heap(s).iter() {
+            out.push(Interval_star { start: iv.start, end: iv.end });
+        }
+        out
+    } else if which == 2 {
+        let mut s: Vec[Vec[Interval_events]] = Vec.new();
+        for e in schedule.iter() {
+            let mut list: Vec[Interval_events] = Vec.new();
+            for iv in e.iter() {
+                list.push(Interval_events { start: iv.start, end: iv.end });
+            }
+            s.push(list);
+        }
+        let mut out: Vec[Interval_star] = Vec.new();
+        for iv in employee_free_time_events(s).iter() {
+            out.push(Interval_star { start: iv.start, end: iv.end });
+        }
+        out
+    } else {
+        let mut s: Vec[Vec[Interval_merge]] = Vec.new();
+        for e in schedule.iter() {
+            let mut list: Vec[Interval_merge] = Vec.new();
+            for iv in e.iter() {
+                list.push(Interval_merge { start: iv.start, end: iv.end });
+            }
+            s.push(list);
+        }
+        let mut out: Vec[Interval_star] = Vec.new();
+        for iv in employee_free_time_merge(s).iter() {
+            out.push(Interval_star { start: iv.start, end: iv.end });
+        }
+        out
+    }
+}
+
+fn same(a: ref Vec[Interval_star], b: ref Vec[Interval_star]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i].start != b[i].start or a[i].end != b[i].end {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition, a unit of time at a time on small schedules: the unit
+// from t to t + 1 is free when no interval covers it, and the free
+// intervals are the runs of free units after the first start and before
+// the last end.
+fn definition(schedule: ref Vec[Vec[Interval_star]]) -> Vec[Interval_star] {
+    let mut first = 1000000;
+    let mut last = -1;
+    for e in schedule.iter() {
+        for iv in e.iter() {
+            if iv.start < first {
+                first = iv.start;
+            }
+            if iv.end > last {
+                last = iv.end;
+            }
+        }
+    }
+    let mut free: Vec[Interval_star] = Vec.new();
+    let mut run_from = -1;
+    for t in first..last {
+        let mut busy = false;
+        for e in schedule.iter() {
+            for iv in e.iter() {
+                if iv.start <= t and t + 1 <= iv.end {
+                    busy = true;
+                }
+            }
+        }
+        if not busy and run_from < 0 {
+            run_from = t;
+        }
+        if busy and run_from >= 0 {
+            free.push(Interval_star { start: run_from, end: t });
+            run_from = -1;
+        }
+    }
+    free
+}
+
+// Whether the answer is a valid list of free time: sorted, each of
+// positive length and apart from the next, inside the working day, and
+// overlapped by no one's working interval.
+fn valid(free: ref Vec[Interval_star], schedule: ref Vec[Vec[Interval_star]]) -> bool {
+    let mut first = 1000000000;
+    let mut last = -1;
+    for e in schedule.iter() {
+        for iv in e.iter() {
+            if iv.start < first {
+                first = iv.start;
+            }
+            if iv.end > last {
+                last = iv.end;
+            }
+        }
+    }
+    for k in 0..free.len() {
+        let f = free[k];
+        if f.start >= f.end or f.start < first or f.end > last {
+            return false;
+        }
+        if k > 0 and free[k - 1].end >= f.start {
+            return false;
+        }
+        for e in schedule.iter() {
+            for iv in e.iter() {
+                if iv.start < f.end and f.start < iv.end {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn random_schedule(seed: mut ref i64, employees: i64, most: i64, spread: i64) -> Vec[Vec[Interval_star]] {
+    let mut schedule: Vec[Vec[Interval_star]] = Vec.new();
+    for _ in 0..employees {
+        let count = 1 + next_random(mut seed) % most;
+        let mut employee: Vec[Interval_star] = Vec.new();
+        let mut t = 0;
+        for _ in 0..count {
+            let start = t + wide_random(mut seed) % spread;
+            let end = start + 1 + wide_random(mut seed) % spread;
+            employee.push(Interval_star { start: start, end: end });
+            t = end + 1;
+        }
+        schedule.push(employee);
+    }
+    schedule
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7590;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let large = 300;
+    let mut gaps = 0;
+    for case in 0..small + large {
+        // small schedules within 0 to about 40, where the definition
+        // can look, then large ones of up to 50 employees with up to 50
+        // intervals each, up to 10^8
+        let schedule = if case < small {
+            let employees = 1 + next_random(mut seed) % 4;
+            random_schedule(mut seed, employees, 4, 1 + next_random(mut seed) % 4)
+        } else {
+            let employees = 1 + next_random(mut seed) % 50;
+            let spread = 1 + wide_random(mut seed) % 999990;
+            random_schedule(mut seed, employees, 50, spread)
+        };
+        let mut top = 0;
+        for e in schedule.iter() {
+            if e[e.len() - 1].end > top {
+                top = e[e.len() - 1].end;
+            }
+        }
+        // the employees shuffled, and one employee's list split in two
+        // employees, alternate intervals each
+        let mut regrouped: Vec[Vec[Interval_star]] = Vec.new();
+        let split = next_random(mut seed) % schedule.len();
+        for e in 0..schedule.len() {
+            if e == split {
+                let mut odd: Vec[Interval_star] = Vec.new();
+                let mut even: Vec[Interval_star] = Vec.new();
+                for i in 0..schedule[e].len() {
+                    if i % 2 == 0 {
+                        even.push(schedule[e][i]);
+                    } else {
+                        odd.push(schedule[e][i]);
+                    }
+                }
+                regrouped.push(even);
+                if odd.len() > 0 {
+                    regrouped.push(odd);
+                }
+            } else {
+                regrouped.push(schedule[e].clone());
+            }
+        }
+        for i in 0..regrouped.len() {
+            let j = i + next_random(mut seed) % (regrouped.len() - i);
+            regrouped.swap(i, j);
+        }
+        // the schedule in a mirror: t becomes top - t
+        let mut mirrored: Vec[Vec[Interval_star]] = Vec.new();
+        for e in schedule.iter() {
+            let mut list: Vec[Interval_star] = Vec.new();
+            let mut i = e.len() - 1;
+            while i >= 0 {
+                list.push(Interval_star { start: top - e[i].end, end: top - e[i].start });
+                i -= 1;
+            }
+            mirrored.push(list);
+        }
+        let want = if case < small { definition(schedule) } else { Vec.new() };
+        for which in 0..arms {
+            let got = answer_with(which, schedule.clone());
+            if which == 0 {
+                gaps += got.len();
+            }
+            // P1: the definition's answer, on the small schedules.
+            if case < small {
+                checks += 1;
+                if not same(got, want) {
+                    fails[0] += 1;
+                }
+            }
+            // P2: a valid list of free time.
+            checks += 1;
+            if not valid(got, schedule) {
+                fails[1] += 1;
+            }
+            // P3: shuffling and splitting employees changes nothing.
+            checks += 1;
+            if not same(answer_with(which, regrouped.clone()), got) {
+                fails[2] += 1;
+            }
+            // P4: the mirror's answer is this one mirrored.
+            checks += 1;
+            let back = answer_with(which, mirrored.clone());
+            let mut flipped: Vec[Interval_star] = Vec.new();
+            let mut i = back.len() - 1;
+            while i >= 0 {
+                flipped.push(Interval_star { start: top - back[i].end, end: top - back[i].start });
+                i -= 1;
+            }
+            if not same(flipped, got) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{small + large} schedules ({gaps} free intervals), {arms} arms, {checks} checks, {failures} failures");
+}

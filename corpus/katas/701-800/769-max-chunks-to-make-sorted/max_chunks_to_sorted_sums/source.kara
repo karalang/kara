@@ -1,0 +1,61 @@
+// LeetCode 769 — Max Chunks To Make Sorted, running sums.
+//
+// Places 0 to i hold the values 0 to i exactly when their sum is
+// 0 + 1 + ... + i: any other set of i + 1 distinct values from 0 up has a
+// larger sum. So count the places where the running sum meets that
+// triangle number.
+
+fn max_chunks_to_sorted(arr: Vec[i64]) -> i64 {
+    let mut chunks = 0;
+    let mut sum = 0;
+    for i in 0..arr.len() {
+        sum += arr[i];
+        if sum == i * (i + 1) / 2 {
+            chunks += 1;
+        }
+    }
+    chunks
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    let chunks = max_chunks_to_sorted(arr);
+    println(f"{arr} -> {chunks}");
+}
+
+fn main() {
+    show([4, 3, 2, 1, 0]);
+    show([1, 0, 2, 3, 4]);
+    show([0]);
+    show([0, 1, 2, 3]);
+    show([1, 2, 0, 3]);
+    show([0, 2, 1, 4, 3, 5]);
+    show([2, 0, 1, 5, 3, 4, 9, 6, 7, 8]);
+    let mut seed = 769;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut arr: Vec[i64] = Vec.new();
+        for i in 0..n {
+            arr.push(i);
+        }
+        // a few swaps of near places, so that there are chunks to find
+        let swaps = next_random(mut seed) % (n + 1);
+        for _ in 0..swaps {
+            let i = next_random(mut seed) % n;
+            let j = (i + 1 + next_random(mut seed) % 3).min(n - 1);
+            arr.swap(i, j);
+        }
+        let chunks = max_chunks_to_sorted(arr);
+        total += chunks;
+        check = (check * 31 + chunks) % 1000000007;
+    }
+    println(f"300 random permutations: {total} chunks in all, checksum {check}");
+}

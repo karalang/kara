@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/770-basic-calculator-iv/bench/basic_calculator_iv.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "db0aa9a19"
+extracted_src = "ef07d291"
+model_rev = "583cfb0d"
+model_src = "ef07d291"

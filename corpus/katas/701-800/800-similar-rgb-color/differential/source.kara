@@ -1,0 +1,286 @@
+// LeetCode #800: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random colours.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn similar_rgb_star(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let part = hex_value_star(color, 1 + 2 * p);
+        let k = (part + 8) / 17;
+        let d = digits.bytes()[k] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+// The number written by the two hex digits of `color` at `at`.
+fn hex_value_star(color: Str, at: i64) -> i64 {
+    let b = color.bytes();
+    digit_star(b[at]) * 16 + digit_star(b[at + 1])
+}
+
+fn digit_star(c: u8) -> i64 {
+    if c >= 48 and c <= 57 {
+        c as i64 - 48
+    } else {
+        c as i64 - 97 + 10
+    }
+}
+
+// ---- nearest arm ----------------------------------------------------
+
+fn similar_rgb_nearest(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let b = color.bytes();
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let part = value_of_nearest(b[1 + 2 * p]) * 16 + value_of_nearest(b[2 + 2 * p]);
+        let mut best = 0;
+        for k in 1..16 {
+            if (17 * k - part).abs() < (17 * best - part).abs() {
+                best = k;
+            }
+        }
+        let d = digits.bytes()[best] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+fn value_of_nearest(c: u8) -> i64 {
+    if c <= 57 { c as i64 - 48 } else { c as i64 - 87 }
+}
+
+// ---- whole arm ------------------------------------------------------
+
+fn similar_rgb_whole(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let b = color.bytes();
+    let mut parts: Vec[i64] = Vec.new();
+    for p in 0..3 {
+        parts.push(hex_whole(b[1 + 2 * p]) * 16 + hex_whole(b[2 + 2 * p]));
+    }
+    let mut best = (0, 0, 0);
+    let mut best_score = -1000000;
+    for x in 0..16 {
+        for y in 0..16 {
+            for z in 0..16 {
+                let dx = 17 * x - parts[0];
+                let dy = 17 * y - parts[1];
+                let dz = 17 * z - parts[2];
+                let score = -(dx * dx + dy * dy + dz * dz);
+                if score > best_score {
+                    best_score = score;
+                    best = (x, y, z);
+                }
+            }
+        }
+    }
+    let (x, y, z) = best;
+    let mut out = String.new();
+    out.push('#');
+    for k in [x, y, z] {
+        let d = digits.bytes()[k] as char;
+        out.push(d);
+        out.push(d);
+    }
+    out
+}
+
+fn hex_whole(c: u8) -> i64 {
+    "0123456789abcdef".find((c as char).to_string()).unwrap_or(0)
+}
+
+// ---- digits arm -----------------------------------------------------
+
+fn similar_rgb_digits(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let b = color.bytes();
+    let mut out = String.new();
+    out.push('#');
+    for p in 0..3 {
+        let d = digit_value_digits(b[1 + 2 * p]);
+        let e = digit_value_digits(b[2 + 2 * p]);
+        let part = 16 * d + e;
+        let mut k = d;
+        if e > d and 17 * (d + 1) - part < part - 17 * d {
+            k = d + 1;
+        } else if e < d and part - 17 * (d - 1) < 17 * d - part {
+            k = d - 1;
+        }
+        let c = digits.bytes()[k] as char;
+        out.push(c);
+        out.push(c);
+    }
+    out
+}
+
+fn digit_value_digits(c: u8) -> i64 {
+    if c >= 97 { c as i64 - 87 } else { c as i64 - 48 }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, color: Str) -> String {
+    if which == 0 {
+        similar_rgb_star(color)
+    } else if which == 1 {
+        similar_rgb_nearest(color)
+    } else if which == 2 {
+        similar_rgb_whole(color)
+    } else {
+        similar_rgb_digits(color)
+    }
+}
+
+// The number written by two hex digits.
+fn two_digits(text: Str, at: i64) -> i64 {
+    let digits = "0123456789abcdef";
+    let mut value = 0;
+    for i in at..at + 2 {
+        let c = text.bytes()[i];
+        for d in 0..16 {
+            if digits.bytes()[d] == c {
+                value = value * 16 + d;
+            }
+        }
+    }
+    value
+}
+
+// The definition: score every shorthand colour #XYZ, whose parts are
+// 17X, 17Y and 17Z, and keep the first that is most similar.
+fn definition(color: Str) -> String {
+    let digits = "0123456789abcdef";
+    let r = two_digits(color, 1);
+    let g = two_digits(color, 3);
+    let b = two_digits(color, 5);
+    let mut best = (0, 0, 0);
+    let mut best_score = 0;
+    let mut first = true;
+    for x in 0..16 {
+        for y in 0..16 {
+            for z in 0..16 {
+                let score = -((17 * x - r) * (17 * x - r) + (17 * y - g) * (17 * y - g) + (17 * z - b) * (17 * z - b));
+                if first or score > best_score {
+                    first = false;
+                    best_score = score;
+                    best = (x, y, z);
+                }
+            }
+        }
+    }
+    let (x, y, z) = best;
+    let mut short = String.new();
+    short.push('#');
+    for k in [x, y, z] {
+        short.push(digits.bytes()[k] as char);
+        short.push(digits.bytes()[k] as char);
+    }
+    short
+}
+
+// The colour with its three parts taken in the order g, b, r.
+fn turned(color: Str) -> String {
+    let b = color.bytes();
+    let mut out = String.new();
+    out.push('#');
+    for i in [3, 4, 5, 6, 1, 2] {
+        out.push(b[i] as char);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let digits = "0123456789abcdef";
+    let mut seed = 8000;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut same = 0;
+    for case in 0..cases {
+        // kind 0: any colour; kind 1: parts at 17k + 8 or 17k + 9, the
+        // two sides of halfway between doubled digits; kind 2: parts
+        // with both digits alike, give or take one; kind 3: parts at the
+        // ends, 0x00 to 0x09 and 0xf6 to 0xff.
+        let kind = case % 4;
+        let mut color = String.new();
+        color.push('#');
+        for _ in 0..3 {
+            let part = if kind == 0 {
+                next_random(mut seed) % 256
+            } else if kind == 1 {
+                17 * (next_random(mut seed) % 15) + 8 + next_random(mut seed) % 2
+            } else if kind == 2 {
+                let v = 17 * (next_random(mut seed) % 16) + next_random(mut seed) % 3 - 1;
+                if v < 0 { 0 } else if v > 255 { 255 } else { v }
+            } else if next_random(mut seed) % 2 == 0 {
+                next_random(mut seed) % 10
+            } else {
+                246 + next_random(mut seed) % 10
+            };
+            color.push(digits.bytes()[part / 16] as char);
+            color.push(digits.bytes()[part % 16] as char);
+        }
+        let want = definition(color);
+        if want == color {
+            same += 1;
+        }
+        for which in 0..arms {
+            let got = answer_with(which, color);
+            // P1: the definition's colour.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the answer is shorthand, and its own answer.
+            checks += 1;
+            let g = got.bytes();
+            if got.len() != 7 or g[1] != g[2] or g[3] != g[4] or g[5] != g[6] or answer_with(which, got) != got {
+                fails[1] += 1;
+            }
+            // P3: taking the parts in another order takes the answer's
+            // parts in that order.
+            checks += 1;
+            if answer_with(which, turned(color)) != turned(got) {
+                fails[2] += 1;
+            }
+            // P4: each part of the answer is within 8 of the colour's.
+            checks += 1;
+            let mut close = got.len() == 7;
+            if close {
+                for p in 0..3 {
+                    if (two_digits(got, 1 + 2 * p) - two_digits(color, 1 + 2 * p)).abs() > 8 {
+                        close = false;
+                    }
+                }
+            }
+            if not close {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({same} already shorthand), {arms} arms, {checks} checks, {failures} failures");
+}

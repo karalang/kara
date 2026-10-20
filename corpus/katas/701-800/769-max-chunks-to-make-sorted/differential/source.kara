@@ -1,0 +1,223 @@
+// LeetCode #769: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random permutations.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn max_chunks_to_sorted_star(arr: Vec[i64]) -> i64 {
+    let mut chunks = 0;
+    let mut largest = 0;
+    for i in 0..arr.len() {
+        largest = largest.max(arr[i]);
+        if largest == i {
+            chunks += 1;
+        }
+    }
+    chunks
+}
+
+// ---- sum arm --------------------------------------------------------
+
+fn max_chunks_to_sorted_sums(arr: Vec[i64]) -> i64 {
+    let mut chunks = 0;
+    let mut sum = 0;
+    for i in 0..arr.len() {
+        sum += arr[i];
+        if sum == i * (i + 1) / 2 {
+            chunks += 1;
+        }
+    }
+    chunks
+}
+
+// ---- cycle arm ------------------------------------------------------
+
+fn max_chunks_to_sorted_cycles(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut reach: Vec[i64] = Vec.new();
+    let mut seen: Vec[bool] = Vec.new();
+    for i in 0..n {
+        reach.push(i);
+        seen.push(false);
+    }
+    for start in 0..n {
+        if not seen[start] {
+            // every place on this cycle, smallest first, reaches its largest
+            let mut far = start;
+            let mut at = start;
+            while not seen[at] {
+                seen[at] = true;
+                far = far.max(at);
+                at = arr[at];
+            }
+            reach[start] = far;
+        }
+    }
+    let mut chunks = 0;
+    let mut end = 0;
+    for i in 0..n {
+        end = end.max(reach[i]);
+        if end == i {
+            chunks += 1;
+        }
+    }
+    chunks
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn max_chunks_to_sorted_stack(arr: Vec[i64]) -> i64 {
+    let mut maxima: Vec[i64] = Vec.new();
+    for x in arr {
+        let mut largest = x;
+        while maxima.len() > 0 and maxima[maxima.len() - 1] > x {
+            largest = largest.max(maxima.pop().unwrap());
+        }
+        maxima.push(largest);
+    }
+    maxima.len()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, arr: Vec[i64]) -> i64 {
+    if which == 0 {
+        max_chunks_to_sorted_star(arr)
+    } else if which == 1 {
+        max_chunks_to_sorted_sums(arr)
+    } else if which == 2 {
+        max_chunks_to_sorted_cycles(arr)
+    } else {
+        max_chunks_to_sorted_stack(arr)
+    }
+}
+
+// The definition: the most pieces, over every way of cutting the array,
+// whose pieces, each sorted on its own, make 0, 1, ..., n - 1.
+fn definition(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 0;
+    for cuts in 0..1 << (n - 1) {
+        let mut pieces = 0;
+        let mut ok = true;
+        let mut start = 0;
+        for end in 1..n + 1 {
+            if end == n or cuts >> (end - 1) & 1 == 1 {
+                let mut piece: Vec[i64] = Vec.new();
+                for i in start..end {
+                    piece.push(arr[i]);
+                }
+                piece.sort();
+                for i in start..end {
+                    if piece[i - start] != i {
+                        ok = false;
+                    }
+                }
+                pieces += 1;
+                start = end;
+            }
+        }
+        if ok and pieces > best {
+            best = pieces;
+        }
+    }
+    best
+}
+
+// A random permutation of 0 to n - 1: either shuffled, or sorted with a
+// few swaps of near places.
+fn permutation(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for i in 0..n {
+        arr.push(i);
+    }
+    if next_random(mut seed) % 3 == 0 {
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            arr.swap(i, j);
+        }
+    } else {
+        let swaps = next_random(mut seed) % (n + 1);
+        for _ in 0..swaps {
+            let i = next_random(mut seed) % n;
+            let j = (i + 1 + next_random(mut seed) % 4).min(n - 1);
+            arr.swap(i, j);
+        }
+    }
+    arr
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7690;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut total = 0;
+    for case in 0..cases {
+        // up to 10 places for the definition, then up to 2000
+        let n = if case < small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 2000 };
+        let arr = permutation(mut seed, n);
+        let m = 1 + next_random(mut seed) % 10;
+        let other = permutation(mut seed, m);
+        let mut inverse: Vec[i64] = Vec.new();
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in 0..n {
+            inverse.push(0);
+            mirrored.push(n - 1 - arr[n - 1 - i]);
+        }
+        for i in 0..n {
+            inverse[arr[i]] = i;
+        }
+        let mut joined = arr.clone();
+        for i in 0..m {
+            joined.push(n + other[i]);
+        }
+        let want = if case < small { definition(arr) } else { 0 };
+        for which in 0..arms {
+            let got = answer_with(which, arr);
+            if which == 0 {
+                total += got;
+            }
+            // P1: the definition's answer.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the inverse permutation has the same answer.
+            checks += 1;
+            if answer_with(which, inverse) != got {
+                fails[1] += 1;
+            }
+            // P3: the array reversed, each value v made n - 1 - v, has the
+            // same answer.
+            checks += 1;
+            if answer_with(which, mirrored) != got {
+                fails[2] += 1;
+            }
+            // P4: a second permutation, its values raised by n, appended
+            // adds its own answer.
+            checks += 1;
+            if answer_with(which, joined) != got + answer_with(which, other) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} permutations ({total} chunks), {arms} arms, {checks} checks, {failures} failures");
+}

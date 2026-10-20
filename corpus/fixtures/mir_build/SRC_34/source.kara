@@ -1,0 +1,13 @@
+import std.path.*;
+import std.encoding.{hex_encode};
+
+fn join(a: Str, b: Str) -> String {
+    f"{a}+{b}"
+}
+
+fn main() {
+    println(parent("a/b") ?? "none");
+    println(join("x", "y"));
+    println(normalize("a/./b/../c"));
+    println(hex_encode("A".bytes()));
+}

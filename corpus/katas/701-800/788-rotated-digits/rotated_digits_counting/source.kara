@@ -1,0 +1,62 @@
+// LeetCode 788 — Rotated Digits, counting by digits.
+//
+// The good numbers are those whose digits all turn into digits, less
+// those whose digits all turn into themselves. Each count, from 0 to n,
+// goes down n's digits from the left: at each place every allowed digit
+// below n's digit there leaves the places after it free, a power of the
+// number of allowed digits, and the count stops at the first digit of n
+// that is not allowed. 0 is in both counts. O(log n).
+fn count_up_to(digits: Vec[i64], allowed: Vec[bool], choices: i64) -> i64 {
+    let mut total = 0;
+    for i in 0..digits.len() {
+        let mut free = 1;
+        for _ in i + 1..digits.len() {
+            free *= choices;
+        }
+        for d in 0..digits[i] {
+            if allowed[d] {
+                total += free;
+            }
+        }
+        if not allowed[digits[i]] {
+            return total;
+        }
+    }
+    total + 1
+}
+
+fn rotated_digits(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let turns = [true, true, true, false, false, true, true, false, true, true];
+    let stays = [true, true, false, false, false, false, false, false, true, false];
+    count_up_to(digits, turns, 7) - count_up_to(digits, stays, 3)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    for n in [10, 1, 2, 9, 100, 857, 1000, 2019, 9999, 10000] {
+        println(f"n = {n} -> {rotated_digits(n)}");
+    }
+    let mut seed = 788;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10000;
+        let good = rotated_digits(n);
+        sum += good;
+        check = (check * 31 + good) % 1000000007;
+    }
+    println(f"300 random n: answers sum to {sum}, checksum {check}");
+}

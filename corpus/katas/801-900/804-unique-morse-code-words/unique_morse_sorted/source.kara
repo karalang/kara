@@ -1,0 +1,89 @@
+// LeetCode 804 — Unique Morse Code Words, sorting.
+//
+// Write each word out in Morse code, sort the results so that equal ones
+// sit together, and count each run of equal results once. O(total
+// letters · log words).
+fn unique_morse_representations(words: Vec[String]) -> i64 {
+    let mut written: Vec[String] = Vec.new();
+    for word in words.iter() {
+        written.push(morse(word));
+    }
+    written.sort();
+    let mut count = 0;
+    for i in 0..written.len() {
+        if i == 0 or written[i] != written[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The word written in Morse code, its letters' codes run together.
+fn morse(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--.."];
+    let mut out = String.new();
+    for b in word.bytes() {
+        out.push_str(codes[b - 97]);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(words: Vec[String]) {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..words.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"\"{words[i]}\"");
+    }
+    out.push_str("]");
+    println(f"{out} -> {unique_morse_representations(words)}");
+}
+
+fn list(text: String) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for word in text.split(" ") {
+        words.push(word.to_string());
+    }
+    words
+}
+
+fn main() {
+    show(list("gin zen gig msg"));
+    show(list("a"));
+    show(list("a et"));
+    show(list("n te tn"));
+    show(list("s eee ie ei i e"));
+    show(list("abcdefghijkl mnopqrstuvwx yz"));
+    show(list("zzzzzzzzzzzz qqqqqqqqqqqq zzzzzzzzzzzz"));
+    let mut seed = 804;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Up to 30 words of 1 to 4 letters from "eitamn", whose codes
+        // are one or two dots and dashes, so that many words share a
+        // code.
+        let count = 1 + next_random(mut seed) % 30;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let length = 1 + next_random(mut seed) % 4;
+            let mut word = String.new();
+            for _ in 0..length {
+                word.push_str(["e", "i", "t", "a", "m", "n"][next_random(mut seed) % 6]);
+            }
+            words.push(word);
+        }
+        let k = unique_morse_representations(words);
+        total += k;
+        check = (check * 131 + k + i) % 1000000007;
+    }
+    println(f"300 random lists: {total} codes in all, checksum {check}");
+}

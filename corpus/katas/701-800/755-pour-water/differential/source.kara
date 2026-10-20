@@ -1,0 +1,259 @@
+// LeetCode #755: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random landscapes.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn pour_water_star(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut h = heights.clone();
+    let n = h.len();
+    for _ in 0..volume {
+        let mut best = k;
+        for d in [-1, 1] {
+            let mut i = k;
+            while i + d >= 0 and i + d < n and h[i + d] <= h[i] {
+                if h[i + d] < h[best] {
+                    best = i + d;
+                }
+                i += d;
+            }
+            if best != k {
+                break;
+            }
+        }
+        h[best] += 1;
+    }
+    h
+}
+
+// ---- recursion arm --------------------------------------------------
+
+fn roll_recur(h: ref Vec[i64], i: i64, d: i64) -> i64 {
+    let next = i + d;
+    if next < 0 or next >= h.len() or h[next] > h[i] {
+        return i;
+    }
+    let further = roll_recur(h, next, d);
+    if h[further] < h[next] {
+        further
+    } else {
+        next
+    }
+}
+
+fn pour_water_recur(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut h = heights.clone();
+    for _ in 0..volume {
+        let left = roll_recur(h, k, -1);
+        let right = roll_recur(h, k, 1);
+        let at = if h[left] < h[k] {
+            left
+        } else if h[right] < h[k] {
+            right
+        } else {
+            k
+        };
+        h[at] += 1;
+    }
+    h
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn lowest_reach_iter(h: ref Vec[i64], k: i64, d: i64) -> i64 {
+    let n = h.len();
+    let steps = (1..n)
+        .take_while(|s| {
+            let at = k + d * s;
+            at >= 0 and at < n and h[at] <= h[at - d]
+        })
+        .count();
+    (1..steps + 1).map(|s| k + d * s).fold(k, |best, at| if h[at] < h[best] { at } else { best })
+}
+
+fn pour_water_iter(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut h = heights.clone();
+    for _ in 0..volume {
+        let left = lowest_reach_iter(h, k, -1);
+        let at = if left != k { left } else { lowest_reach_iter(h, k, 1) };
+        h[at] += 1;
+    }
+    h
+}
+
+// ---- landscape arm --------------------------------------------------
+
+struct Land {
+    cols: Vec[i64],
+}
+
+impl Land {
+    fn settle_side(ref self, k: i64, d: i64) -> Option[i64] {
+        let mut best = k;
+        let mut i = k;
+        loop {
+            let next = i + d;
+            if next < 0 or next >= self.cols.len() or self.cols[next] > self.cols[i] {
+                break;
+            }
+            if self.cols[next] < self.cols[best] {
+                best = next;
+            }
+            i = next;
+        }
+        if best == k { None } else { Some(best) }
+    }
+
+    fn drop_at(mut ref self, k: i64) {
+        let at = match self.settle_side(k, -1) {
+            Some(i) => i,
+            None => self.settle_side(k, 1).unwrap_or(k),
+        };
+        self.cols[at] += 1;
+    }
+}
+
+fn pour_water_land(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut land = Land { cols: heights.clone() };
+    for _ in 0..volume {
+        land.drop_at(k);
+    }
+    land.cols
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    if which == 0 {
+        pour_water_star(heights, volume, k)
+    } else if which == 1 {
+        pour_water_recur(heights, volume, k)
+    } else if which == 2 {
+        pour_water_iter(heights, volume, k)
+    } else {
+        pour_water_land(heights, volume, k)
+    }
+}
+
+// The definition, a drop at a time in two passes per side: first how far
+// the drop can roll, the run outward from k over which the ground never
+// rises; then, within that run, the lowest height, and of the columns at
+// that height the one nearest k. The drop settles there if that height
+// is below k's, the left side first; otherwise on k.
+fn definition(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut h = heights.clone();
+    let n = h.len();
+    for _ in 0..volume {
+        let mut at = k;
+        let mut side = 0;
+        while side < 2 and at == k {
+            let d = if side == 0 { -1 } else { 1 };
+            let mut end = k;
+            while end + d >= 0 and end + d < n and h[end + d] <= h[end] {
+                end += d;
+            }
+            let mut lowest = h[k];
+            let mut j = end;
+            while j != k {
+                if h[j] < lowest {
+                    lowest = h[j];
+                }
+                j -= d;
+            }
+            if lowest < h[k] {
+                let mut nearest = k + d;
+                while h[nearest] != lowest {
+                    nearest += d;
+                }
+                at = nearest;
+            }
+            side += 1;
+        }
+        h[at] += 1;
+    }
+    h
+}
+
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in v.iter() {
+        s += *x;
+    }
+    s
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7550;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 4000;
+    let mut poured = 0;
+    for _ in 0..cases {
+        // short landscapes of low ground, so that equal heights, flat
+        // runs and walls are common
+        let n = 1 + next_random(mut seed) % 25;
+        let top = 1 + next_random(mut seed) % 6;
+        let mut heights: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            heights.push(next_random(mut seed) % top);
+        }
+        let volume = next_random(mut seed) % 40;
+        let k = next_random(mut seed) % n;
+        let split = if volume > 0 { next_random(mut seed) % volume } else { 0 };
+        poured += volume;
+        let want = definition(heights.clone(), volume, k);
+        for which in 0..arms {
+            let got = answer_with(which, heights.clone(), volume, k);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every unit of water is somewhere: the total rises by V.
+            checks += 1;
+            if got.len() != n or total(got) != total(heights) + volume {
+                fails[1] += 1;
+            }
+            // P3: pouring in two parts, `split` units and then the rest,
+            // ends the same as pouring all at once.
+            checks += 1;
+            let first = answer_with(which, heights.clone(), split, k);
+            if answer_with(which, first, volume - split, k) != got {
+                fails[2] += 1;
+            }
+            // P4: one unit fewer leaves the same landscape but for one
+            // column, exactly one lower.
+            if volume > 0 {
+                checks += 1;
+                let less = answer_with(which, heights.clone(), volume - 1, k);
+                let mut lower = 0;
+                let mut other = 0;
+                for i in 0..n {
+                    if less[i] == got[i] - 1 {
+                        lower += 1;
+                    } else if less[i] != got[i] {
+                        other += 1;
+                    }
+                }
+                if lower != 1 or other != 0 {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} landscapes ({poured} units poured), {arms} arms, {checks} checks, {failures} failures");
+}

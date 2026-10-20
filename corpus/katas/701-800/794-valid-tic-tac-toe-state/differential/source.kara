@@ -1,0 +1,404 @@
+// LeetCode #794: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on every board and random ones.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn wins_star(cells: Vec[u8], mark: u8) -> bool {
+    let lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    for line in lines {
+        if cells[line[0]] == mark and cells[line[1]] == mark and cells[line[2]] == mark {
+            return true;
+        }
+    }
+    false
+}
+
+fn valid_tic_tac_toe_star(board: Vec[String]) -> bool {
+    let mut cells: Vec[u8] = Vec.new();
+    for row in board {
+        for b in row.bytes() {
+            cells.push(b);
+        }
+    }
+    let x = cells.iter().filter(|c| c == b'X').count();
+    let o = cells.iter().filter(|c| c == b'O').count();
+    if x != o and x != o + 1 {
+        return false;
+    }
+    if wins_star(cells, b'X') and x != o + 1 {
+        return false;
+    }
+    if wins_star(cells, b'O') and x != o {
+        return false;
+    }
+    true
+}
+
+// ---- masks arm ------------------------------------------------------
+
+fn has_line_masks(bits: i64) -> bool {
+    for line in [0b000000111, 0b000111000, 0b111000000, 0b001001001, 0b010010010, 0b100100100, 0b100010001, 0b001010100] {
+        if bits & line == line {
+            return true;
+        }
+    }
+    false
+}
+
+fn valid_tic_tac_toe_masks(board: Vec[String]) -> bool {
+    let mut xs = 0;
+    let mut os = 0;
+    for r in 0..3 {
+        let row = board[r].bytes();
+        for c in 0..3 {
+            if row[c] == b'X' {
+                xs |= 1 << (r * 3 + c);
+            } else if row[c] == b'O' {
+                os |= 1 << (r * 3 + c);
+            }
+        }
+    }
+    let x = xs.count_ones() as i64;
+    let o = os.count_ones() as i64;
+    let x_won = has_line_masks(xs);
+    let o_won = has_line_masks(os);
+    if x == o + 1 {
+        not o_won
+    } else if x == o {
+        not x_won
+    } else {
+        false
+    }
+}
+
+// ---- replay arm -----------------------------------------------------
+
+fn has_line_replay(cells: Vec[u8], mark: u8) -> bool {
+    for r in 0..3 {
+        if cells[r * 3] == mark and cells[r * 3 + 1] == mark and cells[r * 3 + 2] == mark {
+            return true;
+        }
+    }
+    for c in 0..3 {
+        if cells[c] == mark and cells[c + 3] == mark and cells[c + 6] == mark {
+            return true;
+        }
+    }
+    (cells[0] == mark and cells[4] == mark and cells[8] == mark) or (cells[2] == mark and cells[4] == mark and cells[6] == mark)
+}
+
+// Whether play from `now`, with `mover` to move, can reach `goal`;
+// `down` has bit i set when cell i is marked, and `tried` the positions
+// already searched.
+fn reaches_replay(now: mut ref Vec[u8], down: i64, goal: Vec[u8], mover: u8, tried: mut ref Vec[bool]) -> bool {
+    if now == goal {
+        return true;
+    }
+    if tried[down] or has_line_replay(now, b'X') or has_line_replay(now, b'O') {
+        return false;
+    }
+    tried[down] = true;
+    let other = if mover == b'X' { b'O' } else { b'X' };
+    for i in 0..9 {
+        if now[i] == b' ' and goal[i] == mover {
+            now[i] = mover;
+            let found = reaches_replay(mut now, down | (1 << i), goal, other, mut tried);
+            now[i] = b' ';
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn valid_tic_tac_toe_replay(board: Vec[String]) -> bool {
+    let mut goal: Vec[u8] = Vec.new();
+    for row in board {
+        for b in row.bytes() {
+            goal.push(b);
+        }
+    }
+    let mut now: Vec[u8] = Vec.new();
+    for _ in 0..9 {
+        now.push(b' ');
+    }
+    let mut tried: Vec[bool] = Vec.new();
+    for _ in 0..512 {
+        tried.push(false);
+    }
+    reaches_replay(mut now, 0, goal, b'X', mut tried)
+}
+
+// ---- undo arm -------------------------------------------------------
+
+fn has_line_undo(cells: String, mark: char) -> bool {
+    let c: Vec[char] = cells.chars().collect();
+    let lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    lines.iter().any(|l| c[l[0]] == mark and c[l[1]] == mark and c[l[2]] == mark)
+}
+
+fn settle_undo(cells: String, known: mut ref Map[String, bool]) -> bool {
+    if let Some(answer) = known.get(cells) {
+        return answer;
+    }
+    let x = cells.chars().filter(|c| c == 'X').count();
+    let o = cells.chars().filter(|c| c == 'O').count();
+    let answer = if x == 0 and o == 0 {
+        true
+    } else if x != o and x != o + 1 {
+        false
+    } else {
+        let last = if x == o + 1 { 'X' } else { 'O' };
+        let marks: Vec[char] = cells.chars().collect();
+        let mut found = false;
+        for i in 0..9 {
+            if not found and marks[i] == last {
+                let mut before = marks.clone();
+                before[i] = ' ';
+                let earlier: String = before.iter().collect();
+                if not has_line_undo(earlier, 'X') and not has_line_undo(earlier, 'O') and settle_undo(earlier, mut known) {
+                    found = true;
+                }
+            }
+        }
+        found
+    };
+    known.insert(cells.clone(), answer);
+    answer
+}
+
+fn valid_tic_tac_toe_undo(board: Vec[String]) -> bool {
+    let mut known: Map[String, bool] = Map.new();
+    settle_undo(f"{board[0]}{board[1]}{board[2]}", mut known)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, board: Vec[String]) -> bool {
+    if which == 0 {
+        valid_tic_tac_toe_star(board)
+    } else if which == 1 {
+        valid_tic_tac_toe_masks(board)
+    } else if which == 2 {
+        valid_tic_tac_toe_replay(board)
+    } else {
+        valid_tic_tac_toe_undo(board)
+    }
+}
+
+// A board's cells as 0 (empty), 1 (X) and 2 (O), read as a number in
+// base 3, cell 0 lowest.
+fn code_of(cells: Vec[i64]) -> i64 {
+    let mut code = 0;
+    let mut i = 8;
+    while i >= 0 {
+        code = code * 3 + cells[i];
+        i -= 1;
+    }
+    code
+}
+
+fn board_of(cells: Vec[i64]) -> Vec[String] {
+    let marks = [' ', 'X', 'O'];
+    let mut board: Vec[String] = Vec.new();
+    for r in 0..3 {
+        let mut row = String.new();
+        for c in 0..3 {
+            row.push(marks[cells[r * 3 + c]]);
+        }
+        board.push(row);
+    }
+    board
+}
+
+fn line_of(cells: Vec[i64], mark: i64) -> bool {
+    let lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    for l in lines {
+        if cells[l[0]] == mark and cells[l[1]] == mark and cells[l[2]] == mark {
+            return true;
+        }
+    }
+    false
+}
+
+// Every game: play every move from every position, stopping at a line
+// or a full board, and mark each board met.
+fn play_all(cells: mut ref Vec[i64], mover: i64, reached: mut ref Vec[bool]) {
+    let code = code_of(cells);
+    // A board met before was played on from then, with the same player
+    // to move, since that follows from the marks down.
+    if reached[code] {
+        return;
+    }
+    reached[code] = true;
+    if line_of(cells, 1) or line_of(cells, 2) {
+        return;
+    }
+    for i in 0..9 {
+        if cells[i] == 0 {
+            cells[i] = mover;
+            play_all(mut cells, 3 - mover, mut reached);
+            cells[i] = 0;
+        }
+    }
+}
+
+// The board turned a quarter turn when `turn` is 1, mirrored left to
+// right when `flip` is 1.
+fn moved(cells: Vec[i64], turn: i64, flip: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for r in 0..3 {
+        for c in 0..3 {
+            let (r1, c1) = if turn == 1 { (2 - c, r) } else { (r, c) };
+            let c2 = if flip == 1 { 2 - c1 } else { c1 };
+            out.push(cells[r1 * 3 + c2]);
+        }
+    }
+    out
+}
+
+fn random_cells(seed: mut ref i64) -> Vec[i64] {
+    let mut cells: Vec[i64] = Vec.new();
+    for _ in 0..9 {
+        cells.push(0);
+    }
+    if next_random(mut seed) % 3 == 0 {
+        for i in 0..9 {
+            cells[i] = next_random(mut seed) % 3;
+        }
+    } else {
+        // A random game, going on past a line one time in four.
+        let go_on = next_random(mut seed) % 4 == 0;
+        let mut mover = 1;
+        for _ in 0..next_random(mut seed) % 10 {
+            if not go_on and (line_of(cells, 1) or line_of(cells, 2)) {
+                break;
+            }
+            let mut empty: Vec[i64] = Vec.new();
+            for i in 0..9 {
+                if cells[i] == 0 {
+                    empty.push(i);
+                }
+            }
+            cells[empty[next_random(mut seed) % empty.len()]] = mover;
+            mover = 3 - mover;
+        }
+    }
+    cells
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7940;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut reached: Vec[bool] = Vec.new();
+    for _ in 0..19683 {
+        reached.push(false);
+    }
+    let mut empty: Vec[i64] = Vec.new();
+    for _ in 0..9 {
+        empty.push(0);
+    }
+    play_all(mut empty, 1, mut reached);
+    let valid = reached.iter().filter(|r| r).count();
+    // P1: the definition's answer, for every board.
+    let mut cells: Vec[i64] = Vec.new();
+    for _ in 0..9 {
+        cells.push(0);
+    }
+    for code in 0..19683 {
+        let mut rest = code;
+        for i in 0..9 {
+            cells[i] = rest % 3;
+            rest /= 3;
+        }
+        let board = board_of(cells);
+        for which in 0..arms {
+            checks += 1;
+            if answer_with(which, board.clone()) != reached[code] {
+                fails[0] += 1;
+            }
+        }
+    }
+    let cases = 1000;
+    let mut valid_cases = 0;
+    for _ in 0..cases {
+        let cells = random_cells(mut seed);
+        let x = cells.iter().filter(|c| c == 1).count();
+        let o = cells.iter().filter(|c| c == 2).count();
+        for which in 0..arms {
+            let got = answer_with(which, board_of(cells));
+            if which == 0 and got {
+                valid_cases += 1;
+            }
+            // P2: the same answer for each of the board's 8 turns and
+            // mirrorings.
+            checks += 1;
+            let mut same = true;
+            let mut turned = cells.clone();
+            for _ in 0..4 {
+                turned = moved(turned, 1, 0);
+                if answer_with(which, board_of(turned)) != got or answer_with(which, board_of(moved(turned, 0, 1))) != got {
+                    same = false;
+                }
+            }
+            if not same {
+                fails[1] += 1;
+            }
+            // P3: on a valid board with no line, any move by the player
+            // to move gives a valid board.
+            checks += 1;
+            if got and not line_of(cells, 1) and not line_of(cells, 2) {
+                let mover = if x == o { 1 } else { 2 };
+                for i in 0..9 {
+                    if cells[i] == 0 {
+                        let mut after = cells.clone();
+                        after[i] = mover;
+                        if not answer_with(which, board_of(after)) {
+                            fails[2] += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            // P4: on a valid board with a mark, some mark of the player
+            // who moved last can be taken back to a valid board with no
+            // line.
+            checks += 1;
+            if got and x + o > 0 {
+                let last = if x == o + 1 { 1 } else { 2 };
+                let mut back = false;
+                for i in 0..9 {
+                    if cells[i] == last {
+                        let mut before = cells.clone();
+                        before[i] = 0;
+                        if not line_of(before, 1) and not line_of(before, 2) and answer_with(which, board_of(before)) {
+                            back = true;
+                        }
+                    }
+                }
+                if not back {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}all 19683 boards ({valid} valid) and {cases} random ones ({valid_cases} valid), {arms} arms, {checks} checks, {failures} failures");
+}

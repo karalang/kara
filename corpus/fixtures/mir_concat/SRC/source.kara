@@ -1,0 +1,19 @@
+fn g(e: ref String, i: i64) -> String {
+    let piece = f"{i}";
+    if i % 2 == 0 {
+        return e.clone() + "+" + piece.clone();
+    }
+    e.clone() + "-" + piece
+}
+fn main() {
+    let mut acc = String.from("x");
+    let mut i = 0;
+    while i < 50 {
+        acc = g(acc, i);
+        i = i + 1;
+    }
+    let a = String.from("keep");
+    let b = a + "!";
+    println(f"{a} {b} {acc.len()}");
+    println(acc.substring(0, 12));
+}

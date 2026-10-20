@@ -37,8 +37,8 @@ fn place_star(node: Option[TreeNode], row: i64, column: i64, h: i64, grid: mut r
         grid[row][column] = f"{n.val}";
         if row < h {
             let step = 1 << (h - row - 1);
-            place_star(n.left, row + 1, column - step, h, grid);
-            place_star(n.right, row + 1, column + step, h, grid);
+            place_star(n.left, row + 1, column - step, h, mut grid);
+            place_star(n.right, row + 1, column + step, h, mut grid);
         }
     }
 }
@@ -121,8 +121,8 @@ fn fill_halves(node: Option[TreeNode], row: i64, low: i64, high: i64, grid: mut 
         Some(n) => {
             let middle = (low + high) / 2;
             grid[row][middle] = f"{n.val}";
-            fill_halves(n.left, row + 1, low, middle - 1, grid);
-            fill_halves(n.right, row + 1, middle + 1, high, grid);
+            fill_halves(n.left, row + 1, low, middle - 1, mut grid);
+            fill_halves(n.right, row + 1, middle + 1, high, mut grid);
         }
     }
 }
@@ -218,16 +218,16 @@ fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
 fn paths(node: Option[TreeNode], path: String, out: mut ref Vec[(String, i64)]) {
     if let Some(n) = node {
         out.push((path.clone(), n.val));
-        paths(n.left, path.clone() + "L", out);
-        paths(n.right, path.clone() + "R", out);
+        paths(n.left, path.clone() + "L", mut out);
+        paths(n.right, path.clone() + "R", mut out);
     }
 }
 
 fn all_paths(depth: i64, path: String, out: mut ref Vec[String]) {
     if path.len() < depth {
         out.push(path.clone() + "M");
-        all_paths(depth, path.clone() + "L", out);
-        all_paths(depth, path.clone() + "R", out);
+        all_paths(depth, path.clone() + "L", mut out);
+        all_paths(depth, path.clone() + "R", mut out);
     }
 }
 
@@ -268,9 +268,9 @@ fn definition(root: Option[TreeNode]) -> Vec[Vec[String]] {
 
 fn in_order(node: Option[TreeNode], out: mut ref Vec[String]) {
     if let Some(n) = node {
-        in_order(n.left, out);
+        in_order(n.left, mut out);
         out.push(f"{n.val}");
-        in_order(n.right, out);
+        in_order(n.right, mut out);
     }
 }
 

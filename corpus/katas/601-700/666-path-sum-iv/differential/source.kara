@@ -185,8 +185,8 @@ fn collect(node: Option[Node], above: i64, length: i64, out: mut ref Vec[(i64, i
         if n.left.is_none() and n.right.is_none() {
             out.push((sum, length + 1));
         } else {
-            collect(n.left, sum, length + 1, out);
-            collect(n.right, sum, length + 1, out);
+            collect(n.left, sum, length + 1, mut out);
+            collect(n.right, sum, length + 1, mut out);
         }
     }
 }

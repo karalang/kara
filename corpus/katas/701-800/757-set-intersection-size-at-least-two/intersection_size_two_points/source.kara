@@ -1,0 +1,83 @@
+// LeetCode 757 — Set Intersection Size At Least Two, the points kept.
+//
+// Take the intervals by their right ends and keep the chosen points in
+// a sorted list. Every point chosen so far is at most the current right
+// end, so the points an interval already holds are those at or past its
+// start, found by binary search. If it holds fewer than two, add the
+// rightmost points of it not yet chosen until it holds two.
+
+fn first_at_least(sorted: ref Vec[i64], value: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < value {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn intersection_size_two(intervals: Vec[Vec[i64]]) -> i64 {
+    let mut order = intervals.clone();
+    order.sort_by(|x, y| x[1].cmp(y[1]));
+    let mut chosen: Vec[i64] = Vec.new();
+    for interval in order.iter() {
+        let start = interval[0];
+        let mut have = chosen.len() - first_at_least(chosen, start);
+        let mut point = interval[1];
+        while have < 2 {
+            let at = first_at_least(chosen, point);
+            if at == chosen.len() or chosen[at] != point {
+                chosen.insert(at, point);
+                have += 1;
+            }
+            point -= 1;
+        }
+    }
+    chosen.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(intervals: Vec[Vec[i64]]) {
+    let n = intervals.len();
+    let answer = intersection_size_two(intervals.clone());
+    println(f"{n} intervals {intervals} -> {answer}");
+}
+
+fn main() {
+    show([[1, 3], [3, 7], [8, 9]]);
+    show([[1, 3], [1, 4], [2, 5], [3, 5]]);
+    show([[1, 2], [2, 3], [2, 4], [4, 5]]);
+    show([[0, 1]]);
+    show([[0, 100000000]]);
+    show([[0, 1], [0, 1], [0, 1]]);
+    show([[1, 10], [2, 9], [3, 8], [4, 7], [5, 6]]);
+    show([[0, 2], [2, 4], [4, 6], [6, 8]]);
+    show([[0, 1], [2, 3], [4, 5], [6, 7]]);
+    let mut seed = 757;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 400;
+        let span = 2 + next_random(mut seed) % 99999999;
+        let mut intervals: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let width = 1 + next_random(mut seed) % (span / 20 + 1);
+            let a = next_random(mut seed) * 32768 % (span - width + 1);
+            intervals.push([a, a + width]);
+        }
+        let answer = intersection_size_two(intervals);
+        total += answer;
+        check = (check * 31 + answer) % 1000000007;
+    }
+    println(f"200 random sets of up to 400 intervals: {total} points in all, checksum {check}");
+}

@@ -75,10 +75,10 @@ fn show(coins: Vec[i64], max_jump: i64) {
 fn random_coins(n: i64, top: i64, blocked: i64, seed: mut ref i64) -> Vec[i64] {
     let mut coins: Vec[i64] = Vec.new();
     for i in 0..n {
-        if i > 0 and next_random(seed) % 100 < blocked {
+        if i > 0 and next_random(mut seed) % 100 < blocked {
             coins.push(-1);
         } else {
-            coins.push(next_random(seed) % (top + 1));
+            coins.push(next_random(mut seed) % (top + 1));
         }
     }
     coins

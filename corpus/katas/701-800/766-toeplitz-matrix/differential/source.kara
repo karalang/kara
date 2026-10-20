@@ -1,0 +1,221 @@
+// LeetCode #766: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random matrices.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_toeplitz_matrix_star(matrix: Vec[Vec[i64]]) -> bool {
+    for i in 1..matrix.len() {
+        for j in 1..matrix[i].len() {
+            if matrix[i][j] != matrix[i - 1][j - 1] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- diagonal arm ---------------------------------------------------
+
+fn same_down_diagonals(matrix: Vec[Vec[i64]], row: i64, col: i64) -> bool {
+    let first = matrix[row][col];
+    let mut i = row + 1;
+    let mut j = col + 1;
+    while i < matrix.len() and j < matrix[0].len() {
+        if matrix[i][j] != first {
+            return false;
+        }
+        i += 1;
+        j += 1;
+    }
+    true
+}
+
+fn is_toeplitz_matrix_diagonals(matrix: Vec[Vec[i64]]) -> bool {
+    for col in 0..matrix[0].len() {
+        if not same_down_diagonals(matrix, 0, col) {
+            return false;
+        }
+    }
+    for row in 1..matrix.len() {
+        if not same_down_diagonals(matrix, row, 0) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- keyed arm ------------------------------------------------------
+
+fn is_toeplitz_matrix_keyed(matrix: Vec[Vec[i64]]) -> bool {
+    let mut first: Map[i64, i64] = Map.new();
+    for i in 0..matrix.len() {
+        for j in 0..matrix[i].len() {
+            let key = i - j;
+            match first.get(key) {
+                Some(value) => {
+                    if value != matrix[i][j] {
+                        return false;
+                    }
+                }
+                None => {
+                    first.insert(key, matrix[i][j]);
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- shifted arm ----------------------------------------------------
+
+fn is_toeplitz_matrix_shifted(matrix: Vec[Vec[i64]]) -> bool {
+    let n = matrix[0].len();
+    for i in 1..matrix.len() {
+        if matrix[i][1..n] != matrix[i - 1][0..n - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, matrix: Vec[Vec[i64]]) -> bool {
+    if which == 0 {
+        is_toeplitz_matrix_star(matrix)
+    } else if which == 1 {
+        is_toeplitz_matrix_diagonals(matrix)
+    } else if which == 2 {
+        is_toeplitz_matrix_keyed(matrix)
+    } else {
+        is_toeplitz_matrix_shifted(matrix)
+    }
+}
+
+// The definition: any two cells with the same row minus column hold the
+// same value.
+fn definition(matrix: Vec[Vec[i64]]) -> bool {
+    let m = matrix.len();
+    let n = matrix[0].len();
+    for a in 0..m * n {
+        for b in 0..m * n {
+            let (i, j) = (a / n, a % n);
+            let (k, l) = (b / n, b % n);
+            if i - j == k - l and matrix[i][j] != matrix[k][l] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn toeplitz(seed: mut ref i64, m: i64, n: i64, values: i64) -> Vec[Vec[i64]] {
+    let mut diag: Vec[i64] = Vec.new();
+    for _ in 0..m + n - 1 {
+        diag.push(next_random(mut seed) % values);
+    }
+    let mut matrix: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(diag[i - j + n - 1]);
+        }
+        matrix.push(row);
+    }
+    matrix
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7660;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut yes = 0;
+    for case in 0..cases {
+        // up to 6 by 6 for the definition, then up to 40 by 40
+        let size = if case < small { 6 } else { 40 };
+        let m = 1 + next_random(mut seed) % size;
+        let n = 1 + next_random(mut seed) % size;
+        let values = 1 + next_random(mut seed) % 3;
+        let built = toeplitz(mut seed, m, n, values);
+        let mut matrix = built.clone();
+        if case % 3 == 1 {
+            matrix[next_random(mut seed) % m][next_random(mut seed) % n] = next_random(mut seed) % values;
+        } else if case % 3 == 2 {
+            for i in 0..m {
+                for j in 0..n {
+                    matrix[i][j] = next_random(mut seed) % (values + 1);
+                }
+            }
+        }
+        // a cell of the built matrix with a neighbour on its diagonal,
+        // given a value that differs
+        let mut broken = built.clone();
+        let (bi, bj) = (next_random(mut seed) % m, next_random(mut seed) % n);
+        let paired = (bi > 0 and bj > 0) or (bi + 1 < m and bj + 1 < n);
+        broken[bi][bj] = (built[bi][bj] + 1) % 4;
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for j in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for i in 0..m {
+                row.push(matrix[i][j]);
+            }
+            transposed.push(row);
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for i in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for j in 0..n {
+                row.push(matrix[m - 1 - i][n - 1 - j]);
+            }
+            turned.push(row);
+        }
+        let want = if case < small { definition(matrix) } else { false };
+        for which in 0..arms {
+            let got = answer_with(which, matrix);
+            if which == 0 and got {
+                yes += 1;
+            }
+            // P1: the definition's answer.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the transpose has the same answer.
+            checks += 1;
+            if answer_with(which, transposed) != got {
+                fails[1] += 1;
+            }
+            // P3: the matrix turned half round has the same answer.
+            checks += 1;
+            if answer_with(which, turned) != got {
+                fails[2] += 1;
+            }
+            // P4: a matrix built from its diagonals is Toeplitz, and stops
+            // being so when one cell sharing a diagonal is changed.
+            checks += 1;
+            if not answer_with(which, built) or answer_with(which, broken) == paired {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} matrices ({yes} Toeplitz), {arms} arms, {checks} checks, {failures} failures");
+}

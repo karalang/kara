@@ -1,0 +1,127 @@
+// LeetCode 758 — Bold Words in String, rolling hashes.
+//
+// For each length a word has, hash the words of that length and slide a
+// window of that length over `s`, updating its polynomial hash a
+// character at a time. A window whose hash is a word's is checked against
+// the words themselves before its span is marked, so a collision cannot
+// mark anything. O(distinct lengths x length of s).
+
+fn bold_words(words: Vec[String], s: String) -> String {
+    let modulus = 1000000007;
+    let base = 131;
+    let n = s.len();
+    let bytes = s.bytes();
+    let mut bold: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        bold.push(false);
+    }
+    let mut lengths: Set[i64] = Set.new();
+    let mut known: Set[String] = Set.new();
+    for word in words.iter() {
+        lengths.insert(word.len());
+        known.insert(word.clone());
+    }
+    for size in lengths.iter() {
+        let size = *size;
+        if size > n {
+            continue;
+        }
+        let mut hashes: Set[i64] = Set.new();
+        for word in words.iter() {
+            if word.len() == size {
+                let mut h = 0;
+                for c in word.bytes() {
+                    h = (h * base + c as i64) % modulus;
+                }
+                hashes.insert(h);
+            }
+        }
+        // base^(size - 1), to take the leaving character out of the hash
+        let mut high = 1;
+        for _ in 0..size - 1 {
+            high = high * base % modulus;
+        }
+        let mut h = 0;
+        for i in 0..n {
+            if i >= size {
+                h = (h - bytes[i - size] as i64 * high % modulus + modulus) % modulus;
+            }
+            h = (h * base + bytes[i] as i64) % modulus;
+            if i + 1 >= size and hashes.contains(h) {
+                let start = i + 1 - size;
+                if known.contains(s[start..i + 1].to_string()) {
+                    for j in start..i + 1 {
+                        bold[j] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        if bold[i] and (i == 0 or not bold[i - 1]) {
+            out.push_str("<b>");
+        }
+        out.push(bytes[i] as char);
+        if bold[i] and (i == n - 1 or not bold[i + 1]) {
+            out.push_str("</b>");
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64, length: i64, letters: i64) -> String {
+    let mut text = String.new();
+    for _ in 0..length {
+        text.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    text
+}
+
+fn show(words: Vec[String], s: String) {
+    let answer = bold_words(words.clone(), s.clone());
+    println(f"{words} {s} -> {answer}");
+}
+
+fn main() {
+    show([String.from("ab"), String.from("bc")], String.from("aabcd"));
+    show([String.from("ab"), String.from("cb")], String.from("aabcd"));
+    show(Vec.new(), String.from("abc"));
+    show([String.from("abc")], String.from("abc"));
+    show([String.from("ab"), String.from("cd")], String.from("abcd"));
+    show([String.from("aa")], String.from("aaa"));
+    show([String.from("zz")], String.from("abc"));
+    show([String.from("b")], String.from("abcba"));
+    show([String.from("abcdefghij")], String.from("abc"));
+    show([String.from("e"), String.from("cde"), String.from("bcdef")], String.from("abcdefg"));
+    let mut seed = 758;
+    let mut tags = 0;
+    let mut marks = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let letters = 2 + next_random(mut seed) % 5;
+        let length = 1 + next_random(mut seed) % 500;
+        let s = random_text(mut seed, length, letters);
+        let count = next_random(mut seed) % 51;
+        let longest = 1 + next_random(mut seed) % 10;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % longest;
+            words.push(random_text(mut seed, size, letters + 1));
+        }
+        let answer = bold_words(words, s.clone());
+        tags += (answer.len() - s.len()) / 7;
+        for c in answer.chars() {
+            check = (check * 31 + c as i64) % 1000000007;
+        }
+        marks += answer.len() - s.len();
+    }
+    println(f"300 random strings: {tags} bold runs, {marks} tag characters, checksum {check}");
+}

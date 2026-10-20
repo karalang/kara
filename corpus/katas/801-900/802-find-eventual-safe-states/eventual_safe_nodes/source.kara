@@ -1,0 +1,112 @@
+// LeetCode 802 — Find Eventual Safe States, depth first search in three
+// colours.
+//
+// A node is safe when every walk from it ends at a node with no edges
+// out, that is, when no walk from it reaches a cycle. Search from each
+// node in turn, marking a node grey while its edges are being followed
+// and black once all of them are known to be safe. Reaching a grey node
+// means a cycle, so the walk back up leaves every node on it grey, and
+// grey is kept for good as unsafe. O(n + e).
+fn eventual_safe_nodes(graph: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = graph.len();
+    // 0 not seen yet, 1 grey (on the search or unsafe), 2 black (safe).
+    let mut colour: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        colour.push(0);
+    }
+    let mut safe: Vec[i64] = Vec.new();
+    for node in 0..n {
+        if is_safe(graph, node, mut colour) {
+            safe.push(node);
+        }
+    }
+    safe
+}
+
+fn is_safe(graph: Vec[Vec[i64]], node: i64, colour: mut ref Vec[i64]) -> bool {
+    if colour[node] != 0 {
+        return colour[node] == 2;
+    }
+    colour[node] = 1;
+    for next in graph[node].iter() {
+        if not is_safe(graph, next, mut colour) {
+            return false;
+        }
+    }
+    colour[node] = 2;
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text_list(list: Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..list.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{list[i]}");
+    }
+    out.push_str("]");
+    out
+}
+
+fn text(graph: Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    for i in 0..graph.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(text_list(graph[i]));
+    }
+    out.push_str("]");
+    out
+}
+
+fn show(graph: Vec[Vec[i64]]) {
+    println(f"{text(graph)} -> {text_list(eventual_safe_nodes(graph))}");
+}
+
+fn main() {
+    show(vec![vec![1, 2], vec![2, 3], vec![5], vec![0], vec![5], vec![], vec![]]);
+    show(vec![vec![1, 2, 3, 4], vec![1, 2], vec![3, 4], vec![0, 4], vec![]]);
+    show(vec![vec![]]);
+    show(vec![vec![0]]);
+    show(vec![vec![1], vec![2], vec![0, 3], vec![]]);
+    show(vec![vec![1], vec![2], vec![3], vec![4], vec![]]);
+    show(vec![vec![1, 2], vec![3], vec![3], vec![3]]);
+    let mut seed = 802;
+    let mut count = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Each possible edge, a node to itself included, is there with a
+        // chance of between 1 and 4 in 2n, so that a node has from half
+        // an edge to two out on average.
+        let n = 1 + next_random(mut seed) % 40;
+        let chance = 1 + next_random(mut seed) % 4;
+        let mut graph: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut out: Vec[i64] = Vec.new();
+            for b in 0..n {
+                if next_random(mut seed) % (2 * n) < chance {
+                    out.push(b);
+                }
+            }
+            graph.push(out);
+        }
+        let safe = eventual_safe_nodes(graph);
+        count += safe.len();
+        for v in safe.iter() {
+            check = (check * 131 + v + 1) % 1000000007;
+        }
+        check = (check * 131 + i) % 1000000007;
+    }
+    println(f"300 random graphs: {count} safe nodes, checksum {check}");
+}

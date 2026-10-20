@@ -45,8 +45,8 @@ fn show(nums: Vec[i64]) {
 fn random_runs(runs: i64, low: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
     let mut nums: Vec[i64] = Vec.new();
     for _ in 0..runs {
-        let start = low + next_random(seed) % (spread + 1);
-        let length = 3 + next_random(seed) % 3;
+        let start = low + next_random(mut seed) % (spread + 1);
+        let length = 3 + next_random(mut seed) % 3;
         for v in start..start + length {
             nums.push(v);
         }

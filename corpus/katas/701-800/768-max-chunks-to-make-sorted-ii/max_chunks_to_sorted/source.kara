@@ -1,0 +1,65 @@
+// LeetCode 768 — Max Chunks To Make Sorted II, a stack of chunk maxima.
+//
+// Keep one entry per chunk, its largest value, in a stack that rises from
+// bottom to top. A value at least the top's starts a chunk of its own. A
+// smaller value must share a chunk with every chunk whose largest value
+// is greater than it, so those chunks merge into one, keeping the largest
+// of their maxima. The stack's height at the end is the answer. O(n).
+
+fn max_chunks_to_sorted(arr: Vec[i64]) -> i64 {
+    let mut maxima: Vec[i64] = Vec.new();
+    for x in arr {
+        match maxima.last() {
+            Some(top) if x < top => {
+                let largest = *top;
+                while maxima.len() > 0 and maxima[maxima.len() - 1] > x {
+                    maxima.pop();
+                }
+                maxima.push(largest);
+            }
+            _ => {
+                maxima.push(x);
+            }
+        }
+    }
+    maxima.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    let chunks = max_chunks_to_sorted(arr);
+    println(f"{arr} -> {chunks}");
+}
+
+fn main() {
+    show([5, 4, 3, 2, 1]);
+    show([2, 1, 3, 4, 4]);
+    show([7]);
+    show([1, 2, 3, 4]);
+    show([3, 3, 3]);
+    show([1, 1, 0, 0, 1]);
+    show([4, 2, 2, 1, 1, 5, 6, 6]);
+    show([0, 100000000, 5, 100000000, 7]);
+    let mut seed = 768;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let spread = 1 + next_random(mut seed) % 20;
+        let mut arr: Vec[i64] = Vec.new();
+        for i in 0..n {
+            // values that mostly rise, so that there are chunks to find
+            arr.push(i / 3 + next_random(mut seed) % spread);
+        }
+        let chunks = max_chunks_to_sorted(arr);
+        total += chunks;
+        check = (check * 31 + chunks) % 1000000007;
+    }
+    println(f"300 random arrays: {total} chunks in all, checksum {check}");
+}

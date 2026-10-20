@@ -84,21 +84,21 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
     }
     let mut i = n - 1;
     while i > 0 {
-        let j = next_random(seed) % (i + 1);
+        let j = next_random(mut seed) % (i + 1);
         name.swap(i, j);
         i -= 1;
     }
     let mut edges: Vec[(i64, i64)] = Vec.new();
     let mut joined: Set[(i64, i64)] = Set.new();
     for v in 1..n {
-        let u = next_random(seed) % v;
+        let u = next_random(mut seed) % v;
         edges.push((name[u], name[v]));
         joined.insert((name[u], name[v]));
         joined.insert((name[v], name[u]));
     }
     loop {
-        let a = name[next_random(seed) % n];
-        let b = name[next_random(seed) % n];
+        let a = name[next_random(mut seed) % n];
+        let b = name[next_random(mut seed) % n];
         if a != b and not joined.contains((a, b)) {
             edges.push((a, b));
             break;
@@ -106,12 +106,12 @@ fn random_graph(seed: mut ref i64, n: i64) -> Vec[(i64, i64)] {
     }
     let mut k = n - 1;
     while k > 0 {
-        let j = next_random(seed) % (k + 1);
+        let j = next_random(mut seed) % (k + 1);
         edges.swap(k, j);
         k -= 1;
     }
     for e in 0..n {
-        if next_random(seed) % 2 == 0 {
+        if next_random(mut seed) % 2 == 0 {
             let (a, b) = edges[e];
             edges[e] = (b, a);
         }

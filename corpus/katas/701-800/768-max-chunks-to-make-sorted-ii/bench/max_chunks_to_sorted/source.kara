@@ -1,0 +1,51 @@
+// LeetCode 768 — Max Chunks To Make Sorted II: benchmark, the ★ arm.
+//
+// Sixty-four random arrays of 2,000 values, the most LeetCode allows,
+// built once; each mostly rises, with noise of a random size, so that
+// chunks form and merge. 40,000 rounds each count the next one's chunks.
+
+fn max_chunks_to_sorted(arr: Vec[i64]) -> i64 {
+    let mut maxima: Vec[i64] = Vec.new();
+    for x in arr {
+        match maxima.last() {
+            Some(top) if x < top => {
+                let largest = *top;
+                while maxima.len() > 0 and maxima[maxima.len() - 1] > x {
+                    maxima.pop();
+                }
+                maxima.push(largest);
+            }
+            _ => {
+                maxima.push(x);
+            }
+        }
+    }
+    maxima.len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 40000;
+    let mut seed = 768;
+    let mut pool: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..64 {
+        let noise = 1 + next_random(mut seed) % 40;
+        let mut arr: Vec[i64] = Vec.new();
+        for i in 0..2000 {
+            arr.push(i * 50 + next_random(mut seed) % noise * 50);
+        }
+        pool.push(arr);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..rounds {
+        let chunks = max_chunks_to_sorted(pool[round % 64]);
+        total += chunks;
+        check = (check * 31 + chunks) % 1000000007;
+    }
+    println(f"{rounds} arrays of 2000 values: {total} chunks in all, checksum {check}");
+}

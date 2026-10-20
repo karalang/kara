@@ -1,0 +1,340 @@
+// LeetCode #797: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random graphs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn all_paths_source_target_star(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    path.push(0);
+    walk_star(graph, 0, mut path, mut paths);
+    paths
+}
+
+fn walk_star(graph: Vec[Vec[i64]], node: i64, path: mut ref Vec[i64], paths: mut ref Vec[Vec[i64]]) {
+    if node == graph.len() - 1 {
+        paths.push(path.clone());
+        return;
+    }
+    for next in graph[node].iter() {
+        path.push(*next);
+        walk_star(graph, *next, mut path, mut paths);
+        path.pop();
+    }
+}
+
+// ---- queue arm ------------------------------------------------------
+
+fn all_paths_source_target_queue(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let target = graph.len() - 1;
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    let mut queue: VecDeque[Vec[i64]] = VecDeque.new();
+    let mut first: Vec[i64] = Vec.new();
+    first.push(0);
+    queue.push_back(first);
+    while let Some(path) = queue.pop_front() {
+        let end = path[path.len() - 1];
+        if end == target {
+            paths.push(path);
+            continue;
+        }
+        for next in graph[end].iter() {
+            let mut longer = path.clone();
+            longer.push(*next);
+            queue.push_back(longer);
+        }
+    }
+    paths
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn all_paths_source_target_memo(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = graph.len();
+    let mut known: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut done: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        known.push(Vec.new());
+        done.push(false);
+    }
+    paths_from_memo(graph, 0, mut known, mut done);
+    known[0].clone()
+}
+
+fn paths_from_memo(graph: Vec[Vec[i64]], node: i64, known: mut ref Vec[Vec[Vec[i64]]], done: mut ref Vec[bool]) {
+    if done[node] {
+        return;
+    }
+    let mut here: Vec[Vec[i64]] = Vec.new();
+    if node == graph.len() - 1 {
+        let mut alone: Vec[i64] = Vec.new();
+        alone.push(node);
+        here.push(alone);
+    } else {
+        for next in graph[node].iter() {
+            paths_from_memo(graph, *next, mut known, mut done);
+            for rest in known[*next].iter() {
+                let mut path: Vec[i64] = Vec.new();
+                path.push(node);
+                for v in rest.iter() {
+                    path.push(*v);
+                }
+                here.push(path);
+            }
+        }
+    }
+    known[node] = here;
+    done[node] = true;
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn all_paths_source_target_stack(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let target = graph.len() - 1;
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    let mut tried: Vec[i64] = Vec.new();
+    path.push(0);
+    tried.push(0);
+    while path.len() > 0 {
+        let top = path.len() - 1;
+        let node = path[top];
+        if tried[top] == graph[node].len() {
+            path.pop();
+            tried.pop();
+            continue;
+        }
+        let next = graph[node][tried[top]];
+        tried[top] += 1;
+        path.push(next);
+        tried.push(0);
+        if next == target {
+            paths.push(path.clone());
+            path.pop();
+            tried.pop();
+        }
+    }
+    paths
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut paths = if which == 0 {
+        all_paths_source_target_star(graph)
+    } else if which == 1 {
+        all_paths_source_target_queue(graph)
+    } else if which == 2 {
+        all_paths_source_target_memo(graph)
+    } else {
+        all_paths_source_target_stack(graph)
+    };
+    paths.sort();
+    paths
+}
+
+fn has_edge(graph: Vec[Vec[i64]], a: i64, b: i64) -> bool {
+    for v in graph[a].iter() {
+        if *v == b {
+            return true;
+        }
+    }
+    false
+}
+
+// The definition. A path goes through its nodes in the graph's order,
+// so each path is one set of nodes holding 0 and n - 1: try every set,
+// put it in that order, and keep it when each step is an edge.
+fn definition(graph: Vec[Vec[i64]], order: Vec[i64]) -> Vec[Vec[i64]] {
+    let n = graph.len();
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    for set in 0..1 << n {
+        if set & 1 == 0 or set & (1 << (n - 1)) == 0 {
+            continue;
+        }
+        let mut path: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if set & (1 << order[i]) != 0 {
+                path.push(order[i]);
+            }
+        }
+        let mut good = path[0] == 0 and path[path.len() - 1] == n - 1;
+        for i in 1..path.len() {
+            if not has_edge(graph, path[i - 1], path[i]) {
+                good = false;
+            }
+        }
+        if good {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths
+}
+
+// Every edge turned round and every node v renamed n - 1 - v, so that
+// 0 is still the start and n - 1 the end.
+fn turned(graph: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = graph.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        out.push(Vec.new());
+    }
+    for a in 0..n {
+        for b in graph[a].iter() {
+            out[n - 1 - *b].push(n - 1 - a);
+        }
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7970;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut total = 0;
+    for case in 0..cases {
+        // kind 0: few edges; kind 1: many; kind 2: every edge the order
+        // allows; kind 3: some edges, with 0 and n - 1 anywhere in the
+        // order as long as 0 comes before n - 1, so that nodes may lead into 0
+        // or away from n - 1. In the other kinds 0 is first and n - 1
+        // last.
+        let kind = case % 4;
+        let n = 2 + next_random(mut seed) % 9;
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..n {
+            order.push(i);
+        }
+        for i in 1..n {
+            let j = next_random(mut seed) % (i + 1);
+            let t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+        let mut at_first = 0;
+        let mut at_last = 0;
+        for i in 0..n {
+            if order[i] == 0 {
+                at_first = i;
+            }
+            if order[i] == n - 1 {
+                at_last = i;
+            }
+        }
+        if kind == 3 {
+            if at_last < at_first {
+                order[at_first] = n - 1;
+                order[at_last] = 0;
+            }
+        } else {
+            order[at_first] = order[0];
+            order[0] = 0;
+            for i in 0..n {
+                if order[i] == n - 1 {
+                    at_last = i;
+                }
+            }
+            order[at_last] = order[n - 1];
+            order[n - 1] = n - 1;
+        }
+        let chance = if kind == 0 { 1 } else if kind == 1 { 4 } else if kind == 2 { 5 } else { 1 + next_random(mut seed) % 4 };
+        let mut graph: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            graph.push(Vec.new());
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if next_random(mut seed) % 5 < chance {
+                    graph[order[a]].push(order[b]);
+                }
+            }
+        }
+        let want = definition(graph, order);
+        total += want.len();
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        for path in want.iter() {
+            let mut back: Vec[i64] = Vec.new();
+            for i in 0..path.len() {
+                back.push(n - 1 - path[path.len() - 1 - i]);
+            }
+            flipped.push(back);
+        }
+        flipped.sort();
+        let direct = has_edge(graph, 0, n - 1);
+        let mut more = graph.clone();
+        if not direct {
+            more[0].push(n - 1);
+        }
+        for which in 0..arms {
+            let got = answer_with(which, graph);
+            // P1: the definition's paths.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every path goes from 0 to n - 1 along edges, and no
+            // path comes twice.
+            checks += 1;
+            let mut sound = true;
+            for k in 0..got.len() {
+                let path = got[k].clone();
+                if path.len() == 0 or path[0] != 0 or path[path.len() - 1] != n - 1 {
+                    sound = false;
+                } else {
+                    for i in 1..path.len() {
+                        if not has_edge(graph, path[i - 1], path[i]) {
+                            sound = false;
+                        }
+                    }
+                }
+                if k > 0 and got[k - 1] == path {
+                    sound = false;
+                }
+            }
+            if not sound {
+                fails[1] += 1;
+            }
+            // P3: with every edge turned round and the nodes renamed, the
+            // paths are the old ones backwards and renamed.
+            checks += 1;
+            if answer_with(which, turned(graph)) != flipped {
+                fails[2] += 1;
+            }
+            // P4: an edge from 0 straight to n - 1 adds just the path
+            // [0, n - 1], or nothing when the edge is there already.
+            checks += 1;
+            let longer = answer_with(which, more);
+            let added = if direct { 0 } else { 1 };
+            let mut kept = true;
+            for path in got.iter() {
+                if not longer.contains(path) {
+                    kept = false;
+                }
+            }
+            let mut short: Vec[i64] = Vec.new();
+            short.push(0);
+            short.push(n - 1);
+            if longer.len() != got.len() + added or not kept or not longer.contains(short) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases ({total} paths), {arms} arms, {checks} checks, {failures} failures");
+}

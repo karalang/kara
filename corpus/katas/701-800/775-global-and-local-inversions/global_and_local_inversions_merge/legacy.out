@@ -1,0 +1,12 @@
+[1, 0, 2] -> true
+[1, 2, 0] -> false
+[0] -> true
+[1, 0] -> true
+[0, 2, 1, 3] -> true
+[2, 0, 1] -> false
+[0, 1, 3, 2, 5, 4] -> true
+[1, 0, 3, 2, 4, 6, 5, 7, 9, 8] -> true
+[0, 1, 2, 4, 5, 3] -> false
+100000 values, ideal -> true
+100000 values, a far swap at the end -> false
+300 random permutations: 127 ideal, checksum 163466047

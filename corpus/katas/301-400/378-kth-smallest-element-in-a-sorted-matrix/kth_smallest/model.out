@@ -1,0 +1,9 @@
+example 1: 13
+example 2: -5
+k = 1 is the corner: 1
+k = n * n is the far corner: 4
+rows overlap: 4
+all equal: 7
+duplicates across rows: 2
+negative and extreme values: 0
+100 random matrices: checksum 710711716

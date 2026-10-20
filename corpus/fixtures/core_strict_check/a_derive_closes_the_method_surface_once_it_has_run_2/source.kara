@@ -1,0 +1,7 @@
+
+#[derive(Serialize)]
+struct R { code: i64 }
+fn main() {
+    let r = R { code: 3 };
+    println(Json.serialize(r));
+}

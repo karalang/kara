@@ -1,0 +1,22 @@
+fn eat(v: own Vec[i64]) -> i64 {
+    v.len()
+}
+
+fn main() {
+    let p: Vec[i64] = vec![1, 2];
+    let o: Option[i64] = Some(3);
+    match o {
+        Some(p) => {
+            let a = p + 1;
+            let b = p + 2;
+            println(f"{a} {b}");
+        }
+        None => {}
+    }
+    for p in 0..2 {
+        let a = p + 1;
+        println(f"{a} {p}");
+    }
+    println(f"{eat(p)}");
+    println(f"{eat(p)}");
+}

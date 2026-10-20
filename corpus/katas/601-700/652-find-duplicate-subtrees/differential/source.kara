@@ -27,7 +27,7 @@ fn number_star(
     match node {
         None => 0,
         Some(n) => {
-            let key = (n.val, number_star(n.left, ids, counts, found), number_star(n.right, ids, counts, found));
+            let key = (n.val, number_star(n.left, mut ids, mut counts, mut found), number_star(n.right, mut ids, mut counts, mut found));
             let id = match ids.get(key) {
                 Some(i) => *i,
                 None => {
@@ -58,8 +58,8 @@ fn write_out_strings(node: Option[TreeNode], counts: mut ref Map[String, i64], f
     match node {
         None => "#".to_string(),
         Some(n) => {
-            let left = write_out_strings(n.left, counts, found);
-            let right = write_out_strings(n.right, counts, found);
+            let left = write_out_strings(n.left, mut counts, mut found);
+            let right = write_out_strings(n.right, mut counts, mut found);
             let text = f"{n.val},{left},{right}";
             let count = counts.entry(text.clone()).or_insert(0);
             *count += 1;
@@ -100,8 +100,8 @@ fn find_duplicate_subtrees_pairwise(root: Option[TreeNode]) -> Vec[TreeNode] {
 fn list_pairwise(node: Option[TreeNode], nodes: mut ref Vec[TreeNode]) {
     if let Some(n) = node {
         nodes.push(n);
-        list_pairwise(n.left, nodes);
-        list_pairwise(n.right, nodes);
+        list_pairwise(n.left, mut nodes);
+        list_pairwise(n.right, mut nodes);
     }
 }
 
@@ -126,7 +126,7 @@ fn hash_hashed(node: Option[TreeNode], kinds: mut ref Map[i64, Vec[(TreeNode, i6
     match node {
         None => 1,
         Some(n) => {
-            let h = (n.val + 201 + 403 * hash_hashed(n.left, kinds, found) + 7919 * hash_hashed(n.right, kinds, found)) % 1000000007;
+            let h = (n.val + 201 + 403 * hash_hashed(n.left, mut kinds, mut found) + 7919 * hash_hashed(n.right, mut kinds, mut found)) % 1000000007;
             let bucket = kinds.entry(h).or_insert(Vec.new());
             let mut matched = false;
             for k in 0..bucket.len() {
@@ -225,8 +225,8 @@ fn write(node: Option[TreeNode]) -> String {
 fn every_node(node: Option[TreeNode], texts: mut ref Vec[String]) {
     if let Some(n) = node {
         texts.push(write(Some(n)));
-        every_node(n.left, texts);
-        every_node(n.right, texts);
+        every_node(n.left, mut texts);
+        every_node(n.right, mut texts);
     }
 }
 

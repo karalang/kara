@@ -1,0 +1,117 @@
+// LeetCode 807 — Max Increase to Keep City Skyline, by transposing.
+//
+// Build the grid turned on its diagonal, so that its rows are the
+// original's columns; the column maxima are then row maxima, found by
+// the same function. Sum each building's headroom as before.
+fn row_maxima(grid: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for row in grid.iter() {
+        let mut best = 0;
+        for h in row.iter() {
+            if h > best {
+                best = h;
+            }
+        }
+        out.push(best);
+    }
+    out
+}
+
+fn max_increase_keeping_skyline(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    for j in 0..n {
+        let mut column: Vec[i64] = Vec.new();
+        for i in 0..n {
+            column.push(grid[i][j]);
+        }
+        turned.push(column);
+    }
+    let rows = row_maxima(grid);
+    let cols = row_maxima(turned);
+    let mut total = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let cap = if rows[i] < cols[j] { rows[i] } else { cols[j] };
+            total += cap - grid[i][j];
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(grid: Vec[Vec[i64]]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..grid.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str("[");
+        for j in 0..grid[i].len() {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{grid[i][j]}");
+        }
+        s.push_str("]");
+    }
+    s.push_str("]");
+    s
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{text(grid)} -> {max_increase_keeping_skyline(grid)}");
+}
+
+fn filled(n: i64, h: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(h);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[3, 0, 8, 4], [2, 4, 5, 7], [9, 2, 6, 3], [0, 3, 1, 0]]);
+    show(filled(3, 0));
+    show([[5]]);
+    show([[1, 2], [3, 4]]);
+    // LeetCode's largest: 50 by 50, every building 100 tall.
+    let tall = filled(50, 100);
+    println(f"50 x 50 of 100 -> {max_increase_keeping_skyline(tall)}");
+    // Only the diagonal built, to 100: every other cell can rise to 100.
+    let mut diagonal = filled(50, 0);
+    for i in 0..50 {
+        diagonal[i][i] = 100;
+    }
+    println(f"50 x 50 diagonal of 100 -> {max_increase_keeping_skyline(diagonal)}");
+    let mut seed = 807;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..300 {
+        // 1 to 10 a side, heights 0 to 100 (LeetCode's range).
+        let n = 1 + next_random(mut seed) % 10;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(next_random(mut seed) % 101);
+            }
+            grid.push(row);
+        }
+        let gain = max_increase_keeping_skyline(grid);
+        total += gain;
+        check = (check * 131 + gain + r) % 1000000007;
+    }
+    println(f"300 random grids: {total} in all, checksum {check}");
+}

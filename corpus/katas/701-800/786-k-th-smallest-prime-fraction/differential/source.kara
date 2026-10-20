@@ -1,0 +1,329 @@
+// LeetCode #786: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random arrays.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct Fraction_star {
+    i: i64,
+    j: i64,
+    num: i64,
+    den: i64,
+}
+
+impl PartialEq for Fraction_star {
+    fn eq(ref self, other: ref Fraction_star) -> bool {
+        self.num * other.den == other.num * self.den
+    }
+}
+
+impl Eq for Fraction_star {}
+
+impl PartialOrd for Fraction_star {
+    fn partial_cmp(ref self, other: ref Fraction_star) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Fraction_star {
+    fn cmp(ref self, other: ref Fraction_star) -> Ordering {
+        (self.num * other.den).cmp(other.num * self.den)
+    }
+}
+
+fn kth_smallest_prime_fraction_star(arr: Vec[i64], k: i64) -> Vec[i64] {
+    let n = arr.len();
+    let mut heap: PriorityQueue[Fraction_star] = PriorityQueue.new();
+    for j in 1..n {
+        heap.push(Fraction_star { i: 0, j: j, num: arr[0], den: arr[j] });
+    }
+    for _ in 0..k - 1 {
+        let Some(f) = heap.pop() else {
+            break;
+        };
+        if f.i + 1 < f.j {
+            heap.push(Fraction_star { i: f.i + 1, j: f.j, num: arr[f.i + 1], den: f.den });
+        }
+    }
+    let Some(f) = heap.pop() else {
+        return [];
+    };
+    [f.num, f.den]
+}
+
+// ---- binary arm -----------------------------------------------------
+
+fn kth_smallest_prime_fraction_binary(arr: Vec[i64], k: i64) -> Vec[i64] {
+    let n = arr.len();
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    loop {
+        let mid = (lo + hi) / 2.0;
+        let mut count = 0;
+        let mut best_num = 0;
+        let mut best_den = 1;
+        let mut j = 1;
+        for i in 0..n - 1 {
+            while j < n and (arr[i] as f64) > mid * (arr[j] as f64) {
+                j += 1;
+            }
+            if j == n {
+                break;
+            }
+            count += n - j;
+            if arr[i] * best_den > best_num * arr[j] {
+                best_num = arr[i];
+                best_den = arr[j];
+            }
+        }
+        if count == k {
+            return [best_num, best_den];
+        }
+        if count < k {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn kth_smallest_prime_fraction_sorted(arr: Vec[i64], k: i64) -> Vec[i64] {
+    let n = arr.len();
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for j in 1..n {
+        for i in 0..j {
+            pairs.push((arr[i], arr[j]));
+        }
+    }
+    pairs.sort_by(|a, b| (a.0 * b.1).cmp(b.0 * a.1));
+    let (num, den) = pairs[k - 1];
+    [num, den]
+}
+
+// ---- select arm -----------------------------------------------------
+
+fn less_select(a: (i64, i64), b: (i64, i64)) -> bool {
+    a.0 * b.1 < b.0 * a.1
+}
+
+fn kth_smallest_prime_fraction_select(arr: Vec[i64], k: i64) -> Vec[i64] {
+    let n = arr.len();
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for j in 1..n {
+        for i in 0..j {
+            pairs.push((arr[i], arr[j]));
+        }
+    }
+    let want = k - 1;
+    let mut lo = 0;
+    let mut hi = pairs.len() - 1;
+    while lo < hi {
+        // Lomuto's partition of pairs[lo..=hi] around its middle pair,
+        // moved to the end first.
+        pairs.swap((lo + hi) / 2, hi);
+        let pivot = pairs[hi];
+        let mut store = lo;
+        for at in lo..hi {
+            if less_select(pairs[at], pivot) {
+                pairs.swap(at, store);
+                store += 1;
+            }
+        }
+        pairs.swap(store, hi);
+        if store == want {
+            break;
+        }
+        if store < want {
+            lo = store + 1;
+        } else {
+            hi = store - 1;
+        }
+    }
+    let (num, den) = pairs[want];
+    [num, den]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, arr: Vec[i64], k: i64) -> Vec[i64] {
+    if which == 0 {
+        kth_smallest_prime_fraction_star(arr, k)
+    } else if which == 1 {
+        kth_smallest_prime_fraction_binary(arr, k)
+    } else if which == 2 {
+        kth_smallest_prime_fraction_sorted(arr, k)
+    } else {
+        kth_smallest_prime_fraction_select(arr, k)
+    }
+}
+
+// How many of the fractions arr[i] / arr[j], i < j, are less than
+// num / den.
+fn count_below(arr: Vec[i64], num: i64, den: i64) -> i64 {
+    let mut count = 0;
+    for j in 1..arr.len() {
+        for i in 0..j {
+            if arr[i] * den < num * arr[j] {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// The definition: the fraction with exactly k - 1 fractions below it.
+fn definition(arr: Vec[i64], k: i64) -> Vec[i64] {
+    for j in 1..arr.len() {
+        for i in 0..j {
+            if count_below(arr, arr[i], arr[j]) == k - 1 {
+                return [arr[i], arr[j]];
+            }
+        }
+    }
+    []
+}
+
+fn primes_below(limit: i64) -> Vec[i64] {
+    let mut composite: Vec[bool] = Vec.new();
+    for _ in 0..limit {
+        composite.push(false);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for p in 2..limit {
+        if not composite[p] {
+            out.push(p);
+            let mut m = p * p;
+            while m < limit {
+                composite[m] = true;
+                m += p;
+            }
+        }
+    }
+    out
+}
+
+fn make_array(seed: mut ref i64, primes: Vec[i64], n: i64, kind: i64) -> Vec[i64] {
+    // 1 and n - 1 primes. kind 0: any primes below 30,000; kind 1: from
+    // the first 40; kind 2: a run of consecutive primes from a random
+    // place; kind 3: the first n - 1.
+    let mut picked: Vec[i64] = Vec.new();
+    if kind == 2 {
+        let from = next_random(mut seed) % (primes.len() - n);
+        for t in 0..n - 1 {
+            picked.push(primes[from + t]);
+        }
+    } else if kind == 3 {
+        for t in 0..n - 1 {
+            picked.push(primes[t]);
+        }
+    } else {
+        let pool = if kind == 1 { 40.max(n) } else { primes.len() };
+        let mut taken: Set[i64] = Set.new();
+        while picked.len() < n - 1 {
+            let p = primes[next_random(mut seed) % pool];
+            if not taken.contains(p) {
+                taken.insert(p);
+                picked.push(p);
+            }
+        }
+        picked.sort();
+    }
+    let mut arr: Vec[i64] = [1];
+    for p in picked.iter() {
+        arr.push(*p);
+    }
+    arr
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7860;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let primes = primes_below(30000);
+    let cases = 1400;
+    let mut terms = 0;
+    for case in 0..cases {
+        // 1,200 arrays of 2 to 14 numbers, where the definition's count is
+        // cheap, then 200 of 15 to 100. A quarter of each kind; k is 1 in
+        // one case in five, the last in another, and random in the rest.
+        let n = if case < 1200 { 2 + next_random(mut seed) % 13 } else { 15 + next_random(mut seed) % 86 };
+        let small = n <= 14;
+        let arr = make_array(mut seed, primes, n, case % 4);
+        let total = n * (n - 1) / 2;
+        let k = if case % 5 == 0 { 1 } else if case % 5 == 1 { total } else { 1 + next_random(mut seed) % total };
+        let want = if small { definition(arr, k) } else { answer_with(0, arr, k) };
+        if want.len() == 2 {
+            terms += want[0] + want[1];
+        }
+        // For P4, the array without its largest number, and a k for it.
+        let mut shorter = arr.clone();
+        shorter.pop();
+        let short_total = (n - 1) * (n - 2) / 2;
+        let short_k = if short_total > 0 { 1 + next_random(mut seed) % short_total } else { 0 };
+        for which in 0..arms {
+            let got = answer_with(which, arr, k);
+            // P1: the definition's fraction, on the small arrays.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: two numbers of the array, the smaller first, with
+            // exactly k - 1 fractions below them.
+            checks += 1;
+            if got.len() != 2 or got[0] >= got[1] or not arr.contains(got[0]) or not arr.contains(got[1]) or count_below(arr, got[0], got[1]) != k - 1 {
+                fails[1] += 1;
+            }
+            if got.len() != 2 {
+                continue;
+            }
+            // P3: the next k gives a larger fraction.
+            if k < total {
+                checks += 1;
+                let next = answer_with(which, arr, k + 1);
+                if next.len() != 2 or next[0] * got[1] <= got[0] * next[1] {
+                    fails[2] += 1;
+                }
+            }
+            // P4: the short_k-th fraction of the array without its largest
+            // number is the (short_k + c)-th of the whole one, where c
+            // counts the fractions over the largest number below it.
+            if short_total > 0 {
+                checks += 1;
+                let part = answer_with(which, shorter, short_k);
+                if part.len() != 2 {
+                    fails[3] += 1;
+                    continue;
+                }
+                let mut c = 0;
+                for i in 0..n - 1 {
+                    if arr[i] * part[1] < part[0] * arr[n - 1] {
+                        c += 1;
+                    }
+                }
+                if answer_with(which, arr, short_k + c) != part {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} arrays (terms sum to {terms}), {arms} arms, {checks} checks, {failures} failures");
+}

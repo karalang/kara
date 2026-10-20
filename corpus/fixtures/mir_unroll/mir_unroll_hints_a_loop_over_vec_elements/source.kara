@@ -1,0 +1,13 @@
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < 40 { a.push(q); b.push(0); q = q + 1; }
+    let start = a.len() as i64 - 33;
+    let mut t = 0;
+    while t < 32 {
+        b[t] = a[start + t] + 1;
+        t = t + 1;
+    }
+    println(b[31]);
+}

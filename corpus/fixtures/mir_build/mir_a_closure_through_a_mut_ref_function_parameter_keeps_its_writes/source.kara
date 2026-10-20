@@ -1,0 +1,10 @@
+fn twice(f: mut ref MutFn()) {
+    f();
+    f();
+}
+
+fn main() {
+    let mut n = 0;
+    twice(mut || { n += 1; });
+    println(f"{n}");
+}

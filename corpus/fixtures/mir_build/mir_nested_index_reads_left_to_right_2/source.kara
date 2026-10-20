@@ -1,0 +1,9 @@
+fn p(x: i64) -> i64 { println(f"p{x}"); x }
+fn main() {
+    let mut w: Vec[Vec[i64]] = [[10, 20], [30, 40]];
+    w[p(1)][p(0)] = p(7);
+    w[p(0)][p(1)] += p(2);
+    let a: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];
+    let e = a[p(1)][p(0)] + w[p(1)][p(0)] + w[p(0)][p(1)];
+    println(f"{e}");
+}

@@ -77,7 +77,7 @@ fn search(stickers: ref Vec[Vec[i64]], need: mut ref Vec[i64], used: i64, best: 
         for k in 0..26 {
             need[k] = if need[k] > c[k] { need[k] - c[k] } else { 0 };
         }
-        search(stickers, need, used + 1, best);
+        search(stickers, mut need, used + 1, mut best);
         for k in 0..26 {
             need[k] = saved[k];
         }

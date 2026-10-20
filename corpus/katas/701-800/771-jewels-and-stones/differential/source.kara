@@ -1,0 +1,190 @@
+// LeetCode #771: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random pairs.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_jewels_in_stones_star(jewels: String, stones: String) -> i64 {
+    let mut kinds: Set[char] = Set.new();
+    for c in jewels.chars() {
+        kinds.insert(c);
+    }
+    let mut count = 0;
+    for c in stones.chars() {
+        if kinds.contains(c) {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn num_jewels_in_stones_table(jewels: String, stones: String) -> i64 {
+    let mut jewel = [false; 128];
+    for b in jewels.bytes() {
+        jewel[b as i64] = true;
+    }
+    let mut count = 0;
+    for b in stones.bytes() {
+        if jewel[b as i64] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- mask arm -------------------------------------------------------
+
+fn bit_of_mask(b: u8) -> i64 {
+    if b >= 97 { b as i64 - 97 } else { b as i64 - 65 + 26 }
+}
+
+fn num_jewels_in_stones_mask(jewels: String, stones: String) -> i64 {
+    let mut mask = 0;
+    for b in jewels.bytes() {
+        mask = mask | 1 << bit_of_mask(b);
+    }
+    let mut count = 0;
+    for b in stones.bytes() {
+        count += mask >> bit_of_mask(b) & 1;
+    }
+    count
+}
+
+// ---- scan arm -------------------------------------------------------
+
+fn num_jewels_in_stones_scan(jewels: String, stones: String) -> i64 {
+    let mut count = 0;
+    for s in stones.chars() {
+        if jewels.chars().any(|j| j == s) {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, jewels: String, stones: String) -> i64 {
+    if which == 0 {
+        num_jewels_in_stones_star(jewels, stones)
+    } else if which == 1 {
+        num_jewels_in_stones_table(jewels, stones)
+    } else if which == 2 {
+        num_jewels_in_stones_mask(jewels, stones)
+    } else {
+        num_jewels_in_stones_scan(jewels, stones)
+    }
+}
+
+// The definition: the places in `stones` whose letter equals some letter
+// of `jewels`.
+fn definition(jewels: String, stones: String) -> i64 {
+    let j = jewels.bytes();
+    let s = stones.bytes();
+    let mut count = 0;
+    for i in 0..s.len() {
+        let mut found = false;
+        for k in 0..j.len() {
+            if j[k] == s[i] {
+                found = true;
+            }
+        }
+        if found {
+            count += 1;
+        }
+    }
+    count
+}
+
+// A random string of `n` letters from the first `kinds` of aAbBcC...
+fn random_letters(seed: mut ref i64, n: i64, kinds: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        let k = next_random(mut seed) % kinds;
+        let base = if k % 2 == 0 { 97 } else { 65 };
+        out.push((base + k / 2) as u8 as char);
+    }
+    out
+}
+
+fn swapped_case(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c.is_ascii_lowercase() {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+fn reversed(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars().rev() {
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7710;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 2000;
+    let mut total = 0;
+    for _ in 0..cases {
+        let kinds = 1 + next_random(mut seed) % 52;
+        let jewels = random_letters(mut seed, next_random(mut seed) % 51, kinds);
+        let stones = random_letters(mut seed, next_random(mut seed) % 51, kinds);
+        let more = random_letters(mut seed, next_random(mut seed) % 51, kinds);
+        let want = definition(jewels, stones);
+        let both = f"{stones}{more}";
+        let doubled = f"{jewels}{reversed(jewels)}";
+        for which in 0..arms {
+            let got = answer_with(which, jewels, stones);
+            if which == 0 {
+                total += got;
+            }
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every letter's case exchanged, in both strings, changes
+            // nothing.
+            checks += 1;
+            if answer_with(which, swapped_case(jewels), swapped_case(stones)) != got {
+                fails[1] += 1;
+            }
+            // P3: more stones add their own count.
+            checks += 1;
+            if answer_with(which, jewels, both) != got + answer_with(which, jewels, more) {
+                fails[2] += 1;
+            }
+            // P4: the jewels repeated backwards and the stones reversed
+            // change nothing.
+            checks += 1;
+            if answer_with(which, doubled, reversed(stones)) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} pairs ({total} jewels), {arms} arms, {checks} checks, {failures} failures");
+}

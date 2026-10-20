@@ -1,0 +1,34 @@
+fn main() {
+    let mut last: Map[i64, i64] = Map.new();
+    let mut hits = 0;
+    let mut i = 0;
+    while i < 200 {
+        let x = (i * 7) % 31;
+        match last.get(x) {
+            Some(j) => {
+                if i - j <= 40 { hits = hits + 1; }
+            }
+            None => {}
+        }
+        let _ = last.insert(x, i);
+        i = i + 1;
+    }
+    let _ = last.remove(3);
+    let _ = last.insert(3, 1000);
+    println(f"{hits} {last.len()} {last.get(3)} {last.contains_key(4)} {last.contains_key(99)}");
+    let mut words: Map[String, i64] = Map.new();
+    for w in ["a", "bb", "a", "ccc", "bb", "a"] {
+        let n = match words.get(w.to_string()) { Some(c) => c + 1, None => 1 };
+        let _ = words.insert(w.to_string(), n);
+    }
+    println(f"{words.get(String.from("a"))} {words.get(String.from("bb"))} {words.len()}");
+    let mut s: Set[i64] = Set.new();
+    let _ = s.insert(5);
+    let _ = s.insert(5);
+    let _ = s.insert(6);
+    let mut sm: SortedMap[i64, i64] = SortedMap.new();
+    let _ = sm.insert(2, 20);
+    let _ = sm.insert(1, 10);
+    let _ = sm.insert(2, 21);
+    println(f"{s.len()} {s.contains(6)} {sm.get(2)} {sm.len()}");
+}

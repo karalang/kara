@@ -1,0 +1,8 @@
+"aA" "aAAbbbb" -> 3
+"z" "ZZ" -> 0
+"abc" "" -> 0
+"" "abc" -> 0
+"zZ" "zZzZzZ" -> 6
+"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" "theQuickBrownFoxJumps" -> 21
+"aa" "a" -> 1
+300 random pairs: 4394 jewels in all, checksum 759681639

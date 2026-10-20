@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/775-global-and-local-inversions/global_and_local_inversions_fenwick.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "db0aa9a19"
+extracted_src = "fc24ce1d"
+model_rev = "583cfb0d"
+model_src = "fc24ce1d"

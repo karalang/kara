@@ -1,0 +1,76 @@
+// LeetCode 806 — Number of Lines To Write String, by recursion.
+//
+// write(i, lines, width) places the letters from i on, given the lines
+// used so far and the width of the last: a letter that fits goes on the
+// line, and one that does not starts the next. O(len) calls.
+fn number_of_lines(widths: Vec[i64], s: String) -> (i64, i64) {
+    let letters: Vec[u8] = s.bytes().iter().collect();
+    write(widths, letters, 0, 1, 0)
+}
+
+fn write(widths: Vec[i64], letters: Vec[u8], i: i64, lines: i64, width: i64) -> (i64, i64) {
+    if i == letters.len() {
+        return (lines, width);
+    }
+    let w = widths[letters[i] - 97];
+    if width + w > 100 {
+        write(widths, letters, i + 1, lines + 1, w)
+    } else {
+        write(widths, letters, i + 1, lines, width + w)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(widths: Vec[i64], s: String) {
+    let (lines, width) = number_of_lines(widths, s);
+    println(f"\"{s}\" -> [{lines}, {width}]");
+}
+
+fn all(w: i64) -> Vec[i64] {
+    let mut widths: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        widths.push(w);
+    }
+    widths
+}
+
+fn main() {
+    show(all(10), "abcdefghijklmnopqrstuvwxyz".to_string());
+    let mut second = all(10);
+    second[0] = 4;
+    show(second, "bbbcccdddaaa".to_string());
+    show(all(10), "a".to_string());
+    show(all(10), "abcdefghij".to_string());
+    show(all(10), "abcdefghijk".to_string());
+    show(all(2), "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string());
+    let mut odd = all(2);
+    odd[25] = 9;
+    odd[24] = 10;
+    show(odd, "zyzyzyzyzyzyzyzyzyzy".to_string());
+    let mut seed = 806;
+    let mut total_lines = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Widths from 2 to 10, LeetCode's range, and up to 200 letters.
+        let mut widths: Vec[i64] = Vec.new();
+        for _ in 0..26 {
+            widths.push(2 + next_random(mut seed) % 9);
+        }
+        let length = 1 + next_random(mut seed) % 200;
+        let mut s = String.new();
+        for _ in 0..length {
+            let at = next_random(mut seed) % 26;
+            s.push_str("abcdefghijklmnopqrstuvwxyz".slice(at, at + 1));
+        }
+        let (lines, width) = number_of_lines(widths, s);
+        total_lines += lines;
+        check = (check * 131 + lines * 101 + width + i) % 1000000007;
+    }
+    println(f"300 random strings: {total_lines} lines in all, checksum {check}");
+}

@@ -1,0 +1,129 @@
+// LeetCode 772 — Basic Calculator III: benchmark, the ★ arm.
+//
+// Sixty-four random expressions of 2,400 numbers, up to LeetCode's limit
+// of 10,000 characters, built once; ROUNDS rounds each evaluate the next
+// and fold its value into a checksum. At each operator the generator
+// takes the first, from a random start, that keeps every value valid: no
+// division by zero, nothing beyond 32 bits.
+
+const ROUNDS: i64 = 6000;
+const LEAVES: i64 = 2400;
+
+struct Cursor {
+    bytes: Vec[u8],
+    at: i64,
+}
+
+impl Cursor {
+    fn peek(self) -> u8 {
+        if self.at < self.bytes.len() { self.bytes[self.at] } else { 0 }
+    }
+
+    fn sum(mut ref self) -> i64 {
+        let mut value = self.term();
+        loop {
+            let op = self.peek();
+            if op != b'+' and op != b'-' {
+                return value;
+            }
+            self.at += 1;
+            let right = self.term();
+            value = if op == b'+' { value + right } else { value - right };
+        }
+    }
+
+    fn term(mut ref self) -> i64 {
+        let mut value = self.factor();
+        loop {
+            let op = self.peek();
+            if op != b'*' and op != b'/' {
+                return value;
+            }
+            self.at += 1;
+            let right = self.factor();
+            value = if op == b'*' { value * right } else { value / right };
+        }
+    }
+
+    fn factor(mut ref self) -> i64 {
+        if self.peek() == b'(' {
+            self.at += 1;
+            let value = self.sum();
+            self.at += 1;
+            return value;
+        }
+        let mut value = 0;
+        while self.peek() >= b'0' and self.peek() <= b'9' {
+            value = value * 10 + (self.peek() - b'0') as i64;
+            self.at += 1;
+        }
+        value
+    }
+}
+
+fn calculate(s: String) -> i64 {
+    let mut cursor = Cursor { bytes: s.bytes().to_vec(), at: 0 };
+    cursor.sum()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The value of `a op b`, or None if `b` is 0 under / or the value leaves
+// 32 bits.
+fn combine(a: i64, op: u8, b: i64) -> Option[i64] {
+    if op == b'/' and b == 0 {
+        return None;
+    }
+    let value = if op == b'+' { a + b } else if op == b'-' { a - b } else if op == b'*' { a * b } else { a / b };
+    if value < -2147483648 or value > 2147483647 { None } else { Some(value) }
+}
+
+// A random expression: its text, its value, and how loosely its
+// outermost operator binds (1 for + and -, 2 for * and /, 3 for none).
+struct Piece {
+    text: String,
+    value: i64,
+    level: i64,
+}
+
+fn build(seed: mut ref i64, leaves: i64) -> Piece {
+    if leaves == 1 {
+        let n = if next_random(mut seed) % 4 == 0 { next_random(mut seed) % 1000 } else { next_random(mut seed) % 10 };
+        return Piece { text: f"{n}", value: n, level: 3 };
+    }
+    let left_leaves = 1 + next_random(mut seed) % (leaves - 1);
+    let left = build(mut seed, left_leaves);
+    let right = build(mut seed, leaves - left_leaves);
+    let mut k = next_random(mut seed) % 4;
+    while combine(left.value, b"+-*/"[k], right.value).is_none() {
+        k = (k + 1) % 4;
+    }
+    let op = b"+-*/"[k];
+    let value = combine(left.value, op, right.value).unwrap();
+    let level = if op == b'+' or op == b'-' { 1 } else { 2 };
+    let left_text = if left.level < level or next_random(mut seed) % 4 == 0 { f"({left.text})" } else { left.text.clone() };
+    let right_text = if right.level < level or (right.level == level and op != b'+') or next_random(mut seed) % 4 == 0 { f"({right.text})" } else { right.text.clone() };
+    Piece { text: f"{left_text}{op as char}{right_text}", value: value, level: level }
+}
+
+fn main() {
+    let mut seed = 772;
+    let mut pool: Vec[String] = Vec.new();
+    let mut longest = 0;
+    for _ in 0..64 {
+        let piece = build(mut seed, LEAVES);
+        if piece.text.len() > longest {
+            longest = piece.text.len();
+        }
+        pool.push(piece.text);
+    }
+    let mut check = 0;
+    for round in 0..ROUNDS {
+        let value = calculate(pool[round % 64]);
+        check = ((check * 31 + value) % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"{ROUNDS} expressions of up to {longest} characters: checksum {check}");
+}

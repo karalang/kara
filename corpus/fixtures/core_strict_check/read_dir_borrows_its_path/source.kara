@@ -1,0 +1,8 @@
+
+fn main() {
+    let full = "data".to_string();
+    match fs.read_dir(full) {
+        Ok(v) => println(f"{v.len()}"),
+        Err(e) => println(f"cannot list {full}: {e}"),
+    }
+}

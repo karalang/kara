@@ -25,8 +25,8 @@ fn arm(node: Option[TreeNode], best: mut ref i64) -> i64 {
     match node {
         None => 0,
         Some(n) => {
-            let l = arm(n.left, best);
-            let r = arm(n.right, best);
+            let l = arm(n.left, mut best);
+            let r = arm(n.right, mut best);
             let mut left = 0;
             let mut right = 0;
             if let Some(c) = n.left {
@@ -107,21 +107,21 @@ fn build(n: i64, shape: i64, catalan: ref Vec[i64], code: mut ref i64) -> Option
     }
     let node = leaf(1 + *code % 2);
     *code /= 2;
-    node.left = build(k, rest / catalan[n - 1 - k], catalan, code);
-    node.right = build(n - 1 - k, rest % catalan[n - 1 - k], catalan, code);
+    node.left = build(k, rest / catalan[n - 1 - k], catalan, mut code);
+    node.right = build(n - 1 - k, rest % catalan[n - 1 - k], catalan, mut code);
     Some(node)
 }
 
 // A random tree at most `levels` deep: each child is there with chance
 // `chance` in 100, its value from 1 to `values`.
 fn random_tree(seed: mut ref i64, levels: i64, values: i64, chance: i64) -> TreeNode {
-    let n = leaf(1 + next_random(seed) % values);
+    let n = leaf(1 + next_random(mut seed) % values);
     if levels > 1 {
-        if next_random(seed) % 100 < chance {
-            n.left = Some(random_tree(seed, levels - 1, values, chance));
+        if next_random(mut seed) % 100 < chance {
+            n.left = Some(random_tree(mut seed, levels - 1, values, chance));
         }
-        if next_random(seed) % 100 < chance {
-            n.right = Some(random_tree(seed, levels - 1, values, chance));
+        if next_random(mut seed) % 100 < chance {
+            n.right = Some(random_tree(mut seed, levels - 1, values, chance));
         }
     }
     n

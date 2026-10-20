@@ -1,0 +1,324 @@
+// LeetCode #764: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random grids.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn order_of_largest_plus_sign_star(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(n);
+        }
+        grid.push(row);
+    }
+    for mine in mines.iter() {
+        grid[mine[0]][mine[1]] = 0;
+    }
+    for i in 0..n {
+        let mut left = 0;
+        let mut right = 0;
+        let mut up = 0;
+        let mut down = 0;
+        for j in 0..n {
+            left = if grid[i][j] == 0 { 0 } else { left + 1 };
+            grid[i][j] = grid[i][j].min(left);
+            let k = n - 1 - j;
+            right = if grid[i][k] == 0 { 0 } else { right + 1 };
+            grid[i][k] = grid[i][k].min(right);
+            up = if grid[j][i] == 0 { 0 } else { up + 1 };
+            grid[j][i] = grid[j][i].min(up);
+            down = if grid[k][i] == 0 { 0 } else { down + 1 };
+            grid[k][i] = grid[k][i].min(down);
+        }
+    }
+    let mut best = 0;
+    for row in grid.iter() {
+        for order in row.iter() {
+            best = best.max(*order);
+        }
+    }
+    best
+}
+
+// ---- growing arm ----------------------------------------------------
+
+fn order_of_largest_plus_sign_grow(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    let mut mined: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[bool] = Vec.new();
+        for _ in 0..n {
+            row.push(false);
+        }
+        mined.push(row);
+    }
+    for mine in mines.iter() {
+        mined[mine[0]][mine[1]] = true;
+    }
+    let mut best = 0;
+    for r in 0..n {
+        for c in 0..n {
+            let room = (r + 1).min(n - r).min(c + 1).min(n - c);
+            if mined[r][c] or room <= best {
+                continue;
+            }
+            let mut order = 1;
+            while r - order >= 0 and r + order < n and c - order >= 0 and c + order < n
+                and not mined[r - order][c] and not mined[r + order][c]
+                and not mined[r][c - order] and not mined[r][c + order] {
+                order += 1;
+            }
+            best = best.max(order);
+        }
+    }
+    best
+}
+
+// ---- search arm -----------------------------------------------------
+
+fn fits_search(n: i64, k: i64, rows: ref Vec[Vec[i64]], columns: ref Vec[Vec[i64]]) -> bool {
+    for r in k - 1..n - k + 1 {
+        for c in k - 1..n - k + 1 {
+            if rows[r][c + k] - rows[r][c - k + 1] == 0 and columns[c][r + k] - columns[c][r - k + 1] == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn order_of_largest_plus_sign_search(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    // rows[r][c] counts the mines in row r before column c, and columns[c][r]
+    // the mines in column c before row r.
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut columns: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut zeros: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            zeros.push(0);
+        }
+        rows.push(zeros.clone());
+        columns.push(zeros);
+    }
+    for mine in mines.iter() {
+        rows[mine[0]][mine[1] + 1] += 1;
+        columns[mine[1]][mine[0] + 1] += 1;
+    }
+    for i in 0..n {
+        for j in 1..n + 1 {
+            rows[i][j] += rows[i][j - 1];
+            columns[i][j] += columns[i][j - 1];
+        }
+    }
+    let mut low = 0;
+    let mut high = (n + 1) / 2;
+    while low < high {
+        let middle = (low + high + 1) / 2;
+        if fits_search(n, middle, rows, columns) {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    low
+}
+
+// ---- nearest-mine arm -----------------------------------------------
+
+// The index in the sorted `list` of the first value above `x`.
+fn first_above_nearest(list: ref Vec[i64], x: i64) -> i64 {
+    let mut low = 0;
+    let mut high = list.len();
+    while low < high {
+        let middle = (low + high) / 2;
+        if list[middle] <= x {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+fn order_of_largest_plus_sign_nearest(n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut columns: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        rows.push([-1, n]);
+        columns.push([-1, n]);
+    }
+    for mine in mines.iter() {
+        rows[mine[0]].push(mine[1]);
+        columns[mine[1]].push(mine[0]);
+    }
+    for i in 0..n {
+        rows[i].sort();
+        columns[i].sort();
+    }
+    let mut best = 0;
+    for r in 0..n {
+        for c in 0..n {
+            let a = first_above_nearest(rows[r], c);
+            let b = first_above_nearest(columns[c], r);
+            if rows[r][a - 1] == c {
+                continue;
+            }
+            let across = (c - rows[r][a - 1]).min(rows[r][a] - c);
+            let down = (r - columns[c][b - 1]).min(columns[c][b] - r);
+            best = best.max(across.min(down));
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64, mines: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        order_of_largest_plus_sign_star(n, mines)
+    } else if which == 1 {
+        order_of_largest_plus_sign_grow(n, mines)
+    } else if which == 2 {
+        order_of_largest_plus_sign_search(n, mines)
+    } else {
+        order_of_largest_plus_sign_nearest(n, mines)
+    }
+}
+
+fn random_mines(n: i64, count: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut taken: Set[i64] = Set.new();
+    let mut mines: Vec[Vec[i64]] = Vec.new();
+    while mines.len() < count {
+        let r = next_random(mut seed) % n;
+        let c = next_random(mut seed) % n;
+        if not taken.contains(r * n + c) {
+            taken.insert(r * n + c);
+            mines.push([r, c]);
+        }
+    }
+    mines
+}
+
+fn is_one(n: i64, mines: ref Vec[Vec[i64]], r: i64, c: i64) -> bool {
+    if r < 0 or r >= n or c < 0 or c >= n {
+        return false;
+    }
+    for mine in mines.iter() {
+        if mine[0] == r and mine[1] == c {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition: the largest k for which some cell has, for every j
+// below k, ones at distance j in all four directions, itself included.
+fn definition(n: i64, mines: ref Vec[Vec[i64]]) -> i64 {
+    let mut best = 0;
+    for r in 0..n {
+        for c in 0..n {
+            let mut k = 0;
+            loop {
+                let mut whole = true;
+                for j in 0..k + 1 {
+                    if not (is_one(n, mines, r - j, c) and is_one(n, mines, r + j, c)
+                        and is_one(n, mines, r, c - j) and is_one(n, mines, r, c + j)) {
+                        whole = false;
+                    }
+                }
+                if not whole {
+                    break;
+                }
+                k += 1;
+            }
+            best = best.max(k);
+        }
+    }
+    best
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7640;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let small = 1500;
+    let cases = 1800;
+    let mut total = 0;
+    for case in 0..cases {
+        // grids up to 8 x 8 for the definition, then up to 40 x 40
+        let n = if case < small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 40 };
+        let count = 1 + next_random(mut seed) % (n * n / 3 + 1);
+        let mines = random_mines(n, count, mut seed);
+        let mut rotated: Vec[Vec[i64]] = Vec.new();
+        let mut bordered: Vec[Vec[i64]] = Vec.new();
+        for mine in mines.iter() {
+            rotated.push([mine[1], n - 1 - mine[0]]);
+            bordered.push([mine[0] + 1, mine[1] + 1]);
+        }
+        for i in 0..n + 2 {
+            bordered.push([0, i]);
+            bordered.push([n + 1, i]);
+        }
+        for i in 1..n + 1 {
+            bordered.push([i, 0]);
+            bordered.push([i, n + 1]);
+        }
+        // the same mines and one more on a free cell, if there is one
+        let mut more = mines.clone();
+        if count < n * n {
+            loop {
+                let r = next_random(mut seed) % n;
+                let c = next_random(mut seed) % n;
+                if is_one(n, mines, r, c) {
+                    more.push([r, c]);
+                    break;
+                }
+            }
+        }
+        let want = if case < small { definition(n, mines) } else { 0 };
+        for which in 0..arms {
+            let got = answer_with(which, n, mines.clone());
+            if which == 0 {
+                total += got;
+            }
+            // P1: the definition's answer.
+            if case < small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: the grid turned a quarter turn has the same answer.
+            checks += 1;
+            if answer_with(which, n, rotated.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: another mine never makes the answer larger.
+            checks += 1;
+            if answer_with(which, n, more.clone()) > got {
+                fails[2] += 1;
+            }
+            // P4: a frame of mines around the grid changes nothing.
+            checks += 1;
+            if answer_with(which, n + 2, bordered.clone()) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} grids (orders adding up to {total}), {arms} arms, {checks} checks, {failures} failures");
+}

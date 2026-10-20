@@ -1,0 +1,49 @@
+bound
+  mid
+  v=3
+  dR3/n3
+  dR2/n2
+  dR1/n1
+  dR1/n1
+renamed
+  mid
+  v=6
+  dR6/n6
+  dR5/n5
+  dR4/n4
+  dR4/n4
+two_outs
+  mid
+  v=9
+  dR9/n9
+  dR8/n8
+  dR7/n7
+  dR8/n8
+  dR7/n7
+deep
+  mid
+  v=12
+  dR12/n12
+  dR11/n11
+  dR10/n10
+  dR10/n10
+wild
+  mid
+  v=15
+  dR15/n15
+  dR13/n13
+  dR14/n14
+  dR13/n13
+nosplit
+  mid
+  v=18
+  dR18/n18
+  dR17/n17
+  dR16/n16
+nestedpat
+  mid
+  v=21
+  dR21/n21
+  dR20/n20
+  dR19/n19
+end

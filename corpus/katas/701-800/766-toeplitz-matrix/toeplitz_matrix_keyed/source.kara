@@ -1,0 +1,78 @@
+// LeetCode 766 — Toeplitz Matrix, one value per diagonal.
+//
+// The cells of one diagonal share their row minus column. Keep, in a map
+// from that difference, the first value met on each diagonal, and check
+// every later cell against it.
+
+fn is_toeplitz_matrix(matrix: Vec[Vec[i64]]) -> bool {
+    let mut first: Map[i64, i64] = Map.new();
+    for i in 0..matrix.len() {
+        for j in 0..matrix[i].len() {
+            let key = i - j;
+            match first.get(key) {
+                Some(value) => {
+                    if value != matrix[i][j] {
+                        return false;
+                    }
+                }
+                None => {
+                    first.insert(key, matrix[i][j]);
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(matrix: Vec[Vec[i64]]) {
+    let answer = is_toeplitz_matrix(matrix);
+    println(f"{matrix} -> {answer}");
+}
+
+fn main() {
+    show([[1, 2, 3, 4], [5, 1, 2, 3], [9, 5, 1, 2]]);
+    show([[1, 2], [2, 2]]);
+    show([[7]]);
+    show([[1, 2, 3]]);
+    show([[1], [2], [3]]);
+    show([[3, 8], [4, 3], [6, 4]]);
+    show([[3, 8], [4, 3], [6, 5]]);
+    show([[1, 2, 3], [4, 1, 2], [5, 4, 9]]);
+    let mut seed = 766;
+    let mut yes = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        let m = 1 + next_random(mut seed) % 20;
+        let n = 1 + next_random(mut seed) % 20;
+        let mut diag: Vec[i64] = Vec.new();
+        for _ in 0..m + n - 1 {
+            diag.push(next_random(mut seed) % 4);
+        }
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        for i in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for j in 0..n {
+                row.push(diag[i - j + n - 1]);
+            }
+            matrix.push(row);
+        }
+        if round % 2 == 1 {
+            let i = next_random(mut seed) % m;
+            let j = next_random(mut seed) % n;
+            matrix[i][j] = next_random(mut seed) % 4;
+        }
+        let answer = is_toeplitz_matrix(matrix);
+        if answer {
+            yes += 1;
+        }
+        check = (check * 31 + if answer { 1 } else { 0 } + round) % 1000000007;
+    }
+    println(f"300 random matrices: {yes} Toeplitz, checksum {check}");
+}

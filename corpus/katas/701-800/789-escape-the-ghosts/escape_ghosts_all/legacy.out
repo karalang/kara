@@ -1,0 +1,10 @@
+ghosts = [[1, 0], [0, 3]], target = [0, 1] -> true
+ghosts = [[1, 0]], target = [2, 0] -> false
+ghosts = [[2, 0]], target = [1, 0] -> false
+ghosts = [[5, 0], [-10, 8]], target = [3, 7] -> false
+ghosts = [[0, 0]], target = [0, 0] -> false
+ghosts = [[1, 1]], target = [0, 0] -> true
+ghosts = [[-1, 0], [0, 1], [-1, 0], [0, 1], [-1, 0]], target = [0, 0] -> true
+ghosts = [[10000, 10000], [-10000, -10000]], target = [10000, -10000] -> false
+ghosts = [[10000, 10000], [-10000, -10000]], target = [9999, -10000] -> false
+300 random boards: 77 escapes, checksum 193163879

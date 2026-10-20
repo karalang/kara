@@ -1,0 +1,78 @@
+// LeetCode 791 — Custom Sort String, a bucket for each rank.
+//
+// One string for each letter of order and one more for the rest; each
+// letter of s is appended to its bucket, and the buckets are joined in
+// order. O(n + 26).
+fn custom_sort_string(order: String, s: String) -> String {
+    let mut bucket_of: Map[char, i64] = Map.new();
+    let mut place = 0;
+    for c in order.chars() {
+        bucket_of.insert(c, place);
+        place += 1;
+    }
+    let mut buckets: Vec[String] = Vec.new();
+    for _ in 0..place + 1 {
+        buckets.push(String.new());
+    }
+    for c in s.chars() {
+        let at = match bucket_of.get(c) {
+            Some(b) => *b,
+            None => place,
+        };
+        buckets[at].push(c);
+    }
+    let mut out = String.new();
+    for b in buckets.iter() {
+        out.push_str(b);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(order: String, s: String) {
+    let answer = custom_sort_string(order, s);
+    println(f"order = \"{order}\", s = \"{s}\" -> \"{answer}\"");
+}
+
+fn main() {
+    show("cba", "abcd");
+    show("bcafg", "abcd");
+    show("kqep", "pekeq");
+    show("z", "zzazbz");
+    show("abcdefghijklmnopqrstuvwxyz", "thequickbrownfoxjumpsoverthelazydog");
+    show("zyxwvutsrqponmlkjihgfedcba", "thequickbrownfoxjumpsoverthelazydog");
+    show("xy", "hello");
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut seed = 791;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        // order: a random number of different letters in a random order.
+        let mut pool = letters.clone();
+        let mut i = 25;
+        while i > 0 {
+            pool.swap(i, next_random(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let mut order = String.new();
+        for j in 0..1 + next_random(mut seed) % 26 {
+            order.push(pool[j]);
+        }
+        let mut s = String.new();
+        for _ in 0..1 + next_random(mut seed) % 200 {
+            s.push(letters[next_random(mut seed) % 26]);
+        }
+        let answer = custom_sort_string(order, s);
+        total += answer.len();
+        for b in answer.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {total} letters, checksum {check}");
+}

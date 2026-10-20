@@ -1,0 +1,9 @@
+ababcbacadefegdehijhklij -> [9, 7, 8]
+eccbbbbdec -> [10]
+a -> [1]
+abc -> [1, 1, 1]
+abca -> [4]
+aabbcc -> [2, 2, 2]
+abacbdcedfeg -> [11, 1]
+zyxwvutsrqponmlkjihgfedcbaz -> [27]
+300 random strings: 2423 parts, checksum 249461943

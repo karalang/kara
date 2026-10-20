@@ -1,0 +1,13 @@
+fn main() {
+    let w = vec![4, 6, 9];
+    let n = w.len();
+    let r = (1..n).find(|j| w[0] + w[j] == 13);
+    let word = "QqqQ";
+    let c = word.chars().filter(|c| c == 'Q').count();
+    let up: Vec[char] = word.chars().map(|c| c.to_ascii_uppercase()).filter(|c| c != 'X').collect();
+    let s = (0..5).fold(0, |acc, k| acc + k * k);
+    let e: Vec[(i64, char)] = word.chars().enumerate().filter(|p| p.1 == 'Q').collect();
+    let big = v_iter(w);
+    println(f"{r.unwrap()} {c} {up.len()} {s} {e.len()} {big}");
+}
+fn v_iter(w: ref Vec[i64]) -> i64 { w.iter().filter(|x| *x > 5).count() }

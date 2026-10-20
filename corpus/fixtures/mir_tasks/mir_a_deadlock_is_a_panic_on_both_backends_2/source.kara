@@ -1,0 +1,9 @@
+
+import std.sync.{Mutex};
+fn main() {
+    let m = Mutex.new(1);
+    let a = m.lock();
+    println("start");
+    let b = m.lock();
+    println("unreached");
+}

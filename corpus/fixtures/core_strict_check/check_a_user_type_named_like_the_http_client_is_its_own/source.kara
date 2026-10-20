@@ -1,0 +1,47 @@
+
+struct Client { out: String }
+impl Client {
+    fn error(mut ref self, msg: Str) { self.out.push_str(msg); }
+    fn warn(mut ref self, msg: Str) { self.error(msg); }
+}
+struct Response { code: i64 }
+impl Response {
+    fn status(self) -> i64 { self.code }
+    fn summary(self) -> String { f"{self.status()} ok" }
+}
+enum HttpError { Timeout, Refused(i64) }
+impl HttpError {
+    fn describe(self) -> String {
+        match self {
+            HttpError.Timeout => "timeout".to_string(),
+            HttpError.Refused(p) => f"refused {p}",
+        }
+    }
+}
+struct RequestBuilder { parts: Vec[String] }
+impl RequestBuilder {
+    fn header(own self, h: Str) -> RequestBuilder {
+        let mut parts = self.parts;
+        parts.push(h.to_string());
+        RequestBuilder { parts: parts }
+    }
+    fn send(self) -> Result[Response, HttpError] {
+        if self.parts.len() > 1 { Ok(Response { code: 200 }) } else { Err(HttpError.Refused(80)) }
+    }
+}
+fn main() {
+    let mut c = Client { out: String.new() };
+    c.warn("x");
+    println(c.out);
+    for n in [2, 1] {
+        let mut r = RequestBuilder { parts: Vec.new() };
+        for i in 0..n {
+            r = r.header(f"h{i}");
+        }
+        match r.send() {
+            Ok(resp) => println(resp.summary()),
+            Err(e) => println(e.describe()),
+        }
+    }
+    println(HttpError.Timeout.describe());
+}

@@ -1,0 +1,12 @@
+fn main() {
+    let mut v = vec![1, 9];
+    match v.last() {
+        Some(top) => {
+            let largest = top;
+            v.pop();
+            v.push(largest);
+        }
+        None => {}
+    }
+    println(f"{v}");
+}

@@ -1,0 +1,66 @@
+// LeetCode 805 — Split Array With Same Average: the bench.
+//
+// 16 arrays of 30 numbers, LeetCode's longest, are made once, the
+// numbers below 300, and each array's last number set so that the total
+// is 1 more than a multiple of 30 half the time, so that the answer is
+// often false. Each of 400 rounds answers for the next array with the ★
+// arm, which builds every size's set of sums whatever the answer.
+fn split_array_same_average(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let total = nums.iter().sum();
+    let half = n / 2;
+    let mut sums: Vec[Set[i64]] = Vec.new();
+    for _ in 0..half + 1 {
+        sums.push(Set.new());
+    }
+    sums[0].insert(0);
+    for x in nums.iter() {
+        let mut k = half;
+        while k >= 1 {
+            let before: Vec[i64] = sums[k - 1].iter().collect();
+            for s in before.iter() {
+                sums[k].insert(s + x);
+            }
+            k -= 1;
+        }
+    }
+    for k in 1..half + 1 {
+        if total * k % n == 0 and sums[k].contains(total * k / n) {
+            return true;
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 805;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..16 {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut sum = 0;
+        for _ in 0..29 {
+            let x = next_random(mut seed) % 300;
+            nums.push(x);
+            sum += x;
+        }
+        let last = if a % 2 == 0 { next_random(mut seed) % 300 } else { (31 - sum % 30) % 30 + 30 * (next_random(mut seed) % 9) };
+        nums.push(last);
+        arrays.push(nums);
+    }
+    let rounds = 400;
+    let mut yes = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let can = split_array_same_average(arrays[r % 16]);
+        if can {
+            yes += 1;
+        }
+        check = (check * 131 + if can { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"{rounds} rounds of 30 numbers: {yes} can be split, checksum {check}");
+}

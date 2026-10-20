@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_an_impl_listing_its_parameters_in_another_order_takes_them_by_name"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "db0aa9a19"
+extracted_src = "ba62925b"
+model_rev = "583cfb0d"
+model_src = "ba62925b"

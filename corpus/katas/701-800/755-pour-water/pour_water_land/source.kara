@@ -1,0 +1,87 @@
+// LeetCode 755 — Pour Water, a landscape type with methods.
+//
+// `Land` holds the columns; `settle_side` scans one side for the first
+// lowest column a drop can reach, and `drop_at` adds one unit of water
+// where the rules put it. Pouring is `drop_at` volume times on a land
+// built from the heights. O(V x n).
+
+struct Land {
+    cols: Vec[i64],
+}
+
+impl Land {
+    fn settle_side(ref self, k: i64, d: i64) -> Option[i64] {
+        let mut best = k;
+        let mut i = k;
+        loop {
+            let next = i + d;
+            if next < 0 or next >= self.cols.len() or self.cols[next] > self.cols[i] {
+                break;
+            }
+            if self.cols[next] < self.cols[best] {
+                best = next;
+            }
+            i = next;
+        }
+        if best == k { None } else { Some(best) }
+    }
+
+    fn drop_at(mut ref self, k: i64) {
+        let at = match self.settle_side(k, -1) {
+            Some(i) => i,
+            None => self.settle_side(k, 1).unwrap_or(k),
+        };
+        self.cols[at] += 1;
+    }
+}
+
+fn pour_water(heights: Vec[i64], volume: i64, k: i64) -> Vec[i64] {
+    let mut land = Land { cols: heights.clone() };
+    for _ in 0..volume {
+        land.drop_at(k);
+    }
+    land.cols
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(heights: Vec[i64], volume: i64, k: i64) {
+    let after = pour_water(heights.clone(), volume, k);
+    println(f"{heights}, V = {volume}, K = {k} -> {after}");
+}
+
+fn main() {
+    show([2, 1, 1, 2, 1, 2, 2], 4, 3);
+    show([1, 2, 3, 4], 2, 2);
+    show([3, 1, 3], 5, 1);
+    show([5], 3, 0);
+    show([1, 1, 1, 1], 0, 2);
+    show([0, 0, 0, 0, 0], 7, 2);
+    show([4, 3, 2, 1, 0], 6, 0);
+    show([0, 1, 2, 3, 4], 6, 4);
+    show([2, 0, 2, 0, 2], 3, 2);
+    show([3, 2, 1, 2, 1, 2, 3], 9, 3);
+    let mut seed = 755;
+    let mut water = 0;
+    let mut check = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 100;
+        let mut heights: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            heights.push(next_random(mut seed) % 100);
+        }
+        let volume = next_random(mut seed) % 2001;
+        let k = next_random(mut seed) % n;
+        let after = pour_water(heights, volume, k);
+        for x in after.iter() {
+            water += *x;
+            check = (check * 31 + *x) % 1000000007;
+        }
+    }
+    println(f"200 random landscapes: {water} units of ground and water in all, checksum {check}");
+}

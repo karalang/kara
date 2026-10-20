@@ -1,0 +1,245 @@
+// LeetCode #784: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random strings.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn permute_star(at: i64, buf: mut ref Vec[char], out: mut ref Vec[String]) {
+    if at == buf.len() {
+        let mut s = String.new();
+        for c in buf.iter() {
+            s.push(*c);
+        }
+        out.push(s);
+        return;
+    }
+    let c = buf[at];
+    if c.is_ascii_alphabetic() {
+        buf[at] = c.to_ascii_lowercase();
+        permute_star(at + 1, mut buf, mut out);
+        buf[at] = c.to_ascii_uppercase();
+        permute_star(at + 1, mut buf, mut out);
+        buf[at] = c;
+    } else {
+        permute_star(at + 1, mut buf, mut out);
+    }
+}
+
+fn letter_case_permutation_star(s: String) -> Vec[String] {
+    let mut buf: Vec[char] = s.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    permute_star(0, mut buf, mut out);
+    out
+}
+
+// ---- bitmask arm ----------------------------------------------------
+
+fn letter_case_permutation_bitmask(s: String) -> Vec[String] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut letters = 0;
+    for c in chars.iter() {
+        if c.is_ascii_alphabetic() {
+            letters += 1;
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for mask in 0..(1 << letters) {
+        let mut word = String.new();
+        let mut j = 0;
+        for c in chars.iter() {
+            if c.is_ascii_alphabetic() {
+                word.push(if (mask >> j) & 1 == 1 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() });
+                j += 1;
+            } else {
+                word.push(*c);
+            }
+        }
+        out.push(word);
+    }
+    out
+}
+
+// ---- doubling arm ---------------------------------------------------
+
+fn letter_case_permutation_doubling(s: String) -> Vec[String] {
+    let mut all: Vec[String] = [String.new()];
+    for c in s.chars() {
+        let mut next: Vec[String] = Vec.new();
+        for prefix in all.iter() {
+            if c.is_ascii_alphabetic() {
+                let mut lower = prefix.clone();
+                lower.push(c.to_ascii_lowercase());
+                next.push(lower);
+                let mut upper = prefix.clone();
+                upper.push(c.to_ascii_uppercase());
+                next.push(upper);
+            } else {
+                let mut same = prefix.clone();
+                same.push(c);
+                next.push(same);
+            }
+        }
+        all = next;
+    }
+    all
+}
+
+// ---- gray arm -------------------------------------------------------
+
+fn letter_case_permutation_gray(s: String) -> Vec[String] {
+    let mut chars: Vec[char] = Vec.new();
+    let mut letter_at: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            letter_at.push(chars.len());
+        }
+        chars.push(c.to_ascii_lowercase());
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut k = 0;
+    loop {
+        let mut word = String.new();
+        for c in chars.iter() {
+            word.push(*c);
+        }
+        out.push(word);
+        k += 1;
+        if k == 1 << letter_at.len() {
+            break;
+        }
+        let at = letter_at[k.trailing_zeros()];
+        chars[at] = if chars[at].is_ascii_lowercase() { chars[at].to_ascii_uppercase() } else { chars[at].to_ascii_lowercase() };
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, s: String) -> Vec[String] {
+    let mut all = if which == 0 {
+        letter_case_permutation_star(s)
+    } else if which == 1 {
+        letter_case_permutation_bitmask(s)
+    } else if which == 2 {
+        letter_case_permutation_doubling(s)
+    } else {
+        letter_case_permutation_gray(s)
+    };
+    all.sort();
+    all
+}
+
+// The definition: every way of putting each character, digits included,
+// in lower or upper case, with the repeats removed, in order.
+fn definition(s: String) -> Vec[String] {
+    let chars: Vec[char] = s.chars().collect();
+    let mut found: SortedSet[String] = SortedSet.new();
+    for mask in 0..(1 << chars.len()) {
+        let mut word = String.new();
+        for i in 0..chars.len() {
+            word.push(if (mask >> i) & 1 == 1 { chars[i].to_ascii_uppercase() } else { chars[i].to_ascii_lowercase() });
+        }
+        found.insert(word);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for w in found.iter() {
+        out.push(w.clone());
+    }
+    out
+}
+
+fn swapped_case(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() });
+    }
+    out
+}
+
+fn make_string(seed: mut ref i64, kind: i64) -> String {
+    // kind 0: any of the 62 letters and digits; kind 1: letters only;
+    // kind 2: digits only; kind 3: digits with a letter in one place in
+    // four.
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars().collect();
+    let n = 1 + next_random(mut seed) % (if kind == 1 { 10 } else { 12 });
+    let mut out = String.new();
+    for _ in 0..n {
+        let letter = kind == 1 or (kind == 3 and next_random(mut seed) % 4 == 0);
+        let at = if kind == 0 { next_random(mut seed) % 62 } else if letter { next_random(mut seed) % 52 } else { 52 + next_random(mut seed) % 10 };
+        out.push(alphabet[at]);
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7840;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1000;
+    let mut strings = 0;
+    for case in 0..cases {
+        let s = make_string(mut seed, case % 4);
+        let want = definition(s);
+        strings += want.len();
+        let mut letters = 0;
+        for c in s.chars() {
+            if c.is_ascii_alphabetic() {
+                letters += 1;
+            }
+        }
+        let swapped = swapped_case(s);
+        for which in 0..arms {
+            let got = answer_with(which, s);
+            // P1: the definition's strings.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: 2^L strings for L letters, no two the same.
+            checks += 1;
+            let mut distinct = got.len() == 1 << letters;
+            for i in 1..got.len() {
+                if got[i - 1] >= got[i] {
+                    distinct = false;
+                }
+            }
+            if not distinct {
+                fails[1] += 1;
+            }
+            // P3: every string is s but for the case of its letters, and
+            // s itself is among them.
+            checks += 1;
+            let mut same_letters = got.contains(s);
+            for w in got.iter() {
+                if w.to_lowercase() != s.to_lowercase() {
+                    same_letters = false;
+                }
+            }
+            if not same_letters {
+                fails[2] += 1;
+            }
+            // P4: s with every letter's case swapped gives the same
+            // strings.
+            checks += 1;
+            if answer_with(which, swapped) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} strings ({strings} permutations), {arms} arms, {checks} checks, {failures} failures");
+}

@@ -1,0 +1,53 @@
+// LeetCode 806 — Number of Lines To Write String: the bench.
+//
+// 64 strings of 1000 letters, LeetCode's longest, each with widths of
+// its own from 2 to 10, are made once; each round counts the lines of
+// the next one.
+fn number_of_lines(widths: Vec[i64], s: String) -> (i64, i64) {
+    let mut lines = 1;
+    let mut width = 0;
+    for b in s.bytes() {
+        let w = widths[b - 97];
+        if width + w > 100 {
+            lines += 1;
+            width = w;
+        } else {
+            width += w;
+        }
+    }
+    (lines, width)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 806;
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let mut all_widths: Vec[Vec[i64]] = Vec.new();
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..64 {
+        let mut widths: Vec[i64] = Vec.new();
+        for _ in 0..26 {
+            widths.push(2 + next_random(mut seed) % 9);
+        }
+        all_widths.push(widths);
+        let mut s = String.new();
+        for _ in 0..1000 {
+            let at = next_random(mut seed) % 26;
+            s.push_str(letters.slice(at, at + 1));
+        }
+        strings.push(s);
+    }
+    let rounds = 1000000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let (lines, width) = number_of_lines(all_widths[r % 64], strings[r % 64]);
+        total += lines;
+        check = (check * 131 + lines * 1000 + width) % 1000000007;
+    }
+    println(f"{rounds} rounds of 1000 letters: {total} lines in all, checksum {check}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/794-valid-tic-tac-toe-state/bench/valid_tic_tac_toe.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "db0aa9a19"
+extracted_src = "c258c4d4"
+model_rev = "583cfb0d"
+model_src = "c258c4d4"

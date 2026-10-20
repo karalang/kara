@@ -123,13 +123,16 @@ def derive(meta: dict, rel: str, cands: dict, out: str) -> dict:
                        literal goes in `note` for the classifier to read
     needs-driver       the legacy run timed out: almost always a server the Rust
                        test drives with a client, untestable as a plain program
+    legacy-timeout     the same for a leetcode kata, which is never a server:
+                       the legacy run was only slow
     class d            any deferred:* tag (classification rules, section 3)
     """
     tags = set(meta.get("tags", []))
     expect = str(meta.get("expect", ""))
     note = meta.get("note", "")
     if "timed out" in note:
-        tags.add("needs-driver")
+        kata = re.match(r"katas/\d+-\d+/", rel) is not None
+        tags.add("legacy-timeout" if kata else "needs-driver")
     ran = expect == "stdout" or expect.startswith("panic:") or \
         (expect == "skip" and not note and "format-template" not in tags)
     if meta.get("expected_from") == "legacy-run" and cands.get(rel) and ran and "literal-unmatched" not in tags:

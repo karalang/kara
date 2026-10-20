@@ -1,0 +1,63 @@
+// LeetCode 808 — Soup Servings, the table kept five rows at a time.
+//
+// Row a of the table needs only rows a - 1 to a - 4, so keep the last
+// five rows in turn, row a in slot a % 5. A state with a soup empty is
+// worked out on the spot rather than kept: 1/2 if both are, 1 if only A
+// is, 0 if only B is. O(m²) time, O(m) room.
+fn at(rows: Vec[Vec[f64]], a: i64, b: i64) -> f64 {
+    if a <= 0 {
+        if b <= 0 { 0.5 } else { 1.0 }
+    } else if b <= 0 {
+        0.0
+    } else {
+        rows[a % 5][b]
+    }
+}
+
+fn soup_servings(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    let mut rows = Vec.filled(5, Vec.filled(m + 1, 0.0));
+    for a in 1..m + 1 {
+        for b in 1..m + 1 {
+            let p = 0.25
+                * (at(rows, a - 4, b) + at(rows, a - 3, b - 1) + at(rows, a - 2, b - 2)
+                    + at(rows, a - 1, b - 3));
+            rows[a % 5][b] = p;
+        }
+    }
+    at(rows, m, m)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    for n in [50, 100, 0, 1, 25, 26, 4800, 4801, 1000000000] {
+        println(f"n = {n}: {soup_servings(n):.5}");
+    }
+    let mut line = "every 25 ml to 300:".to_string();
+    let mut n = 25;
+    while n <= 300 {
+        line.push_str(f" {soup_servings(n):.5}");
+        n += 25;
+    }
+    println(line);
+    // The first serving count whose answer is above 1 - 1e-5, so that
+    // rounding it to five places gives 1.
+    let mut m = 0;
+    while soup_servings(25 * m) <= 0.99999 {
+        m += 1;
+    }
+    println(f"first above 0.99999: {25 * m} ml, {soup_servings(25 * m):.7}");
+    let mut sum = 0.0;
+    let mut count = 0;
+    let mut n = 0;
+    while n <= 5000 {
+        sum += soup_servings(n);
+        count += 1;
+        n += 37;
+    }
+    println(f"{count} sizes from 0 to 5000 ml: sum {sum:.5}");
+}

@@ -1,0 +1,34 @@
+
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+trait Shout {
+    fn shout(self) -> String;
+}
+impl Shout for String {
+    fn shout(self) -> String { self.to_uppercase() }
+}
+fn loudest[I: Iterator](it: own I) -> String where I.Item: Shout {
+    let mut it = it;
+    let mut out = "".to_string();
+    while let Some(x) = it.next() {
+        out = out + x.shout();
+    }
+    out
+}
+fn main() {
+    println(loudest(VecIter { items: vec!["a".to_string(), "b".to_string()], pos: 0 }));
+}

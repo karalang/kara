@@ -1,0 +1,256 @@
+// LeetCode #788: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random numbers.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn rotated_digits_star(n: i64) -> i64 {
+    let mut good = 0;
+    for x in 1..n + 1 {
+        let mut rest = x;
+        let mut valid = true;
+        let mut changed = false;
+        while rest > 0 {
+            let d = rest % 10;
+            if d == 3 or d == 4 or d == 7 {
+                valid = false;
+                break;
+            }
+            if d == 2 or d == 5 or d == 6 or d == 9 {
+                changed = true;
+            }
+            rest /= 10;
+        }
+        if valid and changed {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn rotated_digits_table(n: i64) -> i64 {
+    let digit_kind = [0, 0, 1, 2, 2, 1, 1, 2, 0, 1];
+    let mut kind: Vec[i64] = Vec.new();
+    let mut good = 0;
+    for x in 0..n + 1 {
+        let k = if x < 10 { digit_kind[x] } else { kind[x / 10].max(digit_kind[x % 10]) };
+        kind.push(k);
+        if k == 1 {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- counting arm ---------------------------------------------------
+
+fn count_up_to_counting(digits: Vec[i64], allowed: Vec[bool], choices: i64) -> i64 {
+    let mut total = 0;
+    for i in 0..digits.len() {
+        let mut free = 1;
+        for _ in i + 1..digits.len() {
+            free *= choices;
+        }
+        for d in 0..digits[i] {
+            if allowed[d] {
+                total += free;
+            }
+        }
+        if not allowed[digits[i]] {
+            return total;
+        }
+    }
+    total + 1
+}
+
+fn rotated_digits_counting(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let turns = [true, true, true, false, false, true, true, false, true, true];
+    let stays = [true, true, false, false, false, false, false, false, true, false];
+    count_up_to_counting(digits, turns, 7) - count_up_to_counting(digits, stays, 3)
+}
+
+// ---- strings arm ----------------------------------------------------
+
+fn turned_strings(c: char) -> Option[char] {
+    match c {
+        '0' => Some('0'),
+        '1' => Some('1'),
+        '8' => Some('8'),
+        '2' => Some('5'),
+        '5' => Some('2'),
+        '6' => Some('9'),
+        '9' => Some('6'),
+        _ => None,
+    }
+}
+
+fn rotated_digits_strings(n: i64) -> i64 {
+    let mut good = 0;
+    for x in 1..n + 1 {
+        let text = f"{x}";
+        let mut out = String.new();
+        let mut valid = true;
+        for c in text.chars() {
+            match turned_strings(c) {
+                Some(t) => out.push(t),
+                None => valid = false,
+            }
+        }
+        if valid and out != text {
+            good += 1;
+        }
+    }
+    good
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        rotated_digits_star(n)
+    } else if which == 1 {
+        rotated_digits_table(n)
+    } else if which == 2 {
+        rotated_digits_counting(n)
+    } else {
+        rotated_digits_strings(n)
+    }
+}
+
+// x turned upside down as a number, or -1 when a digit does not turn.
+fn turned_number(x: i64) -> i64 {
+    let turn = [0, 1, 5, -1, -1, 2, 9, -1, 8, 6];
+    let mut rest = x;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        let t = turn[rest % 10];
+        if t == -1 {
+            return -1;
+        }
+        out += t * place;
+        place *= 10;
+        rest /= 10;
+    }
+    out
+}
+
+fn is_good(x: i64) -> bool {
+    let t = turned_number(x);
+    t != -1 and t != x
+}
+
+// The definition: the numbers from 1 to n whose turned number exists and
+// is another number.
+fn definition(n: i64) -> i64 {
+    let mut good = 0;
+    for x in 1..n + 1 {
+        if is_good(x) {
+            good += 1;
+        }
+    }
+    good
+}
+
+fn make_n(seed: mut ref i64, kind: i64) -> i64 {
+    // kind 0: any n up to 10,000; kind 1: up to 200; kind 2: next to a
+    // multiple of 100 up to 3,000; kind 3: only digits that turn.
+    if kind == 0 {
+        1 + next_random(mut seed) % 10000
+    } else if kind == 1 {
+        1 + next_random(mut seed) % 200
+    } else if kind == 2 {
+        (1 + next_random(mut seed) % 30) * 100 + next_random(mut seed) % 3 - 1
+    } else {
+        let turning = [0, 1, 2, 5, 6, 8, 9];
+        let places = 1 + next_random(mut seed) % 4;
+        let mut n = 1 + next_random(mut seed) % 6;
+        n = turning[n];
+        for _ in 1..places {
+            n = n * 10 + turning[next_random(mut seed) % 7];
+        }
+        n
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7880;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 240;
+    let mut sum = 0;
+    for case in 0..cases {
+        let n = make_n(mut seed, case % 4);
+        let want = definition(n);
+        sum += want;
+        let q = n / 100;
+        let r = n % 100;
+        for which in 0..arms {
+            let got = answer_with(which, n);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: n adds one to the count for n - 1 exactly when n is
+            // good.
+            if n > 1 {
+                checks += 1;
+                let before = answer_with(which, n - 1);
+                if got - before != (if is_good(n) { 1 } else { 0 }) {
+                    fails[1] += 1;
+                }
+            }
+            // P3: the ten numbers 10a to 10a + 9 hold 4 good ones when a
+            // turns into itself, 7 when a is good and none when a does
+            // not turn.
+            let a = n / 10;
+            if a >= 1 {
+                checks += 1;
+                let block = answer_with(which, 10 * a + 9) - answer_with(which, 10 * a - 1);
+                let t = turned_number(a);
+                let expect = if t == -1 { 0 } else if t == a { 4 } else { 7 };
+                if block != expect {
+                    fails[2] += 1;
+                }
+            }
+            // P4: past a hundreds part q that does not turn, nothing more
+            // is good; past one that turns into itself, the last two
+            // digits count as a number of their own.
+            let t = turned_number(q);
+            if q >= 1 and (t == -1 or t == q) {
+                checks += 1;
+                let base = answer_with(which, 100 * q - 1);
+                let expect = if t == -1 { base } else if r == 0 { base } else { base + answer_with(which, r) };
+                if got != expect {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} numbers (answers sum to {sum}), {arms} arms, {checks} checks, {failures} failures");
+}

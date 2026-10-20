@@ -1,0 +1,87 @@
+
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+// Yields each item with the one before it, if any.
+struct WithPrev[I: Iterator] {
+    it: I,
+    prev: Option[I.Item],
+}
+
+fn with_prev[I: Iterator](it: own I) -> WithPrev[I] {
+    WithPrev { it: it, prev: None }
+}
+
+impl[I: Iterator] Iterator for WithPrev[I] {
+    type Item = (Option[I.Item], I.Item);
+    fn next(mut ref self) -> Option[(Option[I.Item], I.Item)] {
+        match self.it.next() {
+            Some(x) => {
+                let p = self.prev.take();
+                Some((p, x))
+            }
+            None => None,
+        }
+    }
+}
+
+enum Slot[I: Iterator] {
+    Empty,
+    Held(I.Item),
+}
+
+fn first_slot[I: Iterator](it: own I) -> Slot[I] {
+    let mut it = it;
+    match it.next() {
+        Some(x) => Slot.Held(x),
+        None => Slot.Empty,
+    }
+}
+
+fn main() {
+    let words: Vec[String] = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let mut w = with_prev(VecIter { items: words, pos: 0 });
+    w.prev = Some("start".to_string());
+    while let Some((p, x)) = w.next() {
+        match p {
+            Some(p) => println(f"{p}>{x}"),
+            None => println(f"_>{x}"),
+        }
+    }
+    let mut nested = with_prev(with_prev(VecIter { items: vec![1, 2], pos: 0 }));
+    while let Some((outer, (inner, x))) = nested.next() {
+        let o = match outer { Some(_) => "o", None => "-" };
+        let i = match inner { Some(v) => v, None => 0 };
+        println(f"{o} {i} {x}");
+    }
+    let s = first_slot(VecIter { items: vec!["z".to_string()], pos: 0 });
+    match s {
+        Slot.Held(x) => println(f"held {x}"),
+        Slot.Empty => println("empty"),
+    }
+    let none: Vec[String] = Vec.new();
+    let e = first_slot(VecIter { items: none, pos: 0 });
+    match e {
+        Slot.Held(x) => println(f"held {x}"),
+        Slot.Empty => println("empty"),
+    }
+    let mut n = 0;
+    for (p, x) in with_prev(VecIter { items: vec![7, 8, 9], pos: 0 }) {
+        n += x;
+        match p { Some(_) => n += 100, None => {} }
+    }
+    println(f"{n}");
+}

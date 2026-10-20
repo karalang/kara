@@ -1,0 +1,78 @@
+// LeetCode 801 — Minimum Swaps To Make Sequences Increasing, two states.
+//
+// Going left to right, keep the fewest swaps that make both prefixes
+// increasing with place i left alone, `keep`, and with it swapped,
+// `swap`. Place i can follow place i - 1 in the same state when each
+// array goes up there, and in the other state when each goes up across,
+// nums1[i - 1] < nums2[i] and nums2[i - 1] < nums1[i]. O(n), O(1)
+// space.
+fn min_swap(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let n = nums1.len();
+    let mut keep = 0;
+    let mut swap = 1;
+    for i in 1..n {
+        let same = nums1[i - 1] < nums1[i] and nums2[i - 1] < nums2[i];
+        let cross = nums1[i - 1] < nums2[i] and nums2[i - 1] < nums1[i];
+        let mut next_keep = n + 1;
+        let mut next_swap = n + 1;
+        if same {
+            next_keep = keep;
+            next_swap = swap + 1;
+        }
+        if cross {
+            next_keep = next_keep.min(swap);
+            next_swap = next_swap.min(keep + 1);
+        }
+        keep = next_keep;
+        swap = next_swap;
+    }
+    keep.min(swap)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums1: Vec[i64], nums2: Vec[i64]) {
+    println(f"{nums1}, {nums2} -> {min_swap(nums1, nums2)}");
+}
+
+fn main() {
+    show(vec![1, 3, 5, 4], vec![1, 2, 3, 7]);
+    show(vec![0, 3, 5, 8, 9], vec![2, 1, 4, 6, 9]);
+    show(vec![1, 2], vec![3, 4]);
+    show(vec![3, 2], vec![1, 4]);
+    show(vec![0, 4, 4, 5, 9], vec![0, 1, 6, 8, 10]);
+    show(vec![0, 11, 2, 13, 4, 15], vec![10, 1, 12, 3, 14, 5]);
+    let mut seed = 801;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        // Two increasing arrays, then some places swapped, so that some
+        // set of swaps undoes it.
+        let n = 2 + next_random(mut seed) % 40;
+        let gap = 1 + next_random(mut seed) % 3;
+        let mut a: Vec[i64] = Vec.new();
+        let mut b: Vec[i64] = Vec.new();
+        let mut x = next_random(mut seed) % 5;
+        let mut y = next_random(mut seed) % 5;
+        for _ in 0..n {
+            x += 1 + next_random(mut seed) % gap;
+            y += 1 + next_random(mut seed) % gap;
+            if next_random(mut seed) % 2 == 0 {
+                a.push(x);
+                b.push(y);
+            } else {
+                a.push(y);
+                b.push(x);
+            }
+        }
+        let k = min_swap(a, b);
+        total += k;
+        check = (check * 131 + k + i) % 1000000007;
+    }
+    println(f"300 random pairs: {total} swaps in all, checksum {check}");
+}

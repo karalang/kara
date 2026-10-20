@@ -1,0 +1,12 @@
+fn main() {
+    let mut title: Option[String] = Some("a".to_string());
+    let s = "b".to_string();
+    match title {
+        Some(ref t) => title = Some(f"{t}{s}"),
+        None => {}
+    }
+    match title {
+        Some(ref t) => println(t),
+        None => {}
+    }
+}

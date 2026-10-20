@@ -150,7 +150,7 @@ fn solve_memo(counts: ref Vec[Vec[i64]], rest: own String, memo: mut ref Map[Str
         for k in 0..26 {
             left[k] = if need[k] > c[k] { need[k] - c[k] } else { 0 };
         }
-        let sub = solve_memo(counts, spelled_memo(left), memo);
+        let sub = solve_memo(counts, spelled_memo(left), mut memo);
         if sub >= 0 and (best < 0 or sub + 1 < best) {
             best = sub + 1;
         }
@@ -230,7 +230,7 @@ fn search_search(stickers: ref Vec[Vec[i64]], need: mut ref Vec[i64], used: i64,
         for k in 0..26 {
             need[k] = if need[k] > c[k] { need[k] - c[k] } else { 0 };
         }
-        search_search(stickers, need, used + 1, best);
+        search_search(stickers, mut need, used + 1, mut best);
         for k in 0..26 {
             need[k] = saved[k];
         }

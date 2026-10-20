@@ -1,0 +1,13 @@
+[[1, 2, 3], [0, 2], [0, 1, 3], [0, 2]] -> false
+[[1, 3], [0, 2], [1, 3], [0, 2]] -> true
+[[]] -> true
+[[1], [0]] -> true
+[[1, 2], [0, 2], [0, 1], []] -> false
+[[1, 3], [0, 2], [1, 3], [2, 0], [5, 6], [4, 6], [5, 4]] -> false
+[[1, 3], [0, 2], [1, 3], [2, 0], [5], [4, 6], [5]] -> true
+a cycle of 100 -> true
+a cycle of 99 -> false
+two sides of 50, every pair across joined -> true
+that and one edge inside a side -> false
+a random tree of 100 -> true
+300 random graphs: 243 bipartite, checksum 525042956

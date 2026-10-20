@@ -1,0 +1,28 @@
+
+struct FakeEnv {}
+impl EnvProvider for FakeEnv {
+    fn var(self, name: Str) -> Result[String, VarError] { Ok("fake") }
+}
+fn main() {
+    let e = OsEnv {};
+    match e.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(_) => println("unset"),
+    }
+    match e.var("PATH") {
+        Ok(s) => println(s.len() > 0),
+        Err(_) => println("no path"),
+    }
+    println(e.args().len());
+    let c = OsClock {};
+    println(c.now() > 0);
+    println(c.wall_ns() > 0);
+    println(c.monotonic_ns() >= 0);
+    let r = OsRandom {};
+    println(r.next_u64() != r.next_u64());
+    let f = FakeEnv {};
+    match f.var("X") {
+        Ok(s) => println(s),
+        Err(_) => println("err"),
+    }
+}

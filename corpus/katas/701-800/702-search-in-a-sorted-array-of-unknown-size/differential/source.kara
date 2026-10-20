@@ -116,13 +116,13 @@ fn search_lifting(reader: mut ref ArrayReader, target: i64) -> i64 {
 
 fn answer(which: i64, reader: mut ref ArrayReader, target: i64) -> i64 {
     if which == 0 {
-        search_star(reader, target)
+        search_star(mut reader, target)
     } else if which == 1 {
-        search_scan(reader, target)
+        search_scan(mut reader, target)
     } else if which == 2 {
-        search_length(reader, target)
+        search_length(mut reader, target)
     } else {
-        search_lifting(reader, target)
+        search_lifting(mut reader, target)
     }
 }
 

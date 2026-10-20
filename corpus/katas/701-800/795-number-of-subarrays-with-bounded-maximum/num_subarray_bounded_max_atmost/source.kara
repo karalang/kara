@@ -1,0 +1,64 @@
+// LeetCode 795 — Number of Subarrays with Bounded Maximum, as a
+// difference.
+//
+// The subarrays with maximum in [left, right] are those with every
+// number at most right, less those with every number below left. Each
+// count is a sum over runs: a run of k numbers all within the bound has
+// k (k + 1) / 2 subarrays. O(n).
+fn all_at_most(nums: Vec[i64], bound: i64) -> i64 {
+    let mut count = 0;
+    let mut run = 0;
+    for x in nums {
+        if x <= bound {
+            run += 1;
+            count += run;
+        } else {
+            run = 0;
+        }
+    }
+    count
+}
+
+fn num_subarray_bounded_max(nums: Vec[i64], left: i64, right: i64) -> i64 {
+    all_at_most(nums, right) - all_at_most(nums, left - 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], left: i64, right: i64) {
+    let shown = nums.clone();
+    let answer = num_subarray_bounded_max(nums, left, right);
+    println(f"nums = {shown}, left = {left}, right = {right} -> {answer}");
+}
+
+fn main() {
+    show(vec![2, 1, 4, 3], 2, 3);
+    show(vec![2, 9, 2, 5, 6], 2, 8);
+    show(vec![5], 5, 5);
+    show(vec![1, 1, 1], 2, 3);
+    show(vec![3, 3, 3, 3], 0, 1000000000);
+    show(vec![0, 1000000000, 0], 1000000000, 1000000000);
+    show(vec![7, 1, 7, 1, 7], 7, 7);
+    let mut seed = 795;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let top = 1 + next_random(mut seed) % 20;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % top);
+        }
+        let a = next_random(mut seed) % top;
+        let b = next_random(mut seed) % top;
+        let answer = num_subarray_bounded_max(nums, a.min(b), a.max(b));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random cases: {total} subarrays, checksum {check}");
+}

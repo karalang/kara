@@ -1,0 +1,13 @@
+enum Value {
+    Int(i64),
+    Str(String),
+}
+
+fn main() {
+    let v = Value.Str("a".to_string());
+    let w = v.clone();
+    match w {
+        Value.Int(n) => println(f"{n}"),
+        Value.Str(s) => println(s),
+    }
+}

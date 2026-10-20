@@ -1,0 +1,323 @@
+// LeetCode #774: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random stations.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn minmax_gas_dist_star(stations: Vec[i64], k: i64) -> f64 {
+    let mut lo = 0.0;
+    let mut hi = 0.0;
+    for i in 1..stations.len() {
+        let gap = (stations[i] - stations[i - 1]) as f64;
+        if gap > hi {
+            hi = gap;
+        }
+    }
+    hi += 1.0;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let mut needed = 0;
+        for i in 1..stations.len() {
+            needed += ((stations[i] - stations[i - 1]) as f64 / mid) as i64;
+        }
+        if needed <= k {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let mut longest = 0.0;
+    for i in 1..stations.len() {
+        let gap = (stations[i] - stations[i - 1]) as f64;
+        let piece = gap / ((gap / hi) as i64 + 1) as f64;
+        if piece > longest {
+            longest = piece;
+        }
+    }
+    longest
+}
+
+// ---- closed arm -----------------------------------------------------
+
+fn minmax_gas_dist_closed(stations: Vec[i64], k: i64) -> f64 {
+    let mut gaps: Vec[f64] = Vec.new();
+    for i in 1..stations.len() {
+        gaps.push((stations[i] - stations[i - 1]) as f64);
+    }
+    let mut lo = 0.0;
+    let mut hi = 0.0;
+    for g in gaps {
+        if *g > hi {
+            hi = *g;
+        }
+    }
+    loop {
+        let mid = lo + (hi - lo) / 2.0;
+        if mid <= lo or mid >= hi {
+            break;
+        }
+        let mut needed = 0;
+        for g in gaps {
+            needed += (*g / mid).ceil() as i64 - 1;
+        }
+        if needed <= k {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let mut longest = 0.0;
+    for g in gaps {
+        let piece = *g / (*g / hi).ceil();
+        if piece > longest {
+            longest = piece;
+        }
+    }
+    longest
+}
+
+// ---- heap arm -------------------------------------------------------
+
+struct Gap_heap {
+    length: i64,
+    pieces: i64,
+}
+
+impl PartialEq for Gap_heap {
+    fn eq(ref self, other: ref Gap_heap) -> bool {
+        self.length * other.pieces == other.length * self.pieces
+    }
+}
+
+impl Eq for Gap_heap {}
+
+impl PartialOrd for Gap_heap {
+    fn partial_cmp(ref self, other: ref Gap_heap) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Gap_heap {
+    // The heap gives the least first, so a longer piece is less.
+    fn cmp(ref self, other: ref Gap_heap) -> Ordering {
+        (other.length * self.pieces).cmp(self.length * other.pieces)
+    }
+}
+
+fn minmax_gas_dist_heap(stations: Vec[i64], k: i64) -> f64 {
+    let mut heap: PriorityQueue[Gap_heap] = PriorityQueue.new();
+    for i in 1..stations.len() {
+        heap.push(Gap_heap { length: stations[i] - stations[i - 1], pieces: 1 });
+    }
+    for _ in 0..k {
+        let mut top = heap.pop().unwrap();
+        top.pieces += 1;
+        heap.push(top);
+    }
+    let top = heap.pop().unwrap();
+    top.length as f64 / top.pieces as f64
+}
+
+// ---- share arm ------------------------------------------------------
+
+struct Share_share {
+    length: i64,
+    pieces: i64,
+}
+
+impl PartialEq for Share_share {
+    fn eq(ref self, other: ref Share_share) -> bool {
+        self.length * other.pieces == other.length * self.pieces
+    }
+}
+
+impl Eq for Share_share {}
+
+impl PartialOrd for Share_share {
+    fn partial_cmp(ref self, other: ref Share_share) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Share_share {
+    // The heap gives the least first, so a longer piece is less.
+    fn cmp(ref self, other: ref Share_share) -> Ordering {
+        (other.length * self.pieces).cmp(self.length * other.pieces)
+    }
+}
+
+fn minmax_gas_dist_share(stations: Vec[i64], k: i64) -> f64 {
+    let total = stations[stations.len() - 1] - stations[0];
+    // The longest piece of the proportional cutting, as a / b.
+    let mut a = 0;
+    let mut b = 1;
+    for i in 1..stations.len() {
+        let g = stations[i] - stations[i - 1];
+        let pieces = g * k / total + 1;
+        if g * b > a * pieces {
+            a = g;
+            b = pieces;
+        }
+    }
+    let mut left = k;
+    let mut heap: PriorityQueue[Share_share] = PriorityQueue.new();
+    for i in 1..stations.len() {
+        let g = stations[i] - stations[i - 1];
+        let pieces = (g * b + a - 1) / a;
+        left -= pieces - 1;
+        heap.push(Share_share { length: g, pieces: pieces });
+    }
+    for _ in 0..left {
+        let mut top = heap.pop().unwrap();
+        top.pieces += 1;
+        heap.push(top);
+    }
+    let top = heap.pop().unwrap();
+    top.length as f64 / top.pieces as f64
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, stations: Vec[i64], k: i64) -> f64 {
+    if which == 0 {
+        minmax_gas_dist_star(stations, k)
+    } else if which == 1 {
+        minmax_gas_dist_closed(stations, k)
+    } else if which == 2 {
+        minmax_gas_dist_heap(stations, k)
+    } else {
+        minmax_gas_dist_share(stations, k)
+    }
+}
+
+// The stations needed to cut every gap into pieces no longer than a / b:
+// ceil(g * b / a) pieces for gap g.
+fn needed_for(stations: Vec[i64], a: i64, b: i64) -> i64 {
+    let mut needed = 0;
+    for j in 1..stations.len() {
+        let g = stations[j] - stations[j - 1];
+        needed += (g * b + a - 1) / a - 1;
+    }
+    needed
+}
+
+// The definition: the least a / b, over every gap a and every count b
+// from 1 to k + 1, that at most k stations can reach.
+fn definition(stations: Vec[i64], k: i64) -> f64 {
+    let mut best_a = 0;
+    let mut best_b = 0;
+    for i in 1..stations.len() {
+        let a = stations[i] - stations[i - 1];
+        for b in 1..k + 2 {
+            let smaller = best_b == 0 or a * best_b < best_a * b;
+            if smaller and needed_for(stations, a, b) <= k {
+                best_a = a;
+                best_b = b;
+            }
+        }
+    }
+    best_a as f64 / best_b as f64
+}
+
+// The stations needed for every piece to be shorter than a / b:
+// floor(g * b / a) for gap g.
+fn needed_below(stations: Vec[i64], a: i64, b: i64) -> i64 {
+    let mut needed = 0;
+    for j in 1..stations.len() {
+        let g = stations[j] - stations[j - 1];
+        needed += g * b / a;
+    }
+    needed
+}
+
+// A proof that the answer is best: some gap g and count m from 1 to
+// k + 1 with g / m the answer, bit for bit, where k stations can cut
+// every piece to g / m or less but not every piece to less than g / m.
+fn certified(stations: Vec[i64], k: i64, answer: f64) -> bool {
+    for i in 1..stations.len() {
+        let g = stations[i] - stations[i - 1];
+        let m = (g as f64 / answer + 0.5) as i64;
+        if m >= 1 and m <= k + 1 and g as f64 / m as f64 == answer {
+            if needed_for(stations, g, m) <= k and needed_below(stations, g, m) > k {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn random_stations(seed: mut ref i64, n: i64, spread: i64) -> Vec[i64] {
+    let mut stations: Vec[i64] = [next_random(mut seed) % 100];
+    for _ in 1..n {
+        let last = stations[stations.len() - 1];
+        stations.push(last + 1 + next_random(mut seed) % spread);
+    }
+    stations
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7740;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1400;
+    let mut total = 0.0;
+    for case in 0..cases {
+        // 1,200 small cases, where the definition is cheap, then 200 near
+        // LeetCode's sizes.
+        let small = case < 1200;
+        let n = if small { 2 + next_random(mut seed) % 7 } else { 10 + next_random(mut seed) % 191 };
+        let spread = if small { 20 } else if next_random(mut seed) % 4 == 0 { 1000000 } else { 1000 };
+        let stations = random_stations(mut seed, n, spread);
+        let k = if small { 1 + next_random(mut seed) % 30 } else { 1 + next_random(mut seed) % 2000 };
+        let shift = next_random(mut seed) % 1000;
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in 0..n {
+            mirrored.push(shift + stations[n - 1] - stations[n - 1 - i]);
+        }
+        let want = if small { definition(stations, k) } else { 0.0 };
+        for which in 0..arms {
+            let got = answer_with(which, stations, k);
+            if which == 0 {
+                total += got;
+            }
+            // P1: the definition's answer, on the small cases.
+            if small {
+                checks += 1;
+                if got != want {
+                    fails[0] += 1;
+                }
+            }
+            // P2: one more station never makes the answer longer.
+            checks += 1;
+            if answer_with(which, stations, k + 1) > got {
+                fails[1] += 1;
+            }
+            // P3: the stations mirrored and shifted give the same answer.
+            checks += 1;
+            if answer_with(which, mirrored, k) != got {
+                fails[2] += 1;
+            }
+            // P4: the answer is some gap over some count, which k stations
+            // can reach and no shorter length can.
+            checks += 1;
+            if not certified(stations, k, got) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} cases (answers sum to {total:.5}), {arms} arms, {checks} checks, {failures} failures");
+}

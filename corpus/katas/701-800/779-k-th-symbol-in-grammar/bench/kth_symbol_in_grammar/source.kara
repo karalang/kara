@@ -1,0 +1,28 @@
+// Benchmark for #779: K-th Symbol in Grammar -- the ★ arm (the ones in
+// k - 1).
+//
+// Row 1 is 0, and each row is the one before with every 0 replaced by 01
+// and every 1 by 10. So symbol k of row n (from 1) sits under symbol
+// (k + 1) / 2 of row n - 1, and is that symbol for an odd k and the other
+// one for an even k. Going up from k - 1 in binary, each step drops the
+// last bit and flips the symbol when that bit is 1: the symbol is the
+// parity of the 1 bits in k - 1, and row n does not matter beyond
+// holding k. O(1).
+fn kth_grammar(n: i64, k: i64) -> i64 {
+    (k - 1).count_ones() % 2
+}
+
+fn main() {
+    // 200,000,000 queries of row 30, LeetCode's most, one after another:
+    // each k comes from a linear congruential step that takes in the
+    // answer before, so no two queries can run side by side.
+    let mut x: i64 = 779;
+    let mut ones: i64 = 0;
+    for _ in 0..200000000 {
+        let k = 1 + x % 536870912;
+        let answer = kth_grammar(30, k);
+        ones += answer;
+        x = (x * 1103515245 + 12345 + answer) % 2147483648;
+    }
+    println(f"200000000 queries of row 30: {ones} ones, last state {x}");
+}

@@ -1,0 +1,13 @@
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Dec[K] { k: K, order: i64 }
+fn least[T: Ord + Clone](v: ref Vec[T]) -> T {
+    let mut best = v[0].clone();
+    for x in v.iter() { if *x < best { best = x.clone(); } }
+    best
+}
+fn main() {
+    let v: Vec[Dec[String]] = vec![Dec { k: "b".to_string(), order: 0 }, Dec { k: "a".to_string(), order: 1 }];
+    let m = least(v);
+    println(f"{m.k} {m.order}");
+    println(f"{v[0] < v[1]}");
+}

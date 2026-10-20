@@ -1,0 +1,100 @@
+// LeetCode 761 — Special Binary String, through a tree of mountains.
+//
+// Parse the string into a tree: node 0 is the whole string, and each
+// mountain is a child of the mountain, or the string, it sits in. Then
+// give every node its largest form, children before parents (a child is
+// always numbered after its parent): its children's forms in descending
+// order, wrapped in a 1 and a 0 unless it is the root.
+
+fn make_largest_special(s: String) -> String {
+    let mut parent: Vec[i64] = [0];
+    let mut children: Vec[Vec[i64]] = [Vec.new()];
+    let mut at = 0;
+    for c in s.chars() {
+        if c == '1' {
+            let node = parent.len();
+            parent.push(at);
+            children.push(Vec.new());
+            children[at].push(node);
+            at = node;
+        } else {
+            at = parent[at];
+        }
+    }
+    let mut form: Vec[String] = Vec.new();
+    for _ in 0..parent.len() {
+        form.push(String.new());
+    }
+    let mut node = parent.len() - 1;
+    while node >= 0 {
+        let mut parts: Vec[String] = Vec.new();
+        for child in children[node].iter() {
+            parts.push(form[*child].clone());
+        }
+        parts.sort_by(|a, b| b.cmp(a));
+        if node == 0 {
+            form[0] = parts.join("");
+        } else {
+            form[node] = f"1{parts.join("")}0";
+        }
+        node -= 1;
+    }
+    form[0].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random special string of 2m characters: a 1 whenever the string so
+// far is balanced, a 0 once all m 1s are used, and otherwise either.
+fn random_special(m: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let mut ones = 0;
+    let mut depth = 0;
+    for _ in 0..2 * m {
+        if ones < m and (depth == 0 or next_random(mut seed) % 2 == 0) {
+            s.push('1');
+            ones += 1;
+            depth += 1;
+        } else {
+            s.push('0');
+            depth -= 1;
+        }
+    }
+    s
+}
+
+fn show(s: String) {
+    let largest = make_largest_special(s.clone());
+    println(f"{s} -> {largest}");
+}
+
+fn main() {
+    show("11011000");
+    show("10");
+    show("1100");
+    show("101100");
+    show("10101010");
+    show("110100");
+    show("1011011000");
+    show("1101001110001100");
+    let mut seed = 761;
+    let mut changed = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 25;
+        let s = random_special(m, mut seed);
+        let largest = make_largest_special(s.clone());
+        if largest != s {
+            changed += 1;
+        }
+        for c in largest.chars() {
+            check = (check * 2 + if c == '1' { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {changed} changed, checksum {check}");
+}

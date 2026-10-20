@@ -1,0 +1,306 @@
+// LeetCode #790: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties
+// on random boards.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_tilings_star(n: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut full: Vec[i64] = [1, 1];
+    let mut ragged: Vec[i64] = [0, 1];
+    for i in 2..n + 1 {
+        full.push((full[i - 1] + full[i - 2] + 2 * ragged[i - 2]) % modulus);
+        ragged.push((ragged[i - 1] + full[i - 1]) % modulus);
+    }
+    full[n]
+}
+
+// ---- recurrence arm -------------------------------------------------
+
+fn num_tilings_recurrence(n: i64) -> i64 {
+    let modulus = 1000000007;
+    if n <= 2 {
+        return n;
+    }
+    let mut (a, b, c) = (1, 1, 2);
+    for _ in 3..n + 1 {
+        let next = (2 * c + a) % modulus;
+        a = b;
+        b = c;
+        c = next;
+    }
+    c
+}
+
+// ---- matrix arm -----------------------------------------------------
+
+fn multiply_matrix(a: Vec[Vec[i64]], b: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let modulus = 1000000007;
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..3 {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..3 {
+            let mut sum = 0;
+            for k in 0..3 {
+                sum = (sum + a[i][k] * b[k][j]) % modulus;
+            }
+            row.push(sum);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn num_tilings_matrix(n: i64) -> i64 {
+    let modulus = 1000000007;
+    if n <= 2 {
+        return n;
+    }
+    let mut result: Vec[Vec[i64]] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    let mut step: Vec[Vec[i64]] = [[2, 0, 1], [1, 0, 0], [0, 1, 0]];
+    let mut power = n - 2;
+    while power > 0 {
+        if power % 2 == 1 {
+            result = multiply_matrix(result, step);
+        }
+        step = multiply_matrix(step, step);
+        power /= 2;
+    }
+    (result[0][0] * 2 + result[0][1] + result[0][2]) % modulus
+}
+
+// ---- profile arm ----------------------------------------------------
+
+fn place_profile(covered: i64, row: i64, next: i64, ways: i64, counts: mut ref Vec[i64]) {
+    let modulus = 1000000007;
+    if row == 2 {
+        counts[next] = (counts[next] + ways) % modulus;
+        return;
+    }
+    let here = 1 << row;
+    if covered & here != 0 {
+        place_profile(covered, row + 1, next, ways, mut counts);
+        return;
+    }
+    let other = 3 - here;
+    // A vertical domino.
+    if covered & other == 0 {
+        place_profile(covered | 3, row + 1, next, ways, mut counts);
+    }
+    // A horizontal domino.
+    if next & here == 0 {
+        place_profile(covered | here, row + 1, next | here, ways, mut counts);
+    }
+    // The trominoes in this column and the next that cover this square:
+    // with the other square here and one of the next column's, or with
+    // both of the next column's.
+    if covered & other == 0 {
+        if next & here == 0 {
+            place_profile(covered | 3, row + 1, next | here, ways, mut counts);
+        }
+        if next & other == 0 {
+            place_profile(covered | 3, row + 1, next | other, ways, mut counts);
+        }
+    }
+    if next == 0 {
+        place_profile(covered | here, row + 1, 3, ways, mut counts);
+    }
+}
+
+fn num_tilings_profile(n: i64) -> i64 {
+    let mut counts: Vec[i64] = [1, 0, 0, 0];
+    for _ in 0..n {
+        let mut after: Vec[i64] = [0, 0, 0, 0];
+        for covered in 0..4 {
+            if counts[covered] != 0 {
+                place_profile(covered, 0, 0, counts[covered], mut after);
+            }
+        }
+        counts = after;
+    }
+    counts[0]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        num_tilings_star(n)
+    } else if which == 1 {
+        num_tilings_recurrence(n)
+    } else if which == 2 {
+        num_tilings_matrix(n)
+    } else {
+        num_tilings_profile(n)
+    }
+}
+
+// Every tiling of a 2 × n board, counted one by one: the first open
+// square, column by column, is covered by each of the six piece shapes
+// that has it as its own first square and fits.
+fn count_tilings(open: mut ref Vec[bool], n: i64, shapes: Vec[Vec[(i64, i64)]], from: i64) -> i64 {
+    let mut first = from;
+    while first < 2 * n and not open[first] {
+        first += 1;
+    }
+    if first == 2 * n {
+        return 1;
+    }
+    let (row, col) = (first % 2, first / 2);
+    let mut total = 0;
+    for shape in shapes.iter() {
+        let mut fits = true;
+        for (dr, dc) in shape.iter() {
+            let (r, c) = (row + *dr, col + *dc);
+            if r < 0 or r > 1 or c >= n or not open[c * 2 + r] {
+                fits = false;
+            }
+        }
+        if fits {
+            for (dr, dc) in shape.iter() {
+                open[(col + *dc) * 2 + row + *dr] = false;
+            }
+            total += count_tilings(mut open, n, shapes, first + 1);
+            for (dr, dc) in shape.iter() {
+                open[(col + *dc) * 2 + row + *dr] = true;
+            }
+        }
+    }
+    total
+}
+
+// A block is a stretch of a tiling with clean cuts at both ends and none
+// inside: one vertical domino, two horizontal dominoes, or, for three
+// columns or more, a chain of trominoes and horizontal dominoes in one
+// of two mirror forms.
+fn blocks(k: i64) -> i64 {
+    if k <= 2 { 1 } else { 2 }
+}
+
+// The definition: every tiling counted on boards up to 10 columns, and
+// tilings as sequences of blocks on longer ones.
+fn definition(n: i64) -> i64 {
+    let modulus = 1000000007;
+    if n <= 10 {
+        let mut open: Vec[bool] = Vec.new();
+        for _ in 0..2 * n {
+            open.push(true);
+        }
+        // Each shape as (row, column) offsets from its first square.
+        let shapes: Vec[Vec[(i64, i64)]] = [
+            [(0, 0), (1, 0)],
+            [(0, 0), (0, 1)],
+            [(0, 0), (1, 0), (0, 1)],
+            [(0, 0), (1, 0), (1, 1)],
+            [(0, 0), (0, 1), (1, 1)],
+            [(0, 0), (-1, 1), (0, 1)],
+        ];
+        return count_tilings(mut open, n, shapes, 0) % modulus;
+    }
+    let mut ways: Vec[i64] = [1];
+    let mut before = 0;
+    for i in 1..n + 1 {
+        // ways[i] = ways[i - 1] + ways[i - 2] + 2 (ways[0] + ... + ways[i - 3])
+        if i >= 3 {
+            before = (before + ways[i - 3]) % modulus;
+        }
+        let mut w = ways[i - 1] + 2 * before;
+        if i >= 2 {
+            w += ways[i - 2];
+        }
+        ways.push(w % modulus);
+    }
+    ways[n]
+}
+
+fn main() {
+    let modulus = 1000000007;
+    let arms = 4;
+    let mut seed = 7900;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 600;
+    let mut sum = 0;
+    for case in 0..cases {
+        // 300 boards up to 10 columns, 240 of 11 to 30, and 60 of 31 to
+        // 1,000, the last of them 1,000 itself.
+        let n = if case < 300 {
+            1 + next_random(mut seed) % 10
+        } else if case < 540 {
+            11 + next_random(mut seed) % 20
+        } else if case == cases - 1 {
+            1000
+        } else {
+            31 + next_random(mut seed) % 970
+        };
+        let want = definition(n);
+        sum = (sum + want) % modulus;
+        for which in 0..arms {
+            let got = answer_with(which, n);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: f(n) = 2 f(n - 1) + f(n - 3).
+            if n >= 4 {
+                checks += 1;
+                let expect = (2 * answer_with(which, n - 1) + answer_with(which, n - 3)) % modulus;
+                if got != expect {
+                    fails[1] += 1;
+                }
+            }
+            if n <= 30 {
+                let mut f: Vec[i64] = [1];
+                for k in 1..n + 1 {
+                    f.push(answer_with(which, k));
+                }
+                // P3: the last block is a vertical domino, two horizontal
+                // dominoes, or one of two of any length from 3 to n.
+                checks += 1;
+                let mut expect = f[n - 1];
+                if n >= 2 {
+                    expect += f[n - 2];
+                }
+                for k in 0..n - 2 {
+                    expect = (expect + 2 * f[k]) % modulus;
+                }
+                if got != expect % modulus {
+                    fails[2] += 1;
+                }
+                // P4: cut the board after column m. Either the cut is
+                // clean, or one block crosses it, with i of its columns
+                // on the left and j on the right.
+                if n >= 2 {
+                    checks += 1;
+                    let m = 1 + next_random(mut seed) % (n - 1);
+                    let rest = n - m;
+                    let mut expect = f[m] * f[rest] % modulus;
+                    for i in 1..m + 1 {
+                        for j in 1..rest + 1 {
+                            expect = (expect + f[m - i] * blocks(i + j) % modulus * f[rest - j]) % modulus;
+                        }
+                    }
+                    if got != expect {
+                        fails[3] += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} boards (answers sum to {sum}), {arms} arms, {checks} checks, {failures} failures");
+}

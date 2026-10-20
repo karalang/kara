@@ -1,0 +1,89 @@
+// LeetCode 784 — Letter Case Permutation, in Gray code order.
+//
+// Start from the string with every letter in lower case. The reflected
+// Gray code visits every L-bit number changing one bit at each step: at
+// step k the bit that changes is the lowest 1 bit of k. So flip the case
+// of that letter, and the 2^L - 1 steps meet every other permutation
+// once, each from the one before by a single change. O(2^L * n).
+
+fn letter_case_permutation(s: String) -> Vec[String] {
+    let mut chars: Vec[char] = Vec.new();
+    let mut letter_at: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            letter_at.push(chars.len());
+        }
+        chars.push(c.to_ascii_lowercase());
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut k = 0;
+    loop {
+        let mut word = String.new();
+        for c in chars.iter() {
+            word.push(*c);
+        }
+        out.push(word);
+        k += 1;
+        if k == 1 << letter_at.len() {
+            break;
+        }
+        let at = letter_at[k.trailing_zeros()];
+        chars[at] = if chars[at].is_ascii_lowercase() { chars[at].to_ascii_uppercase() } else { chars[at].to_ascii_lowercase() };
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The permutations sorted, so every arm prints them in the same order.
+fn sorted_permutations(s: String) -> Vec[String] {
+    let mut all = letter_case_permutation(s);
+    all.sort();
+    all
+}
+
+fn show(s: String) {
+    let all = sorted_permutations(s);
+    println(f"\"{s}\" -> {all}");
+}
+
+fn main() {
+    show("a1b2");
+    show("3z4");
+    show("12345");
+    show("C");
+    show("aBc");
+    show("Zz9");
+    let all = sorted_permutations("abcdefghijkl");
+    let mut check = 0;
+    for p in all.iter() {
+        for b in p.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"\"abcdefghijkl\" -> {all.len()} strings, first {all[0]}, last {all[all.len() - 1]}, checksum {check}");
+    let alphabet: Vec[char] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let mut seed = 784;
+    let mut strings = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push(alphabet[next_random(mut seed) % 62]);
+        }
+        let all = sorted_permutations(s);
+        strings += all.len();
+        for p in all.iter() {
+            for b in p.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random strings: {strings} permutations, checksum {check}");
+}

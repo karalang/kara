@@ -23,8 +23,8 @@ fn write_out(node: Option[TreeNode], counts: mut ref Map[String, i64], found: mu
     match node {
         None => "#".to_string(),
         Some(n) => {
-            let left = write_out(n.left, counts, found);
-            let right = write_out(n.right, counts, found);
+            let left = write_out(n.left, mut counts, mut found);
+            let right = write_out(n.right, mut counts, mut found);
             let text = f"{n.val},{left},{right}";
             let count = counts.entry(text.clone()).or_insert(0);
             *count += 1;

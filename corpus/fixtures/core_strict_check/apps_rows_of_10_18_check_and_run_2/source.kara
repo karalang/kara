@@ -1,0 +1,6 @@
+fn show(s: Str) { println(s); }
+fn main() {
+    let name = "ACCEPT".to_string();
+    let a = if name.is_empty() { "-" } else { name.as_str() };
+    show(a);
+}

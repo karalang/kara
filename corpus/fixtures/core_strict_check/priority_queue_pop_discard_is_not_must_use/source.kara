@@ -1,0 +1,9 @@
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(3);
+    q.push(1);
+    q.pop();
+    let mut v: Vec[i64] = vec![1, 2];
+    v.pop();
+    println(f"{q.len()} {v.len()}");
+}

@@ -1,0 +1,15 @@
+source = "tests/mir_patterns.rs::a_mut_ref_place_writes_through_to_the_place"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "db0aa9a19"
+extracted_src = "43aed74a"
+model_rev = "583cfb0d"
+model_src = "43aed74a"

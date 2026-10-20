@@ -1,0 +1,10 @@
+
+struct FakeClock {}
+impl ClockProvider for FakeClock {
+    fn now(self) -> i64 { 42 }
+}
+fn main() {
+    let c = FakeClock {};
+    println(c.now());
+    println(c.wall_ns());
+}

@@ -1,0 +1,10 @@
+n = 1, k = 2: 2 digits, shortest, every code once
+n = 2, k = 2: 5 digits, shortest, every code once
+n = 1, k = 1: 1 digits, shortest, every code once
+n = 4, k = 1: 4 digits, shortest, every code once
+n = 1, k = 10: 10 digits, shortest, every code once
+n = 3, k = 2: 10 digits, shortest, every code once
+n = 2, k = 10: 101 digits, shortest, every code once
+n = 3, k = 10: 1002 digits, shortest, every code once
+n = 4, k = 8: 4099 digits, shortest, every code once
+all 38 safes: 12291 digits in all, 38 shortest with every code once

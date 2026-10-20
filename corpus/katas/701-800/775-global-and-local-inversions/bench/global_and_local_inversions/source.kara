@@ -1,0 +1,69 @@
+// Benchmark for #775: Global and Local Inversions -- the ★ arm (every
+// value at most one place from its index).
+//
+// The counts of global and local inversions are equal exactly when no
+// inversion spans more than one place, which in a permutation of 0..n
+// holds exactly when every value sits at most one place from its own
+// index. O(n) time.
+
+fn is_ideal_permutation(nums: Vec[i64]) -> bool {
+    for i in 0..nums.len() {
+        if (nums[i] - i).abs() > 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 permutations of 100,000 values (LeetCode's most), built once:
+    // ideal ones, adjacent pairs swapped at random, and ideal ones with
+    // two values three places apart swapped, half near the end and half
+    // anywhere. Then 12,000 rounds each answer the next one.
+    let count = 64;
+    let n = 100000;
+    let mut seed: i64 = 775;
+    let mut perms: Vec[Vec[i64]] = Vec.new();
+    for g in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for v in 0..n {
+            nums.push(v);
+        }
+        let mut i = 0;
+        while i + 1 < n {
+            if next_random(mut seed) % 2 == 0 {
+                nums.swap(i, i + 1);
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        if g % 4 == 1 {
+            let at = n - 4 - next_random(mut seed) % 1000;
+            nums.swap(at, at + 3);
+        } else if g % 4 == 2 {
+            let at = next_random(mut seed) % (n - 3);
+            nums.swap(at, at + 3);
+        }
+        perms.push(nums);
+    }
+    let mut ideals = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..12000 {
+        let g = (round * 7) % count;
+        if is_ideal_permutation(perms[g]) {
+            ideals += 1;
+            checksum = (checksum * 31 + g + 1) % 1000000007;
+        } else {
+            checksum = (checksum * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"12000 rounds of {n} values: {ideals} ideal, checksum {checksum}");
+}

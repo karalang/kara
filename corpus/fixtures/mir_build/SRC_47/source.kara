@@ -1,0 +1,21 @@
+fn h() -> Result[(i64, (i64, i64)), String] { Ok((4, (5, 6))) }
+fn k() -> Option[(String, i64)] { Some(("ab".to_string(), 2)) }
+fn run() -> Result[i64, String] {
+    let y = h()?.1.0;
+    let z = h()?.0;
+    Ok(y * 10 + z)
+}
+fn opt() -> Option[i64] {
+    let n = k()?.1;
+    let w = k()?.0.len();
+    Some(n * 10 + w as i64)
+}
+fn none() -> Option[i64] {
+    let p: Option[(i64, i64)] = None;
+    let n = p?.0;
+    Some(n + 100)
+}
+fn main() {
+    match run() { Ok(v) => println(f"{v}"), Err(e) => println(e) }
+    println(f"{opt().unwrap_or(-1)} {none().is_none()}");
+}

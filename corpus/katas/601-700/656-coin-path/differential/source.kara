@@ -203,7 +203,7 @@ fn every_path(coins: Vec[i64], max_jump: i64, path: mut ref Vec[i64], cost: i64,
     for j in at + 1..(at + max_jump).min(coins.len() - 1) + 1 {
         if coins[j] != -1 {
             path.push(j + 1);
-            every_path(coins, max_jump, path, cost + coins[j], best, kept);
+            every_path(coins, max_jump, mut path, cost + coins[j], mut best, mut kept);
             path.pop();
         }
     }

@@ -1,0 +1,31 @@
+fn pad_left(s: String, width: i64) -> String {
+    let mut out = s.clone();
+    while out.len() < width {
+        out = " " + out;
+    }
+    out
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+fn last(head: Node) -> i64 {
+    let mut node = ref head;
+    while let Some(n) = node.next {
+        node = n;
+    }
+    node.val
+}
+
+fn longer(a: String, b: String) -> i64 {
+    let mut out = a;
+    if b.len() > out.len() {
+        out = b;
+    }
+    out.len()
+}
+
+fn main() {
+    println(f"[{pad_left("ab".to_string(), 5)}]");
+    let l = Node { val: 1, next: Some(Node { val: 2, next: None }) };
+    println(f"{last(l)} {longer("a".to_string(), "bcd".to_string())}");
+}

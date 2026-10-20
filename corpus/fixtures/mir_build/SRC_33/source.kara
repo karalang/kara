@@ -1,0 +1,23 @@
+import std.encoding.{base64_encode, base64_decode, base64url_encode, base64url_decode, hex_encode, hex_decode, DecodeError};
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok:{String.from_utf8(v.as_slice()).unwrap_or("?".to_string())}",
+        Err(e) => f"err:{e}",
+    }
+}
+fn main() {
+    for s in ["", "f", "fo", "foo", "foob", "fooba", "foobar"].iter() {
+        let e = base64_encode(s.bytes());
+        let u = base64url_encode(s.bytes());
+        println(f"[{s}] {e} {u} {show(base64_decode(e.as_str()))} {show(base64url_decode(u.as_str()))} {hex_encode(s.bytes())}");
+    }
+    println(base64_encode([251u8, 255u8, 191u8].as_slice()));
+    println(base64url_encode([251u8, 255u8, 191u8].as_slice()));
+    println(show(base64_decode("Zm9v!mFy")));
+    println(show(base64_decode("Zm9vYg")));
+    println(show(base64_decode("Zm9vYh==")));
+    println(show(base64url_decode("Zm9vYg==")));
+    println(show(hex_decode("666F6f")));
+    println(show(hex_decode("666")));
+    println(show(hex_decode("6x")));
+}

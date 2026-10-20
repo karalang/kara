@@ -1,0 +1,94 @@
+// LeetCode 796 — Rotate String, Knuth-Morris-Pratt.
+//
+// Search for goal in s + s with the Knuth-Morris-Pratt failure table:
+// fail[i] is the length of the longest proper prefix of goal[..i + 1]
+// that is also its suffix, so a mismatch falls back without reading
+// s + s again. O(n).
+fn rotate_string(s: Str, goal: Str) -> bool {
+    let p = goal.bytes();
+    let m = p.len();
+    if s.len() != m {
+        return false;
+    }
+    let mut fail: Vec[i64] = Vec.new();
+    fail.push(0);
+    let mut k = 0;
+    for i in 1..m {
+        while k > 0 and p[i] != p[k] {
+            k = fail[k - 1];
+        }
+        if p[i] == p[k] {
+            k += 1;
+        }
+        fail.push(k);
+    }
+    let t = s.bytes();
+    let mut matched = 0;
+    for i in 0..2 * m {
+        let c = t[i % m];
+        while matched > 0 and c != p[matched] {
+            matched = fail[matched - 1];
+        }
+        if c == p[matched] {
+            matched += 1;
+        }
+        if matched == m {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, goal: Str) {
+    println(f"s = \"{s}\", goal = \"{goal}\" -> {rotate_string(s, goal)}");
+}
+
+fn main() {
+    show("abcde", "cdeab");
+    show("abcde", "abced");
+    show("a", "a");
+    show("aa", "a");
+    show("abab", "baba");
+    show("abc", "abc");
+    show("aab", "abb");
+    let mut seed = 796;
+    let mut rotations = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let letters = 1 + next_random(mut seed) % 4;
+        let n = 1 + next_random(mut seed) % 100;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+        let kind = next_random(mut seed) % 3;
+        let mut goal = String.new();
+        if kind == 2 {
+            // Any string of the same length.
+            for _ in 0..n {
+                goal.push((97 + next_random(mut seed) % letters) as u8 as char);
+            }
+        } else {
+            // A rotation, with one letter changed when kind is 1.
+            let k = next_random(mut seed) % n;
+            let chars: Vec[char] = s.chars().collect();
+            let change = if kind == 1 { next_random(mut seed) % n } else { -1 };
+            for j in 0..n {
+                let c = chars[(j + k) % n];
+                goal.push(if j == change { (97 + (c as i64 - 97 + 1) % letters) as u8 as char } else { c });
+            }
+        }
+        if rotate_string(s, goal) {
+            rotations += 1;
+            check = (check * 131 + i) % 1000000007;
+        }
+    }
+    println(f"300 random cases: {rotations} rotations, checksum {check}");
+}

@@ -1,0 +1,419 @@
+// LeetCode #756: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random pyramids.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn row_code_star(row: ref Vec[i64]) -> i64 {
+    let mut code = 1;
+    for x in row.iter() {
+        code = code * 6 + *x;
+    }
+    code
+}
+
+fn fill_star(row: ref Vec[i64], i: i64, next: mut ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+    if i + 1 == row.len() {
+        return build_star(next, table, mut dead);
+    }
+    let mut options = table[row[i] * 6 + row[i + 1]];
+    let mut block = 0;
+    while options > 0 {
+        if options & 1 == 1 {
+            next.push(block);
+            if fill_star(row, i + 1, mut next, table, mut dead) {
+                return true;
+            }
+            next.pop();
+        }
+        options >>= 1;
+        block += 1;
+    }
+    false
+}
+
+fn build_star(row: ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+    if row.len() == 1 {
+        return true;
+    }
+    let code = row_code_star(row);
+    if dead.contains(code) {
+        return false;
+    }
+    let mut next: Vec[i64] = Vec.new();
+    if fill_star(row, 0, mut next, table, mut dead) {
+        return true;
+    }
+    dead.insert(code);
+    false
+}
+
+fn pyramid_transition_star(bottom: String, allowed: Vec[String]) -> bool {
+    let mut table: Vec[i64] = Vec.new();
+    for _ in 0..36 {
+        table.push(0);
+    }
+    for triple in allowed.iter() {
+        let b = triple.bytes();
+        let pair = (b[0] - b'A') as i64 * 6 + (b[1] - b'A') as i64;
+        table[pair] = table[pair] | (1 << (b[2] - b'A') as i64);
+    }
+    let mut row: Vec[i64] = Vec.new();
+    for c in bottom.bytes() {
+        row.push((c - b'A') as i64);
+    }
+    let mut dead: Set[i64] = Set.new();
+    build_star(row, table, mut dead)
+}
+
+// ---- string arm -----------------------------------------------------
+
+fn can_finish_strings(row: String, tops: ref Map[String, String], memo: mut ref Map[String, bool]) -> bool {
+    if row.len() == 1 {
+        return true;
+    }
+    match memo.get(row.clone()) {
+        Some(known) => return known,
+        None => {}
+    }
+    let answer = extend_strings(row, 0, String.new(), tops, mut memo);
+    memo.insert(row.clone(), answer);
+    answer
+}
+
+fn extend_strings(row: String, i: i64, above: String, tops: ref Map[String, String], memo: mut ref Map[String, bool]) -> bool {
+    if i + 1 == row.len() {
+        return can_finish_strings(above, tops, mut memo);
+    }
+    let pair = row[i..i + 2].to_string();
+    let choices = tops.get(pair).unwrap_or("");
+    for c in choices.chars() {
+        let mut next = above.clone();
+        next.push(c);
+        if extend_strings(row, i + 1, next, tops, mut memo) {
+            return true;
+        }
+    }
+    false
+}
+
+fn pyramid_transition_strings(bottom: String, allowed: Vec[String]) -> bool {
+    let mut tops: Map[String, String] = Map.new();
+    for triple in allowed.iter() {
+        let pair = triple[0..2].to_string();
+        let top = triple[2..3].to_string();
+        if tops.contains_key(pair.clone()) {
+            tops.get_mut(pair).unwrap().push_str(top);
+        } else {
+            tops.insert(pair, top);
+        }
+    }
+    let mut memo: Map[String, bool] = Map.new();
+    can_finish_strings(bottom, tops, mut memo)
+}
+
+// ---- level arm ------------------------------------------------------
+
+fn grow_levels(row: String, i: i64, part: String, allowed: ref Set[String], out: mut ref Set[String]) {
+    if i + 1 == row.len() {
+        out.insert(part.clone());
+        return;
+    }
+    for c in "ABCDEF".chars() {
+        let mut triple = row[i..i + 2].to_string();
+        triple.push(c);
+        if allowed.contains(triple) {
+            let mut next = part.clone();
+            next.push(c);
+            grow_levels(row, i + 1, next, allowed, mut out);
+        }
+    }
+}
+
+fn pyramid_transition_levels(bottom: String, allowed: Vec[String]) -> bool {
+    let mut triples: Set[String] = Set.new();
+    for triple in allowed.iter() {
+        triples.insert(triple.clone());
+    }
+    let mut width = bottom.len();
+    let mut level: Set[String] = Set.new();
+    level.insert(bottom.clone());
+    while width > 1 {
+        let mut above: Set[String] = Set.new();
+        for row in level.iter() {
+            grow_levels(row.clone(), 0, String.new(), triples, mut above);
+        }
+        if above.len() == 0 {
+            return false;
+        }
+        level = above;
+        width -= 1;
+    }
+    true
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn mark_table(above: ref Vec[i64], i: i64, last: i64, code: i64, below: mut ref Vec[bool], fits: ref Vec[bool]) {
+    if i == above.len() {
+        below[code] = true;
+        return;
+    }
+    for x in 0..6 {
+        if fits[(last * 6 + x) * 6 + above[i]] {
+            mark_table(above, i + 1, x, code * 6 + x, mut below, fits);
+        }
+    }
+}
+
+fn pyramid_transition_table(bottom: String, allowed: Vec[String]) -> bool {
+    let mut fits: Vec[bool] = Vec.new();
+    for _ in 0..216 {
+        fits.push(false);
+    }
+    for triple in allowed.iter() {
+        let b = triple.bytes();
+        fits[((b[0] - b'A') as i64 * 6 + (b[1] - b'A') as i64) * 6 + (b[2] - b'A') as i64] = true;
+    }
+    let mut good: Vec[bool] = Vec.new();
+    for _ in 0..6 {
+        good.push(true);
+    }
+    let mut width = 1;
+    let mut size = 6;
+    while width < bottom.len() {
+        let mut below: Vec[bool] = Vec.new();
+        for _ in 0..size * 6 {
+            below.push(false);
+        }
+        for code in 0..size {
+            if good[code] {
+                let mut above: Vec[i64] = Vec.new();
+                let mut rest = code;
+                for _ in 0..width {
+                    above.insert(0, rest % 6);
+                    rest /= 6;
+                }
+                for first in 0..6 {
+                    mark_table(above, 0, first, first, mut below, fits);
+                }
+            }
+        }
+        good = below;
+        width += 1;
+        size *= 6;
+    }
+    let mut code = 0;
+    for c in bottom.bytes() {
+        code = code * 6 + (c - b'A') as i64;
+    }
+    good[code]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer_with(which: i64, bottom: String, allowed: Vec[String]) -> bool {
+    if which == 0 {
+        pyramid_transition_star(bottom, allowed)
+    } else if which == 1 {
+        pyramid_transition_strings(bottom, allowed)
+    } else if which == 2 {
+        pyramid_transition_levels(bottom, allowed)
+    } else {
+        pyramid_transition_table(bottom, allowed)
+    }
+}
+
+fn letter(x: i64) -> String {
+    let mut s = String.new();
+    s.push((b'A' + x as u8) as char);
+    s
+}
+
+fn digit(code: i64, width: i64, i: i64) -> i64 {
+    let mut c = code;
+    for _ in 0..width - 1 - i {
+        c /= 6;
+    }
+    c % 6
+}
+
+// Whether the row numbered `u`, `width - 1` blocks wide, can stand on
+// the row numbered `r`, `width` blocks wide: every block of it allowed on
+// the pair below it.
+fn stands_on(u: i64, r: i64, width: i64, fits: ref Vec[bool]) -> bool {
+    for i in 0..width - 1 {
+        let left = digit(r, width, i);
+        let right = digit(r, width, i + 1);
+        if not fits[(left * 6 + right) * 6 + digit(u, width - 1, i)] {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition, by brute force: at each level, every row of the next
+// width that can stand on some row that can stand at this one, each
+// candidate row tried against each such row. The pyramid can be built
+// when some row reaches width one.
+fn definition(bottom: String, allowed: ref Vec[String]) -> bool {
+    let mut fits: Vec[bool] = Vec.new();
+    for _ in 0..216 {
+        fits.push(false);
+    }
+    for triple in allowed.iter() {
+        let b = triple.bytes();
+        fits[((b[0] - b'A') as i64 * 6 + (b[1] - b'A') as i64) * 6 + (b[2] - b'A') as i64] = true;
+    }
+    let mut code = 0;
+    for c in bottom.bytes() {
+        code = code * 6 + (c - b'A') as i64;
+    }
+    let mut level: Vec[i64] = Vec.new();
+    level.push(code);
+    let mut width = bottom.len();
+    let mut size = 1;
+    for _ in 0..width - 1 {
+        size *= 6;
+    }
+    while width > 1 {
+        let mut above: Vec[i64] = Vec.new();
+        for u in 0..size {
+            let mut found = false;
+            for r in level.iter() {
+                if not found and stands_on(u, *r, width, fits) {
+                    found = true;
+                }
+            }
+            if found {
+                above.push(u);
+            }
+        }
+        if above.len() == 0 {
+            return false;
+        }
+        level = above;
+        width -= 1;
+        size /= 6;
+    }
+    true
+}
+
+fn relabel(s: ref String, perm: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    for c in s.bytes() {
+        out.push_str(letter(perm[(c - b'A') as i64]));
+    }
+    out
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 7560;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 2000;
+    let mut built = 0;
+    for _ in 0..cases {
+        // narrow pyramids over few letters at times, so that tables are
+        // dense enough for about a third to be buildable
+        let width = 2 + next_random(mut seed) % 4;
+        let letters = 2 + next_random(mut seed) % 5;
+        let mut bottom = String.new();
+        for _ in 0..width {
+            bottom.push_str(letter(next_random(mut seed) % letters));
+        }
+        let count = next_random(mut seed) % (letters * letters * 2);
+        let mut allowed: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let mut t = String.new();
+            for _ in 0..3 {
+                t.push_str(letter(next_random(mut seed) % letters));
+            }
+            allowed.push(t);
+        }
+        let want = definition(bottom.clone(), allowed);
+        if want {
+            built += 1;
+        }
+        // the letters renamed by a random permutation, the triples
+        // shuffled
+        let mut perm = [0, 1, 2, 3, 4, 5];
+        for i in 0..6 {
+            let j = i + next_random(mut seed) % (6 - i);
+            perm.swap(i, j);
+        }
+        let renamed = relabel(bottom, perm);
+        let mut renamed_allowed: Vec[String] = Vec.new();
+        for t in allowed.iter() {
+            renamed_allowed.push(relabel(t, perm));
+        }
+        for i in 0..renamed_allowed.len() {
+            let j = i + next_random(mut seed) % (renamed_allowed.len() - i);
+            renamed_allowed.swap(i, j);
+        }
+        // the pyramid seen in a mirror: the bottom reversed and each
+        // triple's pair swapped
+        let mut mirrored = String.new();
+        let bb = bottom.bytes();
+        for i in 0..width {
+            mirrored.push((bb[width - 1 - i]) as char);
+        }
+        let mut mirrored_allowed: Vec[String] = Vec.new();
+        for t in allowed.iter() {
+            let b = t.bytes();
+            let mut m = String.new();
+            m.push(b[1] as char);
+            m.push(b[0] as char);
+            m.push(b[2] as char);
+            mirrored_allowed.push(m);
+        }
+        let mut extra = String.new();
+        for _ in 0..3 {
+            extra.push_str(letter(next_random(mut seed) % letters));
+        }
+        for which in 0..arms {
+            let got = answer_with(which, bottom.clone(), allowed.clone());
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: renaming the letters and shuffling the triples changes
+            // nothing.
+            checks += 1;
+            if answer_with(which, renamed.clone(), renamed_allowed.clone()) != got {
+                fails[1] += 1;
+            }
+            // P3: nor does the mirror.
+            checks += 1;
+            if answer_with(which, mirrored.clone(), mirrored_allowed.clone()) != got {
+                fails[2] += 1;
+            }
+            // P4: one more allowed triple never makes a buildable
+            // pyramid unbuildable, and makes an unbuildable one buildable
+            // only if the definition says so.
+            checks += 1;
+            let mut more = allowed.clone();
+            more.push(extra.clone());
+            let with_more = answer_with(which, bottom.clone(), more.clone());
+            if (got and not with_more) or with_more != definition(bottom.clone(), more) {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut failures = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+            failures += fails[p];
+        }
+    }
+    println(f"{report}{cases} pyramids ({built} buildable), {arms} arms, {checks} checks, {failures} failures");
+}

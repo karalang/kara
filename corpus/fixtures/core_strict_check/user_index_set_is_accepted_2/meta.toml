@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::user_index_set_is_accepted"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "db0aa9a19"
+extracted_src = "b3808b6a"
+model_rev = "583cfb0d"
+model_src = "b3808b6a"

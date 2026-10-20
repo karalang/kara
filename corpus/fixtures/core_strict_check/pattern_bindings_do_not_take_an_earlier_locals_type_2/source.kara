@@ -1,0 +1,32 @@
+fn main() {
+    {
+        let p: Vec[i64] = vec![1];
+        println(f"{p.len()}");
+    }
+    let o: Option[i64] = Some(3);
+    match o {
+        Some(p) => {
+            let a = p + 1;
+            let b = p + 2;
+            println(f"{a} {b}");
+        }
+        None => {}
+    }
+    if let Some(p) = o {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+    let mut it = vec![5, 6].into_iter();
+    while let Some(p) = it.next() {
+        let a = p + 1;
+        let b = p + 2;
+        println(f"{a} {b}");
+    }
+    let f = |p: i64| {
+        let a = p + 1;
+        let b = p + 2;
+        a + b
+    };
+    println(f"{f(1)}");
+}

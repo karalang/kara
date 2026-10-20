@@ -1,0 +1,146 @@
+// LeetCode 758 — Bold Words in String, an Aho-Corasick automaton.
+//
+// Build a trie of the words over the letters a to z, then give every node
+// a failure link, the node of its longest proper suffix in the trie, and
+// complete the transitions breadth first so that every node has one for
+// every letter. Each node records the longest word ending there, its own
+// or one reached by failure links. One pass over `s` then knows, at each
+// character, the longest word ending on it, and marks that word's span.
+// O(length of s + total length of the words x 26).
+
+fn bold_words(words: Vec[String], s: String) -> String {
+    let mut next: Vec[i64] = Vec.new();
+    let mut longest: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        next.push(-1);
+    }
+    longest.push(0);
+    for word in words.iter() {
+        let mut node = 0;
+        for c in word.bytes() {
+            let slot = node * 26 + (c - b'a') as i64;
+            if next[slot] < 0 {
+                next[slot] = longest.len();
+                longest.push(0);
+                for _ in 0..26 {
+                    next.push(-1);
+                }
+            }
+            node = next[slot];
+        }
+        if word.len() > longest[node] {
+            longest[node] = word.len();
+        }
+    }
+    let mut fail: Vec[i64] = Vec.new();
+    for _ in 0..longest.len() {
+        fail.push(0);
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        if next[c] < 0 {
+            next[c] = 0;
+        } else {
+            queue.push(next[c]);
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+        if longest[fail[node]] > longest[node] {
+            longest[node] = longest[fail[node]];
+        }
+        for c in 0..26 {
+            let child = next[node * 26 + c];
+            if child < 0 {
+                next[node * 26 + c] = next[fail[node] * 26 + c];
+            } else {
+                fail[child] = next[fail[node] * 26 + c];
+                queue.push(child);
+            }
+        }
+    }
+    let n = s.len();
+    let mut bold: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        bold.push(false);
+    }
+    let mut state = 0;
+    let bytes = s.bytes();
+    for i in 0..n {
+        state = next[state * 26 + (bytes[i] - b'a') as i64];
+        let mut j = i;
+        while j > i - longest[state] {
+            bold[j] = true;
+            j -= 1;
+        }
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        if bold[i] and (i == 0 or not bold[i - 1]) {
+            out.push_str("<b>");
+        }
+        out.push(bytes[i] as char);
+        if bold[i] and (i == n - 1 or not bold[i + 1]) {
+            out.push_str("</b>");
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64, length: i64, letters: i64) -> String {
+    let mut text = String.new();
+    for _ in 0..length {
+        text.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    text
+}
+
+fn show(words: Vec[String], s: String) {
+    let answer = bold_words(words.clone(), s.clone());
+    println(f"{words} {s} -> {answer}");
+}
+
+fn main() {
+    show([String.from("ab"), String.from("bc")], String.from("aabcd"));
+    show([String.from("ab"), String.from("cb")], String.from("aabcd"));
+    show(Vec.new(), String.from("abc"));
+    show([String.from("abc")], String.from("abc"));
+    show([String.from("ab"), String.from("cd")], String.from("abcd"));
+    show([String.from("aa")], String.from("aaa"));
+    show([String.from("zz")], String.from("abc"));
+    show([String.from("b")], String.from("abcba"));
+    show([String.from("abcdefghij")], String.from("abc"));
+    show([String.from("e"), String.from("cde"), String.from("bcdef")], String.from("abcdefg"));
+    let mut seed = 758;
+    let mut tags = 0;
+    let mut marks = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let letters = 2 + next_random(mut seed) % 5;
+        let length = 1 + next_random(mut seed) % 500;
+        let s = random_text(mut seed, length, letters);
+        let count = next_random(mut seed) % 51;
+        let longest = 1 + next_random(mut seed) % 10;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % longest;
+            words.push(random_text(mut seed, size, letters + 1));
+        }
+        let answer = bold_words(words, s.clone());
+        tags += (answer.len() - s.len()) / 7;
+        for c in answer.chars() {
+            check = (check * 31 + c as i64) % 1000000007;
+        }
+        marks += answer.len() - s.len();
+    }
+    println(f"300 random strings: {tags} bold runs, {marks} tag characters, checksum {check}");
+}

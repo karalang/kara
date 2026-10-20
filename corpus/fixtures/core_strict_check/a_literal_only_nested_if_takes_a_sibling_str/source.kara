@@ -1,0 +1,11 @@
+fn step(b: u8) -> Str { "x" }
+fn pair(b: u8) -> (i64, Str) { (0, "y") }
+fn main() {
+    let x = "hello".to_string();
+    for b in [0u8, 5u8, 200u8] {
+        let reason = match b { 0 => step(b), _ => if b < 128 { "" } else { "bad" } };
+        let t = match b { 0 => pair(b), _ => if b < 128 { (1, "") } else { (-1, "bad") } };
+        let r2 = if b > 3 { x.as_str() } else if b > 2 { "a" } else { "b" };
+        println(f"[{reason}] {t.0} [{t.1}] {r2}");
+    }
+}

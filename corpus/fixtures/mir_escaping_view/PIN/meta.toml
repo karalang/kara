@@ -1,0 +1,17 @@
+source = "tests/mir_escaping_view.rs::PIN"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "db0aa9a19"
+extracted_src = "b02b0461"
+model_rev = "583cfb0d"
+model_src = "b02b0461"

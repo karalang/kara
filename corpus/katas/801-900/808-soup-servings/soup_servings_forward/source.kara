@@ -1,0 +1,75 @@
+// LeetCode 808 — Soup Servings, pushing the chance forward turn by turn.
+//
+// Every pour takes four servings in all, so after t turns a state still
+// being served has a + b = 2m - 4t, and the servings of A alone name it.
+// Keep the chance of each such state; each turn split it four ways, and
+// a pour that empties a soup adds its share to the answer, whole if only
+// A ran out and half if both did, rather than going on. O(m²).
+fn soup_servings(n: i64) -> f64 {
+    if n > 4800 {
+        return 1.0;
+    }
+    let m = (n + 24) / 25;
+    if m == 0 {
+        return 0.5;
+    }
+    let mut live = Vec.filled(m + 1, 0.0);
+    live[m] = 1.0;
+    let mut left = 2 * m;
+    let mut answer = 0.0;
+    while left > 0 {
+        let mut next = Vec.filled(m + 1, 0.0);
+        for a in 1..m + 1 {
+            let q = live[a] / 4.0;
+            if q == 0.0 {
+                continue;
+            }
+            let b = left - a;
+            for (da, db) in [(4, 0), (3, 1), (2, 2), (1, 3)] {
+                let x = a - da;
+                let y = b - db;
+                if x <= 0 and y <= 0 {
+                    answer += q / 2.0;
+                } else if x <= 0 {
+                    answer += q;
+                } else if y > 0 {
+                    next[x] += q;
+                }
+            }
+        }
+        live = next;
+        left -= 4;
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    for n in [50, 100, 0, 1, 25, 26, 4800, 4801, 1000000000] {
+        println(f"n = {n}: {soup_servings(n):.5}");
+    }
+    let mut line = "every 25 ml to 300:".to_string();
+    let mut n = 25;
+    while n <= 300 {
+        line.push_str(f" {soup_servings(n):.5}");
+        n += 25;
+    }
+    println(line);
+    // The first serving count whose answer is above 1 - 1e-5, so that
+    // rounding it to five places gives 1.
+    let mut m = 0;
+    while soup_servings(25 * m) <= 0.99999 {
+        m += 1;
+    }
+    println(f"first above 0.99999: {25 * m} ml, {soup_servings(25 * m):.7}");
+    let mut sum = 0.0;
+    let mut count = 0;
+    let mut n = 0;
+    while n <= 5000 {
+        sum += soup_servings(n);
+        count += 1;
+        n += 37;
+    }
+    println(f"{count} sizes from 0 to 5000 ml: sum {sum:.5}");
+}

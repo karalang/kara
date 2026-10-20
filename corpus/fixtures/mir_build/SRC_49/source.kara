@@ -1,0 +1,19 @@
+fn o(x: Ordering) -> Str {
+    match x { Ordering.Less => "lt", Ordering.Equal => "eq", Ordering.Greater => "gt" }
+}
+fn biggest[T: Ord + Copy](a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+fn total[T: Add[Output = T] + Copy](a: T, b: T) -> T {
+    a + b
+}
+fn main() {
+    let a: u128 = 1u128 << 127;
+    let b: u128 = 5;
+    let c: i128 = -3;
+    println(f"{o(a.cmp(b))} {o(c.cmp(2))} {a.partial_cmp(b).is_some()} {o(b.cmp(b))}");
+    println(f"{biggest(a, b)} {biggest(c, 7)} {total(a, b)} {total(c, -4)}");
+    let mut v: Vec[u128] = vec![b, a, 1];
+    v.sort_by(|x, y| x.cmp(y));
+    println(f"{v[0]} {v[2]}");
+}

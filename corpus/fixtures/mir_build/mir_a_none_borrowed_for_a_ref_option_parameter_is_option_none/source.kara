@@ -1,0 +1,33 @@
+
+enum V {
+    None,
+    Int(i64),
+}
+
+fn f(x: ref Option[i64]) -> i64 {
+    match x {
+        Some(n) => *n,
+        None => -1,
+    }
+}
+
+fn name(x: ref Option[String]) -> String {
+    match x {
+        Some(s) => s.clone(),
+        None => "none".to_string(),
+    }
+}
+
+fn v(x: ref V) -> i64 {
+    match x {
+        V.None => 0,
+        V.Int(n) => *n,
+    }
+}
+
+fn main() {
+    println(f"{f(None)} {f(Some(4))}");
+    println(name(None));
+    println(name(Some("w".to_string())));
+    println(f"{v(V.None)} {v(V.Int(7))}");
+}

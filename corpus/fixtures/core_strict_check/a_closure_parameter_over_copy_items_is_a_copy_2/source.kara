@@ -1,0 +1,12 @@
+fn main() {
+    let w = vec![4, 6, 9];
+    let mut it = w.iter();
+    let Some(k) = it.next() else { return; };
+    let x = *k;
+    let mut c: VecDeque[i64] = VecDeque.new();
+    c.push_back(5);
+    let mut dit = c.iter();
+    let Some(d) = dit.next() else { return; };
+    let y = *d;
+    println(f"{x} {y}");
+}

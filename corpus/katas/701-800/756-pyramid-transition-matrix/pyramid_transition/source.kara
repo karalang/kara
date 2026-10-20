@@ -1,0 +1,123 @@
+// LeetCode 756 — Pyramid Transition Matrix, depth first with a memo.
+//
+// Read the letters A to F as 0 to 5 and the allowed triples as a table:
+// for each pair of neighbours, a bitmask of the blocks that may sit on
+// them. Build the row above one block at a time, trying each block the
+// table allows; when a row is complete, build on it in turn. A row that
+// has been shown to lead nowhere is remembered, as a number (a leading 1
+// and then its letters in base 6), so no row is explored twice.
+
+fn row_code(row: ref Vec[i64]) -> i64 {
+    let mut code = 1;
+    for x in row.iter() {
+        code = code * 6 + *x;
+    }
+    code
+}
+
+fn fill(row: ref Vec[i64], i: i64, next: mut ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+    if i + 1 == row.len() {
+        return build(next, table, mut dead);
+    }
+    let mut options = table[row[i] * 6 + row[i + 1]];
+    let mut block = 0;
+    while options > 0 {
+        if options & 1 == 1 {
+            next.push(block);
+            if fill(row, i + 1, mut next, table, mut dead) {
+                return true;
+            }
+            next.pop();
+        }
+        options >>= 1;
+        block += 1;
+    }
+    false
+}
+
+fn build(row: ref Vec[i64], table: ref Vec[i64], dead: mut ref Set[i64]) -> bool {
+    if row.len() == 1 {
+        return true;
+    }
+    let code = row_code(row);
+    if dead.contains(code) {
+        return false;
+    }
+    let mut next: Vec[i64] = Vec.new();
+    if fill(row, 0, mut next, table, mut dead) {
+        return true;
+    }
+    dead.insert(code);
+    false
+}
+
+fn pyramid_transition(bottom: String, allowed: Vec[String]) -> bool {
+    let mut table: Vec[i64] = Vec.new();
+    for _ in 0..36 {
+        table.push(0);
+    }
+    for triple in allowed.iter() {
+        let b = triple.bytes();
+        let pair = (b[0] - b'A') as i64 * 6 + (b[1] - b'A') as i64;
+        table[pair] = table[pair] | (1 << (b[2] - b'A') as i64);
+    }
+    let mut row: Vec[i64] = Vec.new();
+    for c in bottom.bytes() {
+        row.push((c - b'A') as i64);
+    }
+    let mut dead: Set[i64] = Set.new();
+    build(row, table, mut dead)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(x: i64) -> String {
+    let mut s = String.new();
+    s.push((b'A' + x as u8) as char);
+    s
+}
+
+fn show(bottom: String, allowed: Vec[String]) {
+    let n = allowed.len();
+    let answer = pyramid_transition(bottom.clone(), allowed);
+    println(f"{bottom} with {n} triples -> {answer}");
+}
+
+fn main() {
+    show(String.from("BCD"), [String.from("BCC"), String.from("CDE"), String.from("CEA"), String.from("FFF")]);
+    show(String.from("AAAA"), [String.from("AAB"), String.from("AAC"), String.from("BCD"), String.from("BBE"), String.from("DEF")]);
+    show(String.from("AB"), [String.from("ABC")]);
+    show(String.from("AB"), [String.from("BAC")]);
+    show(String.from("AB"), Vec.new());
+    show(String.from("FFFFFF"), [String.from("FFF")]);
+    show(String.from("ABCDEF"), [String.from("FFF")]);
+    let mut seed = 756;
+    let mut yes = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        let width = 2 + next_random(mut seed) % 5;
+        let mut bottom = String.new();
+        for _ in 0..width {
+            bottom.push_str(letter(next_random(mut seed) % 6));
+        }
+        let count = next_random(mut seed) % 60;
+        let mut allowed: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let mut t = String.new();
+            for _ in 0..3 {
+                t.push_str(letter(next_random(mut seed) % 6));
+            }
+            allowed.push(t);
+        }
+        if pyramid_transition(bottom, allowed) {
+            yes += 1;
+            check = (check * 31 + round) % 1000000007;
+        }
+    }
+    println(f"300 random pyramids: {yes} can be built, checksum {check}");
+}

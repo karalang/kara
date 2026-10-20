@@ -1,0 +1,18 @@
+import std.time.{sleep, Duration};
+fn bump(m: Mutex[i64]) {
+    lock m x {
+        let v = x;
+        sleep(Duration.ms(2));
+        x = v + 1;
+    }
+}
+fn main() {
+    let m = Mutex.new(0);
+    {
+        let g = TaskGroup.new();
+        for _ in 0..4 {
+            g.spawn(|| bump(m));
+        }
+    }
+    lock m x { println(x); }
+}

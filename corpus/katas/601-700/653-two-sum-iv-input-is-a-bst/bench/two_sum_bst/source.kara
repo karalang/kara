@@ -30,9 +30,9 @@ fn find_target(root: Option[TreeNode], k: i64) -> bool {
 
 fn in_order(node: Option[TreeNode], values: mut ref Vec[i64]) {
     if let Some(n) = node {
-        in_order(n.left, values);
+        in_order(n.left, mut values);
         values.push(n.val);
-        in_order(n.right, values);
+        in_order(n.right, mut values);
     }
 }
 

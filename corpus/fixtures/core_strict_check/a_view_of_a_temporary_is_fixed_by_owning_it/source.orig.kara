@@ -1,0 +1,6 @@
+fn main() {
+    let line = "key = value".to_string();
+    let pos = 4;
+    let name = line.substring(0, pos).trim();
+    println(name);
+}

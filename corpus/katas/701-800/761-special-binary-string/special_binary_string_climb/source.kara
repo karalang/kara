@@ -1,0 +1,144 @@
+// LeetCode 761 — Special Binary String, by climbing.
+//
+// Make the moves themselves: while two consecutive special substrings
+// would give a larger string swapped, swap them. Every swap makes the
+// string larger, so this stops, and it stops only when no level holds two
+// neighbouring mountains out of order, which is the largest string. Much
+// slower than sorting, but it needs no insight into the structure.
+
+// The end of the shortest special substring that starts at `i`: the first
+// point where its 1s and 0s balance, unless the 0s pull ahead first.
+fn special_end(c: ref Vec[char], i: i64) -> Option[i64] {
+    let mut depth = 0;
+    for j in i..c.len() {
+        if c[j] == '1' {
+            depth += 1;
+        } else {
+            depth -= 1;
+        }
+        if depth < 0 {
+            return None;
+        }
+        if depth == 0 {
+            return Some(j + 1);
+        }
+    }
+    None
+}
+
+// The first swap of c[i..j] and c[j..k] that makes the string larger.
+fn find_swap(c: ref Vec[char]) -> Option[(i64, i64, i64)] {
+    let n = c.len();
+    for i in 0..n {
+        let mut j = i;
+        while j < n {
+            match special_end(c, j) {
+                Some(end) => j = end,
+                None => break,
+            }
+            let mut k = j;
+            while k < n {
+                match special_end(c, k) {
+                    Some(end) => k = end,
+                    None => break,
+                }
+                // compare c[j..k] followed by c[i..j] with c[i..k]
+                let mut t = 0;
+                while t < k - i {
+                    let swapped = if t < k - j { c[j + t] } else { c[i + t - (k - j)] };
+                    if swapped != c[i + t] {
+                        if swapped == '1' {
+                            return Some((i, j, k));
+                        }
+                        break;
+                    }
+                    t += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
+fn make_largest_special(s: String) -> String {
+    let mut c: Vec[char] = s.chars().collect();
+    loop {
+        match find_swap(c) {
+            Some((i, j, k)) => {
+                let mut moved: Vec[char] = Vec.new();
+                for t in j..k {
+                    moved.push(c[t]);
+                }
+                for t in i..j {
+                    moved.push(c[t]);
+                }
+                for t in 0..k - i {
+                    c[i + t] = moved[t];
+                }
+            }
+            None => break,
+        }
+    }
+    let mut out = String.new();
+    for ch in c.iter() {
+        out.push(*ch);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random special string of 2m characters: a 1 whenever the string so
+// far is balanced, a 0 once all m 1s are used, and otherwise either.
+fn random_special(m: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let mut ones = 0;
+    let mut depth = 0;
+    for _ in 0..2 * m {
+        if ones < m and (depth == 0 or next_random(mut seed) % 2 == 0) {
+            s.push('1');
+            ones += 1;
+            depth += 1;
+        } else {
+            s.push('0');
+            depth -= 1;
+        }
+    }
+    s
+}
+
+fn show(s: String) {
+    let largest = make_largest_special(s.clone());
+    println(f"{s} -> {largest}");
+}
+
+fn main() {
+    show("11011000");
+    show("10");
+    show("1100");
+    show("101100");
+    show("10101010");
+    show("110100");
+    show("1011011000");
+    show("1101001110001100");
+    let mut seed = 761;
+    let mut changed = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 25;
+        let s = random_special(m, mut seed);
+        let largest = make_largest_special(s.clone());
+        if largest != s {
+            changed += 1;
+        }
+        for c in largest.chars() {
+            check = (check * 2 + if c == '1' { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {changed} changed, checksum {check}");
+}

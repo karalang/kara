@@ -1,0 +1,121 @@
+// LeetCode 792 — Number of Matching Subsequences, binary search in the
+// places of each letter.
+//
+// List the places of each letter in s, in order. A word is read off s
+// by taking, for each of its letters, the first place of that letter
+// at or after where the last one was found, which a binary search in
+// that letter's list gives. `Vec.binary_search` says only whether a
+// value is there, so the search for the first place at or after is
+// written out. O(|s| + total length × log |s|).
+
+// The index of the first entry of the sorted `list` that is at least
+// `at`, or the list's length when there is none.
+fn first_at_least(list: ref Vec[i64], at: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = list.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if list[mid] < at {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn num_matching_subseq(s: Str, words: Vec[String]) -> i64 {
+    let mut places: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        places.push(Vec.new());
+    }
+    let t = s.bytes();
+    for i in 0..t.len() {
+        places[(t[i] - b'a') as i64].push(i);
+    }
+    let mut count = 0;
+    for word in words {
+        let mut at = 0;
+        let mut found = true;
+        for b in word.bytes() {
+            let list = ref places[(b - b'a') as i64];
+            let k = first_at_least(list, at);
+            if k == list.len() {
+                found = false;
+                break;
+            }
+            at = list[k] + 1;
+        }
+        if found {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn show(s: Str, words: Vec[String]) {
+    let shown = words.clone();
+    let answer = num_matching_subseq(s, words);
+    println(f"s = \"{s}\", words = {shown} -> {answer}");
+}
+
+fn main() {
+    show("abcde", vec!["a", "bb", "acd", "ace"].iter().map(|w| w.to_string()).collect());
+    show("dsahjpjauf", vec!["ahjpjau", "ja", "ahbwzgqnuk", "tnmlanowax"].iter().map(|w| w.to_string()).collect());
+    show("a", vec!["a", "a", "b", "aa"].iter().map(|w| w.to_string()).collect());
+    show("aaaaa", vec!["a", "aa", "aaa", "aaaaa", "aaaaaa"].iter().map(|w| w.to_string()).collect());
+    show("abc", vec!["abc", "cba", "ac", "ca", "c"].iter().map(|w| w.to_string()).collect());
+    let mut seed = 792;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let letters = 1 + next_random(mut seed) % 26;
+        let s = random_word(mut seed, 1 + next_random(mut seed) % 300, letters);
+        let t = s.bytes();
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 50 {
+            let kind = next_random(mut seed) % 4;
+            if kind == 0 and words.len() > 0 {
+                // A repeat of an earlier word.
+                let again = words[next_random(mut seed) % words.len()].clone();
+                words.push(again);
+            } else if kind == 1 {
+                // A piece of s, letters kept one time in three, at most 50.
+                let mut word = String.new();
+                for b in t.iter() {
+                    if word.len() == 50 {
+                        break;
+                    }
+                    if next_random(mut seed) % 3 == 0 {
+                        word.push(*b as char);
+                    }
+                }
+                if word.len() == 0 {
+                    word.push(t[0] as char);
+                }
+                words.push(word);
+            } else {
+                words.push(random_word(mut seed, 1 + next_random(mut seed) % 8, letters));
+            }
+        }
+        let answer = num_matching_subseq(s, words);
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"300 random cases: {total} matching words, checksum {check}");
+}

@@ -1,0 +1,6 @@
+fn f(s: String, t: own String) -> i64 {
+    let mut out = s;
+    out = t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), "xyz".to_string())}"); }

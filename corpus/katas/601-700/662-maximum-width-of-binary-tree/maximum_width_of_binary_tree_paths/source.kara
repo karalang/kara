@@ -41,10 +41,10 @@ fn walk(node: Option[TreeNode], right_first: bool, path: mut ref Vec[i64], first
         let (a, b) = if right_first { (n.right, n.left) } else { (n.left, n.right) };
         let (da, db) = if right_first { (1, 0) } else { (0, 1) };
         path.push(da);
-        walk(a, right_first, path, firsts);
+        walk(a, right_first, mut path, mut firsts);
         path.pop();
         path.push(db);
-        walk(b, right_first, path, firsts);
+        walk(b, right_first, mut path, mut firsts);
         path.pop();
     }
 }

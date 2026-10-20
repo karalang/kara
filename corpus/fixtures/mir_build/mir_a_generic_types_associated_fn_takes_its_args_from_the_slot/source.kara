@@ -1,0 +1,25 @@
+
+struct Bag[T] { items: Vec[T] }
+impl[T: Clone] Bag[T] {
+    fn new() -> Bag[T] { Bag { items: Vec.new() } }
+    fn with(x: own T) -> Bag[T] {
+        let mut b = Bag.new();
+        b.items.push(x);
+        b
+    }
+}
+fn fill[U](x: own U, b: own Bag[U]) -> Bag[U] {
+    let mut b = b;
+    b.items.push(x);
+    b
+}
+fn main() {
+    let b = Bag.with(5);
+    let mut bags: Vec[Bag[i64]] = Vec.new();
+    bags.push(Bag.new());
+    bags.insert(0, Bag.new());
+    let mut m: Map[String, Bag[i64]] = Map.new();
+    m.insert("a".to_string(), Bag.new());
+    let c = fill("s".to_string(), Bag.new());
+    println(f"{b.items.len()} {bags.len()} {m.len()} {c.items[0]}");
+}

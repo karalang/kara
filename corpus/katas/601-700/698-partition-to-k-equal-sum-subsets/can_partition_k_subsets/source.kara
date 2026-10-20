@@ -24,7 +24,7 @@ fn place(nums: Vec[i64], i: i64, buckets: mut ref Vec[i64], target: i64) -> bool
             continue;
         }
         buckets[b] += nums[i];
-        if place(nums, i + 1, buckets, target) {
+        if place(nums, i + 1, mut buckets, target) {
             return true;
         }
         buckets[b] -= nums[i];

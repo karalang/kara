@@ -1,0 +1,5 @@
+fn main() {
+    let r = Clock.bogus_op();
+    stdout.bogus_op();
+    println("ran");
+}

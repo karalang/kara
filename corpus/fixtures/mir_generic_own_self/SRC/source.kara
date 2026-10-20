@@ -1,0 +1,21 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+trait Show { fn show(own self) -> i64; fn peek(self) -> i64; }
+impl Show for R { fn show(self) -> i64 { self.id } fn peek(self) -> i64 { self.id + 10 } }
+fn via[T: Show](x: own T) -> i64 {
+    let p = x.peek();
+    println(f"peek {p}");
+    let n = x.show() + 1;
+    println("got");
+    n
+}
+fn direct() {
+    let r = R { id: 7 };
+    let n = r.show();
+    println(f"direct {n}");
+}
+fn main() {
+    let n = via(R { id: 1 });
+    println(f"{n}");
+    direct();
+}

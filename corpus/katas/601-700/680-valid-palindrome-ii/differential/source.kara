@@ -214,17 +214,17 @@ fn definition(s: String) -> bool {
 fn random_string(seed: mut ref i64, n: i64, width: i64) -> String {
     let mut s = String.new();
     for _ in 0..n {
-        s.push(letter(next_random(seed) % width));
+        s.push(letter(next_random(mut seed) % width));
     }
     s
 }
 
 // A random palindrome of length n over the first `width` letters.
 fn palindrome(seed: mut ref i64, n: i64, width: i64) -> String {
-    let half = random_string(seed, n / 2, width);
+    let half = random_string(mut seed, n / 2, width);
     let mut s = half.clone();
     if n % 2 == 1 {
-        s.push(letter(next_random(seed) % width));
+        s.push(letter(next_random(mut seed) % width));
     }
     s.push_str(reversed(half));
     s

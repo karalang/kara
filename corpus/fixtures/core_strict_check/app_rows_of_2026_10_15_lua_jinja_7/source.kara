@@ -1,0 +1,12 @@
+struct T { text: String, f: f64 }
+fn g(s: Str) -> i64 { s.len() }
+fn main() {
+    let mut out: Vec[T] = Vec.new();
+    let mut t = T { text: "1.5".to_string(), f: 0.0 };
+    let n = g(t.text);
+    let k = t.text.len();
+    out.push(t);
+    let mut u = T { text: "1.5".to_string(), f: 0.0 };
+    let r = f64.parse(u.text);
+    println(f"{n} {k} {out.len()} {u.text}");
+}

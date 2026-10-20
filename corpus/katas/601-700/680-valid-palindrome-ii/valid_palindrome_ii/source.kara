@@ -71,14 +71,14 @@ fn nth_string(i: i64, n: i64) -> String {
 fn near_palindrome(seed: mut ref i64, n: i64, width: i64, extra: i64) -> String {
     let mut half: Vec[char] = Vec.new();
     for _ in 0..n / 2 {
-        half.push(letter(next_random(seed) % width));
+        half.push(letter(next_random(mut seed) % width));
     }
     let mut cs: Vec[char] = Vec.new();
     for c in half.iter() {
         cs.push(*c);
     }
     if n % 2 == 1 {
-        cs.push(letter(next_random(seed) % width));
+        cs.push(letter(next_random(mut seed) % width));
     }
     let mut k = half.len() - 1;
     while k >= 0 {
@@ -86,8 +86,8 @@ fn near_palindrome(seed: mut ref i64, n: i64, width: i64, extra: i64) -> String 
         k -= 1;
     }
     for _ in 0..extra {
-        let at = next_random(seed) % (cs.len() + 1);
-        cs.insert(at, letter(next_random(seed) % width));
+        let at = next_random(mut seed) % (cs.len() + 1);
+        cs.insert(at, letter(next_random(mut seed) % width));
     }
     cs.iter().collect()
 }
