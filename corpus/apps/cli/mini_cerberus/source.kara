@@ -1,0 +1,4577 @@
+// mini_cerberus: Cerberus 1.3.8, Nicola Iarocci's validator for Python
+// dicts, the way services check API payloads, config files and
+// imported rows with it. It reads the job list from data/jobs.tsv:
+// schemas and documents as JSON, validated, normalized and both, with
+// Cerberus's own error trees, and schemas Cerberus refuses.
+//
+// Cerberus works on Python values, so the port carries a Value with the
+// Python types a JSON document, a schema or Cerberus itself builds:
+// None, bool, int, float, str, list, tuple, dict (in insertion order),
+// set and datetime.date. Python's == , < , repr() and str() are written
+// out for them, since Cerberus's messages and results print them.
+
+#[derive(Clone)]
+enum Value {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[Value]),
+    Tuple(Vec[Value]),
+    Set(Vec[Value]),
+    Dict(Vec[Kv]),
+    Date(i64, i64, i64),
+}
+
+#[derive(Clone)]
+struct Kv {
+    key: Value,
+    val: Value,
+}
+
+fn vs(s: Str) -> Value {
+    Value.Str(s.to_string())
+}
+
+fn empty_dict() -> Value {
+    Value.Dict(Vec.new())
+}
+
+fn type_name(v: ref Value) -> String {
+    let n = match v {
+        Value.Null => "NoneType",
+        Value.Bool(_) => "bool",
+        Value.Int(_) => "int",
+        Value.Float(_) => "float",
+        Value.Str(_) => "str",
+        Value.List(_) => "list",
+        Value.Tuple(_) => "tuple",
+        Value.Set(_) => "set",
+        Value.Dict(_) => "dict",
+        Value.Date(_, _, _) => "datetime.date",
+    };
+    n.to_string()
+}
+
+// The number a bool or int compares as, for ==.
+fn as_num(v: ref Value) -> Option[f64] {
+    match v {
+        Value.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value.Int(i) => Some(*i as f64),
+        Value.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+fn is_intlike(v: ref Value) -> bool {
+    match v {
+        Value.Bool(_) => true,
+        Value.Int(_) => true,
+        _ => false,
+    }
+}
+
+fn int_of(v: ref Value) -> i64 {
+    match v {
+        Value.Bool(b) => if *b { 1 } else { 0 },
+        Value.Int(i) => *i,
+        _ => 0,
+    }
+}
+
+fn seq_eq(a: ref Vec[Value], b: ref Vec[Value]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if not py_eq(a[i], b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn set_has(s: ref Vec[Value], x: ref Value) -> bool {
+    for y in s {
+        if py_eq(y, x) {
+            return true;
+        }
+    }
+    false
+}
+
+// Python's ==.
+fn py_eq(a: ref Value, b: ref Value) -> bool {
+    if is_intlike(a) and is_intlike(b) {
+        return int_of(a) == int_of(b);
+    }
+    match (as_num(a), as_num(b)) {
+        (Some(x), Some(y)) => return x == y,
+        _ => {}
+    }
+    match (a, b) {
+        (Value.Null, Value.Null) => true,
+        (Value.Str(x), Value.Str(y)) => x == y,
+        (Value.List(x), Value.List(y)) => seq_eq(x, y),
+        (Value.Tuple(x), Value.Tuple(y)) => seq_eq(x, y),
+        (Value.Set(x), Value.Set(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            for e in x {
+                if not set_has(y, e) {
+                    return false;
+                }
+            }
+            true
+        }
+        (Value.Dict(x), Value.Dict(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            for e in x {
+                match dict_get(y, e.key) {
+                    Some(v) => {
+                        if not py_eq(v, e.val) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            true
+        }
+        (Value.Date(y1, m1, d1), Value.Date(y2, m2, d2)) => y1 == y2 and m1 == m2 and d1 == d2,
+        _ => false,
+    }
+}
+
+fn cmp_i(a: i64, b: i64) -> i64 {
+    if a < b { -1 } else if a > b { 1 } else { 0 }
+}
+
+fn str_cmp(a: ref String, b: ref String) -> i64 {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut i = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return if (x[i] as u32) < (y[i] as u32) { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    cmp_i(x.len(), y.len())
+}
+
+// Python's ordering of two values, or None where < raises TypeError.
+fn py_cmp(a: ref Value, b: ref Value) -> Option[i64] {
+    if is_intlike(a) and is_intlike(b) {
+        return Some(cmp_i(int_of(a), int_of(b)));
+    }
+    match (as_num(a), as_num(b)) {
+        (Some(x), Some(y)) => {
+            if x != x or y != y {
+                return Some(2);
+            }
+            return Some(if x < y { -1 } else if x > y { 1 } else { 0 });
+        }
+        _ => {}
+    }
+    match (a, b) {
+        (Value.Str(x), Value.Str(y)) => Some(str_cmp(x, y)),
+        (Value.List(x), Value.List(y)) => seq_cmp(x, y),
+        (Value.Tuple(x), Value.Tuple(y)) => seq_cmp(x, y),
+        (Value.Date(y1, m1, d1), Value.Date(y2, m2, d2)) => {
+            let c = cmp_i(*y1, *y2);
+            if c != 0 {
+                return Some(c);
+            }
+            let c2 = cmp_i(*m1, *m2);
+            if c2 != 0 {
+                return Some(c2);
+            }
+            Some(cmp_i(*d1, *d2))
+        }
+        _ => None,
+    }
+}
+
+fn seq_cmp(a: ref Vec[Value], b: ref Vec[Value]) -> Option[i64] {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if not py_eq(a[i], b[i]) {
+            return py_cmp(a[i], b[i]);
+        }
+        i += 1;
+    }
+    Some(cmp_i(a.len(), b.len()))
+}
+
+// a < b, a > b; None for a TypeError. NaN compares false both ways (2).
+fn py_lt(a: ref Value, b: ref Value) -> Option[bool] {
+    match py_cmp(a, b) {
+        Some(c) => Some(c == -1),
+        None => None,
+    }
+}
+
+fn py_gt(a: ref Value, b: ref Value) -> Option[bool] {
+    match py_cmp(a, b) {
+        Some(c) => Some(c == 1),
+        None => None,
+    }
+}
+
+fn is_hashable(v: ref Value) -> bool {
+    match v {
+        Value.List(_) => false,
+        Value.Dict(_) => false,
+        Value.Set(_) => false,
+        Value.Tuple(xs) => {
+            for x in xs {
+                if not is_hashable(x) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+// ------------------------------------------------------------ dicts
+
+fn dict_find(d: ref Vec[Kv], k: ref Value) -> i64 {
+    for i in 0..d.len() {
+        if py_eq(d[i].key, k) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn dict_get(d: ref Vec[Kv], k: ref Value) -> Option[Value] {
+    let i = dict_find(d, k);
+    if i < 0 { None } else { Some(d[i].val.clone()) }
+}
+
+fn dict_set(d: mut ref Vec[Kv], k: ref Value, v: own Value) {
+    let i = dict_find(d, k);
+    if i < 0 {
+        d.push(Kv { key: k.clone(), val: v });
+    } else {
+        d[i].val = v;
+    }
+}
+
+fn dict_del(d: mut ref Vec[Kv], k: ref Value) {
+    let i = dict_find(d, k);
+    if i >= 0 {
+        d.remove(i);
+    }
+}
+
+fn entries(v: ref Value) -> Vec[Kv] {
+    match v {
+        Value.Dict(d) => d.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn keys_of(v: ref Value) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    for e in entries(v) {
+        out.push(e.key.clone());
+    }
+    out
+}
+
+fn is_dict(v: ref Value) -> bool {
+    match v {
+        Value.Dict(_) => true,
+        _ => false,
+    }
+}
+
+fn is_str(v: ref Value) -> bool {
+    match v {
+        Value.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn is_null(v: ref Value) -> bool {
+    match v {
+        Value.Null => true,
+        _ => false,
+    }
+}
+
+// isinstance(v, Sequence): list or tuple or str.
+fn is_seq(v: ref Value) -> bool {
+    match v {
+        Value.List(_) => true,
+        Value.Tuple(_) => true,
+        Value.Str(_) => true,
+        _ => false,
+    }
+}
+
+// isinstance(v, Iterable) and isinstance(v, Sized), which Cerberus's
+// value types agree on.
+fn is_iterable(v: ref Value) -> bool {
+    match v {
+        Value.List(_) => true,
+        Value.Tuple(_) => true,
+        Value.Str(_) => true,
+        Value.Set(_) => true,
+        Value.Dict(_) => true,
+        _ => false,
+    }
+}
+
+// The items iter() gives: a dict's keys, a str's characters.
+fn items_of(v: ref Value) -> Vec[Value] {
+    match v {
+        Value.List(xs) => xs.clone(),
+        Value.Tuple(xs) => xs.clone(),
+        Value.Set(xs) => xs.clone(),
+        Value.Dict(_) => keys_of(v),
+        Value.Str(s) => {
+            let mut out: Vec[Value] = Vec.new();
+            for c in s.chars() {
+                out.push(Value.Str(c.to_string()));
+            }
+            out
+        }
+        _ => Vec.new(),
+    }
+}
+
+fn py_len(v: ref Value) -> i64 {
+    match v {
+        Value.Str(s) => s.chars().count(),
+        _ => items_of(v).len(),
+    }
+}
+
+// `x in container`; Err for a container `in` refuses (TypeError).
+fn py_in(x: ref Value, c: ref Value) -> Result[bool, ()] {
+    match c {
+        Value.Str(s) => match x {
+            Value.Str(t) => Ok(s.contains(t.as_str())),
+            _ => Err(()),
+        },
+        Value.Dict(d) => Ok(dict_find(d, x) >= 0),
+        Value.List(_) => Ok(set_has(items_of(c), x)),
+        Value.Tuple(_) => Ok(set_has(items_of(c), x)),
+        Value.Set(_) => Ok(set_has(items_of(c), x)),
+        _ => Err(()),
+    }
+}
+
+fn has_key(v: ref Value, k: Str) -> bool {
+    match py_in(vs(k), v) {
+        Ok(b) => b,
+        Err(_) => false,
+    }
+}
+
+// mapping.get(k), None for a missing key or a non-mapping.
+fn get(v: ref Value, k: Str) -> Value {
+    match v {
+        Value.Dict(d) => match dict_get(d, vs(k)) {
+            Some(x) => x,
+            None => Value.Null,
+        },
+        _ => Value.Null,
+    }
+}
+
+fn get_v(v: ref Value, k: ref Value) -> Value {
+    match v {
+        Value.Dict(d) => match dict_get(d, k) {
+            Some(x) => x,
+            None => Value.Null,
+        },
+        _ => Value.Null,
+    }
+}
+
+fn get_or(v: ref Value, k: Str, default: own Value) -> Value {
+    match v {
+        Value.Dict(d) => match dict_get(d, vs(k)) {
+            Some(x) => x,
+            None => default,
+        },
+        _ => default,
+    }
+}
+
+fn truthy(v: ref Value) -> bool {
+    match v {
+        Value.Null => false,
+        Value.Bool(b) => *b,
+        Value.Int(i) => *i != 0,
+        Value.Float(x) => *x != 0.0,
+        Value.Date(_, _, _) => true,
+        _ => py_len(v) > 0,
+    }
+}
+
+fn is_true(v: ref Value) -> bool {
+    match v {
+        Value.Bool(b) => *b,
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ repr
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+fn hex2(n: u32) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(d[(n / 16) as i64]);
+    s.push(d[(n % 16) as i64]);
+    s
+}
+
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if (c as u32) < 32 or c as u32 == 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn join_repr(xs: ref Vec[Value]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs {
+        parts.push(py_repr(x));
+    }
+    parts.join(", ")
+}
+
+fn py_repr(v: ref Value) -> String {
+    match v {
+        Value.Null => "None".to_string(),
+        Value.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Value.Int(i) => f"{i}",
+        Value.Float(x) => float_repr(*x),
+        Value.Str(s) => str_repr(s),
+        Value.List(xs) => f"[{join_repr(xs)}]",
+        Value.Tuple(xs) => {
+            if xs.len() == 1 {
+                f"({py_repr(xs[0])},)"
+            } else {
+                f"({join_repr(xs)})"
+            }
+        }
+        Value.Set(xs) => {
+            if xs.len() == 0 {
+                "set()".to_string()
+            } else {
+                f"{{{join_repr(xs)}}}"
+            }
+        }
+        Value.Dict(d) => {
+            let mut parts: Vec[String] = Vec.new();
+            for e in d {
+                parts.push(f"{py_repr(e.key)}: {py_repr(e.val)}");
+            }
+            f"{{{parts.join(", ")}}}"
+        }
+        Value.Date(y, m, d) => f"datetime.date({y}, {m}, {d})",
+    }
+}
+
+// str(): a str as itself, a date in ISO form, anything else as repr().
+fn py_str(v: ref Value) -> String {
+    match v {
+        Value.Str(s) => s.clone(),
+        Value.Date(y, m, d) => {
+            let ys = f"{y}";
+            let mut pad = String.new();
+            for _ in ys.len()..4 {
+                pad.push('0');
+            }
+            let ms = if *m < 10 { f"0{m}" } else { f"{m}" };
+            let ds = if *d < 10 { f"0{d}" } else { f"{d}" };
+            f"{pad}{ys}-{ms}-{ds}"
+        }
+        _ => py_repr(v),
+    }
+}
+
+// ------------------------------------------------------------ JSON
+
+struct JsonParser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonParser {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and (self.cs[self.pos] == ' ' or self.cs[self.pos] == '\n' or self.cs[self.pos] == '\t' or self.cs[self.pos] == '\r') {
+            self.pos += 1;
+        }
+    }
+
+    fn peek(ref self) -> char {
+        if self.pos < self.cs.len() { self.cs[self.pos] } else { '\u{0}' }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let ws: Vec[char] = w.chars().collect();
+        for k in 0..ws.len() {
+            if self.pos + k >= self.cs.len() or self.cs[self.pos + k] != ws[k] {
+                return false;
+            }
+        }
+        self.pos += ws.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.cs[self.pos];
+            self.pos += 1;
+            let d = if c >= '0' and c <= '9' {
+                c as u32 - '0' as u32
+            } else if c >= 'a' and c <= 'f' {
+                c as u32 - 'a' as u32 + 10
+            } else {
+                c as u32 - 'A' as u32 + 10
+            };
+            v = v * 16 + d;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> String {
+        self.pos += 1;
+        let mut out = String.new();
+        while self.cs[self.pos] != '"' {
+            let c = self.cs[self.pos];
+            self.pos += 1;
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                out.push('\n');
+            } else if e == 't' {
+                out.push('\t');
+            } else if e == 'r' {
+                out.push('\r');
+            } else if e == 'b' {
+                out.push('\u{8}');
+            } else if e == 'f' {
+                out.push('\u{c}');
+            } else if e == 'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xd800 and cp < 0xdc00 and self.peek() == '\\' {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+                }
+                out.push(char.try_from(cp).unwrap_or('?'));
+            } else {
+                out.push(e);
+            }
+        }
+        self.pos += 1;
+        out
+    }
+
+    fn number(mut ref self) -> Value {
+        let start = self.pos;
+        let mut float = false;
+        while self.pos < self.cs.len() {
+            let c = self.cs[self.pos];
+            if c == '.' or c == 'e' or c == 'E' {
+                float = true;
+            } else if not (c == '-' or c == '+' or (c >= '0' and c <= '9')) {
+                break;
+            }
+            self.pos += 1;
+        }
+        let mut t = String.new();
+        for k in start..self.pos {
+            t.push(self.cs[k]);
+        }
+        if float {
+            Value.Float(f64.parse(t).unwrap_or(0.0))
+        } else {
+            Value.Int(i64.parse(t).unwrap_or(0))
+        }
+    }
+
+    fn value(mut ref self) -> Value {
+        self.ws();
+        let c = self.peek();
+        if c == '{' {
+            self.pos += 1;
+            let mut d: Vec[Kv] = Vec.new();
+            self.ws();
+            if self.peek() == '}' {
+                self.pos += 1;
+                return Value.Dict(d);
+            }
+            loop {
+                self.ws();
+                let k = self.string();
+                self.ws();
+                self.pos += 1;
+                let v = self.value();
+                dict_set(mut d, Value.Str(k), v);
+                self.ws();
+                let sep = self.peek();
+                self.pos += 1;
+                if sep == '}' {
+                    break;
+                }
+            }
+            Value.Dict(d)
+        } else if c == '[' {
+            self.pos += 1;
+            let mut xs: Vec[Value] = Vec.new();
+            self.ws();
+            if self.peek() == ']' {
+                self.pos += 1;
+                return Value.List(xs);
+            }
+            loop {
+                xs.push(self.value());
+                self.ws();
+                let sep = self.peek();
+                self.pos += 1;
+                if sep == ']' {
+                    break;
+                }
+            }
+            Value.List(xs)
+        } else if c == '"' {
+            Value.Str(self.string())
+        } else if self.word("null") {
+            Value.Null
+        } else if self.word("true") {
+            Value.Bool(true)
+        } else if self.word("false") {
+            Value.Bool(false)
+        } else {
+            self.number()
+        }
+    }
+}
+
+fn json_loads(s: ref String) -> Value {
+    let mut p = JsonParser { cs: s.chars().collect(), pos: 0 };
+    p.value()
+}
+
+// ------------------------------------------------------------ errors
+//
+// cerberus.errors: ValidationError, the error codes and their rules,
+// the document error tree a validator queries while it runs, and
+// BasicErrorHandler, which turns a list of errors into the nested dict
+// `validator.errors` returns.
+
+#[derive(Clone)]
+struct VErr {
+    dp: Vec[Value],
+    sp: Vec[Value],
+    // schema_path is the string "__require_all__" instead of a tuple
+    sp_require_all: bool,
+    code: i64,
+    rule: String,
+    constraint: Value,
+    value: Value,
+    info: Vec[Value],
+    // info[0] of a group or logic error: the errors it bundles
+    children: Vec[VErr],
+}
+
+fn rule_of(code: i64) -> String {
+    let r = if code == 0x02 {
+        "required"
+    } else if code == 0x04 or code == 0x05 {
+        "dependencies"
+    } else if code == 0x06 {
+        "excludes"
+    } else if code == 0x22 {
+        "empty"
+    } else if code == 0x23 {
+        "nullable"
+    } else if code == 0x24 {
+        "type"
+    } else if code == 0x25 or code == 0x81 or code == 0x82 {
+        "schema"
+    } else if code == 0x26 or code == 0x8F {
+        "items"
+    } else if code == 0x27 {
+        "minlength"
+    } else if code == 0x28 {
+        "maxlength"
+    } else if code == 0x41 {
+        "regex"
+    } else if code == 0x42 {
+        "min"
+    } else if code == 0x43 {
+        "max"
+    } else if code == 0x44 or code == 0x45 {
+        "allowed"
+    } else if code == 0x46 or code == 0x47 {
+        "forbidden"
+    } else if code == 0x48 {
+        "contains"
+    } else if code == 0x61 {
+        "coerce"
+    } else if code == 0x62 {
+        "rename_handler"
+    } else if code == 0x63 {
+        "readonly"
+    } else if code == 0x64 {
+        "default_setter"
+    } else if code == 0x83 {
+        "keysrules"
+    } else if code == 0x84 {
+        "valuesrules"
+    } else if code == 0x91 {
+        "noneof"
+    } else if code == 0x92 {
+        "oneof"
+    } else if code == 0x93 {
+        "anyof"
+    } else if code == 0x94 {
+        "allof"
+    } else {
+        ""
+    };
+    r.to_string()
+}
+
+fn is_group(e: ref VErr) -> bool {
+    e.code & 0x80 != 0
+}
+
+fn is_logic(e: ref VErr) -> bool {
+    e.code & 0x10 != 0
+}
+
+fn has_code(errs: ref Vec[VErr], code: i64) -> bool {
+    for e in errs {
+        if e.code == code {
+            return true;
+        }
+    }
+    false
+}
+
+fn type_rank(v: ref Value) -> i64 {
+    match v {
+        Value.Bool(_) => 0,
+        Value.Int(_) => 0,
+        Value.Str(_) => 1,
+        Value.Tuple(_) => 2,
+        _ => 3,
+    }
+}
+
+fn path_prefix_eq(x: ref Vec[Value], y: ref Vec[Value], n: i64) -> bool {
+    for i in 0..n {
+        if not py_eq(x[i], y[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// utils.compare_paths_lt.
+fn compare_paths_lt(x: ref Vec[Value], y: ref Vec[Value]) -> bool {
+    let m = if x.len() < y.len() { x.len() } else { y.len() };
+    if path_prefix_eq(x, y, m) {
+        return x.len() == m;
+    }
+    for i in 0..m {
+        let ra = type_rank(x[i]);
+        if ra < 3 and type_rank(y[i]) != ra {
+            return true;
+        }
+        if py_eq(x[i], y[i]) {
+            continue;
+        }
+        return match py_lt(x[i], y[i]) {
+            Some(b) => b,
+            None => false,
+        };
+    }
+    false
+}
+
+fn err_lt(a: ref VErr, b: ref VErr) -> bool {
+    if not (a.dp.len() == b.dp.len() and path_prefix_eq(a.dp, b.dp, a.dp.len())) {
+        return compare_paths_lt(a.dp, b.dp);
+    }
+    compare_paths_lt(a.sp, b.sp)
+}
+
+// list.sort() with ValidationError.__lt__; the paths of the errors a
+// validator gathers are all distinct, so any stable sort agrees.
+fn sort_errors(errs: mut ref Vec[VErr]) {
+    let mut i = 1;
+    while i < errs.len() {
+        let mut j = i;
+        while j > 0 and err_lt(errs[j], errs[j - 1]) {
+            errs.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+// The DocumentErrorTree, as the errors it was given: a node exists for
+// every prefix of an error's document path.
+#[derive(Clone)]
+struct TreeEnt {
+    path: Vec[Value],
+    code: i64,
+}
+
+fn tree_add(tree: mut ref Vec[TreeEnt], e: ref VErr) {
+    tree.push(TreeEnt { path: e.dp.clone(), code: e.code });
+    if is_group(e) and e.dp.len() > 0 {
+        for c in e.children {
+            tree_add(mut tree, c);
+        }
+    }
+}
+
+fn path_eq(a: ref Vec[Value], b: ref Vec[Value]) -> bool {
+    a.len() == b.len() and path_prefix_eq(a, b, a.len())
+}
+
+// errors.COERCION_FAILED in tree.fetch_errors_from(path), and the like.
+fn tree_has_code(tree: ref Vec[TreeEnt], path: ref Vec[Value], code: i64) -> bool {
+    for t in tree {
+        if t.code == code and path_eq(t.path, path) {
+            return true;
+        }
+    }
+    false
+}
+
+// tree.fetch_node_from(path) is not None.
+fn tree_has_node(tree: ref Vec[TreeEnt], path: ref Vec[Value]) -> bool {
+    if path.len() == 0 {
+        return true;
+    }
+    for t in tree {
+        if t.path.len() >= path.len() and path_prefix_eq(t.path, path, path.len()) {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ handler
+
+#[derive(Clone)]
+enum PNode {
+    Msg(String),
+    Sub(PTree),
+}
+
+#[derive(Clone)]
+struct PTree {
+    keys: Vec[Value],
+    lists: Vec[Vec[PNode]],
+}
+
+fn new_tree() -> PTree {
+    PTree { keys: Vec.new(), lists: Vec.new() }
+}
+
+fn ptree_find(t: ref PTree, k: ref Value) -> i64 {
+    for i in 0..t.keys.len() {
+        if py_eq(t.keys[i], k) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn take_sub(n: own Option[PNode]) -> PTree {
+    match n {
+        Some(PNode.Sub(t)) => t,
+        _ => new_tree(),
+    }
+}
+
+// BasicErrorHandler._insert_error.
+fn insert_error(t: mut ref PTree, path: ref Vec[Value], msg: ref String) {
+    let field = path[0].clone();
+    let i = ptree_find(t, field);
+    if path.len() == 1 {
+        if i >= 0 {
+            let sub = t.lists[i].pop();
+            t.lists[i].push(PNode.Msg(msg.clone()));
+            match sub {
+                Some(s) => t.lists[i].push(s),
+                None => {}
+            }
+        } else {
+            t.keys.push(field);
+            let mut l: Vec[PNode] = Vec.new();
+            l.push(PNode.Msg(msg.clone()));
+            l.push(PNode.Sub(new_tree()));
+            t.lists.push(l);
+        }
+        return;
+    }
+    let mut at = i;
+    if at < 0 {
+        t.keys.push(field);
+        let mut l: Vec[PNode] = Vec.new();
+        l.push(PNode.Sub(new_tree()));
+        t.lists.push(l);
+        at = t.keys.len() - 1;
+    }
+    let mut sub = take_sub(t.lists[at].pop());
+    let mut rest: Vec[Value] = Vec.new();
+    for k in 1..path.len() {
+        rest.push(path[k].clone());
+    }
+    insert_error(mut sub, rest, msg);
+    t.lists[at].push(PNode.Sub(sub));
+}
+
+fn fmt_messages(code: i64, schema_handler: bool, field: ref Value, e: ref VErr) -> Option[String] {
+    let i0 = if e.info.len() > 0 { py_str(e.info[0]) } else { "".to_string() };
+    let i1 = if e.info.len() > 1 { py_str(e.info[1]) } else { "".to_string() };
+    let c = py_str(e.constraint);
+    let f = py_str(field);
+    let v = py_str(e.value);
+    let m = if code == 0x00 {
+        i0
+    } else if code == 0x01 {
+        "document is missing".to_string()
+    } else if code == 0x02 {
+        "required field".to_string()
+    } else if code == 0x03 {
+        if schema_handler { "unknown rule".to_string() } else { "unknown field".to_string() }
+    } else if code == 0x04 {
+        f"field '{i0}' is required"
+    } else if code == 0x05 {
+        f"depends on these values: {c}"
+    } else if code == 0x06 {
+        f"{i0} must not be present with '{f}'"
+    } else if code == 0x21 {
+        f"'{i0}' is not a document, must be a dict"
+    } else if code == 0x22 {
+        "empty values not allowed".to_string()
+    } else if code == 0x23 {
+        "null value not allowed".to_string()
+    } else if code == 0x24 {
+        f"must be of {c} type"
+    } else if code == 0x25 {
+        "must be of dict type".to_string()
+    } else if code == 0x26 {
+        f"length of list should be {i0}, it is {i1}"
+    } else if code == 0x27 {
+        f"min length is {c}"
+    } else if code == 0x28 {
+        f"max length is {c}"
+    } else if code == 0x41 {
+        f"value does not match regex '{c}'"
+    } else if code == 0x42 {
+        f"min value is {c}"
+    } else if code == 0x43 {
+        f"max value is {c}"
+    } else if code == 0x44 or code == 0x46 {
+        f"unallowed value {v}"
+    } else if code == 0x45 or code == 0x47 {
+        f"unallowed values {i0}"
+    } else if code == 0x48 {
+        f"missing members {i0}"
+    } else if code == 0x61 {
+        f"field '{f}' cannot be coerced: {i0}"
+    } else if code == 0x62 {
+        f"field '{f}' cannot be renamed: {i0}"
+    } else if code == 0x63 {
+        "field is read-only".to_string()
+    } else if code == 0x64 {
+        f"default value for '{f}' cannot be set: {i0}"
+    } else if code == 0x91 {
+        "one or more definitions validate".to_string()
+    } else if code == 0x92 {
+        "none or more than one rule validate".to_string()
+    } else if code == 0x93 {
+        "no definitions validate".to_string()
+    } else if code == 0x94 {
+        "one or more definitions don't validate".to_string()
+    } else {
+        return None;
+    };
+    Some(m)
+}
+
+fn field_of(e: ref VErr) -> Value {
+    if e.dp.len() > 0 { e.dp[e.dp.len() - 1].clone() } else { Value.Null }
+}
+
+// error.definitions_errors: the indexes of the child errors, grouped by
+// the definition they came from, in the order the groups first appear.
+fn definition_groups(e: ref VErr) -> Vec[(Value, Vec[i64])] {
+    let mut groups: Vec[(Value, Vec[i64])] = Vec.new();
+    let at = e.sp.len();
+    for ci in 0..e.children.len() {
+        let key = e.children[ci].sp[at].clone();
+        let mut found = -1;
+        for gi in 0..groups.len() {
+            if py_eq(groups[gi].0, key) {
+                found = gi;
+            }
+        }
+        if found < 0 {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(ci);
+            groups.push((key, v));
+        } else {
+            groups[found].1.push(ci);
+        }
+    }
+    groups
+}
+
+fn tail_from(p: ref Vec[Value], start: i64) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    let mut i = if start < 0 { 0 } else { start };
+    while i < p.len() {
+        out.push(p[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn concat(a: ref Vec[Value], b: ref Vec[Value]) -> Vec[Value] {
+    let mut out = a.clone();
+    for x in b {
+        out.push(x.clone());
+    }
+    out
+}
+
+fn rewrite_error_path(e: mut ref VErr, offset: i64) {
+    if is_logic(e) {
+        let child_start = e.dp.len() - offset;
+        for g in definition_groups(e) {
+            let nodename = f"{e.rule} definition {py_str(g.0)}";
+            let mut path = e.dp.clone();
+            path.push(Value.Str(nodename));
+            for ci in g.1 {
+                let rel = tail_from(e.children[ci].dp, child_start);
+                e.children[ci].dp = concat(path, rel);
+                rewrite_error_path(mut e.children[ci], offset + 1);
+            }
+        }
+    } else if is_group(e) {
+        let child_start = e.dp.len() - offset;
+        for ci in 0..e.children.len() {
+            let rel = tail_from(e.children[ci].dp, child_start);
+            e.children[ci].dp = concat(e.dp, rel);
+            rewrite_error_path(mut e.children[ci], offset);
+        }
+    }
+}
+
+struct Handler {
+    tree: PTree,
+    schema_handler: bool,
+}
+
+impl Handler {
+    fn insert_plain(mut ref self, e: ref VErr, field: ref Value) {
+        match fmt_messages(e.code, self.schema_handler, field, e) {
+            Some(m) => insert_error(mut self.tree, e.dp, m),
+            None => {}
+        }
+    }
+
+    fn insert_logic(mut ref self, e: ref VErr) {
+        let field = field_of(e);
+        self.insert_plain(e, field);
+        for g in definition_groups(e) {
+            for ci in g.1 {
+                let c = e.children[ci].clone();
+                if is_logic(c) {
+                    self.insert_logic(c);
+                } else if is_group(c) {
+                    self.insert_group(c);
+                } else {
+                    self.insert_plain(c, field);
+                }
+            }
+        }
+    }
+
+    fn insert_group(mut ref self, e: ref VErr) {
+        for c in e.children {
+            if is_logic(c) {
+                self.insert_logic(c);
+            } else if is_group(c) {
+                self.insert_group(c);
+            } else {
+                self.insert_plain(c, field_of(c));
+            }
+        }
+    }
+
+    fn add(mut ref self, e0: ref VErr) {
+        let mut e = e0.clone();
+        rewrite_error_path(mut e, 0);
+        if is_logic(e) {
+            self.insert_logic(e);
+        } else if is_group(e) {
+            self.insert_group(e);
+        } else {
+            self.insert_plain(e, field_of(e));
+        }
+    }
+}
+
+fn purge_empty(l: mut ref Vec[PNode]) {
+    let last = l.pop();
+    match last {
+        Some(PNode.Sub(t)) => {
+            if t.keys.len() > 0 {
+                let mut t2 = t;
+                for i in 0..t2.lists.len() {
+                    purge_empty(mut t2.lists[i]);
+                }
+                l.push(PNode.Sub(t2));
+            }
+        }
+        Some(other) => l.push(other),
+        None => {}
+    }
+}
+
+// handler(errors).pretty_tree
+fn pretty_tree(errs: ref Vec[VErr], schema_handler: bool) -> PTree {
+    let mut h = Handler { tree: new_tree(), schema_handler: schema_handler };
+    for e in errs {
+        h.add(e);
+    }
+    let mut t = h.tree;
+    for i in 0..t.lists.len() {
+        purge_empty(mut t.lists[i]);
+    }
+    t
+}
+
+fn ptree_repr(t: ref PTree) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..t.keys.len() {
+        let mut items: Vec[String] = Vec.new();
+        for n in t.lists[i] {
+            match n {
+                PNode.Msg(m) => items.push(str_repr(m)),
+                PNode.Sub(s) => items.push(ptree_repr(s)),
+            }
+        }
+        parts.push(f"{py_repr(t.keys[i])}: [{items.join(", ")}]");
+    }
+    f"{{{parts.join(", ")}}}"
+}
+
+// ------------------------------------------------------------ validator
+//
+// cerberus.validator.BareValidator with Validator's rules, and the
+// SchemaValidator that cerberus.schema builds to check a schema against
+// those rules. Both are a V: `schema_kind` picks SchemaValidator's types
+// and check_with methods and its `logical` rule.
+
+// What the module-level registries and a SchemaValidator's reference
+// sets hold, plus the target validator's rules.
+struct Ctx {
+    schema_reg: Vec[Kv],
+    rules_reg: Vec[Kv],
+    known_rules_refs: Vec[String],
+    known_schema_refs: Vec[String],
+    rules: Value,
+    validation_rules: Value,
+}
+
+// A validator's _config.
+#[derive(Clone)]
+struct Cfg {
+    allow_unknown: Value,
+    require_all: bool,
+    purge_unknown: bool,
+    purge_readonly: bool,
+    ignore_none_values: bool,
+    is_child: bool,
+    has_root: bool,
+    root_allow_unknown: Value,
+    root_document: Value,
+    is_normalized: bool,
+    schema_kind: bool,
+}
+
+struct V {
+    cfg: Cfg,
+    schema: Value,
+    document: Value,
+    errors: Vec[VErr],
+    tree: Vec[TreeEnt],
+    dp: Vec[Value],
+    sp: Vec[Value],
+    update: bool,
+    remaining: Vec[String],
+    unreq: Vec[Value],
+}
+
+fn new_cfg(schema_kind: bool) -> Cfg {
+    Cfg {
+        allow_unknown: Value.Bool(false),
+        require_all: false,
+        purge_unknown: false,
+        purge_readonly: false,
+        ignore_none_values: false,
+        is_child: false,
+        has_root: false,
+        root_allow_unknown: Value.Null,
+        root_document: Value.Null,
+        is_normalized: false,
+        schema_kind: schema_kind,
+    }
+}
+
+fn new_v(cfg: own Cfg, schema: own Value) -> V {
+    V {
+        cfg: cfg,
+        schema: schema,
+        document: Value.Null,
+        errors: Vec.new(),
+        tree: Vec.new(),
+        dp: Vec.new(),
+        sp: Vec.new(),
+        update: false,
+        remaining: Vec.new(),
+        unreq: Vec.new(),
+    }
+}
+
+fn extend_path(p: ref Vec[Value], crumb: ref Value) -> Vec[Value] {
+    let mut out = p.clone();
+    match crumb {
+        Value.Null => {}
+        Value.Tuple(xs) => {
+            for x in xs {
+                out.push(x.clone());
+            }
+        }
+        _ => out.push(crumb.clone()),
+    }
+    out
+}
+
+fn pair(a: ref Value, b: Str) -> Value {
+    let mut v: Vec[Value] = Vec.new();
+    v.push(a.clone());
+    v.push(vs(b));
+    Value.Tuple(v)
+}
+
+fn one_dict(k: ref Value, v: own Value) -> Value {
+    let mut d: Vec[Kv] = Vec.new();
+    d.push(Kv { key: k.clone(), val: v });
+    Value.Dict(d)
+}
+
+fn str_list_has(l: ref Vec[String], s: ref String) -> bool {
+    for x in l {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn value_list_add(l: mut ref Vec[Value], v: ref Value) {
+    if not set_has(l, v) {
+        l.push(v.clone());
+    }
+}
+
+fn is_norm_rule(r: ref String) -> bool {
+    r == "coerce" or r == "default" or r == "default_setter" or r == "purge_unknown" or r == "rename" or r == "rename_handler"
+}
+
+fn drop_item(t: ref Vec[Value], i: i64) -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    for k in 0..t.len() {
+        if k != i {
+            out.push(t[k].clone());
+        }
+    }
+    out
+}
+
+fn sorted_ints_first(xs: own Vec[Value]) -> Vec[Value] {
+    // A set of small ints iterates in ascending order.
+    let mut all_int = true;
+    for x in xs {
+        if not is_intlike(x) {
+            all_int = false;
+        }
+    }
+    if not all_int {
+        return xs;
+    }
+    let mut v = xs;
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and int_of(v[j]) < int_of(v[j - 1]) {
+            v.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+    v
+}
+
+fn resolve_rules_set(v: ref Value, ctx: ref Ctx) -> Value {
+    match v {
+        Value.Dict(_) => v.clone(),
+        Value.Str(_) => match dict_get(ctx.rules_reg, v) {
+            Some(d) => d,
+            None => Value.Null,
+        },
+        _ => Value.Null,
+    }
+}
+
+fn resolve_schema(v: ref Value, ctx: ref Ctx) -> Value {
+    match v {
+        Value.Dict(_) => v.clone(),
+        Value.Str(_) => match dict_get(ctx.schema_reg, v) {
+            Some(d) => d,
+            None => Value.Null,
+        },
+        _ => Value.Null,
+    }
+}
+
+// What a default setter raised: KeyError puts the field back in line.
+enum SetErr {
+    Key,
+    Other(String),
+}
+
+impl V {
+    fn root_allow_unknown(ref self) -> Value {
+        if self.cfg.has_root { self.cfg.root_allow_unknown.clone() } else { self.cfg.allow_unknown.clone() }
+    }
+
+    fn root_document(ref self) -> Value {
+        if self.cfg.has_root { self.cfg.root_document.clone() } else { self.document.clone() }
+    }
+
+    fn child(ref self, dcrumb: ref Value, scrumb: ref Value, schema: own Value) -> V {
+        let mut cfg = self.cfg.clone();
+        if not self.cfg.is_child {
+            cfg.is_child = true;
+            cfg.has_root = true;
+            cfg.root_allow_unknown = self.cfg.allow_unknown.clone();
+            cfg.root_document = self.document.clone();
+        }
+        let mut c = new_v(cfg, schema);
+        c.dp = extend_path(self.dp, dcrumb);
+        c.sp = extend_path(self.sp, scrumb);
+        c
+    }
+
+    // _error(list_of_errors)
+    fn add_errors(mut ref self, errs: ref Vec[VErr]) {
+        for e in errs {
+            self.errors.push(e.clone());
+        }
+        sort_errors(mut self.errors);
+        for e in errs {
+            tree_add(mut self.tree, e);
+        }
+    }
+
+    // _error(field, definition, *info)
+    fn error_def(mut ref self, field: ref Value, code: i64, info: own Vec[Value], children: own Vec[VErr], ctx: ref Ctx) {
+        let rule = rule_of(code);
+        let mut dp = self.dp.clone();
+        dp.push(field.clone());
+        let mut sp = self.sp.clone();
+        let mut sp_ra = false;
+        if code != 0x03 and rule != "" {
+            sp.push(field.clone());
+            sp.push(Value.Str(rule.clone()));
+        }
+        let constraint = if rule == "" {
+            Value.Null
+        } else {
+            let rs = resolve_rules_set(get_v(resolve_schema(self.schema, ctx), field), ctx);
+            if rule == "nullable" {
+                get_or(rs, "nullable", Value.Bool(false))
+            } else if rule == "required" {
+                if not has_key(rs, "required") {
+                    sp_ra = true;
+                }
+                get_or(rs, "required", Value.Bool(self.cfg.require_all))
+            } else {
+                get(rs, rule.as_str())
+            }
+        };
+        let value = get_v(self.document, field);
+        let mut one: Vec[VErr] = Vec.new();
+        one.push(VErr {
+            dp: dp,
+            sp: sp,
+            sp_require_all: sp_ra,
+            code: code,
+            rule: rule,
+            constraint: constraint,
+            value: value,
+            info: info,
+            children: children,
+        });
+        self.add_errors(one);
+    }
+
+    fn error0(mut ref self, field: ref Value, code: i64, ctx: ref Ctx) {
+        self.error_def(field, code, Vec.new(), Vec.new(), ctx);
+    }
+
+    fn error1(mut ref self, field: ref Value, code: i64, info: own Value, ctx: ref Ctx) {
+        let mut i: Vec[Value] = Vec.new();
+        i.push(info);
+        self.error_def(field, code, i, Vec.new(), ctx);
+    }
+
+    fn custom(mut ref self, field: ref Value, msg: own String, ctx: ref Ctx) {
+        self.error1(field, 0x00, Value.Str(msg), ctx);
+    }
+
+    fn drop_nodes(ref self, errs: mut ref Vec[VErr], dp_items: ref Vec[i64], sp_items: ref Vec[i64]) {
+        let db = self.dp.len();
+        let sb = self.sp.len();
+        for k in 0..errs.len() {
+            let mut di = dp_items.clone();
+            di.sort();
+            di.reverse();
+            for i in di {
+                errs[k].dp = drop_item(errs[k].dp, db + i);
+            }
+            let mut si = sp_items.clone();
+            si.sort();
+            si.reverse();
+            for i in si {
+                errs[k].sp = drop_item(errs[k].sp, sb + i);
+            }
+            if is_group(errs[k]) {
+                self.drop_nodes(mut errs[k].children, dp_items, sp_items);
+            }
+        }
+    }
+
+    fn drop_rules(mut ref self, rules: ref Vec[Str]) {
+        for r in rules {
+            let mut i = 0;
+            while i < self.remaining.len() {
+                if self.remaining[i] == *r {
+                    self.remaining.remove(i);
+                    break;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn init_processing(mut ref self, document: ref Value) {
+        self.errors = Vec.new();
+        self.tree = Vec.new();
+        self.document = document.clone();
+        if not self.cfg.is_child {
+            self.cfg.is_normalized = false;
+        }
+        if is_null(self.schema) {
+            if is_dict(self.cfg.allow_unknown) {
+                self.schema = empty_dict();
+            } else {
+                panic("SchemaError: validation schema missing");
+            }
+        }
+        if not is_dict(self.document) {
+            panic("DocumentError: not a document");
+        }
+    }
+
+    // ------------------------------------------------------- normalizing
+
+    fn normalized(mut ref self, document: ref Value, always: bool, ctx: mut ref Ctx) -> Result[Value, ()] {
+        self.init_processing(document);
+        let mut m = entries(self.document);
+        let schema = self.schema.clone();
+        self.normalize_mapping(mut m, schema, ctx)?;
+        self.document = Value.Dict(m);
+        if self.errors.len() > 0 and not always {
+            Ok(Value.Null)
+        } else {
+            Ok(self.document.clone())
+        }
+    }
+
+    fn normalize_mapping(mut ref self, m: mut ref Vec[Kv], schema0: own Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let schema1 = if is_str(schema0) { resolve_schema(schema0, ctx) } else { schema0 };
+        let mut rs: Vec[Kv] = Vec.new();
+        for e in entries(schema1) {
+            rs.push(Kv { key: e.key.clone(), val: resolve_rules_set(e.val, ctx) });
+        }
+        let schema = Value.Dict(rs);
+        self.rename_fields(m, schema, ctx);
+        if self.cfg.purge_unknown and not truthy(self.cfg.allow_unknown) {
+            let mut i = 0;
+            while i < m.len() {
+                if has_key_v(schema, m[i].key) {
+                    i += 1;
+                } else {
+                    m.remove(i);
+                }
+            }
+        }
+        if self.cfg.purge_readonly {
+            let mut i = 0;
+            while i < m.len() {
+                if truthy(get_or(get_or(schema, "", Value.Null), "", Value.Null)) {
+                    i += 1;
+                } else if truthy(get_or(get_v_or_empty(schema, m[i].key), "readonly", Value.Bool(false))) {
+                    m.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        self.validate_readonly_fields(m, schema, ctx);
+        self.default_fields(m, schema, ctx)?;
+        self.coerce_fields(m, schema, ctx);
+        self.containers(m, schema, ctx)?;
+        self.cfg.is_normalized = true;
+        Ok(())
+    }
+
+    fn rename_fields(mut ref self, m: mut ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) {
+        let fields: Vec[Value] = keys_of(Value.Dict(m.clone()));
+        for field in fields {
+            if has_key_v(schema, field) {
+                let rules = get_v(schema, field);
+                if has_key(rules, "rename") {
+                    let new = get(rules, "rename");
+                    let v = get_v(Value.Dict(m.clone()), field);
+                    dict_set(mut m, new, v);
+                    dict_del(mut m, field);
+                }
+                self.rename_handler(m, rules, field, ctx);
+            } else if is_dict(self.cfg.allow_unknown) and has_key(self.cfg.allow_unknown, "rename_handler") {
+                let au = self.cfg.allow_unknown.clone();
+                self.rename_handler(m, au, field, ctx);
+            }
+        }
+    }
+
+    fn rename_handler(mut ref self, m: mut ref Vec[Kv], rules: ref Value, field: ref Value, ctx: mut ref Ctx) {
+        if not has_key(rules, "rename_handler") {
+            return;
+        }
+        let new_name = self.normalize_coerce(get(rules, "rename_handler"), field, field.clone(), false, 0x62, ctx);
+        if not py_eq(new_name, field) {
+            let v = get_v(Value.Dict(m.clone()), field);
+            dict_set(mut m, new_name, v);
+            dict_del(mut m, field);
+        }
+    }
+
+    fn normalize_coerce(mut ref self, processor: ref Value, field: ref Value, value: own Value, nullable: bool, code: i64, ctx: mut ref Ctx) -> Value {
+        match processor {
+            Value.Str(name) => {
+                match coerce_named(name, value) {
+                    Ok(v) => v,
+                    Err(msg) => {
+                        if not (nullable and is_null(value)) {
+                            self.error1(field, code, Value.Str(msg), ctx);
+                        }
+                        value
+                    }
+                }
+            }
+            _ => {
+                let mut result = value;
+                let at = extend_path(self.dp, field);
+                for p in items_of(processor) {
+                    result = self.normalize_coerce(p, field, result, nullable, code, ctx);
+                    if tree_has_code(self.tree, at, 0x61) {
+                        break;
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    fn validate_readonly_fields(mut ref self, m: ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) {
+        for e in entries(schema) {
+            if dict_find(m, e.key) >= 0 and truthy(get(resolve_rules_set(e.val, ctx), "readonly")) {
+                let v = get_v(Value.Dict(m.clone()), e.key);
+                self.validate_readonly(get(e.val, "readonly"), e.key, v, ctx);
+            }
+        }
+    }
+
+    fn default_fields(mut ref self, m: mut ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut empty: Vec[Value] = Vec.new();
+        for e in entries(schema) {
+            let i = dict_find(m, e.key);
+            if i < 0 or (is_null(m[i].val) and not truthy(get_or(e.val, "nullable", Value.Bool(false)))) {
+                empty.push(e.key.clone());
+            }
+        }
+        let mut with_default: Vec[Value] = Vec.new();
+        for x in empty {
+            match py_in(vs("default"), get_v(schema, x)) {
+                Err(_) => return Err(()),
+                Ok(true) => with_default.push(x.clone()),
+                Ok(false) => {}
+            }
+        }
+        for x in with_default {
+            dict_set(mut m, x, get(get_v(schema, x), "default"));
+        }
+        let mut setters: Vec[Value] = Vec.new();
+        for x in empty {
+            if has_key(get_v(schema, x), "default_setter") {
+                setters.push(x.clone());
+            }
+        }
+        let mut known: Vec[Vec[Value]] = Vec.new();
+        while setters.len() > 0 {
+            let field = setters.remove(0);
+            let setter = get(get_v(schema, field), "default_setter");
+            match setter {
+                Value.Str(name) => match default_setter_named(name, Value.Dict(m.clone())) {
+                    Ok(v) => dict_set(mut m, field, v),
+                    Err(SetErr.Key) => setters.push(field.clone()),
+                    Err(SetErr.Other(msg)) => self.error1(field, 0x64, Value.Str(msg), ctx),
+                },
+                _ => {}
+            }
+            let mut seen = false;
+            for k in known {
+                if seq_eq(k, setters) {
+                    seen = true;
+                }
+            }
+            if seen {
+                for f in setters {
+                    self.error1(f, 0x64, vs("Circular dependencies of default setters."), ctx);
+                }
+                break;
+            }
+            known.push(setters.clone());
+        }
+        Ok(())
+    }
+
+    fn coerce_fields(mut ref self, m: mut ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) {
+        for k in 0..m.len() {
+            let field = m[k].key.clone();
+            let rules = get_v(schema, field);
+            if has_key_v(schema, field) and has_key(rules, "coerce") {
+                let nullable = truthy(get_or(rules, "nullable", Value.Bool(false)));
+                let v = m[k].val.clone();
+                let nv = self.normalize_coerce(get(rules, "coerce"), field, v, nullable, 0x61, ctx);
+                m[k].val = nv;
+            } else if is_dict(self.cfg.allow_unknown) and has_key(self.cfg.allow_unknown, "coerce") {
+                let au = self.cfg.allow_unknown.clone();
+                let nullable = truthy(get_or(au, "nullable", Value.Bool(false)));
+                let v = m[k].val.clone();
+                let nv = self.normalize_coerce(get(au, "coerce"), field, v, nullable, 0x61, ctx);
+                m[k].val = nv;
+            }
+        }
+    }
+
+    fn containers(mut ref self, m: mut ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        for k in 0..m.len() {
+            let field = m[k].key.clone();
+            let rules = get_v(schema, field);
+            let rk = keys_of(rules);
+            let has = |name: Str| set_has(rk, vs(name));
+            match m[k].val {
+                Value.Dict(_) => {
+                    if has("keysrules") {
+                        self.per_keysrules(field, m, get(rules, "keysrules"), ctx)?;
+                    }
+                    if has("valuesrules") {
+                        self.per_valuesrules(field, m, get(rules, "valuesrules"), ctx)?;
+                    }
+                    if has("allow_unknown") or has("purge_unknown") or has("schema") or is_dict(self.cfg.allow_unknown) {
+                        let _ = self.per_schema(field, m, schema, ctx);
+                    }
+                }
+                Value.Str(_) => {}
+                Value.List(_) => {
+                    if has("schema") {
+                        self.per_seq(field, m, get(rules, "schema"), "schema", ctx)?;
+                    } else if has("items") {
+                        self.per_items(field, m, get(rules, "items"), ctx)?;
+                    }
+                }
+                Value.Tuple(_) => {
+                    if has("schema") {
+                        self.per_seq(field, m, get(rules, "schema"), "schema", ctx)?;
+                    } else if has("items") {
+                        self.per_items(field, m, get(rules, "items"), ctx)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn per_keysrules(mut ref self, field: ref Value, m: mut ref Vec[Kv], prules: own Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let cur = get_v(Value.Dict(m.clone()), field);
+        let mut sch: Vec[Kv] = Vec.new();
+        let mut doc: Vec[Kv] = Vec.new();
+        for key in keys_of(cur) {
+            sch.push(Kv { key: key.clone(), val: prules.clone() });
+            doc.push(Kv { key: key.clone(), val: key.clone() });
+        }
+        let mut c = self.child(field, pair(field, "keysrules"), Value.Dict(sch));
+        let result = c.normalized(Value.Dict(doc), true, ctx)?;
+        if c.errors.len() > 0 {
+            let mut errs = c.errors.clone();
+            let mut si: Vec[i64] = Vec.new();
+            si.push(2);
+            si.push(4);
+            self.drop_nodes(mut errs, Vec.new(), si);
+            self.add_errors(errs);
+        }
+        let mut d = entries(cur);
+        for e in entries(result) {
+            if py_eq(e.key, e.val) {
+                continue;
+            }
+            let v = get_v(Value.Dict(d.clone()), e.key);
+            if dict_find(d, e.val) >= 0 {
+                dict_set(mut d, e.val, v);
+            } else {
+                dict_set(mut d, e.val, v);
+                dict_del(mut d, e.key);
+            }
+        }
+        dict_set(mut m, field, Value.Dict(d));
+        Ok(())
+    }
+
+    fn per_valuesrules(mut ref self, field: ref Value, m: mut ref Vec[Kv], vrules: own Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let cur = get_v(Value.Dict(m.clone()), field);
+        let mut sch: Vec[Kv] = Vec.new();
+        for key in keys_of(cur) {
+            sch.push(Kv { key: key.clone(), val: vrules.clone() });
+        }
+        let mut c = self.child(field, pair(field, "valuesrules"), Value.Dict(sch));
+        let result = c.normalized(cur, true, ctx)?;
+        dict_set(mut m, field, result);
+        if c.errors.len() > 0 {
+            let mut errs = c.errors.clone();
+            let mut si: Vec[i64] = Vec.new();
+            si.push(2);
+            self.drop_nodes(mut errs, Vec.new(), si);
+            self.add_errors(errs);
+        }
+        Ok(())
+    }
+
+    fn per_schema(mut ref self, field: ref Value, m: mut ref Vec[Kv], schema: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut rules = get_or(schema, "", Value.Null);
+        rules = match schema {
+            Value.Dict(d) => match dict_get(d, field) {
+                Some(r) => r,
+                None => empty_dict(),
+            },
+            _ => empty_dict(),
+        };
+        if not truthy(rules) and is_dict(self.cfg.allow_unknown) {
+            rules = self.cfg.allow_unknown.clone();
+        }
+        let mut c = self.child(field, pair(field, "schema"), get_or(rules, "schema", empty_dict()));
+        c.cfg.allow_unknown = get_or(rules, "allow_unknown", self.cfg.allow_unknown.clone());
+        c.cfg.purge_unknown = truthy(get_or(rules, "purge_unknown", Value.Bool(self.cfg.purge_unknown)));
+        c.cfg.require_all = is_true(get_or(rules, "require_all", Value.Bool(self.cfg.require_all)));
+        let cur = get_v(Value.Dict(m.clone()), field);
+        let result = c.normalized(cur, true, ctx)?;
+        dict_set(mut m, field, result);
+        if c.errors.len() > 0 {
+            let errs = c.errors.clone();
+            self.add_errors(errs);
+        }
+        Ok(())
+    }
+
+    fn per_seq(mut ref self, field: ref Value, m: mut ref Vec[Kv], item_rules: own Value, crumb: Str, ctx: mut ref Ctx) -> Result[(), ()] {
+        let cur = get_v(Value.Dict(m.clone()), field);
+        let items = items_of(cur);
+        let mut sch: Vec[Kv] = Vec.new();
+        let mut doc: Vec[Kv] = Vec.new();
+        for i in 0..items.len() {
+            sch.push(Kv { key: Value.Int(i), val: item_rules.clone() });
+            doc.push(Kv { key: Value.Int(i), val: items[i].clone() });
+        }
+        self.per_seq_run(field, m, cur, sch, doc, crumb, ctx)
+    }
+
+    fn per_items(mut ref self, field: ref Value, m: mut ref Vec[Kv], rules: own Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let cur = get_v(Value.Dict(m.clone()), field);
+        let items = items_of(cur);
+        let rl = items_of(rules);
+        if rl.len() != items.len() {
+            return Ok(());
+        }
+        let mut sch: Vec[Kv] = Vec.new();
+        let mut doc: Vec[Kv] = Vec.new();
+        for i in 0..items.len() {
+            sch.push(Kv { key: Value.Int(i), val: rl[i].clone() });
+            doc.push(Kv { key: Value.Int(i), val: items[i].clone() });
+        }
+        self.per_seq_run(field, m, cur, sch, doc, "items", ctx)
+    }
+
+    fn per_seq_run(mut ref self, field: ref Value, m: mut ref Vec[Kv], cur: ref Value, sch: own Vec[Kv], doc: own Vec[Kv], crumb: Str, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut c = self.child(field, pair(field, crumb), Value.Dict(sch));
+        let result = c.normalized(Value.Dict(doc), true, ctx)?;
+        let mut vals: Vec[Value] = Vec.new();
+        for e in entries(result) {
+            vals.push(e.val.clone());
+        }
+        let nv = match cur {
+            Value.Tuple(_) => Value.Tuple(vals),
+            _ => Value.List(vals),
+        };
+        dict_set(mut m, field, nv);
+        if c.errors.len() > 0 {
+            let mut errs = c.errors.clone();
+            let mut si: Vec[i64] = Vec.new();
+            si.push(2);
+            self.drop_nodes(mut errs, Vec.new(), si);
+            self.add_errors(errs);
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------- validating
+
+    fn validate(mut ref self, document: ref Value, update: bool, normalize: bool, ctx: mut ref Ctx) -> Result[bool, ()] {
+        self.update = update;
+        self.unreq = Vec.new();
+        self.init_processing(document);
+        if normalize {
+            let mut m = entries(self.document);
+            let schema = self.schema.clone();
+            self.normalize_mapping(mut m, schema, ctx)?;
+            self.document = Value.Dict(m);
+        }
+        for field in keys_of(self.document) {
+            let value = get_v(self.document, field);
+            if self.cfg.ignore_none_values and is_null(value) {
+                continue;
+            }
+            let defs = get_v(self.schema, field);
+            if not is_null(defs) {
+                self.validate_definitions(defs, field, ctx);
+            } else {
+                self.validate_unknown(field, ctx)?;
+            }
+        }
+        if not self.update {
+            self.validate_required(ctx)?;
+        }
+        Ok(self.errors.len() == 0)
+    }
+
+    fn validate_unknown(mut ref self, field: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if truthy(self.cfg.allow_unknown) {
+            if is_dict(self.cfg.allow_unknown) or is_str(self.cfg.allow_unknown) {
+                let crumb = if self.cfg.is_child { vs("allow_unknown") } else { vs("__allow_unknown__") };
+                let mut c = self.child(Value.Null, crumb, one_dict(field, self.cfg.allow_unknown.clone()));
+                let doc = one_dict(field, get_v(self.document, field));
+                if not c.validate(doc, false, false, ctx)? {
+                    let errs = c.errors.clone();
+                    self.add_errors(errs);
+                }
+            }
+        } else {
+            self.error0(field, 0x03, ctx);
+        }
+        Ok(())
+    }
+
+    fn validate_definitions(mut ref self, defs0: ref Value, field: ref Value, ctx: mut ref Ctx) {
+        let defs = resolve_rules_set(defs0, ctx);
+        let value = get_v(self.document, field);
+        let mut queue: Vec[String] = Vec.new();
+        for x in ["nullable", "readonly", "type", "empty"] {
+            if x == "nullable" or has_key(defs, x) {
+                queue.push(x.to_string());
+            }
+        }
+        for k in keys_of(defs) {
+            let name = py_str(k);
+            if not str_list_has(queue, name) and not is_norm_rule(name) and name != "allow_unknown" and name != "require_all" and name != "meta" and name != "required" {
+                queue.push(name);
+            }
+        }
+        self.remaining = queue;
+        while self.remaining.len() > 0 {
+            let rule = self.remaining.remove(0);
+            let constraint = get(defs, rule.as_str());
+            match self.validate_rule(rule, constraint, field, value, ctx) {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(_) => break,
+            }
+        }
+        self.remaining = Vec.new();
+    }
+
+    fn validate_rule(mut ref self, rule: ref String, c: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[bool, ()] {
+        if rule == "allowed" {
+            self.v_allowed(c, field, value, ctx);
+        } else if rule == "allof" or rule == "anyof" or rule == "noneof" or rule == "oneof" {
+            self.v_logical(rule, c, field, value, ctx)?;
+        } else if rule == "check_with" {
+            self.v_check_with(c, field, value, ctx)?;
+        } else if rule == "contains" {
+            self.v_contains(c, field, value, ctx);
+        } else if rule == "dependencies" {
+            return Ok(self.v_dependencies(c, field, ctx));
+        } else if rule == "empty" {
+            if is_iterable(value) and py_len(value) == 0 {
+                self.drop_rules(["allowed", "forbidden", "items", "minlength", "maxlength", "regex", "check_with"]);
+                if not truthy(c) {
+                    self.error0(field, 0x22, ctx);
+                }
+            }
+        } else if rule == "excludes" {
+            self.v_excludes(c, field, ctx);
+        } else if rule == "forbidden" {
+            self.v_forbidden(c, field, value, ctx);
+        } else if rule == "items" {
+            self.v_items(c, field, value, ctx)?;
+        } else if rule == "keysrules" {
+            self.v_keysrules(c, field, value, ctx)?;
+        } else if rule == "max" {
+            if py_gt(value, c) == Some(true) {
+                self.error0(field, 0x43, ctx);
+            }
+        } else if rule == "min" {
+            if py_lt(value, c) == Some(true) {
+                self.error0(field, 0x42, ctx);
+            }
+        } else if rule == "maxlength" {
+            if is_iterable(value) and py_gt(Value.Int(py_len(value)), c) == Some(true) {
+                self.error1(field, 0x28, Value.Int(py_len(value)), ctx);
+            }
+        } else if rule == "minlength" {
+            if is_iterable(value) and py_lt(Value.Int(py_len(value)), c) == Some(true) {
+                self.error1(field, 0x27, Value.Int(py_len(value)), ctx);
+            }
+        } else if rule == "nullable" {
+            if is_null(value) {
+                if not truthy(c) {
+                    self.error0(field, 0x23, ctx);
+                }
+                self.drop_rules(["allof", "allowed", "anyof", "empty", "forbidden", "items", "keysrules", "min", "max",
+                    "minlength", "maxlength", "noneof", "oneof", "regex", "schema", "type", "valuesrules"]);
+            }
+        } else if rule == "readonly" {
+            self.validate_readonly(c, field, value, ctx);
+        } else if rule == "regex" {
+            self.v_regex(c, field, value, ctx);
+        } else if rule == "schema" {
+            self.v_schema(c, field, value, ctx)?;
+        } else if rule == "type" {
+            self.v_type(c, field, value, ctx);
+        } else if rule == "valuesrules" {
+            self.v_valuesrules(c, field, value, ctx)?;
+        } else if rule == "logical" and self.cfg.schema_kind {
+            self.v_schema_logical(c, field, value, ctx)?;
+        } else if rule == "allow_unknown" or rule == "meta" or rule == "require_all" or rule == "required" {
+        } else {
+            panic(f"There's no handler for '{rule}' in the 'validate' domain.");
+        }
+        Ok(false)
+    }
+
+    fn v_allowed(mut ref self, allowed: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        if is_iterable(value) and not is_str(value) {
+            let mut unallowed: Vec[Value] = Vec.new();
+            for x in items_of(value) {
+                if not py_in(x, allowed).unwrap_or(false) {
+                    unallowed.push(x.clone());
+                }
+            }
+            if unallowed.len() > 0 {
+                self.error1(field, 0x45, Value.Tuple(unallowed), ctx);
+            }
+        } else if not py_in(value, allowed).unwrap_or(false) {
+            self.error1(field, 0x44, value.clone(), ctx);
+        }
+    }
+
+    fn v_check_with(mut ref self, checks: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        match checks {
+            Value.Str(name) => {
+                if self.cfg.schema_kind {
+                    self.schema_check(name, field, value, ctx)?;
+                } else {
+                    match app_check(name, value) {
+                        Some(msg) => self.custom(field, msg, ctx),
+                        None => {}
+                    }
+                }
+            }
+            _ => {
+                for c in items_of(checks) {
+                    self.v_check_with(c, field, value, ctx)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn v_contains(mut ref self, expected: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        if not is_iterable(value) {
+            return;
+        }
+        let mut exp: Vec[Value] = Vec.new();
+        if not is_iterable(expected) or is_str(expected) {
+            exp.push(expected.clone());
+        } else {
+            for x in items_of(expected) {
+                value_list_add(mut exp, x);
+            }
+        }
+        let have = items_of(value);
+        let mut missing: Vec[Value] = Vec.new();
+        for x in exp {
+            if not set_has(have, x) {
+                missing.push(x.clone());
+            }
+        }
+        if missing.len() > 0 {
+            self.error1(field, 0x48, Value.Set(sorted_ints_first(missing)), ctx);
+        }
+    }
+
+    fn lookup_field(ref self, path: ref Value) -> (Value, Value) {
+        let mut p = py_str(path);
+        let mut context = self.document.clone();
+        if p.starts_with("^") {
+            p = p[1..].to_string();
+            context = if p.starts_with("^") { self.document.clone() } else { self.root_document() };
+        }
+        let parts: Vec[String] = p.split(".").map(|x| x.to_string()).collect();
+        for part in parts {
+            if not py_in(Value.Str(part.clone()), context).unwrap_or(false) {
+                return (Value.Null, Value.Null);
+            }
+            context = get_or(context, part.as_str(), empty_dict());
+        }
+        (Value.Str(parts[parts.len() - 1].clone()), context)
+    }
+
+    fn v_dependencies(mut ref self, deps0: ref Value, field: ref Value, ctx: mut ref Ctx) -> bool {
+        let deps = if is_str(deps0) or not is_iterable(deps0) {
+            let mut t: Vec[Value] = Vec.new();
+            t.push(deps0.clone());
+            Value.Tuple(t)
+        } else {
+            deps0.clone()
+        };
+        match deps {
+            Value.Dict(d) => {
+                let mut counter = 0;
+                let mut info: Vec[Kv] = Vec.new();
+                for e in d {
+                    let vals = if not is_seq(e.val) or is_str(e.val) {
+                        let mut l: Vec[Value] = Vec.new();
+                        l.push(e.val.clone());
+                        Value.List(l)
+                    } else {
+                        e.val.clone()
+                    };
+                    let (_, wanted) = self.lookup_field(e.key);
+                    if py_in(wanted, vals).unwrap_or(false) {
+                        counter += 1;
+                    } else {
+                        dict_set(mut info, e.key, wanted);
+                    }
+                }
+                if counter != d.len() {
+                    self.error1(field, 0x05, Value.Dict(info), ctx);
+                }
+            }
+            Value.List(_) => self.deps_sequence(deps, field, ctx),
+            Value.Tuple(_) => self.deps_sequence(deps, field, ctx),
+            _ => {}
+        }
+        let mut at = self.sp.clone();
+        at.push(field.clone());
+        at.push(vs("dependencies"));
+        tree_has_node(self.tree, at)
+    }
+
+    fn deps_sequence(mut ref self, deps: ref Value, field: ref Value, ctx: mut ref Ctx) {
+        for dep in items_of(deps) {
+            let (f, _) = self.lookup_field(dep);
+            if is_null(f) {
+                self.error1(field, 0x04, dep.clone(), ctx);
+            }
+        }
+    }
+
+    fn v_excludes(mut ref self, excluded: ref Value, field: ref Value, ctx: mut ref Ctx) {
+        let ex = if is_hashable(excluded) {
+            let mut l: Vec[Value] = Vec.new();
+            l.push(excluded.clone());
+            l
+        } else {
+            items_of(excluded)
+        };
+        let frules = get_v(self.schema, field);
+        let req = truthy(get_or(frules, "required", Value.Bool(self.cfg.require_all)));
+        if req {
+            value_list_add(mut self.unreq, field);
+        }
+        for e in ex {
+            if has_key_v(self.schema, e) and req {
+                value_list_add(mut self.unreq, e);
+            }
+        }
+        let mut any = false;
+        for e in ex {
+            if has_key_v(self.document, e) {
+                any = true;
+            }
+        }
+        if any {
+            let mut parts: Vec[String] = Vec.new();
+            for e in ex {
+                parts.push(f"'{py_str(e)}'");
+            }
+            self.error1(field, 0x06, Value.Str(parts.join(", ")), ctx);
+        }
+    }
+
+    fn v_forbidden(mut ref self, forbidden: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        if is_seq(value) and not is_str(value) {
+            let fb = items_of(forbidden);
+            let mut hit: Vec[Value] = Vec.new();
+            for x in items_of(value) {
+                if set_has(fb, x) {
+                    value_list_add(mut hit, x);
+                }
+            }
+            if hit.len() > 0 {
+                self.error1(field, 0x47, Value.List(sorted_ints_first(hit)), ctx);
+            }
+        } else if py_in(value, forbidden).unwrap_or(false) {
+            self.error1(field, 0x46, value.clone(), ctx);
+        }
+    }
+
+    fn v_items(mut ref self, items: ref Value, field: ref Value, values: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let rl = items_of(items);
+        let vl = items_of(values);
+        if rl.len() != vl.len() {
+            let mut info: Vec[Value] = Vec.new();
+            info.push(Value.Int(rl.len()));
+            info.push(Value.Int(vl.len()));
+            self.error_def(field, 0x26, info, Vec.new(), ctx);
+            return Ok(());
+        }
+        let mut sch: Vec[Kv] = Vec.new();
+        let mut doc: Vec[Kv] = Vec.new();
+        for i in 0..rl.len() {
+            sch.push(Kv { key: Value.Int(i), val: rl[i].clone() });
+            doc.push(Kv { key: Value.Int(i), val: vl[i].clone() });
+        }
+        let mut c = self.child(field, pair(field, "items"), Value.Dict(sch));
+        if not c.validate(Value.Dict(doc), self.update, false, ctx)? {
+            let errs = c.errors.clone();
+            self.error_def(field, 0x8F, Vec.new(), errs, ctx);
+        }
+        Ok(())
+    }
+
+    fn v_logical(mut ref self, op: ref String, defs: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut valid = 0;
+        let mut errs: Vec[VErr] = Vec.new();
+        let ds = items_of(defs);
+        let frules = get_v(self.schema, field);
+        for i in 0..ds.len() {
+            let mut d = entries(ds[i]);
+            for r in ["allow_unknown", "type"] {
+                if dict_find(d, vs(r)) < 0 and has_key(frules, r) {
+                    dict_set(mut d, vs(r), get(frules, r));
+                }
+            }
+            if dict_find(d, vs("allow_unknown")) < 0 {
+                dict_set(mut d, vs("allow_unknown"), self.cfg.allow_unknown.clone());
+            }
+            let mut crumb: Vec[Value] = Vec.new();
+            crumb.push(field.clone());
+            crumb.push(Value.Str(op.clone()));
+            crumb.push(Value.Int(i));
+            let mut c = self.child(Value.Null, Value.Tuple(crumb), one_dict(field, Value.Dict(d)));
+            c.cfg.allow_unknown = Value.Bool(true);
+            let doc = self.document.clone();
+            if c.validate(doc, self.update, false, ctx)? {
+                valid += 1;
+            } else {
+                let mut e = c.errors.clone();
+                let mut si: Vec[i64] = Vec.new();
+                si.push(3);
+                self.drop_nodes(mut e, Vec.new(), si);
+                for x in e {
+                    errs.push(x.clone());
+                }
+            }
+        }
+        let n = ds.len();
+        let failed = if op == "anyof" {
+            valid < 1
+        } else if op == "allof" {
+            valid < n
+        } else if op == "noneof" {
+            valid > 0
+        } else {
+            valid != 1
+        };
+        if failed {
+            let code = if op == "anyof" { 0x93 } else if op == "allof" { 0x94 } else if op == "noneof" { 0x91 } else { 0x92 };
+            let mut info: Vec[Value] = Vec.new();
+            info.push(Value.Int(valid));
+            info.push(Value.Int(n));
+            self.error_def(field, code, info, errs, ctx);
+        }
+        Ok(())
+    }
+
+    fn v_keysrules(mut ref self, rules: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if not is_dict(value) {
+            return Ok(());
+        }
+        let mut sch: Vec[Kv] = Vec.new();
+        let mut doc: Vec[Kv] = Vec.new();
+        for k in keys_of(value) {
+            sch.push(Kv { key: k.clone(), val: rules.clone() });
+            doc.push(Kv { key: k.clone(), val: k.clone() });
+        }
+        let mut c = self.child(field, pair(field, "keysrules"), Value.Dict(sch));
+        if not c.validate(Value.Dict(doc), false, false, ctx)? {
+            let mut errs = c.errors.clone();
+            let mut si: Vec[i64] = Vec.new();
+            si.push(2);
+            si.push(4);
+            self.drop_nodes(mut errs, Vec.new(), si);
+            self.error_def(field, 0x83, Vec.new(), errs, ctx);
+        }
+        Ok(())
+    }
+
+    fn validate_readonly(mut ref self, readonly: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        if truthy(readonly) {
+            if not self.cfg.is_normalized {
+                self.error0(field, 0x63, ctx);
+            }
+            let at = extend_path(self.dp, field);
+            let has_error = tree_has_code(self.tree, at, 0x63);
+            if self.cfg.is_normalized and has_error {
+                self.remaining = Vec.new();
+            }
+        }
+    }
+
+    fn v_regex(mut ref self, pattern: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        let s = match value {
+            Value.Str(s) => s.clone(),
+            _ => return,
+        };
+        let mut p = py_str(pattern);
+        if not p.ends_with("$") {
+            p.push_str("$");
+        }
+        let ok = match Regex.compile(f"^(?:{p})") {
+            Ok(re) => re.is_match(s),
+            Err(_) => false,
+        };
+        if not ok {
+            self.error0(field, 0x41, ctx);
+        }
+    }
+
+    fn v_schema(mut ref self, sch: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if is_null(sch) {
+            return Ok(());
+        }
+        if is_seq(value) and not is_str(value) {
+            let items = items_of(value);
+            let mut s2: Vec[Kv] = Vec.new();
+            let mut doc: Vec[Kv] = Vec.new();
+            for i in 0..items.len() {
+                s2.push(Kv { key: Value.Int(i), val: sch.clone() });
+                doc.push(Kv { key: Value.Int(i), val: items[i].clone() });
+            }
+            let mut c = self.child(field, pair(field, "schema"), Value.Dict(s2));
+            c.cfg.allow_unknown = self.cfg.allow_unknown.clone();
+            c.validate(Value.Dict(doc), self.update, false, ctx)?;
+            if c.errors.len() > 0 {
+                let mut errs = c.errors.clone();
+                let mut si: Vec[i64] = Vec.new();
+                si.push(2);
+                self.drop_nodes(mut errs, Vec.new(), si);
+                self.error_def(field, 0x82, Vec.new(), errs, ctx);
+            }
+        } else if is_dict(value) {
+            let s = resolve_schema(sch, ctx);
+            let frules = resolve_rules_set(get_v(self.schema, field), ctx);
+            let mut c = self.child(field, pair(field, "schema"), s);
+            c.cfg.allow_unknown = get_or(frules, "allow_unknown", self.cfg.allow_unknown.clone());
+            c.cfg.require_all = is_true(get_or(frules, "require_all", Value.Bool(self.cfg.require_all)));
+            match c.validate(value, self.update, false, ctx) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let errs = c.errors.clone();
+                    self.error_def(field, 0x81, Vec.new(), errs, ctx);
+                }
+                Err(_) => {
+                    self.error0(field, 0x25, ctx);
+                    return Err(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn type_match(ref self, t: ref String, v: ref Value) -> bool {
+        if t == "boolean" {
+            match v {
+                Value.Bool(_) => true,
+                _ => false,
+            }
+        } else if t == "integer" {
+            is_intlike(v)
+        } else if t == "float" {
+            match v {
+                Value.Float(_) => true,
+                _ => is_intlike(v),
+            }
+        } else if t == "number" {
+            match v {
+                Value.Int(_) => true,
+                Value.Float(_) => true,
+                _ => false,
+            }
+        } else if t == "string" {
+            is_str(v)
+        } else if t == "dict" {
+            is_dict(v)
+        } else if t == "list" {
+            match v {
+                Value.List(_) => true,
+                Value.Tuple(_) => true,
+                _ => false,
+            }
+        } else if t == "set" {
+            match v {
+                Value.Set(_) => true,
+                _ => false,
+            }
+        } else if t == "container" {
+            is_iterable(v) and not is_str(v)
+        } else if t == "date" {
+            match v {
+                Value.Date(_, _, _) => true,
+                _ => false,
+            }
+        } else if t == "datetime" or t == "binary" {
+            false
+        } else if self.cfg.schema_kind and t == "callable" {
+            false
+        } else if self.cfg.schema_kind and t == "hashable" {
+            is_hashable(v)
+        } else {
+            panic(f"There's no handler for '{t}' in the 'validate_type' domain.")
+        }
+    }
+
+    fn v_type(mut ref self, dt: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) {
+        if not truthy(dt) {
+            return;
+        }
+        let types = if is_str(dt) {
+            let mut l: Vec[Value] = Vec.new();
+            l.push(dt.clone());
+            l
+        } else {
+            items_of(dt)
+        };
+        for t in types {
+            if self.type_match(py_str(t), value) {
+                return;
+            }
+        }
+        self.error0(field, 0x24, ctx);
+        self.remaining = Vec.new();
+    }
+
+    fn v_valuesrules(mut ref self, rules: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if not is_dict(value) {
+            return Ok(());
+        }
+        let mut sch: Vec[Kv] = Vec.new();
+        for k in keys_of(value) {
+            sch.push(Kv { key: k.clone(), val: rules.clone() });
+        }
+        let mut c = self.child(field, pair(field, "valuesrules"), Value.Dict(sch));
+        c.validate(value, self.update, false, ctx)?;
+        if c.errors.len() > 0 {
+            let mut errs = c.errors.clone();
+            let mut si: Vec[i64] = Vec.new();
+            si.push(2);
+            self.drop_nodes(mut errs, Vec.new(), si);
+            self.error_def(field, 0x84, Vec.new(), errs, ctx);
+        }
+        Ok(())
+    }
+
+    fn validate_required(mut ref self, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut required: Vec[Value] = Vec.new();
+        for e in entries(self.schema) {
+            let rs = resolve_rules_set(e.val, ctx);
+            if is_null(rs) {
+                let last_is_schema = self.sp.len() > 0 and py_eq(self.sp[self.sp.len() - 1], vs("schema"));
+                if self.cfg.is_child and last_is_schema {
+                    return Err(());
+                }
+                panic("AttributeError: 'NoneType' object has no attribute 'get'");
+            }
+            if is_true(get_or(rs, "required", Value.Bool(self.cfg.require_all))) and not set_has(self.unreq, e.key) {
+                required.push(e.key.clone());
+            }
+        }
+        let doc = entries(self.document);
+        let mut present: Vec[Value] = Vec.new();
+        for e in doc {
+            if not is_null(e.val) or not self.cfg.ignore_none_values {
+                present.push(e.key.clone());
+            }
+        }
+        for f in required {
+            if not set_has(present, f) {
+                self.error0(f, 0x02, ctx);
+            }
+        }
+        if self.unreq.len() > 0 {
+            let mut fields: Vec[Value] = Vec.new();
+            for e in doc {
+                if not is_null(e.val) {
+                    fields.push(e.key.clone());
+                }
+            }
+            let mut disjoint = true;
+            for u in self.unreq {
+                if set_has(fields, u) {
+                    disjoint = false;
+                }
+            }
+            if disjoint {
+                let unreq = self.unreq.clone();
+                for f in unreq {
+                    self.error0(f, 0x02, ctx);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------- SchemaValidator
+
+    fn v_schema_logical(mut ref self, rule: ref Value, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if not is_seq(value) {
+            self.error0(field, 0x24, ctx);
+            return Ok(());
+        }
+        let mut c = self.child(rule, Value.Null, ctx.validation_rules.clone());
+        c.cfg.allow_unknown = Value.Bool(false);
+        for constraints in items_of(value) {
+            c.validate(constraints, false, false, ctx)?;
+            if c.errors.len() > 0 {
+                let errs = c.errors.clone();
+                self.add_errors(errs);
+            }
+        }
+        Ok(())
+    }
+
+    fn schema_check(mut ref self, name: ref String, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        if name == "bulk_schema" {
+            self.check_bulk_schema(field, value, ctx)?;
+        } else if name == "dependencies" {
+            if is_dict(value) {
+                let mut rules: Vec[Kv] = Vec.new();
+                dict_set(mut rules, vs("type"), vs("list"));
+                let mut c = self.child(field, Value.Null, one_dict(vs("valuesrules"), Value.Dict(rules)));
+                c.cfg.allow_unknown = Value.Bool(true);
+                if not c.validate(value, false, false, ctx)? {
+                    let errs = c.errors.clone();
+                    self.add_errors(errs);
+                }
+            } else if is_seq(value) and not is_str(value) {
+                let mut all = true;
+                for x in items_of(value) {
+                    if not is_hashable(x) {
+                        all = false;
+                    }
+                }
+                if not all {
+                    let path = extend_path(self.dp, field);
+                    self.custom(Value.Tuple(path), "All dependencies must be a hashable type.".to_string(), ctx);
+                }
+            }
+        } else if name == "items" {
+            let items = items_of(value);
+            for i in 0..items.len() {
+                let mut t: Vec[Value] = Vec.new();
+                t.push(field.clone());
+                t.push(Value.Int(i));
+                self.check_bulk_schema(Value.Tuple(t), items[i], ctx)?;
+            }
+        } else if name == "schema" {
+            let mut v = value.clone();
+            match value {
+                Value.Str(s) => {
+                    if str_list_has(ctx.known_schema_refs, s) {
+                        return Ok(());
+                    }
+                    ctx.known_schema_refs.push(s.clone());
+                    match dict_get(ctx.schema_reg, value) {
+                        Some(d) => v = d,
+                        None => {
+                            let path = extend_path(self.dp, field);
+                            self.custom(Value.Tuple(path), f"Schema definition {s} not found.", ctx);
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            let mut expanded: Vec[Kv] = Vec.new();
+            for e in entries(v) {
+                let val = match e.val {
+                    Value.Str(_) => match dict_get(ctx.rules_reg, e.val) {
+                        Some(d) => d,
+                        None => Value.Null,
+                    },
+                    _ => e.val.clone(),
+                };
+                expanded.push(Kv { key: e.key.clone(), val: val });
+            }
+            let mut c = self.child(field, Value.Null, Value.Null);
+            c.cfg.allow_unknown = self.root_allow_unknown();
+            c.validate(Value.Dict(expanded), false, false, ctx)?;
+            if c.errors.len() > 0 {
+                let errs = c.errors.clone();
+                self.add_errors(errs);
+            }
+        } else if name == "type" {
+            let mut vals: Vec[Value] = Vec.new();
+            if is_str(value) {
+                vals.push(value.clone());
+            } else {
+                for x in items_of(value) {
+                    value_list_add(mut vals, x);
+                }
+            }
+            let mut invalid: Vec[String] = Vec.new();
+            for x in vals {
+                if not set_has(app_types(), x) {
+                    invalid.push(py_str(x));
+                }
+            }
+            if invalid.len() > 0 {
+                self.custom(field, f"Unsupported types: {invalid.join(", ")}", ctx);
+            }
+        } else {
+            panic(f"There's no handler for '{name}' in the 'check_with' domain.");
+        }
+        Ok(())
+    }
+
+    fn check_bulk_schema(mut ref self, field: ref Value, value: ref Value, ctx: mut ref Ctx) -> Result[(), ()] {
+        let mut v = value.clone();
+        match value {
+            Value.Str(s) => {
+                if str_list_has(ctx.known_rules_refs, s) {
+                    return Ok(());
+                }
+                ctx.known_rules_refs.push(s.clone());
+                match dict_get(ctx.rules_reg, value) {
+                    Some(d) => v = d,
+                    None => {
+                        self.custom(field, f"Rules set definition {s} not found.", ctx);
+                        return Ok(());
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut c = self.child(field, Value.Null, ctx.rules.clone());
+        c.cfg.allow_unknown = Value.Bool(false);
+        c.validate(v, false, false, ctx)?;
+        if c.errors.len() > 0 {
+            let errs = c.errors.clone();
+            self.add_errors(errs);
+        }
+        Ok(())
+    }
+}
+
+fn has_key_v(v: ref Value, k: ref Value) -> bool {
+    match v {
+        Value.Dict(d) => dict_find(d, k) >= 0,
+        _ => false,
+    }
+}
+
+// schema.get(x, {})
+fn get_v_or_empty(v: ref Value, k: ref Value) -> Value {
+    match v {
+        Value.Dict(d) => match dict_get(d, k) {
+            Some(x) => x,
+            None => empty_dict(),
+        },
+        _ => empty_dict(),
+    }
+}
+
+// ------------------------------------------------------------ schemas
+//
+// cerberus.schema: DefinitionSchema.expand and validate, and the
+// registries.
+
+fn of_rule_split(k: ref Value) -> Option[(String, String)] {
+    let s = match k {
+        Value.Str(s) => s.clone(),
+        _ => return None,
+    };
+    for op in ["allof_", "anyof_", "noneof_", "oneof_"] {
+        if s.starts_with(op) {
+            return Some((op[0..op.len() - 1].to_string(), s[op.len()..].to_string()));
+        }
+    }
+    None
+}
+
+// _expand_logical_shortcuts; Err where Python raises and expand() gives up.
+fn expand_logical(schema: mut ref Value) -> Result[(), ()] {
+    let mut d = match schema {
+        Value.Dict(d) => d.clone(),
+        _ => return Err(()),
+    };
+    for fi in 0..d.len() {
+        let mut rules = match d[fi].val {
+            Value.Dict(r) => r.clone(),
+            Value.Str(_) => continue,
+            Value.List(_) => continue,
+            Value.Tuple(_) => continue,
+            _ => {
+                *schema = Value.Dict(d);
+                return Err(());
+            }
+        };
+        let mut ofs: Vec[Value] = Vec.new();
+        for e in rules {
+            match of_rule_split(e.key) {
+                Some(_) => ofs.push(e.key.clone()),
+                None => {}
+            }
+        }
+        for of in ofs {
+            let (op, rule) = match of_rule_split(of) {
+                Some(p) => p,
+                None => continue,
+            };
+            let vals = get_v(Value.Dict(rules.clone()), of);
+            if not is_iterable(vals) {
+                d[fi].val = Value.Dict(rules);
+                *schema = Value.Dict(d);
+                return Err(());
+            }
+            let mut l: Vec[Value] = Vec.new();
+            for v in items_of(vals) {
+                l.push(one_dict(Value.Str(rule.clone()), v.clone()));
+            }
+            dict_set(mut rules, Value.Str(op), Value.List(l));
+            dict_del(mut rules, of);
+        }
+        d[fi].val = Value.Dict(rules);
+    }
+    *schema = Value.Dict(d);
+    Ok(())
+}
+
+fn expand_one(v: ref Value) -> Result[Value, ()] {
+    let r = expand(one_dict(Value.Int(0), v.clone()))?;
+    Ok(get_v(r, Value.Int(0)))
+}
+
+// _expand_subschemas.
+fn expand_subschemas(schema: mut ref Value) -> Result[(), ()] {
+    let mut d = match schema {
+        Value.Dict(d) => d.clone(),
+        _ => return Err(()),
+    };
+    for fi in 0..d.len() {
+        let mut rules = d[fi].val.clone();
+        let mut failed = false;
+        if is_dict(rules) and has_key(rules, "schema") {
+            let sub = get(rules, "schema");
+            match sub.clone() {
+                Value.Dict(sd) => {
+                    let mut all = true;
+                    for e in sd {
+                        if not is_dict(e.val) {
+                            all = false;
+                        }
+                    }
+                    let ns = if all { expand(sub.clone()) } else { expand_one(sub) };
+                    match ns {
+                        Ok(x) => {
+                            let mut rd = entries(rules);
+                            dict_set(mut rd, vs("schema"), x);
+                            rules = Value.Dict(rd);
+                        }
+                        Err(_) => failed = true,
+                    }
+                }
+                _ => failed = true,
+            }
+        }
+        if not failed {
+            for r in ["keysrules", "valuesrules", "keyschema", "valueschema"] {
+                match py_in(vs(r), rules) {
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Ok(true) => {
+                        if not is_dict(rules) {
+                            failed = true;
+                            break;
+                        }
+                        match expand_one(get(rules, r)) {
+                            Ok(x) => {
+                                let mut rd = entries(rules);
+                                dict_set(mut rd, vs(r), x);
+                                rules = Value.Dict(rd);
+                            }
+                            Err(_) => {
+                                failed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if not failed {
+            for r in ["allof", "anyof", "items", "noneof", "oneof"] {
+                match py_in(vs(r), rules) {
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Ok(true) => {
+                        if not is_dict(rules) {
+                            failed = true;
+                            break;
+                        }
+                        let cur = get(rules, r);
+                        if not is_seq(cur) {
+                            continue;
+                        }
+                        let mut nl: Vec[Value] = Vec.new();
+                        for item in items_of(cur) {
+                            match expand_one(item) {
+                                Ok(x) => nl.push(x),
+                                Err(_) => {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if failed {
+                            break;
+                        }
+                        let mut rd = entries(rules);
+                        dict_set(mut rd, vs(r), Value.List(nl));
+                        rules = Value.Dict(rd);
+                    }
+                }
+            }
+        }
+        d[fi].val = rules;
+        if failed {
+            *schema = Value.Dict(d);
+            return Err(());
+        }
+    }
+    *schema = Value.Dict(d);
+    Ok(())
+}
+
+// _rename_deprecated_rulenames; Err for the TypeError a non-container
+// rules value raises.
+fn rename_deprecated(schema: mut ref Value) -> Result[(), ()] {
+    let mut d = entries(schema);
+    for fi in 0..d.len() {
+        if is_str(d[fi].val) {
+            continue;
+        }
+        for (old, new) in [("keyschema", "keysrules"), ("validator", "check_with"), ("valueschema", "valuesrules")] {
+            match py_in(vs(old), d[fi].val) {
+                Err(_) => return Err(()),
+                Ok(false) => {}
+                Ok(true) => {
+                    let mut rd = entries(d[fi].val);
+                    let v = get(Value.Dict(rd.clone()), old);
+                    dict_set(mut rd, vs(new), v);
+                    dict_del(mut rd, vs(old));
+                    d[fi].val = Value.Dict(rd);
+                }
+            }
+        }
+    }
+    *schema = Value.Dict(d);
+    Ok(())
+}
+
+// DefinitionSchema.expand.
+fn expand(schema0: own Value) -> Result[Value, ()] {
+    let mut schema = schema0;
+    let r = expand_logical(mut schema);
+    if r.is_ok() {
+        let _ = expand_subschemas(mut schema);
+    }
+    rename_deprecated(mut schema)?;
+    Ok(schema)
+}
+
+fn expand_top(schema: own Value) -> Value {
+    match expand(schema) {
+        Ok(s) => s,
+        Err(_) => panic("TypeError while expanding a schema"),
+    }
+}
+
+// DefinitionSchema(validator, schema): the expanded schema, or the
+// message of the SchemaError it raises.
+fn define_schema(schema0: ref Value, ctx: mut ref Ctx) -> Result[Value, String] {
+    let schema = match schema0 {
+        Value.Str(_) => match dict_get(ctx.schema_reg, schema0) {
+            Some(s) => s,
+            None => schema0.clone(),
+        },
+        _ => schema0.clone(),
+    };
+    if not is_dict(schema) {
+        return Err(f"schema definition for field '{py_str(schema)}' must be a dict");
+    }
+    let s = expand_top(schema);
+    let mut test: Vec[Kv] = Vec.new();
+    for e in entries(s) {
+        let v = match e.val {
+            Value.Str(_) => match dict_get(ctx.rules_reg, e.val) {
+                Some(d) => d,
+                None => e.val.clone(),
+            },
+            Value.Dict(rs) => {
+                let mut t: Vec[Kv] = Vec.new();
+                for r in rs {
+                    t.push(Kv { key: Value.Str(py_str(r.key).replace(" ", "_")), val: r.val.clone() });
+                }
+                Value.Dict(t)
+            }
+            _ => e.val.clone(),
+        };
+        test.push(Kv { key: e.key.clone(), val: v });
+    }
+    ctx.known_rules_refs = Vec.new();
+    ctx.known_schema_refs = Vec.new();
+    let mut svs: Vec[Kv] = Vec.new();
+    dict_set(mut svs, vs("allow_unknown"), Value.Bool(false));
+    dict_set(mut svs, vs("schema"), ctx.rules.clone());
+    dict_set(mut svs, vs("type"), vs("dict"));
+    let mut cfg = new_cfg(true);
+    cfg.allow_unknown = Value.Dict(svs);
+    let mut sv = new_v(cfg, Value.Null);
+    let ok = match sv.validate(Value.Dict(test), false, false, ctx) {
+        Ok(b) => b,
+        Err(_) => panic("schema rule type error while checking a schema"),
+    };
+    if not ok {
+        return Err(ptree_repr(pretty_tree(sv.errors, true)));
+    }
+    Ok(s)
+}
+// ------------------------------------------------------------ the application
+//
+// What AppValidator adds to Validator: named coercers, default setters and
+// checks. Each fails with the message Python's exception would carry,
+// since Cerberus puts str(exception) into the error it records.
+
+fn py_type(v: ref Value) -> String {
+    match v {
+        Value.Date(_, _, _) => "date".to_string(),
+        _ => type_name(v),
+    }
+}
+
+fn no_attr(v: ref Value, attr: Str) -> String {
+    f"'{py_type(v)}' object has no attribute '{attr}'"
+}
+
+fn is_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0b' or c == '\x0c'
+}
+
+// str.strip() with no argument.
+fn py_strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out = String.new();
+    for i in a..b {
+        out.push(cs[i]);
+    }
+    out
+}
+
+// int(s) for a str: optional sign, then digits with single underscores
+// between them.
+fn int_of_str(s: ref String) -> Result[i64, String] {
+    let bad = f"invalid literal for int() with base 10: {str_repr(s)}";
+    let t = py_strip(s);
+    let cs: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return Err(bad);
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < cs.len() {
+        let c = cs[i];
+        if c.is_ascii_digit() {
+            n = n * 10 + (c as i64 - '0' as i64);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < cs.len() and cs[i + 1].is_ascii_digit() {
+            prev_digit = false;
+        } else {
+            return Err(bad);
+        }
+        i += 1;
+    }
+    Ok(if neg { -n } else { n })
+}
+
+fn coerce_int(v: ref Value) -> Result[Value, String] {
+    match v {
+        Value.Int(i) => Ok(Value.Int(*i)),
+        Value.Bool(b) => Ok(Value.Int(if *b { 1 } else { 0 })),
+        Value.Float(x) => {
+            if *x != *x {
+                Err("cannot convert float NaN to integer".to_string())
+            } else if *x == 1.0 / 0.0 or *x == -1.0 / 0.0 {
+                Err("cannot convert float infinity to integer".to_string())
+            } else {
+                Ok(Value.Int(x.trunc() as i64))
+            }
+        }
+        Value.Str(s) => Ok(Value.Int(int_of_str(s)?)),
+        _ => Err(f"int() argument must be a string, a bytes-like object or a real number, not '{py_type(v)}'"),
+    }
+}
+
+fn coerce_float(v: ref Value) -> Result[Value, String] {
+    match v {
+        Value.Int(i) => Ok(Value.Float(*i as f64)),
+        Value.Bool(b) => Ok(Value.Float(if *b { 1.0 } else { 0.0 })),
+        Value.Float(x) => Ok(Value.Float(*x)),
+        Value.Str(s) => match f64.parse(py_strip(s)) {
+            Ok(x) => Ok(Value.Float(x)),
+            Err(_) => Err(f"could not convert string to float: {str_repr(s)}"),
+        },
+        _ => Err(f"float() argument must be a string or a real number, not '{py_type(v)}'"),
+    }
+}
+
+fn str_or(v: ref Value, attr: Str) -> Result[String, String] {
+    match v {
+        Value.Str(s) => Ok(s.clone()),
+        _ => Err(no_attr(v, attr)),
+    }
+}
+
+fn days_in(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn coerce_date(v: ref Value) -> Result[Value, String] {
+    let s = str_or(v, "split")?;
+    let parts: Vec[String] = s.split("-").map(|p| p.to_string()).collect();
+    if parts.len() < 3 {
+        return Err(f"not enough values to unpack (expected 3, got {parts.len()})");
+    }
+    if parts.len() > 3 {
+        return Err("too many values to unpack (expected 3)".to_string());
+    }
+    let y = int_of_str(parts[0])?;
+    let m = int_of_str(parts[1])?;
+    let d = int_of_str(parts[2])?;
+    if y < 1 or y > 9999 {
+        return Err(f"year {y} is out of range");
+    }
+    if m < 1 or m > 12 {
+        return Err("month must be in 1..12".to_string());
+    }
+    if d < 1 or d > days_in(y, m) {
+        return Err("day is out of range for month".to_string());
+    }
+    Ok(Value.Date(y, m, d))
+}
+
+fn coerce_named(name: ref String, value: ref Value) -> Result[Value, String] {
+    if name == "int" {
+        coerce_int(value)
+    } else if name == "float" {
+        coerce_float(value)
+    } else if name == "strip" {
+        Ok(Value.Str(py_strip(str_or(value, "strip")?)))
+    } else if name == "lower" {
+        Ok(Value.Str(str_or(value, "lower")?.to_lowercase()))
+    } else if name == "split" {
+        let s = str_or(value, "split")?;
+        let mut out: Vec[Value] = Vec.new();
+        for p in s.split(",") {
+            out.push(Value.Str(py_strip(p.to_string())));
+        }
+        Ok(Value.List(out))
+    } else if name == "yesno" {
+        let s = str_or(value, "lower")?.to_lowercase();
+        if s == "yes" or s == "y" or s == "true" or s == "1" {
+            Ok(Value.Bool(true))
+        } else if s == "no" or s == "n" or s == "false" or s == "0" {
+            Ok(Value.Bool(false))
+        } else {
+            Err(str_repr(s))
+        }
+    } else if name == "date" {
+        coerce_date(value)
+    } else if name == "snake" {
+        let s = str_or(value, "isupper")?;
+        let mut out = String.new();
+        let mut i = 0;
+        for c in s.chars() {
+            if c.is_uppercase() and i > 0 {
+                out.push('_');
+            }
+            out.push_str(c.to_lowercase().to_string());
+            i += 1;
+        }
+        Ok(Value.Str(out.replace("-", "_").replace(" ", "_")))
+    } else {
+        panic(f"no coercer named {name}")
+    }
+}
+
+fn field_of_doc(doc: ref Value, k: Str) -> Result[Value, SetErr] {
+    match dict_get(entries(doc), vs(k)) {
+        Some(v) => Ok(v),
+        None => Err(SetErr.Key),
+    }
+}
+
+fn default_setter_named(name: ref String, doc: own Value) -> Result[Value, SetErr] {
+    if name == "slug" {
+        let t = field_of_doc(doc, "title")?;
+        match t {
+            Value.Str(s) => Ok(Value.Str(s.to_lowercase().replace(" ", "-"))),
+            _ => Err(SetErr.Other(no_attr(t, "lower"))),
+        }
+    } else if name == "owner" {
+        let a = field_of_doc(doc, "author")?;
+        match a {
+            Value.Str(s) => Ok(Value.Str(f"{s}@example.com")),
+            Value.List(_) => Err(SetErr.Other("can only concatenate list (not \"str\") to list".to_string())),
+            _ => Err(SetErr.Other(f"unsupported operand type(s) for +: '{py_type(a)}' and 'str'")),
+        }
+    } else if name == "author" {
+        let o = field_of_doc(doc, "owner")?;
+        match o {
+            Value.Str(s) => {
+                let parts: Vec[Str] = s.split("@").collect();
+                Ok(Value.Str(parts[0].to_string()))
+            }
+            _ => Err(SetErr.Other(no_attr(o, "split"))),
+        }
+    } else if name == "count" {
+        let items = field_of_doc(doc, "items")?;
+        match items {
+            Value.Str(_) => Ok(Value.Int(py_len(items))),
+            Value.List(_) => Ok(Value.Int(py_len(items))),
+            Value.Tuple(_) => Ok(Value.Int(py_len(items))),
+            Value.Set(_) => Ok(Value.Int(py_len(items))),
+            Value.Dict(_) => Ok(Value.Int(py_len(items))),
+            _ => Err(SetErr.Other(f"object of type '{py_type(items)}' has no len()")),
+        }
+    } else {
+        panic(f"no default setter named {name}")
+    }
+}
+
+fn luhn_fails(s: ref String) -> bool {
+    let mut digits: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c as i64 - '0' as i64);
+        }
+    }
+    let mut total = 0;
+    let mut i = 0;
+    let mut k = digits.len();
+    while k > 0 {
+        k -= 1;
+        let mut d = digits[k];
+        if i % 2 == 1 {
+            d *= 2;
+            if d > 9 {
+                d -= 9;
+            }
+        }
+        total += d;
+        i += 1;
+    }
+    total % 10 != 0
+}
+
+// sorted(xs): a stable insertion sort; mixed types raise TypeError.
+fn py_sorted(xs: ref Vec[Value]) -> Vec[Value] {
+    let mut v = xs.clone();
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 {
+            match py_lt(v[j], v[j - 1]) {
+                Some(true) => {
+                    v.swap(j, j - 1);
+                    j -= 1;
+                }
+                Some(false) => break,
+                None => panic("TypeError: '<' not supported between these items"),
+            }
+        }
+        i += 1;
+    }
+    v
+}
+
+fn app_check(name: ref String, value: ref Value) -> Option[String] {
+    if name == "even" {
+        if is_intlike(value) and int_of(value) % 2 != 0 {
+            return Some("must be an even number".to_string());
+        }
+    } else if name == "luhn" {
+        if let Value.Str(s) = value {
+            if luhn_fails(s) {
+                return Some("card number fails the Luhn check".to_string());
+            }
+        }
+    } else if name == "port" {
+        if is_intlike(value) {
+            let p = int_of(value);
+            if p < 1024 and p != 80 and p != 443 {
+                return Some(f"privileged port {p}");
+            }
+        }
+    } else if name == "sorted" {
+        if let Value.List(xs) = value {
+            if not seq_eq(xs, py_sorted(xs)) {
+                return Some("items are not sorted".to_string());
+            }
+        }
+    } else {
+        panic(f"no check named {name}");
+    }
+    None
+}
+
+fn app_types() -> Vec[Value] {
+    let mut out: Vec[Value] = Vec.new();
+    for t in ["binary", "boolean", "container", "date", "datetime", "dict", "float", "integer", "list", "number", "set", "string"] {
+        out.push(vs(t));
+    }
+    out
+}
+
+// Validator.rules: each rule's own schema, as the docstrings and the
+// AppValidator methods declare them. {"(": [...]} marks a tuple.
+fn rules_json() -> String {
+    let checks = "{\"(\": [\"even\", \"luhn\", \"port\", \"sorted\"]}";
+    let coercers = "{\"(\": [\"date\", \"float\", \"int\", \"lower\", \"snake\", \"split\", \"strip\", \"yesno\"]}";
+    let setters = "{\"(\": [\"author\", \"count\", \"owner\", \"slug\"]}";
+    let processor = f"{{\"oneof\": [{{\"type\": \"callable\"}}, {{\"type\": \"list\", \"schema\": {{\"oneof\": [{{\"type\": \"callable\"}}, {{\"type\": \"string\", \"allowed\": {coercers}}}]}}}}, {{\"type\": \"string\", \"allowed\": {coercers}}}]}}";
+    let mut parts: Vec[String] = Vec.new();
+    parts.push("\"allof\": {\"type\": \"list\", \"logical\": \"allof\"}".to_string());
+    parts.push("\"allow_unknown\": {\"oneof\": [{\"type\": \"boolean\"}, {\"type\": [\"dict\", \"string\"], \"check_with\": \"bulk_schema\"}]}".to_string());
+    parts.push("\"allowed\": {\"type\": \"container\"}".to_string());
+    parts.push("\"anyof\": {\"type\": \"list\", \"logical\": \"anyof\"}".to_string());
+    parts.push(f"\"check_with\": {{\"oneof\": [{{\"type\": \"callable\"}}, {{\"type\": \"list\", \"schema\": {{\"oneof\": [{{\"type\": \"callable\"}}, {{\"type\": \"string\", \"allowed\": {checks}}}]}}}}, {{\"type\": \"string\", \"allowed\": {checks}}}]}}");
+    parts.push("\"contains\": {\"empty\": false}".to_string());
+    parts.push("\"dependencies\": {\"type\": {\"(\": [\"dict\", \"hashable\", \"list\"]}, \"check_with\": \"dependencies\"}".to_string());
+    parts.push("\"empty\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"excludes\": {\"type\": {\"(\": [\"hashable\", \"list\"]}, \"schema\": {\"type\": \"hashable\"}}".to_string());
+    parts.push("\"forbidden\": {\"type\": \"list\"}".to_string());
+    parts.push("\"items\": {\"type\": \"list\", \"check_with\": \"items\"}".to_string());
+    parts.push("\"keysrules\": {\"type\": [\"dict\", \"string\"], \"check_with\": \"bulk_schema\", \"forbidden\": [\"rename\", \"rename_handler\"]}".to_string());
+    parts.push("\"max\": {\"nullable\": false}".to_string());
+    parts.push("\"maxlength\": {\"type\": \"integer\"}".to_string());
+    parts.push("\"meta\": {}".to_string());
+    parts.push("\"min\": {\"nullable\": false}".to_string());
+    parts.push("\"minlength\": {\"type\": \"integer\"}".to_string());
+    parts.push("\"noneof\": {\"type\": \"list\", \"logical\": \"noneof\"}".to_string());
+    parts.push("\"nullable\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"oneof\": {\"type\": \"list\", \"logical\": \"oneof\"}".to_string());
+    parts.push("\"readonly\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"regex\": {\"type\": \"string\"}".to_string());
+    parts.push("\"require_all\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"required\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"schema\": {\"type\": [\"dict\", \"string\"], \"anyof\": [{\"check_with\": \"schema\"}, {\"check_with\": \"bulk_schema\"}]}".to_string());
+    parts.push("\"type\": {\"type\": [\"string\", \"list\"], \"check_with\": \"type\"}".to_string());
+    parts.push("\"valuesrules\": {\"type\": [\"dict\", \"string\"], \"check_with\": \"bulk_schema\", \"forbidden\": [\"rename\", \"rename_handler\"]}".to_string());
+    parts.push(f"\"coerce\": {processor}");
+    parts.push("\"default\": {\"nullable\": true}".to_string());
+    parts.push(f"\"default_setter\": {{\"oneof\": [{{\"type\": \"callable\"}}, {{\"type\": \"string\", \"allowed\": {setters}}}]}}");
+    parts.push("\"purge_unknown\": {\"type\": \"boolean\"}".to_string());
+    parts.push("\"rename\": {\"type\": \"hashable\"}".to_string());
+    parts.push(f"\"rename_handler\": {processor}");
+    let body = parts.join(", ");
+    f"{{{body}}}"
+}
+
+// Turn each {"(": [...]} into a tuple.
+fn tuples(v: own Value) -> Value {
+    match v {
+        Value.Dict(d) => {
+            if d.len() == 1 and py_eq(d[0].key, vs("(")) {
+                return Value.Tuple(items_of(tuples(d[0].val.clone())));
+            }
+            let mut out: Vec[Kv] = Vec.new();
+            for e in d {
+                out.push(Kv { key: e.key.clone(), val: tuples(e.val.clone()) });
+            }
+            Value.Dict(out)
+        }
+        Value.List(xs) => {
+            let mut out: Vec[Value] = Vec.new();
+            for x in xs {
+                out.push(tuples(x.clone()));
+            }
+            Value.List(out)
+        }
+        _ => v,
+    }
+}
+
+fn new_ctx() -> Ctx {
+    let rules = tuples(json_loads(rules_json()));
+    let mut vr: Vec[Kv] = Vec.new();
+    let all = entries(rules);
+    for i in 0..27 {
+        vr.push(all[i].clone());
+    }
+    Ctx {
+        schema_reg: Vec.new(),
+        rules_reg: Vec.new(),
+        known_rules_refs: Vec.new(),
+        known_schema_refs: Vec.new(),
+        rules: rules,
+        validation_rules: Value.Dict(vr),
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+// str.splitlines() for files whose lines end in \n.
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn docs_of(rel: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in lines_of(read_text(rel)) {
+        if py_strip(l) != "" {
+            out.push(l.clone());
+        }
+    }
+    out
+}
+
+fn load(rel: ref String) -> Value {
+    json_loads(read_text(rel))
+}
+
+fn errors_repr(v: ref V) -> String {
+    ptree_repr(pretty_tree(v.errors, false))
+}
+
+fn has_opt(opts: ref Vec[String], o: Str) -> bool {
+    for x in opts {
+        if x == o {
+            return true;
+        }
+    }
+    false
+}
+
+// AppValidator(schema, **options).
+fn make(schema: ref Value, opts: ref Vec[String], ctx: mut ref Ctx) -> Result[V, String] {
+    let defined = define_schema(schema, mut ctx)?;
+    let mut cfg = new_cfg(false);
+    for o in opts {
+        if o == "allow_unknown" {
+            cfg.allow_unknown = Value.Bool(true);
+        } else if o == "require_all" {
+            cfg.require_all = true;
+        } else if o == "purge_unknown" {
+            cfg.purge_unknown = true;
+        } else if o == "purge_readonly" {
+            cfg.purge_readonly = true;
+        } else if o == "ignore_none_values" {
+            cfg.ignore_none_values = true;
+        } else if o.starts_with("allow_unknown=") {
+            let value = json_loads(o["allow_unknown=".len()..].to_string());
+            let is_bool = match value {
+                Value.Bool(_) => true,
+                _ => false,
+            };
+            if not is_bool {
+                define_schema(one_dict(vs("allow_unknown"), value.clone()), mut ctx)?;
+            }
+            cfg.allow_unknown = value;
+        }
+    }
+    Ok(new_v(cfg, defined))
+}
+
+fn run(kind: ref String, args: ref Vec[String], ctx: mut ref Ctx, out: mut ref String) {
+    let mut opts: Vec[String] = Vec.new();
+    for i in 2..args.len() {
+        opts.push(args[i].clone());
+    }
+    let mut v = match make(load(args[0]), opts, mut ctx) {
+        Ok(v) => v,
+        Err(msg) => {
+            emit(mut out, f"  SchemaError: {msg}");
+            return;
+        }
+    };
+    let update = has_opt(opts, "update");
+    let normalize = not has_opt(opts, "no_normalize");
+    for line in docs_of(args[1]) {
+        emit(mut out, f"> {line}");
+        let doc = json_loads(line);
+        if kind == "validate" {
+            let ok = match v.validate(doc, update, normalize, ctx) {
+                Ok(b) => b,
+                Err(_) => panic("schema rule type error"),
+            };
+            emit(mut out, if ok { "  valid".to_string() } else { "  invalid".to_string() });
+            if not ok {
+                emit(mut out, f"  errors: {errors_repr(v)}");
+            }
+            emit(mut out, f"  document: {py_repr(v.document)}");
+        } else if kind == "validated" {
+            let ok = match v.validate(doc, update, normalize, ctx) {
+                Ok(b) => b,
+                Err(_) => panic("schema rule type error"),
+            };
+            let result = if ok { v.document.clone() } else { Value.Null };
+            emit(mut out, f"  result: {py_repr(result)}");
+        } else {
+            let result = match v.normalized(doc, false, ctx) {
+                Ok(r) => r,
+                Err(_) => panic("schema rule type error"),
+            };
+            emit(mut out, f"  result: {py_repr(result)}");
+            if v.errors.len() > 0 {
+                emit(mut out, f"  errors: {errors_repr(v)}");
+            }
+        }
+    }
+}
+
+fn schemas_job(rel: ref String, ctx: mut ref Ctx, out: mut ref String) {
+    for line in docs_of(rel) {
+        emit(mut out, f"> {line}");
+        match define_schema(json_loads(line), mut ctx) {
+            Ok(_) => emit(mut out, "  ok".to_string()),
+            Err(msg) => emit(mut out, f"  SchemaError: {msg}"),
+        }
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut ctx = new_ctx();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        let k = job[0].clone();
+        if k == "schema_registry" {
+            let s = expand_top(load(job[2]));
+            dict_set(mut ctx.schema_reg, Value.Str(job[1].clone()), s);
+        } else if k == "rules_set_registry" {
+            let r = match expand_one(load(job[2])) {
+                Ok(r) => r,
+                Err(_) => panic("TypeError while expanding a rules set"),
+            };
+            dict_set(mut ctx.rules_reg, Value.Str(job[1].clone()), r);
+        } else if k == "schemas" {
+            schemas_job(job[1], mut ctx, mut out);
+        } else {
+            let mut args: Vec[String] = Vec.new();
+            for i in 1..job.len() {
+                args.push(job[i].clone());
+            }
+            run(k, args, mut ctx, mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    data_part_5(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"name\": {\"type\": \"strin\"}}\n");
+    t.push_str("{\"name\": {\"typ\": \"string\"}}\n");
+    t.push_str("{\"age\": {\"type\": \"integer\", \"min\": \"zero\", \"max\": 10}}\n");
+    t.push_str("{\"age\": \"integer\"}\n");
+    t.push_str("{\"tags\": {\"type\": \"list\", \"schema\": {\"type\": \"string\", \"minlength\": \"3\"}}}\n");
+    t.push_str("{\"tags\": {\"type\": \"list\", \"schema\": {\"tpye\": \"string\"}}}\n");
+    t.push_str("{\"role\": {\"allowed\": \"admin\"}}\n");
+    t.push_str("{\"role\": {\"required\": \"yes\", \"nullable\": 1}}\n");
+    t.push_str("{\"x\": {\"coerce\": \"to_upper\"}}\n");
+    t.push_str("{\"x\": {\"check_with\": \"odd\"}}\n");
+    t.push_str("{\"x\": {\"default_setter\": \"nowhere\"}}\n");
+    t.push_str("{\"x\": {\"anyof\": {\"type\": \"string\"}}}\n");
+    t.push_str("{\"x\": {\"anyof\": [{\"type\": \"string\"}, {\"typo\": 1}]}}\n");
+    t.push_str("{\"x\": {\"oneof_type\": [\"string\", \"nope\"]}}\n");
+    t.push_str("{\"x\": {\"regex\": 5}}\n");
+    t.push_str("{\"x\": {\"items\": [{\"type\": \"string\"}, {\"tpe\": \"int\"}]}}\n");
+    t.push_str("{\"x\": {\"dependencies\": 5}}\n");
+    t.push_str("{\"x\": {\"dependencies\": {\"y\": 5}}}\n");
+    t.push_str("{\"x\": {\"excludes\": [\"a\", {\"b\": 1}]}}\n");
+    t.push_str("{\"x\": {\"keysrules\": {\"type\": \"string\", \"rename\": \"y\"}}}\n");
+    t.push_str("{\"x\": {\"valuesrules\": {\"type\": \"bogus\"}}}\n");
+    t.push_str("{\"x\": {\"schema\": \"no_such_schema\"}}\n");
+    t.push_str("{\"x\": \"no_such_rules\"}\n");
+    t.push_str("{\"x\": {\"type\": \"dict\", \"schema\": {\"y\": {\"type\": \"dict\", \"schema\": {\"z\": {\"maxlength\": -1, \"regexx\": \"a\"}}}}}}\n");
+    t.push_str("{\"x\": {\"type\": [\"string\", \"integer\", \"colour\"]}}\n");
+    t.push_str("{\"x\": {\"empty\": \"no\", \"readonly\": \"no\", \"purge_unknown\": 1}}\n");
+    t.push_str("{\"x\": {\"min\": 1, \"max\": 2, \"meta\": {\"anything\": [1, 2]}}}\n");
+    t.push_str("{\"x\": {\"minlength\": 1.5, \"contains\": []}}\n");
+    t.push_str("{\"x\": {\"allow_unknown\": {\"type\": \"nonsense\"}, \"type\": \"dict\"}}\n");
+    t.push_str("{\"x\": {\"rename\": [\"not\", \"hashable\"]}}\n");
+    v.push(DataFile { path: "broken.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"contact\": {\"email\": \"a@b.c\"}, \"price\": 3, \"ids\": [1, \"abc\"]}\n");
+    t.push_str("{\"contact\": {\"phone\": \"+351912345678\", \"email\": \"x@y.z\"}, \"price\": 0.5, \"ids\": [0, \"ab\", 2.5]}\n");
+    t.push_str("{\"contact\": {\"phone\": \"12345\"}, \"price\": -1.5, \"ids\": []}\n");
+    t.push_str("{\"contact\": {}, \"price\": null, \"ids\": [\"abcd\", -2]}\n");
+    v.push(DataFile { path: "docs/anyof.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"service\": \"billing\", \"port\": \"8080\", \"database\": {\"host\": \"db.internal\", \"name\": \"billing\"}}\n");
+    t.push_str("{\"service\": \"auth\", \"port\": 443, \"debug\": \"YES\", \"log_level\": \"WARNING\", \"database\": {\"host\": \"auth-db\", \"port\": \"6432\", \"pool\": {\"min\": 2, \"max\": 20}}, \"features\": {\"sso\": \"yes\", \"mfa\": \"no\", \"beta_ui\": true}}\n");
+    t.push_str("{\"service\": \"\", \"port\": \"eighty\", \"database\": {\"port\": \"x\"}, \"log_level\": \"verbose\"}\n");
+    t.push_str("{\"service\": \"edge\", \"port\": 22, \"workers\": 3, \"database\": \"postgres://edge\", \"features\": {\"Legacy-Mode\": true, \"fast\": \"sometimes\"}}\n");
+    t.push_str("{\"service\": \"cron\", \"port\": 70000, \"workers\": 8, \"database\": {\"host\": \"db\", \"pool\": {\"min\": -1, \"max\": 500}}, \"allowed_hosts\": \"a.example.com, b.example.com,,c.example.com\"}\n");
+    t.push_str("{\"service\": \"api\", \"debug\": 7, \"database\": {\"host\": \"db\", \"name\": \"API\", \"replica\": \"db2\"}, \"allowed_hosts\": [\"x.io\"], \"extra\": {\"k\": 1}}\n");
+    t.push_str("{\"port\": null, \"database\": null, \"features\": null}\n");
+    v.push(DataFile { path: "docs/config.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"sku\": \"KIT-0001\", \"name\": \"Chef's knife\", \"price\": \"49.90\", \"stock\": \"12\", \"active\": \"yes\", \"category\": \"Kitchen\", \"launched\": \"2021-09-14\"}\n");
+    t.push_str("{\"sku\": \" GAR-0042 \", \"name\": \"Rake\", \"price\": \"1e2\", \"stock\": \"-3\", \"active\": \"Y\", \"category\": \"GardenTools\", \"launched\": \"2022-04-01\"}\n");
+    t.push_str("{\"sku\": \"OFF-12\", \"name\": \"   \", \"price\": \"free\", \"stock\": \"3.5\", \"active\": \"maybe\", \"category\": \"Home Office\"}\n");
+    t.push_str("{\"sku\": \"OUT-7777\", \"name\": \"Hammock\", \"price\": \"-1\", \"stock\": \"\", \"active\": \"0\", \"category\": \"outdoor-living\", \"launched\": \"2023-02-29\"}\n");
+    t.push_str("{\"sku\": \"KIT-0002\", \"name\": \"Pan\", \"price\": \"inf\", \"stock\": \"007\", \"active\": \"TRUE\", \"category\": \"Bathroom\", \"launched\": null}\n");
+    t.push_str("{\"sku\": \"KIT-0003\", \"name\": \"Lid\", \"price\": null, \"stock\": null, \"active\": null}\n");
+    v.push(DataFile { path: "docs/csv_rows.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"web\", \"labels\": {\"app\": \"web\", \"tier\": \"frontend\"}}, \"spec\": {\"replicas\": 3, \"containers\": [{\"name\": \"nginx\", \"image\": \"nginx:1.25\", \"ports\": [{\"containerPort\": 80}, {\"containerPort\": \"metrics\"}], \"resources\": {\"limits\": {\"cpu\": \"500m\", \"memory\": \"128Mi\"}}}]}}\n");
+    t.push_str("{\"apiVersion\": \"v1\", \"kind\": \"Pod\", \"metadata\": {\"name\": \"Web_App\"}, \"spec\": {\"containers\": []}}\n");
+    t.push_str("{\"apiVersion\": \"apps/v1\", \"kind\": \"StatefulSet\", \"metadata\": {\"name\": \"db\", \"labels\": {\"app.kubernetes.io/name\": \"postgres\", \"Bad Key\": \"x\"}}, \"spec\": {\"replicas\": 1, \"autoscale\": {\"min\": 1, \"max\": 3}, \"containers\": [{\"name\": \"pg\", \"image\": \"Postgres:16\", \"ports\": [{\"containerPort\": 70000}, {\"containerPort\": \"Postgres-Port-Number\"}, {\"containerPort\": 5432, \"protocol\": \"HTTP\"}], \"resources\": {\"limits\": {\"cpu\": -1, \"memory\": \"1GB\", \"pods\": 4}}, \"env\": [{\"name\": \"PGDATA\", \"value\": \"/data\"}, {\"name\": \"lower\", \"value\": \"x\", \"valueFrom\": {\"secret\": \"s\"}}], \"args\": [\"-c\", \"max_connections=100\", \"extra\"]}]}}\n");
+    t.push_str("{\"apiVersion\": \"apps/v1\", \"kind\": \"DaemonSet\", \"metadata\": {\"name\": \"agent\"}, \"spec\": {\"containers\": [{\"name\": \"agent\", \"image\": \"registry.example.com/agent:v2\", \"ports\": [{\"containerPort\": true}, {\"containerPort\": 9100.5}], \"args\": [\"--port\", 9100]}]}}\n");
+    v.push(DataFile { path: "docs/manifests.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"customer\": {\"name\": \"Ana\", \"email\": \"ana@shop.example\"}, \"items\": [{\"sku\": \"ABC-1234\", \"qty\": 2, \"price\": 9.99}], \"currency\": \"EUR\", \"shipping\": \"standard\", \"address\": {\"street\": \"Rua Augusta 1\", \"city\": \"Lisboa\", \"zip\": \"1100-048\"}, \"card\": \"4539 1488 0343 6467\"}\n");
+    t.push_str("{\"id\": \"ord_1\", \"customer\": {\"name\": \"Bo\"}, \"items\": [], \"currency\": \"SEK\"}\n");
+    t.push_str("{\"customer\": {\"name\": \"Cy\", \"email\": \"cy@x.y\"}, \"currency\": \"USD\", \"items\": [{\"sku\": \"abc-1\", \"qty\": 0}, {\"qty\": 1, \"price\": -3}, \"XYZ-0001\"], \"coupon\": \"SPRING\", \"discount\": 0.25}\n");
+    t.push_str("{\"customer\": {\"name\": \"Di\"}, \"items\": [{\"sku\": \"DEF-5678\", \"qty\": 1}], \"currency\": \"GBP\", \"shipping\": \"pickup\", \"address\": {\"street\": \"1 High St\", \"city\": \"Leeds\"}, \"store\": \"LDS-01\", \"gift_note\": \"Happy birthday!\", \"card\": \"4539 1488 0343 6468\"}\n");
+    t.push_str("{\"customer\": {\"name\": \"Ed\", \"email\": \"ed@x.y\", \"vip\": true}, \"items\": [{\"sku\": \"GHI-0000\", \"qty\": 3}], \"currency\": \"INR\", \"store\": \"BLR\", \"gift_note\": \"For you\", \"gift_wrap\": true, \"discount\": 0.75}\n");
+    t.push_str("{\"customer\": \"Fay\", \"items\": {\"sku\": \"JKL-1111\"}, \"currency\": \"EUR\", \"address\": {\"city\": \"Paris\"}}\n");
+    v.push(DataFile { path: "docs/orders.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"title\": \"Hello World\", \"author\": \"ada\", \"items\": [1, 2]}\n");
+    t.push_str("{\"title\": \"Second Post\", \"owner\": \"grace@example.com\"}\n");
+    t.push_str("{\"title\": \"No Author\"}\n");
+    t.push_str("{\"slug\": \"custom\", \"author\": \"ken\", \"views\": 5}\n");
+    t.push_str("{\"title\": \"Shouting\", \"author\": \"linus\", \"Body\": \"TEXT\", \"items\": null}\n");
+    v.push(DataFile { path: "docs/posts.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"Desk\", \"price\": 199.0, \"weight\": 30, \"dims\": [120, 60, 75], \"ships_to\": [{\"street\": \"Main St 1\", \"city\": \"Porto\"}]}\n");
+    t.push_str("{\"name\": \"Lamp\", \"price\": -5, \"weight\": 0, \"dims\": [10, -1], \"ships_to\": [{\"city\": \"Faro\", \"zip\": \"80\"}]}\n");
+    v.push(DataFile { path: "docs/products.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"sensor\": \"  Kitchen-01 \", \"temp\": \"21.5\", \"humidity\": 40, \"at\": \"2024-03-01\", \"readings\": [1, 2, 3.5]}\n");
+    t.push_str("{\"sensor\": \"garage\", \"temp\": null, \"humidity\": null, \"status\": null, \"at\": \"2024-02-30\"}\n");
+    t.push_str("{\"sensor\": 17, \"temp\": \"hot\", \"at\": \"yesterday\", \"readings\": [3, 1, 2]}\n");
+    t.push_str("{\"id\": \"s-9\", \"sensor\": \"Attic\", \"temp\": 99, \"humidity\": 120, \"units\": {\"temp\": \"K\", \"pressure\": \"hPa\"}, \"battery\": 3.1}\n");
+    t.push_str("{\"sensor\": \"Porch\", \"temp\": -41.0, \"at\": \"2024-1-2-3\", \"units\": {\"temp\": \"F\"}}\n");
+    t.push_str("{\"device\": \"Shed\", \"at\": \"2024-13-01\"}\n");
+    v.push(DataFile { path: "docs/sensors.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"username\": \"ada\", \"email\": \"ada@example.org\", \"password\": \"correct horse\"}\n");
+    t.push_str("{\"username\": \"Ada\", \"email\": \"ada@example\", \"password\": \"short\"}\n");
+    t.push_str("{\"username\": \"grace_h\", \"email\": \"grace@navy.mil\", \"password\": \"cobol1959\", \"age\": 12, \"role\": \"superuser\", \"newsletter\": \"yes\"}\n");
+    t.push_str("{\"email\": \"x@y.io\", \"password\": \"12345678\", \"admin\": true}\n");
+    t.push_str("{\"username\": \"linus\", \"email\": \"linus@kernel.org\", \"password\": \"penguins!\", \"tags\": [\"kernel\", \"git\", \"a-very-long-tag\", 7], \"age\": 54.5}\n");
+    t.push_str("{\"username\": \"ken\", \"email\": \"ken@bell-labs.com\", \"password\": \"unix-1969\", \"referrer\": null, \"tags\": []}\n");
+    t.push_str("{\"username\": \"dmr\", \"email\": \"dmr@bell-labs.com\", \"password\": \"c-is-fun!\", \"referrer\": \"\", \"age\": true, \"role\": null}\n");
+    t.push_str("{\"username\": \"xxxxxxxxxxxxxxxxxxxx\", \"email\": \"a b@c.de\", \"password\": 12345678, \"tags\": \"solo\"}\n");
+    t.push_str("{\"username\": \"bjarne\", \"email\": \"bs@cpp.org\", \"password\": \"templates\", \"tags\": [\"a\", \"b\", \"c\", \"d\"]}\n");
+    t.push_str("{}\n");
+    v.push(DataFile { path: "docs/signup.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"host\": \"a\", \"port\": 1, \"tls\": {\"cert\": \"c\"}}\n");
+    t.push_str("{\"host\": \"a\"}\n");
+    t.push_str("{\"port\": \"x\", \"extra\": 1, \"tls\": {\"cert\": 1, \"ca\": \"y\"}}\n");
+    t.push_str("{\"host\": null, \"port\": null}\n");
+    v.push(DataFile { path: "docs/strict.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"tags\": [\"release\", \"v2\"], \"level\": 8, \"codes\": [1, 2, 3, 6], \"flags\": {\"a\": 1}, \"pair\": [\"x\", 1], \"score\": 50, \"ratio\": 0.5, \"id\": 7, \"name\": \"Alice\"}\n");
+    t.push_str("{\"tags\": [\"wip\", \"docs\"], \"level\": 13, \"codes\": [5, 4, 2], \"flags\": {\"a\": 1, \"c\": 2, \"d\": 3}, \"pair\": [\"x\"], \"score\": 95, \"ratio\": 1.5, \"id\": \"42\", \"name\": \"alice\"}\n");
+    t.push_str("{\"tags\": [], \"level\": 0, \"codes\": [], \"pair\": [1, -1], \"score\": \"high\", \"ratio\": \"half\", \"id\": \"x1\", \"name\": 7}\n");
+    t.push_str("{\"level\": 4, \"codes\": [1, 2, 3], \"pair\": [\"a\", 1, 2], \"id\": true, \"name\": null, \"ratio\": 0}\n");
+    v.push(DataFile { path: "docs/tags.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("validate\tschemas/signup.json\tdocs/signup.jsonl\n");
+    t.push_str("validated\tschemas/signup.json\tdocs/signup.jsonl\n");
+    t.push_str("validate\tschemas/signup.json\tdocs/signup.jsonl\tupdate\n");
+    t.push_str("validate\tschemas/signup.json\tdocs/signup.jsonl\tallow_unknown\trequire_all\n");
+    t.push_str("validate\tschemas/config.json\tdocs/config.jsonl\n");
+    t.push_str("normalized\tschemas/config.json\tdocs/config.jsonl\n");
+    t.push_str("validate\tschemas/config.json\tdocs/config.jsonl\tno_normalize\n");
+    t.push_str("validate\tschemas/config.json\tdocs/config.jsonl\tignore_none_values\tpurge_unknown\n");
+    t.push_str("schema_registry\taddress\tschemas/address.json\n");
+    t.push_str("schema_registry\tcustomer\tschemas/customer.json\n");
+    t.push_str("validate\tschemas/order.json\tdocs/orders.jsonl\n");
+    t.push_str("validate\tschemas/order.json\tdocs/orders.jsonl\tpurge_readonly\tallow_unknown\n");
+    t.push_str("validate\tschemas/manifest.json\tdocs/manifests.jsonl\n");
+    t.push_str("validate\tschemas/sensor.json\tdocs/sensors.jsonl\n");
+    t.push_str("normalized\tschemas/sensor.json\tdocs/sensors.jsonl\n");
+    t.push_str("validated\tschemas/sensor.json\tdocs/sensors.jsonl\tpurge_unknown\n");
+    t.push_str("validate\tschemas/sensor.json\tdocs/sensors.jsonl\tpurge_readonly\tno_normalize\n");
+    t.push_str("validate\tschemas/csv_row.json\tdocs/csv_rows.jsonl\n");
+    t.push_str("validated\tschemas/csv_row.json\tdocs/csv_rows.jsonl\trequire_all\n");
+    t.push_str("normalized\tschemas/post.json\tdocs/posts.jsonl\n");
+    t.push_str("validate\tschemas/post.json\tdocs/posts.jsonl\n");
+    t.push_str("validate\tschemas/tags.json\tdocs/tags.jsonl\n");
+    t.push_str("validate\tschemas/anyof.json\tdocs/anyof.jsonl\n");
+    t.push_str("rules_set_registry\tmoney\tschemas/money.json\n");
+    t.push_str("rules_set_registry\tpositive\tschemas/positive.json\n");
+    t.push_str("validate\tschemas/product.json\tdocs/products.jsonl\n");
+    t.push_str("validate\tschemas/strict.json\tdocs/strict.jsonl\n");
+    t.push_str("validate\tschemas/strict.json\tdocs/strict.jsonl\tallow_unknown\n");
+    t.push_str("validate\tschemas/strict.json\tdocs/strict.jsonl\tallow_unknown={\"type\": \"string\", \"maxlength\": 5}\n");
+    t.push_str("validate\tschemas/strict.json\tdocs/strict.jsonl\trequire_all\tignore_none_values\n");
+    t.push_str("schemas\tbroken.jsonl\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"street\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"city\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"zip\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"regex\": \"[0-9]{4,5}(-[0-9]{3,4})?\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"country\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"minlength\": 2,\n");
+    t.push_str("    \"maxlength\": 2,\n");
+    t.push_str("    \"default\": \"PT\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/address.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"contact\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"anyof\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"schema\": {\n");
+    t.push_str("          \"email\": {\n");
+    t.push_str("            \"type\": \"string\",\n");
+    t.push_str("            \"required\": true\n");
+    t.push_str("          }\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"schema\": {\n");
+    t.push_str("          \"phone\": {\n");
+    t.push_str("            \"type\": \"string\",\n");
+    t.push_str("            \"required\": true,\n");
+    t.push_str("            \"regex\": \"\\\\+[0-9]{7,15}\"\n");
+    t.push_str("          }\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"price\": {\n");
+    t.push_str("    \"anyof\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"integer\",\n");
+    t.push_str("        \"min\": 0\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"float\",\n");
+    t.push_str("        \"min\": 0.0,\n");
+    t.push_str("        \"max\": 1.0\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"nullable\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"ids\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"oneof\": [\n");
+    t.push_str("        {\n");
+    t.push_str("          \"type\": \"integer\",\n");
+    t.push_str("          \"min\": 1\n");
+    t.push_str("        },\n");
+    t.push_str("        {\n");
+    t.push_str("          \"type\": \"string\",\n");
+    t.push_str("          \"minlength\": 3\n");
+    t.push_str("        }\n");
+    t.push_str("      ]\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/anyof.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"service\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"empty\": false\n");
+    t.push_str("  },\n");
+    t.push_str("  \"port\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"coerce\": \"int\",\n");
+    t.push_str("    \"min\": 1,\n");
+    t.push_str("    \"max\": 65535,\n");
+    t.push_str("    \"check_with\": \"port\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"debug\": {\n");
+    t.push_str("    \"type\": \"boolean\",\n");
+    t.push_str("    \"coerce\": \"yesno\",\n");
+    t.push_str("    \"default\": false\n");
+    t.push_str("  },\n");
+    t.push_str("  \"database\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"host\": {\n");
+    t.push_str("        \"type\": \"string\",\n");
+    t.push_str("        \"required\": true\n");
+    t.push_str("      },\n");
+    t.push_str("      \"port\": {\n");
+    t.push_str("        \"type\": \"integer\",\n");
+    t.push_str("        \"coerce\": \"int\",\n");
+    t.push_str("        \"default\": 5432\n");
+    t.push_str("      },\n");
+    t.push_str("      \"name\": {\n");
+    t.push_str("        \"type\": \"string\",\n");
+    t.push_str("        \"regex\": \"[a-z_]+\"\n");
+    t.push_str("      },\n");
+    t.push_str("      \"pool\": {\n");
+    t.push_str("        \"type\": \"dict\",\n");
+    t.push_str("        \"schema\": {\n");
+    t.push_str("          \"min\": {\n");
+    t.push_str("            \"type\": \"integer\",\n");
+    t.push_str("            \"min\": 0\n");
+    t.push_str("          },\n");
+    t.push_str("          \"max\": {\n");
+    t.push_str("            \"type\": \"integer\",\n");
+    t.push_str("            \"min\": 1,\n");
+    t.push_str("            \"max\": 100\n");
+    t.push_str("          }\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"log_level\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"coerce\": \"lower\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"debug\",\n");
+    t.push_str("      \"info\",\n");
+    t.push_str("      \"warning\",\n");
+    t.push_str("      \"error\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"default\": \"info\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"features\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"keysrules\": {\n");
+    t.push_str("      \"type\": \"string\",\n");
+    t.push_str("      \"regex\": \"[a-z][a-z0-9_]*\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"valuesrules\": {\n");
+    t.push_str("      \"type\": \"boolean\",\n");
+    t.push_str("      \"coerce\": \"yesno\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"workers\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"check_with\": \"even\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"allowed_hosts\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"coerce\": \"split\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"type\": \"string\",\n");
+    t.push_str("      \"empty\": false\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/config.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"sku\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"coerce\": \"strip\",\n");
+    t.push_str("    \"regex\": \"[A-Z]{3}-[0-9]{4}\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"name\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"coerce\": \"strip\",\n");
+    t.push_str("    \"empty\": false\n");
+    t.push_str("  },\n");
+    t.push_str("  \"price\": {\n");
+    t.push_str("    \"type\": \"float\",\n");
+    t.push_str("    \"coerce\": \"float\",\n");
+    t.push_str("    \"min\": 0\n");
+    t.push_str("  },\n");
+    t.push_str("  \"stock\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"coerce\": \"int\",\n");
+    t.push_str("    \"min\": 0\n");
+    t.push_str("  },\n");
+    t.push_str("  \"active\": {\n");
+    t.push_str("    \"type\": \"boolean\",\n");
+    t.push_str("    \"coerce\": \"yesno\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"category\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"coerce\": [\n");
+    t.push_str("      \"strip\",\n");
+    t.push_str("      \"snake\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"kitchen\",\n");
+    t.push_str("      \"garden_tools\",\n");
+    t.push_str("      \"home_office\",\n");
+    t.push_str("      \"outdoor_living\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"launched\": {\n");
+    t.push_str("    \"type\": \"date\",\n");
+    t.push_str("    \"coerce\": \"date\",\n");
+    t.push_str("    \"nullable\": true\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/csv_row.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"email\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"regex\": \"[^@]+@[^@]+\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/customer.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"apps/v1\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"kind\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"Deployment\",\n");
+    t.push_str("      \"StatefulSet\",\n");
+    t.push_str("      \"DaemonSet\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"name\": {\n");
+    t.push_str("        \"type\": \"string\",\n");
+    t.push_str("        \"required\": true,\n");
+    t.push_str("        \"regex\": \"[a-z0-9]([-a-z0-9]*[a-z0-9])?\",\n");
+    t.push_str("        \"maxlength\": 63\n");
+    t.push_str("      },\n");
+    t.push_str("      \"labels\": {\n");
+    t.push_str("        \"type\": \"dict\",\n");
+    t.push_str("        \"keysrules\": {\n");
+    t.push_str("          \"type\": \"string\",\n");
+    t.push_str("          \"regex\": \"([a-z0-9.-]+/)?[a-zA-Z0-9_.-]+\"\n");
+    t.push_str("        },\n");
+    t.push_str("        \"valuesrules\": {\n");
+    t.push_str("          \"type\": \"string\",\n");
+    t.push_str("          \"maxlength\": 63\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"replicas\": {\n");
+    t.push_str("        \"type\": \"integer\",\n");
+    t.push_str("        \"min\": 0,\n");
+    t.push_str("        \"excludes\": \"autoscale\"\n");
+    t.push_str("      },\n");
+    t.push_str("      \"autoscale\": {\n");
+    t.push_str("        \"type\": \"dict\",\n");
+    t.push_str("        \"schema\": {\n");
+    t.push_str("          \"min\": {\n");
+    t.push_str("            \"type\": \"integer\",\n");
+    t.push_str("            \"min\": 1\n");
+    t.push_str("          },\n");
+    t.push_str("          \"max\": {\n");
+    t.push_str("            \"type\": \"integer\",\n");
+    t.push_str("            \"min\": 1\n");
+    t.push_str("          }\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"containers\": {\n");
+    t.push_str("        \"type\": \"list\",\n");
+    t.push_str("        \"required\": true,\n");
+    t.push_str("        \"minlength\": 1,\n");
+    t.push_str("        \"schema\": {\n");
+    t.push_str("          \"type\": \"dict\",\n");
+    t.push_str("          \"schema\": {\n");
+    t.push_str("            \"name\": {\n");
+    t.push_str("              \"type\": \"string\",\n");
+    t.push_str("              \"required\": true\n");
+    t.push_str("            },\n");
+    t.push_str("            \"image\": {\n");
+    t.push_str("              \"type\": \"string\",\n");
+    t.push_str("              \"required\": true,\n");
+    t.push_str("              \"regex\": \"[a-z0-9./-]+(:[A-Za-z0-9._-]+)?\"\n");
+    t.push_str("            },\n");
+    t.push_str("            \"ports\": {\n");
+    t.push_str("              \"type\": \"list\",\n");
+    t.push_str("              \"schema\": {\n");
+    t.push_str("                \"type\": \"dict\",\n");
+    t.push_str("                \"schema\": {\n");
+    t.push_str("                  \"containerPort\": {\n");
+    t.push_str("                    \"anyof\": [\n");
+    t.push_str("                      {\n");
+    t.push_str("                        \"type\": \"integer\",\n");
+    t.push_str("                        \"min\": 1,\n");
+    t.push_str("                        \"max\": 65535\n");
+    t.push_str("                      },\n");
+    t.push_str("                      {\n");
+    t.push_str("                        \"type\": \"string\",\n");
+    t.push_str("                        \"regex\": \"[a-z][a-z0-9-]{0,14}\"\n");
+    t.push_str("                      }\n");
+    t.push_str("                    ]\n");
+    t.push_str("                  },\n");
+    t.push_str("                  \"protocol\": {\n");
+    t.push_str("                    \"type\": \"string\",\n");
+    t.push_str("                    \"allowed\": [\n");
+    t.push_str("                      \"TCP\",\n");
+    t.push_str("                      \"UDP\",\n");
+    t.push_str("                      \"SCTP\"\n");
+    t.push_str("                    ],\n");
+    t.push_str("                    \"default\": \"TCP\"\n");
+    t.push_str("                  }\n");
+    t.push_str("                }\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"type\": \"dict\",\n");
+    t.push_str("              \"schema\": {\n");
+    t.push_str("                \"limits\": {\n");
+    t.push_str("                  \"type\": \"dict\",\n");
+    t.push_str("                  \"valuesrules\": {\n");
+    t.push_str("                    \"oneof\": [\n");
+    t.push_str("                      {\n");
+    t.push_str("                        \"type\": \"integer\",\n");
+    t.push_str("                        \"min\": 0\n");
+    t.push_str("                      },\n");
+    t.push_str("                      {\n");
+    t.push_str("                        \"type\": \"string\",\n");
+    t.push_str("                        \"regex\": \"[0-9]+(m|Mi|Gi)\"\n");
+    t.push_str("                      }\n");
+    t.push_str("                    ]\n");
+    t.push_str("                  }\n");
+    t.push_str("                }\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"env\": {\n");
+    t.push_str("              \"type\": \"list\",\n");
+    t.push_str("              \"schema\": {\n");
+    t.push_str("                \"type\": \"dict\",\n");
+    t.push_str("                \"schema\": {\n");
+    t.push_str("                  \"name\": {\n");
+    t.push_str("                    \"type\": \"string\",\n");
+    t.push_str("                    \"required\": true,\n");
+    t.push_str("                    \"regex\": \"[A-Z_][A-Z0-9_]*\"\n");
+    t.push_str("                  },\n");
+    t.push_str("                  \"value\": {\n");
+    t.push_str("                    \"type\": \"string\",\n");
+    t.push_str("                    \"excludes\": \"valueFrom\"\n");
+    t.push_str("                  },\n");
+    t.push_str("                  \"valueFrom\": {\n");
+    t.push_str("                    \"type\": \"dict\",\n");
+    t.push_str("                    \"excludes\": \"value\"\n");
+    t.push_str("                  }\n");
+    t.push_str("                }\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"args\": {\n");
+    t.push_str("              \"type\": \"list\",\n");
+    t.push_str("              \"items\": [\n");
+    t.push_str("                {\n");
+    t.push_str("                  \"type\": \"string\"\n");
+    t.push_str("                },\n");
+    t.push_str("                {\n");
+    t.push_str("                  \"type\": \"string\"\n");
+    t.push_str("                }\n");
+    t.push_str("              ]\n");
+    t.push_str("            }\n");
+    t.push_str("          }\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/manifest.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"type\": \"number\",\n");
+    t.push_str("  \"min\": 0,\n");
+    t.push_str("  \"required\": true\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/money.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"id\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"readonly\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"customer\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"schema\": \"customer\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"items\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"minlength\": 1,\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"type\": \"dict\",\n");
+    t.push_str("      \"schema\": {\n");
+    t.push_str("        \"sku\": {\n");
+    t.push_str("          \"type\": \"string\",\n");
+    t.push_str("          \"required\": true,\n");
+    t.push_str("          \"regex\": \"[A-Z]{3}-[0-9]{4}\"\n");
+    t.push_str("        },\n");
+    t.push_str("        \"qty\": {\n");
+    t.push_str("          \"type\": \"integer\",\n");
+    t.push_str("          \"required\": true,\n");
+    t.push_str("          \"min\": 1\n");
+    t.push_str("        },\n");
+    t.push_str("        \"price\": {\n");
+    t.push_str("          \"type\": \"number\",\n");
+    t.push_str("          \"min\": 0\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"currency\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"EUR\",\n");
+    t.push_str("      \"USD\",\n");
+    t.push_str("      \"GBP\",\n");
+    t.push_str("      \"INR\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"coupon\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"excludes\": \"discount\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"discount\": {\n");
+    t.push_str("    \"type\": \"float\",\n");
+    t.push_str("    \"min\": 0,\n");
+    t.push_str("    \"max\": 0.5,\n");
+    t.push_str("    \"excludes\": \"coupon\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"shipping\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"standard\",\n");
+    t.push_str("      \"express\",\n");
+    t.push_str("      \"pickup\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"address\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"schema\": \"address\",\n");
+    t.push_str("    \"dependencies\": {\n");
+    t.push_str("      \"shipping\": [\n");
+    t.push_str("        \"standard\",\n");
+    t.push_str("        \"express\"\n");
+    t.push_str("      ]\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"store\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"dependencies\": {\n");
+    t.push_str("      \"shipping\": \"pickup\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"gift_note\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"dependencies\": [\n");
+    t.push_str("      \"gift_wrap\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"maxlength\": 40\n");
+    t.push_str("  },\n");
+    t.push_str("  \"gift_wrap\": {\n");
+    t.push_str("    \"type\": \"boolean\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"card\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"check_with\": \"luhn\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/order.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"type\": \"number\",\n");
+    t.push_str("  \"min\": 0,\n");
+    t.push_str("  \"forbidden\": [\n");
+    t.push_str("    0\n");
+    t.push_str("  ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/positive.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"title\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"slug\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"default_setter\": \"slug\",\n");
+    t.push_str("    \"regex\": \"[a-z0-9-]+\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"author\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"default_setter\": \"author\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"owner\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"default_setter\": \"owner\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"items\": {\n");
+    t.push_str("    \"type\": \"list\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"count\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"default_setter\": \"count\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"views\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"default\": 0,\n");
+    t.push_str("    \"readonly\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"draft\": {\n");
+    t.push_str("    \"type\": \"boolean\",\n");
+    t.push_str("    \"default\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"lang\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"rename_handler\": \"lower\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"Body\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"rename_handler\": \"snake\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"body\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"minlength\": 1\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/post.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"price\": \"money\",\n");
+    t.push_str("  \"weight\": \"positive\",\n");
+    t.push_str("  \"dims\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"schema\": \"positive\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"ships_to\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"type\": \"dict\",\n");
+    t.push_str("      \"schema\": \"address\"\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/product.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"id\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"readonly\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"sensor\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"coerce\": [\n");
+    t.push_str("      \"strip\",\n");
+    t.push_str("      \"lower\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"rename\": \"device\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"device\": {\n");
+    t.push_str("    \"type\": \"string\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"temp\": {\n");
+    t.push_str("    \"type\": \"float\",\n");
+    t.push_str("    \"nullable\": true,\n");
+    t.push_str("    \"min\": -40,\n");
+    t.push_str("    \"max\": 85,\n");
+    t.push_str("    \"coerce\": \"float\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"humidity\": {\n");
+    t.push_str("    \"type\": \"number\",\n");
+    t.push_str("    \"min\": 0,\n");
+    t.push_str("    \"max\": 100,\n");
+    t.push_str("    \"nullable\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"status\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"ok\",\n");
+    t.push_str("      \"degraded\",\n");
+    t.push_str("      \"offline\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"default\": \"ok\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"readings\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"type\": \"number\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"check_with\": \"sorted\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"at\": {\n");
+    t.push_str("    \"type\": \"date\",\n");
+    t.push_str("    \"coerce\": \"date\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"units\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"default\": {},\n");
+    t.push_str("    \"purge_unknown\": true,\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"temp\": {\n");
+    t.push_str("        \"type\": \"string\",\n");
+    t.push_str("        \"allowed\": [\n");
+    t.push_str("          \"C\",\n");
+    t.push_str("          \"F\"\n");
+    t.push_str("        ]\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/sensor.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"username\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"minlength\": 3,\n");
+    t.push_str("    \"maxlength\": 16,\n");
+    t.push_str("    \"regex\": \"[a-z][a-z0-9_]*\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"email\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"regex\": \"[^@ ]+@[^@ ]+\\\\.[a-z]{2,}\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"password\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"required\": true,\n");
+    t.push_str("    \"minlength\": 8\n");
+    t.push_str("  },\n");
+    t.push_str("  \"age\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"min\": 13,\n");
+    t.push_str("    \"max\": 130\n");
+    t.push_str("  },\n");
+    t.push_str("  \"role\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"user\",\n");
+    t.push_str("      \"admin\",\n");
+    t.push_str("      \"editor\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"default\": \"user\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"tags\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"type\": \"string\",\n");
+    t.push_str("      \"maxlength\": 10\n");
+    t.push_str("    },\n");
+    t.push_str("    \"maxlength\": 3\n");
+    t.push_str("  },\n");
+    t.push_str("  \"newsletter\": {\n");
+    t.push_str("    \"type\": \"boolean\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"referrer\": {\n");
+    t.push_str("    \"type\": \"string\",\n");
+    t.push_str("    \"nullable\": true,\n");
+    t.push_str("    \"empty\": false\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/signup.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"host\": {\n");
+    t.push_str("    \"type\": \"string\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"port\": {\n");
+    t.push_str("    \"type\": \"integer\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"tls\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"schema\": {\n");
+    t.push_str("      \"cert\": {\n");
+    t.push_str("        \"type\": \"string\"\n");
+    t.push_str("      },\n");
+    t.push_str("      \"key\": {\n");
+    t.push_str("        \"type\": \"string\"\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/strict.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_5(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"tags\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"contains\": \"release\",\n");
+    t.push_str("    \"forbidden\": [\n");
+    t.push_str("      \"wip\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"level\": {\n");
+    t.push_str("    \"type\": \"integer\",\n");
+    t.push_str("    \"forbidden\": [\n");
+    t.push_str("      0,\n");
+    t.push_str("      13\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      1,\n");
+    t.push_str("      2,\n");
+    t.push_str("      3,\n");
+    t.push_str("      5,\n");
+    t.push_str("      8,\n");
+    t.push_str("      13,\n");
+    t.push_str("      21\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"codes\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"contains\": [\n");
+    t.push_str("      1,\n");
+    t.push_str("      2,\n");
+    t.push_str("      3\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"forbidden\": [\n");
+    t.push_str("      4,\n");
+    t.push_str("      5\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"flags\": {\n");
+    t.push_str("    \"type\": \"dict\",\n");
+    t.push_str("    \"allowed\": [\n");
+    t.push_str("      \"a\",\n");
+    t.push_str("      \"b\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"pair\": {\n");
+    t.push_str("    \"type\": \"list\",\n");
+    t.push_str("    \"items\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"string\"\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"integer\",\n");
+    t.push_str("        \"min\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"score\": {\n");
+    t.push_str("    \"noneof\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"integer\",\n");
+    t.push_str("        \"min\": 90\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"string\"\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"ratio\": {\n");
+    t.push_str("    \"allof\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"float\"\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"min\": 0\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"max\": 1\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"id\": {\n");
+    t.push_str("    \"oneof\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"integer\"\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"type\": \"string\",\n");
+    t.push_str("        \"regex\": \"[0-9]+\"\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"name\": {\n");
+    t.push_str("    \"anyof_type\": [\n");
+    t.push_str("      \"string\",\n");
+    t.push_str("      \"integer\"\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"anyof_regex\": [\n");
+    t.push_str("      \"[A-Z].*\",\n");
+    t.push_str("      \"[0-9]+\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "schemas/tags.json".to_string(), hex: false, body: t });
+}

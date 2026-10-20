@@ -1,0 +1,632 @@
+== validate schemas/signup.json docs/signup.jsonl
+> {"username": "ada", "email": "ada@example.org", "password": "correct horse"}
+  valid
+  document: {'username': 'ada', 'email': 'ada@example.org', 'password': 'correct horse', 'role': 'user'}
+> {"username": "Ada", "email": "ada@example", "password": "short"}
+  invalid
+  errors: {'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'password': ['min length is 8'], 'username': ["value does not match regex '[a-z][a-z0-9_]*'"]}
+  document: {'username': 'Ada', 'email': 'ada@example', 'password': 'short', 'role': 'user'}
+> {"username": "grace_h", "email": "grace@navy.mil", "password": "cobol1959", "age": 12, "role": "superuser", "newsletter": "yes"}
+  invalid
+  errors: {'age': ['min value is 13'], 'newsletter': ['must be of boolean type'], 'role': ['unallowed value superuser']}
+  document: {'username': 'grace_h', 'email': 'grace@navy.mil', 'password': 'cobol1959', 'age': 12, 'role': 'superuser', 'newsletter': 'yes'}
+> {"email": "x@y.io", "password": "12345678", "admin": true}
+  invalid
+  errors: {'admin': ['unknown field'], 'username': ['required field']}
+  document: {'email': 'x@y.io', 'password': '12345678', 'admin': True, 'role': 'user'}
+> {"username": "linus", "email": "linus@kernel.org", "password": "penguins!", "tags": ["kernel", "git", "a-very-long-tag", 7], "age": 54.5}
+  invalid
+  errors: {'age': ['must be of integer type'], 'tags': ['max length is 3', {2: ['max length is 10'], 3: ['must be of string type']}]}
+  document: {'username': 'linus', 'email': 'linus@kernel.org', 'password': 'penguins!', 'tags': ['kernel', 'git', 'a-very-long-tag', 7], 'age': 54.5, 'role': 'user'}
+> {"username": "ken", "email": "ken@bell-labs.com", "password": "unix-1969", "referrer": null, "tags": []}
+  valid
+  document: {'username': 'ken', 'email': 'ken@bell-labs.com', 'password': 'unix-1969', 'referrer': None, 'tags': [], 'role': 'user'}
+> {"username": "dmr", "email": "dmr@bell-labs.com", "password": "c-is-fun!", "referrer": "", "age": true, "role": null}
+  invalid
+  errors: {'age': ['min value is 13'], 'referrer': ['empty values not allowed']}
+  document: {'username': 'dmr', 'email': 'dmr@bell-labs.com', 'password': 'c-is-fun!', 'referrer': '', 'age': True, 'role': 'user'}
+> {"username": "xxxxxxxxxxxxxxxxxxxx", "email": "a b@c.de", "password": 12345678, "tags": "solo"}
+  invalid
+  errors: {'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'password': ['must be of string type'], 'tags': ['must be of list type'], 'username': ['max length is 16']}
+  document: {'username': 'xxxxxxxxxxxxxxxxxxxx', 'email': 'a b@c.de', 'password': 12345678, 'tags': 'solo', 'role': 'user'}
+> {"username": "bjarne", "email": "bs@cpp.org", "password": "templates", "tags": ["a", "b", "c", "d"]}
+  invalid
+  errors: {'tags': ['max length is 3']}
+  document: {'username': 'bjarne', 'email': 'bs@cpp.org', 'password': 'templates', 'tags': ['a', 'b', 'c', 'd'], 'role': 'user'}
+> {}
+  invalid
+  errors: {'email': ['required field'], 'password': ['required field'], 'username': ['required field']}
+  document: {'role': 'user'}
+== validated schemas/signup.json docs/signup.jsonl
+> {"username": "ada", "email": "ada@example.org", "password": "correct horse"}
+  result: {'username': 'ada', 'email': 'ada@example.org', 'password': 'correct horse', 'role': 'user'}
+> {"username": "Ada", "email": "ada@example", "password": "short"}
+  result: None
+> {"username": "grace_h", "email": "grace@navy.mil", "password": "cobol1959", "age": 12, "role": "superuser", "newsletter": "yes"}
+  result: None
+> {"email": "x@y.io", "password": "12345678", "admin": true}
+  result: None
+> {"username": "linus", "email": "linus@kernel.org", "password": "penguins!", "tags": ["kernel", "git", "a-very-long-tag", 7], "age": 54.5}
+  result: None
+> {"username": "ken", "email": "ken@bell-labs.com", "password": "unix-1969", "referrer": null, "tags": []}
+  result: {'username': 'ken', 'email': 'ken@bell-labs.com', 'password': 'unix-1969', 'referrer': None, 'tags': [], 'role': 'user'}
+> {"username": "dmr", "email": "dmr@bell-labs.com", "password": "c-is-fun!", "referrer": "", "age": true, "role": null}
+  result: None
+> {"username": "xxxxxxxxxxxxxxxxxxxx", "email": "a b@c.de", "password": 12345678, "tags": "solo"}
+  result: None
+> {"username": "bjarne", "email": "bs@cpp.org", "password": "templates", "tags": ["a", "b", "c", "d"]}
+  result: None
+> {}
+  result: None
+== validate schemas/signup.json docs/signup.jsonl update
+> {"username": "ada", "email": "ada@example.org", "password": "correct horse"}
+  valid
+  document: {'username': 'ada', 'email': 'ada@example.org', 'password': 'correct horse', 'role': 'user'}
+> {"username": "Ada", "email": "ada@example", "password": "short"}
+  invalid
+  errors: {'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'password': ['min length is 8'], 'username': ["value does not match regex '[a-z][a-z0-9_]*'"]}
+  document: {'username': 'Ada', 'email': 'ada@example', 'password': 'short', 'role': 'user'}
+> {"username": "grace_h", "email": "grace@navy.mil", "password": "cobol1959", "age": 12, "role": "superuser", "newsletter": "yes"}
+  invalid
+  errors: {'age': ['min value is 13'], 'newsletter': ['must be of boolean type'], 'role': ['unallowed value superuser']}
+  document: {'username': 'grace_h', 'email': 'grace@navy.mil', 'password': 'cobol1959', 'age': 12, 'role': 'superuser', 'newsletter': 'yes'}
+> {"email": "x@y.io", "password": "12345678", "admin": true}
+  invalid
+  errors: {'admin': ['unknown field']}
+  document: {'email': 'x@y.io', 'password': '12345678', 'admin': True, 'role': 'user'}
+> {"username": "linus", "email": "linus@kernel.org", "password": "penguins!", "tags": ["kernel", "git", "a-very-long-tag", 7], "age": 54.5}
+  invalid
+  errors: {'age': ['must be of integer type'], 'tags': ['max length is 3', {2: ['max length is 10'], 3: ['must be of string type']}]}
+  document: {'username': 'linus', 'email': 'linus@kernel.org', 'password': 'penguins!', 'tags': ['kernel', 'git', 'a-very-long-tag', 7], 'age': 54.5, 'role': 'user'}
+> {"username": "ken", "email": "ken@bell-labs.com", "password": "unix-1969", "referrer": null, "tags": []}
+  valid
+  document: {'username': 'ken', 'email': 'ken@bell-labs.com', 'password': 'unix-1969', 'referrer': None, 'tags': [], 'role': 'user'}
+> {"username": "dmr", "email": "dmr@bell-labs.com", "password": "c-is-fun!", "referrer": "", "age": true, "role": null}
+  invalid
+  errors: {'age': ['min value is 13'], 'referrer': ['empty values not allowed']}
+  document: {'username': 'dmr', 'email': 'dmr@bell-labs.com', 'password': 'c-is-fun!', 'referrer': '', 'age': True, 'role': 'user'}
+> {"username": "xxxxxxxxxxxxxxxxxxxx", "email": "a b@c.de", "password": 12345678, "tags": "solo"}
+  invalid
+  errors: {'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'password': ['must be of string type'], 'tags': ['must be of list type'], 'username': ['max length is 16']}
+  document: {'username': 'xxxxxxxxxxxxxxxxxxxx', 'email': 'a b@c.de', 'password': 12345678, 'tags': 'solo', 'role': 'user'}
+> {"username": "bjarne", "email": "bs@cpp.org", "password": "templates", "tags": ["a", "b", "c", "d"]}
+  invalid
+  errors: {'tags': ['max length is 3']}
+  document: {'username': 'bjarne', 'email': 'bs@cpp.org', 'password': 'templates', 'tags': ['a', 'b', 'c', 'd'], 'role': 'user'}
+> {}
+  valid
+  document: {'role': 'user'}
+== validate schemas/signup.json docs/signup.jsonl allow_unknown require_all
+> {"username": "ada", "email": "ada@example.org", "password": "correct horse"}
+  invalid
+  errors: {'age': ['required field'], 'newsletter': ['required field'], 'referrer': ['required field'], 'tags': ['required field']}
+  document: {'username': 'ada', 'email': 'ada@example.org', 'password': 'correct horse', 'role': 'user'}
+> {"username": "Ada", "email": "ada@example", "password": "short"}
+  invalid
+  errors: {'age': ['required field'], 'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'newsletter': ['required field'], 'password': ['min length is 8'], 'referrer': ['required field'], 'tags': ['required field'], 'username': ["value does not match regex '[a-z][a-z0-9_]*'"]}
+  document: {'username': 'Ada', 'email': 'ada@example', 'password': 'short', 'role': 'user'}
+> {"username": "grace_h", "email": "grace@navy.mil", "password": "cobol1959", "age": 12, "role": "superuser", "newsletter": "yes"}
+  invalid
+  errors: {'age': ['min value is 13'], 'newsletter': ['must be of boolean type'], 'referrer': ['required field'], 'role': ['unallowed value superuser'], 'tags': ['required field']}
+  document: {'username': 'grace_h', 'email': 'grace@navy.mil', 'password': 'cobol1959', 'age': 12, 'role': 'superuser', 'newsletter': 'yes'}
+> {"email": "x@y.io", "password": "12345678", "admin": true}
+  invalid
+  errors: {'age': ['required field'], 'newsletter': ['required field'], 'referrer': ['required field'], 'tags': ['required field'], 'username': ['required field']}
+  document: {'email': 'x@y.io', 'password': '12345678', 'admin': True, 'role': 'user'}
+> {"username": "linus", "email": "linus@kernel.org", "password": "penguins!", "tags": ["kernel", "git", "a-very-long-tag", 7], "age": 54.5}
+  invalid
+  errors: {'age': ['must be of integer type'], 'newsletter': ['required field'], 'referrer': ['required field'], 'tags': ['max length is 3', {2: ['max length is 10'], 3: ['must be of string type']}]}
+  document: {'username': 'linus', 'email': 'linus@kernel.org', 'password': 'penguins!', 'tags': ['kernel', 'git', 'a-very-long-tag', 7], 'age': 54.5, 'role': 'user'}
+> {"username": "ken", "email": "ken@bell-labs.com", "password": "unix-1969", "referrer": null, "tags": []}
+  invalid
+  errors: {'age': ['required field'], 'newsletter': ['required field']}
+  document: {'username': 'ken', 'email': 'ken@bell-labs.com', 'password': 'unix-1969', 'referrer': None, 'tags': [], 'role': 'user'}
+> {"username": "dmr", "email": "dmr@bell-labs.com", "password": "c-is-fun!", "referrer": "", "age": true, "role": null}
+  invalid
+  errors: {'age': ['min value is 13'], 'newsletter': ['required field'], 'referrer': ['empty values not allowed'], 'tags': ['required field']}
+  document: {'username': 'dmr', 'email': 'dmr@bell-labs.com', 'password': 'c-is-fun!', 'referrer': '', 'age': True, 'role': 'user'}
+> {"username": "xxxxxxxxxxxxxxxxxxxx", "email": "a b@c.de", "password": 12345678, "tags": "solo"}
+  invalid
+  errors: {'age': ['required field'], 'email': ["value does not match regex '[^@ ]+@[^@ ]+\\.[a-z]{2,}'"], 'newsletter': ['required field'], 'password': ['must be of string type'], 'referrer': ['required field'], 'tags': ['must be of list type'], 'username': ['max length is 16']}
+  document: {'username': 'xxxxxxxxxxxxxxxxxxxx', 'email': 'a b@c.de', 'password': 12345678, 'tags': 'solo', 'role': 'user'}
+> {"username": "bjarne", "email": "bs@cpp.org", "password": "templates", "tags": ["a", "b", "c", "d"]}
+  invalid
+  errors: {'age': ['required field'], 'newsletter': ['required field'], 'referrer': ['required field'], 'tags': ['max length is 3']}
+  document: {'username': 'bjarne', 'email': 'bs@cpp.org', 'password': 'templates', 'tags': ['a', 'b', 'c', 'd'], 'role': 'user'}
+> {}
+  invalid
+  errors: {'age': ['required field'], 'email': ['required field'], 'newsletter': ['required field'], 'password': ['required field'], 'referrer': ['required field'], 'tags': ['required field'], 'username': ['required field']}
+  document: {'role': 'user'}
+== validate schemas/config.json docs/config.jsonl
+> {"service": "billing", "port": "8080", "database": {"host": "db.internal", "name": "billing"}}
+  invalid
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"]}
+  document: {'service': 'billing', 'port': 8080, 'database': {'host': 'db.internal', 'name': 'billing', 'port': 5432}, 'debug': False, 'log_level': 'info'}
+> {"service": "auth", "port": 443, "debug": "YES", "log_level": "WARNING", "database": {"host": "auth-db", "port": "6432", "pool": {"min": 2, "max": 20}}, "features": {"sso": "yes", "mfa": "no", "beta_ui": true}}
+  invalid
+  errors: {'features': [{'beta_ui': ["field 'beta_ui' cannot be coerced: 'bool' object has no attribute 'lower'"]}]}
+  document: {'service': 'auth', 'port': 443, 'debug': True, 'log_level': 'warning', 'database': {'host': 'auth-db', 'port': 6432, 'pool': {'min': 2, 'max': 20}}, 'features': {'sso': True, 'mfa': False, 'beta_ui': True}}
+> {"service": "", "port": "eighty", "database": {"port": "x"}, "log_level": "verbose"}
+  invalid
+  errors: {'database': [{'host': ['required field'], 'port': ['must be of integer type', "field 'port' cannot be coerced: invalid literal for int() with base 10: 'x'"]}], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'log_level': ['unallowed value verbose'], 'port': ["field 'port' cannot be coerced: invalid literal for int() with base 10: 'eighty'", 'must be of integer type'], 'service': ['empty values not allowed']}
+  document: {'service': '', 'port': 'eighty', 'database': {'port': 'x'}, 'log_level': 'verbose', 'debug': False}
+> {"service": "edge", "port": 22, "workers": 3, "database": "postgres://edge", "features": {"Legacy-Mode": true, "fast": "sometimes"}}
+  invalid
+  errors: {'database': ['must be of dict type'], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'features': [{'Legacy-Mode': ["value does not match regex '[a-z][a-z0-9_]*'", "field 'Legacy-Mode' cannot be coerced: 'bool' object has no attribute 'lower'"], 'fast': ['must be of boolean type', "field 'fast' cannot be coerced: 'sometimes'"]}], 'port': ['privileged port 22'], 'workers': ['must be an even number']}
+  document: {'service': 'edge', 'port': 22, 'workers': 3, 'database': 'postgres://edge', 'features': {'Legacy-Mode': True, 'fast': 'sometimes'}, 'debug': False, 'log_level': 'info'}
+> {"service": "cron", "port": 70000, "workers": 8, "database": {"host": "db", "pool": {"min": -1, "max": 500}}, "allowed_hosts": "a.example.com, b.example.com,,c.example.com"}
+  invalid
+  errors: {'allowed_hosts': [{2: ['empty values not allowed']}], 'database': [{'pool': [{'max': ['max value is 100'], 'min': ['min value is 0']}]}], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'port': ['max value is 65535']}
+  document: {'service': 'cron', 'port': 70000, 'workers': 8, 'database': {'host': 'db', 'pool': {'min': -1, 'max': 500}, 'port': 5432}, 'allowed_hosts': ['a.example.com', 'b.example.com', '', 'c.example.com'], 'debug': False, 'log_level': 'info'}
+> {"service": "api", "debug": 7, "database": {"host": "db", "name": "API", "replica": "db2"}, "allowed_hosts": ["x.io"], "extra": {"k": 1}}
+  invalid
+  errors: {'allowed_hosts': ["field 'allowed_hosts' cannot be coerced: 'list' object has no attribute 'split'"], 'database': [{'name': ["value does not match regex '[a-z_]+'"], 'replica': ['unknown field']}], 'debug': ["field 'debug' cannot be coerced: 'int' object has no attribute 'lower'", 'must be of boolean type'], 'extra': ['unknown field']}
+  document: {'service': 'api', 'debug': 7, 'database': {'host': 'db', 'name': 'API', 'replica': 'db2', 'port': 5432}, 'allowed_hosts': ['x.io'], 'extra': {'k': 1}, 'log_level': 'info'}
+> {"port": null, "database": null, "features": null}
+  invalid
+  errors: {'database': ['null value not allowed'], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'features': ['null value not allowed'], 'port': ["field 'port' cannot be coerced: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'", 'null value not allowed'], 'service': ['required field']}
+  document: {'port': None, 'database': None, 'features': None, 'debug': False, 'log_level': 'info'}
+== normalized schemas/config.json docs/config.jsonl
+> {"service": "billing", "port": "8080", "database": {"host": "db.internal", "name": "billing"}}
+  result: None
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"]}
+> {"service": "auth", "port": 443, "debug": "YES", "log_level": "WARNING", "database": {"host": "auth-db", "port": "6432", "pool": {"min": 2, "max": 20}}, "features": {"sso": "yes", "mfa": "no", "beta_ui": true}}
+  result: None
+  errors: {'features': [{'beta_ui': ["field 'beta_ui' cannot be coerced: 'bool' object has no attribute 'lower'"]}]}
+> {"service": "", "port": "eighty", "database": {"port": "x"}, "log_level": "verbose"}
+  result: None
+  errors: {'database': [{'port': ["field 'port' cannot be coerced: invalid literal for int() with base 10: 'x'"]}], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'port': ["field 'port' cannot be coerced: invalid literal for int() with base 10: 'eighty'"]}
+> {"service": "edge", "port": 22, "workers": 3, "database": "postgres://edge", "features": {"Legacy-Mode": true, "fast": "sometimes"}}
+  result: None
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'features': [{'Legacy-Mode': ["field 'Legacy-Mode' cannot be coerced: 'bool' object has no attribute 'lower'"], 'fast': ["field 'fast' cannot be coerced: 'sometimes'"]}]}
+> {"service": "cron", "port": 70000, "workers": 8, "database": {"host": "db", "pool": {"min": -1, "max": 500}}, "allowed_hosts": "a.example.com, b.example.com,,c.example.com"}
+  result: None
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"]}
+> {"service": "api", "debug": 7, "database": {"host": "db", "name": "API", "replica": "db2"}, "allowed_hosts": ["x.io"], "extra": {"k": 1}}
+  result: None
+  errors: {'allowed_hosts': ["field 'allowed_hosts' cannot be coerced: 'list' object has no attribute 'split'"], 'debug': ["field 'debug' cannot be coerced: 'int' object has no attribute 'lower'"]}
+> {"port": null, "database": null, "features": null}
+  result: None
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'port': ["field 'port' cannot be coerced: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"]}
+== validate schemas/config.json docs/config.jsonl no_normalize
+> {"service": "billing", "port": "8080", "database": {"host": "db.internal", "name": "billing"}}
+  invalid
+  errors: {'port': ['must be of integer type']}
+  document: {'service': 'billing', 'port': '8080', 'database': {'host': 'db.internal', 'name': 'billing'}}
+> {"service": "auth", "port": 443, "debug": "YES", "log_level": "WARNING", "database": {"host": "auth-db", "port": "6432", "pool": {"min": 2, "max": 20}}, "features": {"sso": "yes", "mfa": "no", "beta_ui": true}}
+  invalid
+  errors: {'database': [{'port': ['must be of integer type']}], 'debug': ['must be of boolean type'], 'features': [{'mfa': ['must be of boolean type'], 'sso': ['must be of boolean type']}], 'log_level': ['unallowed value WARNING']}
+  document: {'service': 'auth', 'port': 443, 'debug': 'YES', 'log_level': 'WARNING', 'database': {'host': 'auth-db', 'port': '6432', 'pool': {'min': 2, 'max': 20}}, 'features': {'sso': 'yes', 'mfa': 'no', 'beta_ui': True}}
+> {"service": "", "port": "eighty", "database": {"port": "x"}, "log_level": "verbose"}
+  invalid
+  errors: {'database': [{'host': ['required field'], 'port': ['must be of integer type']}], 'log_level': ['unallowed value verbose'], 'port': ['must be of integer type'], 'service': ['empty values not allowed']}
+  document: {'service': '', 'port': 'eighty', 'database': {'port': 'x'}, 'log_level': 'verbose'}
+> {"service": "edge", "port": 22, "workers": 3, "database": "postgres://edge", "features": {"Legacy-Mode": true, "fast": "sometimes"}}
+  invalid
+  errors: {'database': ['must be of dict type'], 'features': [{'Legacy-Mode': ["value does not match regex '[a-z][a-z0-9_]*'"], 'fast': ['must be of boolean type']}], 'port': ['privileged port 22'], 'workers': ['must be an even number']}
+  document: {'service': 'edge', 'port': 22, 'workers': 3, 'database': 'postgres://edge', 'features': {'Legacy-Mode': True, 'fast': 'sometimes'}}
+> {"service": "cron", "port": 70000, "workers": 8, "database": {"host": "db", "pool": {"min": -1, "max": 500}}, "allowed_hosts": "a.example.com, b.example.com,,c.example.com"}
+  invalid
+  errors: {'allowed_hosts': ['must be of list type'], 'database': [{'pool': [{'max': ['max value is 100'], 'min': ['min value is 0']}]}], 'port': ['max value is 65535']}
+  document: {'service': 'cron', 'port': 70000, 'workers': 8, 'database': {'host': 'db', 'pool': {'min': -1, 'max': 500}}, 'allowed_hosts': 'a.example.com, b.example.com,,c.example.com'}
+> {"service": "api", "debug": 7, "database": {"host": "db", "name": "API", "replica": "db2"}, "allowed_hosts": ["x.io"], "extra": {"k": 1}}
+  invalid
+  errors: {'database': [{'name': ["value does not match regex '[a-z_]+'"], 'replica': ['unknown field']}], 'debug': ['must be of boolean type'], 'extra': ['unknown field']}
+  document: {'service': 'api', 'debug': 7, 'database': {'host': 'db', 'name': 'API', 'replica': 'db2'}, 'allowed_hosts': ['x.io'], 'extra': {'k': 1}}
+> {"port": null, "database": null, "features": null}
+  invalid
+  errors: {'database': ['null value not allowed'], 'features': ['null value not allowed'], 'port': ['null value not allowed'], 'service': ['required field']}
+  document: {'port': None, 'database': None, 'features': None}
+== validate schemas/config.json docs/config.jsonl ignore_none_values purge_unknown
+> {"service": "billing", "port": "8080", "database": {"host": "db.internal", "name": "billing"}}
+  invalid
+  errors: {'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"]}
+  document: {'service': 'billing', 'port': 8080, 'database': {'host': 'db.internal', 'name': 'billing', 'port': 5432}, 'debug': False, 'log_level': 'info'}
+> {"service": "auth", "port": 443, "debug": "YES", "log_level": "WARNING", "database": {"host": "auth-db", "port": "6432", "pool": {"min": 2, "max": 20}}, "features": {"sso": "yes", "mfa": "no", "beta_ui": true}}
+  invalid
+  errors: {'features': [{'beta_ui': ["field 'beta_ui' cannot be coerced: 'bool' object has no attribute 'lower'"]}]}
+  document: {'service': 'auth', 'port': 443, 'debug': True, 'log_level': 'warning', 'database': {'host': 'auth-db', 'port': 6432, 'pool': {'min': 2, 'max': 20}}, 'features': {'sso': True, 'mfa': False, 'beta_ui': True}}
+> {"service": "", "port": "eighty", "database": {"port": "x"}, "log_level": "verbose"}
+  invalid
+  errors: {'database': [{'host': ['required field'], 'port': ['must be of integer type', "field 'port' cannot be coerced: invalid literal for int() with base 10: 'x'"]}], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'log_level': ['unallowed value verbose'], 'port': ["field 'port' cannot be coerced: invalid literal for int() with base 10: 'eighty'", 'must be of integer type'], 'service': ['empty values not allowed']}
+  document: {'service': '', 'port': 'eighty', 'database': {'port': 'x'}, 'log_level': 'verbose', 'debug': False}
+> {"service": "edge", "port": 22, "workers": 3, "database": "postgres://edge", "features": {"Legacy-Mode": true, "fast": "sometimes"}}
+  invalid
+  errors: {'database': ['must be of dict type'], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'features': [{'Legacy-Mode': ["value does not match regex '[a-z][a-z0-9_]*'", "field 'Legacy-Mode' cannot be coerced: 'bool' object has no attribute 'lower'"], 'fast': ['must be of boolean type', "field 'fast' cannot be coerced: 'sometimes'"]}], 'port': ['privileged port 22'], 'workers': ['must be an even number']}
+  document: {'service': 'edge', 'port': 22, 'workers': 3, 'database': 'postgres://edge', 'features': {'Legacy-Mode': True, 'fast': 'sometimes'}, 'debug': False, 'log_level': 'info'}
+> {"service": "cron", "port": 70000, "workers": 8, "database": {"host": "db", "pool": {"min": -1, "max": 500}}, "allowed_hosts": "a.example.com, b.example.com,,c.example.com"}
+  invalid
+  errors: {'allowed_hosts': [{2: ['empty values not allowed']}], 'database': [{'pool': [{'max': ['max value is 100'], 'min': ['min value is 0']}]}], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'port': ['max value is 65535']}
+  document: {'service': 'cron', 'port': 70000, 'workers': 8, 'database': {'host': 'db', 'pool': {'min': -1, 'max': 500}, 'port': 5432}, 'allowed_hosts': ['a.example.com', 'b.example.com', '', 'c.example.com'], 'debug': False, 'log_level': 'info'}
+> {"service": "api", "debug": 7, "database": {"host": "db", "name": "API", "replica": "db2"}, "allowed_hosts": ["x.io"], "extra": {"k": 1}}
+  invalid
+  errors: {'allowed_hosts': ["field 'allowed_hosts' cannot be coerced: 'list' object has no attribute 'split'"], 'database': [{'name': ["value does not match regex '[a-z_]+'"]}], 'debug': ["field 'debug' cannot be coerced: 'int' object has no attribute 'lower'", 'must be of boolean type']}
+  document: {'service': 'api', 'debug': 7, 'database': {'host': 'db', 'name': 'API', 'port': 5432}, 'allowed_hosts': ['x.io'], 'log_level': 'info'}
+> {"port": null, "database": null, "features": null}
+  invalid
+  errors: {'database': ['required field'], 'debug': ["field 'debug' cannot be coerced: 'bool' object has no attribute 'lower'"], 'port': ["field 'port' cannot be coerced: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"], 'service': ['required field']}
+  document: {'port': None, 'database': None, 'features': None, 'debug': False, 'log_level': 'info'}
+== schema_registry address schemas/address.json
+== schema_registry customer schemas/customer.json
+== validate schemas/order.json docs/orders.jsonl
+> {"customer": {"name": "Ana", "email": "ana@shop.example"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}], "currency": "EUR", "shipping": "standard", "address": {"street": "Rua Augusta 1", "city": "Lisboa", "zip": "1100-048"}, "card": "4539 1488 0343 6467"}
+  valid
+  document: {'customer': {'name': 'Ana', 'email': 'ana@shop.example'}, 'items': [{'sku': 'ABC-1234', 'qty': 2, 'price': 9.99}], 'currency': 'EUR', 'shipping': 'standard', 'address': {'street': 'Rua Augusta 1', 'city': 'Lisboa', 'zip': '1100-048', 'country': 'PT'}, 'card': '4539 1488 0343 6467'}
+> {"id": "ord_1", "customer": {"name": "Bo"}, "items": [], "currency": "SEK"}
+  invalid
+  errors: {'currency': ['unallowed value SEK'], 'customer': [{'email': ['required field']}], 'id': ['field is read-only'], 'items': ['min length is 1']}
+  document: {'id': 'ord_1', 'customer': {'name': 'Bo'}, 'items': [], 'currency': 'SEK'}
+> {"customer": {"name": "Cy", "email": "cy@x.y"}, "currency": "USD", "items": [{"sku": "abc-1", "qty": 0}, {"qty": 1, "price": -3}, "XYZ-0001"], "coupon": "SPRING", "discount": 0.25}
+  invalid
+  errors: {'coupon': ["'discount' must not be present with 'coupon'"], 'discount': ["'coupon' must not be present with 'discount'"], 'items': [{0: [{'qty': ['min value is 1'], 'sku': ["value does not match regex '[A-Z]{3}-[0-9]{4}'"]}], 1: [{'price': ['min value is 0'], 'sku': ['required field']}], 2: ['must be of dict type']}]}
+  document: {'customer': {'name': 'Cy', 'email': 'cy@x.y'}, 'currency': 'USD', 'items': [{'sku': 'abc-1', 'qty': 0}, {'qty': 1, 'price': -3}, 'XYZ-0001'], 'coupon': 'SPRING', 'discount': 0.25}
+> {"customer": {"name": "Di"}, "items": [{"sku": "DEF-5678", "qty": 1}], "currency": "GBP", "shipping": "pickup", "address": {"street": "1 High St", "city": "Leeds"}, "store": "LDS-01", "gift_note": "Happy birthday!", "card": "4539 1488 0343 6468"}
+  invalid
+  errors: {'address': ["depends on these values: {'shipping': ['standard', 'express']}"], 'card': ['card number fails the Luhn check'], 'customer': [{'email': ['required field']}], 'gift_note': ["field 'gift_wrap' is required"]}
+  document: {'customer': {'name': 'Di'}, 'items': [{'sku': 'DEF-5678', 'qty': 1}], 'currency': 'GBP', 'shipping': 'pickup', 'address': {'street': '1 High St', 'city': 'Leeds', 'country': 'PT'}, 'store': 'LDS-01', 'gift_note': 'Happy birthday!', 'card': '4539 1488 0343 6468'}
+> {"customer": {"name": "Ed", "email": "ed@x.y", "vip": true}, "items": [{"sku": "GHI-0000", "qty": 3}], "currency": "INR", "store": "BLR", "gift_note": "For you", "gift_wrap": true, "discount": 0.75}
+  invalid
+  errors: {'customer': [{'vip': ['unknown field']}], 'discount': ['max value is 0.5'], 'store': ["depends on these values: {'shipping': 'pickup'}"]}
+  document: {'customer': {'name': 'Ed', 'email': 'ed@x.y', 'vip': True}, 'items': [{'sku': 'GHI-0000', 'qty': 3}], 'currency': 'INR', 'store': 'BLR', 'gift_note': 'For you', 'gift_wrap': True, 'discount': 0.75}
+> {"customer": "Fay", "items": {"sku": "JKL-1111"}, "currency": "EUR", "address": {"city": "Paris"}}
+  invalid
+  errors: {'address': ["depends on these values: {'shipping': ['standard', 'express']}", {'street': ['required field']}], 'customer': ['must be of dict type'], 'items': ['must be of list type']}
+  document: {'customer': 'Fay', 'items': {'sku': 'JKL-1111'}, 'currency': 'EUR', 'address': {'city': 'Paris', 'country': 'PT'}}
+== validate schemas/order.json docs/orders.jsonl purge_readonly allow_unknown
+> {"customer": {"name": "Ana", "email": "ana@shop.example"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}], "currency": "EUR", "shipping": "standard", "address": {"street": "Rua Augusta 1", "city": "Lisboa", "zip": "1100-048"}, "card": "4539 1488 0343 6467"}
+  valid
+  document: {'customer': {'name': 'Ana', 'email': 'ana@shop.example'}, 'items': [{'sku': 'ABC-1234', 'qty': 2, 'price': 9.99}], 'currency': 'EUR', 'shipping': 'standard', 'address': {'street': 'Rua Augusta 1', 'city': 'Lisboa', 'zip': '1100-048', 'country': 'PT'}, 'card': '4539 1488 0343 6467'}
+> {"id": "ord_1", "customer": {"name": "Bo"}, "items": [], "currency": "SEK"}
+  invalid
+  errors: {'currency': ['unallowed value SEK'], 'customer': [{'email': ['required field']}], 'items': ['min length is 1']}
+  document: {'customer': {'name': 'Bo'}, 'items': [], 'currency': 'SEK'}
+> {"customer": {"name": "Cy", "email": "cy@x.y"}, "currency": "USD", "items": [{"sku": "abc-1", "qty": 0}, {"qty": 1, "price": -3}, "XYZ-0001"], "coupon": "SPRING", "discount": 0.25}
+  invalid
+  errors: {'coupon': ["'discount' must not be present with 'coupon'"], 'discount': ["'coupon' must not be present with 'discount'"], 'items': [{0: [{'qty': ['min value is 1'], 'sku': ["value does not match regex '[A-Z]{3}-[0-9]{4}'"]}], 1: [{'price': ['min value is 0'], 'sku': ['required field']}], 2: ['must be of dict type']}]}
+  document: {'customer': {'name': 'Cy', 'email': 'cy@x.y'}, 'currency': 'USD', 'items': [{'sku': 'abc-1', 'qty': 0}, {'qty': 1, 'price': -3}, 'XYZ-0001'], 'coupon': 'SPRING', 'discount': 0.25}
+> {"customer": {"name": "Di"}, "items": [{"sku": "DEF-5678", "qty": 1}], "currency": "GBP", "shipping": "pickup", "address": {"street": "1 High St", "city": "Leeds"}, "store": "LDS-01", "gift_note": "Happy birthday!", "card": "4539 1488 0343 6468"}
+  invalid
+  errors: {'address': ["depends on these values: {'shipping': ['standard', 'express']}"], 'card': ['card number fails the Luhn check'], 'customer': [{'email': ['required field']}], 'gift_note': ["field 'gift_wrap' is required"]}
+  document: {'customer': {'name': 'Di'}, 'items': [{'sku': 'DEF-5678', 'qty': 1}], 'currency': 'GBP', 'shipping': 'pickup', 'address': {'street': '1 High St', 'city': 'Leeds', 'country': 'PT'}, 'store': 'LDS-01', 'gift_note': 'Happy birthday!', 'card': '4539 1488 0343 6468'}
+> {"customer": {"name": "Ed", "email": "ed@x.y", "vip": true}, "items": [{"sku": "GHI-0000", "qty": 3}], "currency": "INR", "store": "BLR", "gift_note": "For you", "gift_wrap": true, "discount": 0.75}
+  invalid
+  errors: {'discount': ['max value is 0.5'], 'store': ["depends on these values: {'shipping': 'pickup'}"]}
+  document: {'customer': {'name': 'Ed', 'email': 'ed@x.y', 'vip': True}, 'items': [{'sku': 'GHI-0000', 'qty': 3}], 'currency': 'INR', 'store': 'BLR', 'gift_note': 'For you', 'gift_wrap': True, 'discount': 0.75}
+> {"customer": "Fay", "items": {"sku": "JKL-1111"}, "currency": "EUR", "address": {"city": "Paris"}}
+  invalid
+  errors: {'address': ["depends on these values: {'shipping': ['standard', 'express']}", {'street': ['required field']}], 'customer': ['must be of dict type'], 'items': ['must be of list type']}
+  document: {'customer': 'Fay', 'items': {'sku': 'JKL-1111'}, 'currency': 'EUR', 'address': {'city': 'Paris', 'country': 'PT'}}
+== validate schemas/manifest.json docs/manifests.jsonl
+> {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "web", "labels": {"app": "web", "tier": "frontend"}}, "spec": {"replicas": 3, "containers": [{"name": "nginx", "image": "nginx:1.25", "ports": [{"containerPort": 80}, {"containerPort": "metrics"}], "resources": {"limits": {"cpu": "500m", "memory": "128Mi"}}}]}}
+  valid
+  document: {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'web', 'labels': {'app': 'web', 'tier': 'frontend'}}, 'spec': {'replicas': 3, 'containers': [{'name': 'nginx', 'image': 'nginx:1.25', 'ports': [{'containerPort': 80, 'protocol': 'TCP'}, {'containerPort': 'metrics', 'protocol': 'TCP'}], 'resources': {'limits': {'cpu': '500m', 'memory': '128Mi'}}}]}}
+> {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "Web_App"}, "spec": {"containers": []}}
+  invalid
+  errors: {'apiVersion': ['unallowed value v1'], 'kind': ['unallowed value Pod'], 'metadata': [{'name': ["value does not match regex '[a-z0-9]([-a-z0-9]*[a-z0-9])?'"]}], 'spec': [{'containers': ['min length is 1']}]}
+  document: {'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': 'Web_App'}, 'spec': {'containers': []}}
+> {"apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": {"name": "db", "labels": {"app.kubernetes.io/name": "postgres", "Bad Key": "x"}}, "spec": {"replicas": 1, "autoscale": {"min": 1, "max": 3}, "containers": [{"name": "pg", "image": "Postgres:16", "ports": [{"containerPort": 70000}, {"containerPort": "Postgres-Port-Number"}, {"containerPort": 5432, "protocol": "HTTP"}], "resources": {"limits": {"cpu": -1, "memory": "1GB", "pods": 4}}, "env": [{"name": "PGDATA", "value": "/data"}, {"name": "lower", "value": "x", "valueFrom": {"secret": "s"}}], "args": ["-c", "max_connections=100", "extra"]}]}}
+  invalid
+  errors: {'metadata': [{'labels': [{'Bad Key': ["value does not match regex '([a-z0-9.-]+/)?[a-zA-Z0-9_.-]+'"]}]}], 'spec': [{'containers': [{0: [{'args': ['length of list should be 2, it is 3'], 'env': [{1: [{'name': ["value does not match regex '[A-Z_][A-Z0-9_]*'"], 'value': ["'valueFrom' must not be present with 'value'"], 'valueFrom': ["'value' must not be present with 'valueFrom'"]}]}], 'image': ["value does not match regex '[a-z0-9./-]+(:[A-Za-z0-9._-]+)?'"], 'ports': [{0: [{'containerPort': ['no definitions validate', {'anyof definition 0': ['max value is 65535'], 'anyof definition 1': ['must be of string type']}]}], 1: [{'containerPort': ['no definitions validate', {'anyof definition 0': ['must be of integer type'], 'anyof definition 1': ["value does not match regex '[a-z][a-z0-9-]{0,14}'"]}]}], 2: [{'protocol': ['unallowed value HTTP']}]}], 'resources': [{'limits': [{'cpu': ['none or more than one rule validate', {'oneof definition 0': ['min value is 0'], 'oneof definition 1': ['must be of string type']}], 'memory': ['none or more than one rule validate', {'oneof definition 0': ['must be of integer type'], 'oneof definition 1': ["value does not match regex '[0-9]+(m|Mi|Gi)'"]}]}]}]}]}], 'replicas': ["'autoscale' must not be present with 'replicas'"]}]}
+  document: {'apiVersion': 'apps/v1', 'kind': 'StatefulSet', 'metadata': {'name': 'db', 'labels': {'app.kubernetes.io/name': 'postgres', 'Bad Key': 'x'}}, 'spec': {'replicas': 1, 'autoscale': {'min': 1, 'max': 3}, 'containers': [{'name': 'pg', 'image': 'Postgres:16', 'ports': [{'containerPort': 70000, 'protocol': 'TCP'}, {'containerPort': 'Postgres-Port-Number', 'protocol': 'TCP'}, {'containerPort': 5432, 'protocol': 'HTTP'}], 'resources': {'limits': {'cpu': -1, 'memory': '1GB', 'pods': 4}}, 'env': [{'name': 'PGDATA', 'value': '/data'}, {'name': 'lower', 'value': 'x', 'valueFrom': {'secret': 's'}}], 'args': ['-c', 'max_connections=100', 'extra']}]}}
+> {"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": {"name": "agent"}, "spec": {"containers": [{"name": "agent", "image": "registry.example.com/agent:v2", "ports": [{"containerPort": true}, {"containerPort": 9100.5}], "args": ["--port", 9100]}]}}
+  invalid
+  errors: {'spec': [{'containers': [{0: [{'args': [{1: ['must be of string type']}], 'ports': [{1: [{'containerPort': ['no definitions validate', {'anyof definition 0': ['must be of integer type'], 'anyof definition 1': ['must be of string type']}]}]}]}]}]}]}
+  document: {'apiVersion': 'apps/v1', 'kind': 'DaemonSet', 'metadata': {'name': 'agent'}, 'spec': {'containers': [{'name': 'agent', 'image': 'registry.example.com/agent:v2', 'ports': [{'containerPort': True, 'protocol': 'TCP'}, {'containerPort': 9100.5, 'protocol': 'TCP'}], 'args': ['--port', 9100]}]}}
+== validate schemas/sensor.json docs/sensors.jsonl
+> {"sensor": "  Kitchen-01 ", "temp": "21.5", "humidity": 40, "at": "2024-03-01", "readings": [1, 2, 3.5]}
+  invalid
+  errors: {'sensor': ['required field']}
+  document: {'temp': 21.5, 'humidity': 40, 'at': datetime.date(2024, 3, 1), 'readings': [1, 2, 3.5], 'device': '  Kitchen-01 ', 'status': 'ok', 'units': {}}
+> {"sensor": "garage", "temp": null, "humidity": null, "status": null, "at": "2024-02-30"}
+  invalid
+  errors: {'at': ["field 'at' cannot be coerced: day is out of range for month", 'must be of date type'], 'sensor': ['required field']}
+  document: {'temp': None, 'humidity': None, 'status': 'ok', 'at': '2024-02-30', 'device': 'garage', 'units': {}}
+> {"sensor": 17, "temp": "hot", "at": "yesterday", "readings": [3, 1, 2]}
+  invalid
+  errors: {'at': ["field 'at' cannot be coerced: not enough values to unpack (expected 3, got 1)", 'must be of date type'], 'device': ['must be of string type'], 'readings': ['items are not sorted'], 'sensor': ['required field'], 'temp': ["field 'temp' cannot be coerced: could not convert string to float: 'hot'", 'must be of float type']}
+  document: {'temp': 'hot', 'at': 'yesterday', 'readings': [3, 1, 2], 'device': 17, 'status': 'ok', 'units': {}}
+> {"id": "s-9", "sensor": "Attic", "temp": 99, "humidity": 120, "units": {"temp": "K", "pressure": "hPa"}, "battery": 3.1}
+  invalid
+  errors: {'battery': ['unknown field'], 'humidity': ['max value is 100'], 'id': ['field is read-only'], 'sensor': ['required field'], 'temp': ['max value is 85'], 'units': [{'temp': ['unallowed value K']}]}
+  document: {'id': 's-9', 'temp': 99.0, 'humidity': 120, 'units': {'temp': 'K'}, 'battery': 3.1, 'device': 'Attic', 'status': 'ok'}
+> {"sensor": "Porch", "temp": -41.0, "at": "2024-1-2-3", "units": {"temp": "F"}}
+  invalid
+  errors: {'at': ["field 'at' cannot be coerced: too many values to unpack (expected 3)", 'must be of date type'], 'sensor': ['required field'], 'temp': ['min value is -40']}
+  document: {'temp': -41.0, 'at': '2024-1-2-3', 'units': {'temp': 'F'}, 'device': 'Porch', 'status': 'ok'}
+> {"device": "Shed", "at": "2024-13-01"}
+  invalid
+  errors: {'at': ["field 'at' cannot be coerced: month must be in 1..12", 'must be of date type'], 'sensor': ['required field']}
+  document: {'device': 'Shed', 'at': '2024-13-01', 'status': 'ok', 'units': {}}
+== normalized schemas/sensor.json docs/sensors.jsonl
+> {"sensor": "  Kitchen-01 ", "temp": "21.5", "humidity": 40, "at": "2024-03-01", "readings": [1, 2, 3.5]}
+  result: {'temp': 21.5, 'humidity': 40, 'at': datetime.date(2024, 3, 1), 'readings': [1, 2, 3.5], 'device': '  Kitchen-01 ', 'status': 'ok', 'units': {}}
+> {"sensor": "garage", "temp": null, "humidity": null, "status": null, "at": "2024-02-30"}
+  result: None
+  errors: {'at': ["field 'at' cannot be coerced: day is out of range for month"]}
+> {"sensor": 17, "temp": "hot", "at": "yesterday", "readings": [3, 1, 2]}
+  result: None
+  errors: {'at': ["field 'at' cannot be coerced: not enough values to unpack (expected 3, got 1)"], 'temp': ["field 'temp' cannot be coerced: could not convert string to float: 'hot'"]}
+> {"id": "s-9", "sensor": "Attic", "temp": 99, "humidity": 120, "units": {"temp": "K", "pressure": "hPa"}, "battery": 3.1}
+  result: None
+  errors: {'id': ['field is read-only']}
+> {"sensor": "Porch", "temp": -41.0, "at": "2024-1-2-3", "units": {"temp": "F"}}
+  result: None
+  errors: {'at': ["field 'at' cannot be coerced: too many values to unpack (expected 3)"]}
+> {"device": "Shed", "at": "2024-13-01"}
+  result: None
+  errors: {'at': ["field 'at' cannot be coerced: month must be in 1..12"]}
+== validated schemas/sensor.json docs/sensors.jsonl purge_unknown
+> {"sensor": "  Kitchen-01 ", "temp": "21.5", "humidity": 40, "at": "2024-03-01", "readings": [1, 2, 3.5]}
+  result: None
+> {"sensor": "garage", "temp": null, "humidity": null, "status": null, "at": "2024-02-30"}
+  result: None
+> {"sensor": 17, "temp": "hot", "at": "yesterday", "readings": [3, 1, 2]}
+  result: None
+> {"id": "s-9", "sensor": "Attic", "temp": 99, "humidity": 120, "units": {"temp": "K", "pressure": "hPa"}, "battery": 3.1}
+  result: None
+> {"sensor": "Porch", "temp": -41.0, "at": "2024-1-2-3", "units": {"temp": "F"}}
+  result: None
+> {"device": "Shed", "at": "2024-13-01"}
+  result: None
+== validate schemas/sensor.json docs/sensors.jsonl purge_readonly no_normalize
+> {"sensor": "  Kitchen-01 ", "temp": "21.5", "humidity": 40, "at": "2024-03-01", "readings": [1, 2, 3.5]}
+  invalid
+  errors: {'at': ['must be of date type'], 'temp': ['must be of float type']}
+  document: {'sensor': '  Kitchen-01 ', 'temp': '21.5', 'humidity': 40, 'at': '2024-03-01', 'readings': [1, 2, 3.5]}
+> {"sensor": "garage", "temp": null, "humidity": null, "status": null, "at": "2024-02-30"}
+  invalid
+  errors: {'at': ['must be of date type'], 'status': ['null value not allowed']}
+  document: {'sensor': 'garage', 'temp': None, 'humidity': None, 'status': None, 'at': '2024-02-30'}
+> {"sensor": 17, "temp": "hot", "at": "yesterday", "readings": [3, 1, 2]}
+  invalid
+  errors: {'at': ['must be of date type'], 'readings': ['items are not sorted'], 'sensor': ['must be of string type'], 'temp': ['must be of float type']}
+  document: {'sensor': 17, 'temp': 'hot', 'at': 'yesterday', 'readings': [3, 1, 2]}
+> {"id": "s-9", "sensor": "Attic", "temp": 99, "humidity": 120, "units": {"temp": "K", "pressure": "hPa"}, "battery": 3.1}
+  invalid
+  errors: {'battery': ['unknown field'], 'humidity': ['max value is 100'], 'id': ['field is read-only'], 'temp': ['max value is 85'], 'units': [{'pressure': ['unknown field'], 'temp': ['unallowed value K']}]}
+  document: {'id': 's-9', 'sensor': 'Attic', 'temp': 99, 'humidity': 120, 'units': {'temp': 'K', 'pressure': 'hPa'}, 'battery': 3.1}
+> {"sensor": "Porch", "temp": -41.0, "at": "2024-1-2-3", "units": {"temp": "F"}}
+  invalid
+  errors: {'at': ['must be of date type'], 'temp': ['min value is -40']}
+  document: {'sensor': 'Porch', 'temp': -41.0, 'at': '2024-1-2-3', 'units': {'temp': 'F'}}
+> {"device": "Shed", "at": "2024-13-01"}
+  invalid
+  errors: {'at': ['must be of date type'], 'sensor': ['required field']}
+  document: {'device': 'Shed', 'at': '2024-13-01'}
+== validate schemas/csv_row.json docs/csv_rows.jsonl
+> {"sku": "KIT-0001", "name": "Chef's knife", "price": "49.90", "stock": "12", "active": "yes", "category": "Kitchen", "launched": "2021-09-14"}
+  valid
+  document: {'sku': 'KIT-0001', 'name': "Chef's knife", 'price': 49.9, 'stock': 12, 'active': True, 'category': 'kitchen', 'launched': datetime.date(2021, 9, 14)}
+> {"sku": " GAR-0042 ", "name": "Rake", "price": "1e2", "stock": "-3", "active": "Y", "category": "GardenTools", "launched": "2022-04-01"}
+  invalid
+  errors: {'stock': ['min value is 0']}
+  document: {'sku': 'GAR-0042', 'name': 'Rake', 'price': 100.0, 'stock': -3, 'active': True, 'category': 'garden_tools', 'launched': datetime.date(2022, 4, 1)}
+> {"sku": "OFF-12", "name": "   ", "price": "free", "stock": "3.5", "active": "maybe", "category": "Home Office"}
+  invalid
+  errors: {'active': ["field 'active' cannot be coerced: 'maybe'", 'must be of boolean type'], 'category': ['unallowed value home__office'], 'name': ['empty values not allowed'], 'price': ["field 'price' cannot be coerced: could not convert string to float: 'free'", 'must be of float type'], 'sku': ["value does not match regex '[A-Z]{3}-[0-9]{4}'"], 'stock': ["field 'stock' cannot be coerced: invalid literal for int() with base 10: '3.5'", 'must be of integer type']}
+  document: {'sku': 'OFF-12', 'name': '', 'price': 'free', 'stock': '3.5', 'active': 'maybe', 'category': 'home__office'}
+> {"sku": "OUT-7777", "name": "Hammock", "price": "-1", "stock": "", "active": "0", "category": "outdoor-living", "launched": "2023-02-29"}
+  invalid
+  errors: {'launched': ["field 'launched' cannot be coerced: day is out of range for month", 'must be of date type'], 'price': ['min value is 0'], 'stock': ["field 'stock' cannot be coerced: invalid literal for int() with base 10: ''", 'must be of integer type']}
+  document: {'sku': 'OUT-7777', 'name': 'Hammock', 'price': -1.0, 'stock': '', 'active': False, 'category': 'outdoor_living', 'launched': '2023-02-29'}
+> {"sku": "KIT-0002", "name": "Pan", "price": "inf", "stock": "007", "active": "TRUE", "category": "Bathroom", "launched": null}
+  invalid
+  errors: {'category': ['unallowed value bathroom']}
+  document: {'sku': 'KIT-0002', 'name': 'Pan', 'price': inf, 'stock': 7, 'active': True, 'category': 'bathroom', 'launched': None}
+> {"sku": "KIT-0003", "name": "Lid", "price": null, "stock": null, "active": null}
+  invalid
+  errors: {'active': ["field 'active' cannot be coerced: 'NoneType' object has no attribute 'lower'", 'null value not allowed'], 'price': ["field 'price' cannot be coerced: float() argument must be a string or a real number, not 'NoneType'", 'null value not allowed'], 'stock': ["field 'stock' cannot be coerced: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'", 'null value not allowed']}
+  document: {'sku': 'KIT-0003', 'name': 'Lid', 'price': None, 'stock': None, 'active': None}
+== validated schemas/csv_row.json docs/csv_rows.jsonl require_all
+> {"sku": "KIT-0001", "name": "Chef's knife", "price": "49.90", "stock": "12", "active": "yes", "category": "Kitchen", "launched": "2021-09-14"}
+  result: {'sku': 'KIT-0001', 'name': "Chef's knife", 'price': 49.9, 'stock': 12, 'active': True, 'category': 'kitchen', 'launched': datetime.date(2021, 9, 14)}
+> {"sku": " GAR-0042 ", "name": "Rake", "price": "1e2", "stock": "-3", "active": "Y", "category": "GardenTools", "launched": "2022-04-01"}
+  result: None
+> {"sku": "OFF-12", "name": "   ", "price": "free", "stock": "3.5", "active": "maybe", "category": "Home Office"}
+  result: None
+> {"sku": "OUT-7777", "name": "Hammock", "price": "-1", "stock": "", "active": "0", "category": "outdoor-living", "launched": "2023-02-29"}
+  result: None
+> {"sku": "KIT-0002", "name": "Pan", "price": "inf", "stock": "007", "active": "TRUE", "category": "Bathroom", "launched": null}
+  result: None
+> {"sku": "KIT-0003", "name": "Lid", "price": null, "stock": null, "active": null}
+  result: None
+== normalized schemas/post.json docs/posts.jsonl
+> {"title": "Hello World", "author": "ada", "items": [1, 2]}
+  result: {'title': 'Hello World', 'author': 'ada', 'items': [1, 2], 'views': 0, 'draft': True, 'slug': 'hello-world', 'owner': 'ada@example.com', 'count': 2}
+> {"title": "Second Post", "owner": "grace@example.com"}
+  result: None
+  errors: {'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."]}
+> {"title": "No Author"}
+  result: None
+  errors: {'author': ["default value for 'author' cannot be set: Circular dependencies of default setters."], 'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."], 'owner': ["default value for 'owner' cannot be set: Circular dependencies of default setters."]}
+> {"slug": "custom", "author": "ken", "views": 5}
+  result: None
+  errors: {'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."], 'views': ['field is read-only']}
+> {"title": "Shouting", "author": "linus", "Body": "TEXT", "items": null}
+  result: None
+  errors: {'count': ["default value for 'count' cannot be set: object of type 'NoneType' has no len()"]}
+== validate schemas/post.json docs/posts.jsonl
+> {"title": "Hello World", "author": "ada", "items": [1, 2]}
+  valid
+  document: {'title': 'Hello World', 'author': 'ada', 'items': [1, 2], 'views': 0, 'draft': True, 'slug': 'hello-world', 'owner': 'ada@example.com', 'count': 2}
+> {"title": "Second Post", "owner": "grace@example.com"}
+  invalid
+  errors: {'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."]}
+  document: {'title': 'Second Post', 'owner': 'grace@example.com', 'views': 0, 'draft': True, 'slug': 'second-post', 'author': 'grace'}
+> {"title": "No Author"}
+  invalid
+  errors: {'author': ["default value for 'author' cannot be set: Circular dependencies of default setters."], 'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."], 'owner': ["default value for 'owner' cannot be set: Circular dependencies of default setters."]}
+  document: {'title': 'No Author', 'views': 0, 'draft': True, 'slug': 'no-author'}
+> {"slug": "custom", "author": "ken", "views": 5}
+  invalid
+  errors: {'count': ["default value for 'count' cannot be set: Circular dependencies of default setters."], 'title': ['required field'], 'views': ['field is read-only']}
+  document: {'slug': 'custom', 'author': 'ken', 'views': 5, 'draft': True, 'owner': 'ken@example.com'}
+> {"title": "Shouting", "author": "linus", "Body": "TEXT", "items": null}
+  invalid
+  errors: {'count': ["default value for 'count' cannot be set: object of type 'NoneType' has no len()"], 'items': ['null value not allowed']}
+  document: {'title': 'Shouting', 'author': 'linus', 'items': None, 'body': 'TEXT', 'views': 0, 'draft': True, 'slug': 'shouting', 'owner': 'linus@example.com'}
+== validate schemas/tags.json docs/tags.jsonl
+> {"tags": ["release", "v2"], "level": 8, "codes": [1, 2, 3, 6], "flags": {"a": 1}, "pair": ["x", 1], "score": 50, "ratio": 0.5, "id": 7, "name": "Alice"}
+  valid
+  document: {'tags': ['release', 'v2'], 'level': 8, 'codes': [1, 2, 3, 6], 'flags': {'a': 1}, 'pair': ['x', 1], 'score': 50, 'ratio': 0.5, 'id': 7, 'name': 'Alice'}
+> {"tags": ["wip", "docs"], "level": 13, "codes": [5, 4, 2], "flags": {"a": 1, "c": 2, "d": 3}, "pair": ["x"], "score": 95, "ratio": 1.5, "id": "42", "name": "alice"}
+  invalid
+  errors: {'codes': ['missing members {1, 3}', 'unallowed values [4, 5]'], 'flags': ["unallowed values ('c', 'd')"], 'level': ['unallowed value 13'], 'name': ['no definitions validate', {'anyof definition 0': ["value does not match regex '[A-Z].*'"], 'anyof definition 1': ["value does not match regex '[0-9]+'"]}], 'pair': ['length of list should be 2, it is 1'], 'ratio': ["one or more definitions don't validate", {'allof definition 2': ['max value is 1']}], 'score': ['one or more definitions validate', {'noneof definition 1': ['must be of string type']}], 'tags': ["missing members {'release'}", "unallowed values ['wip']"]}
+  document: {'tags': ['wip', 'docs'], 'level': 13, 'codes': [5, 4, 2], 'flags': {'a': 1, 'c': 2, 'd': 3}, 'pair': ['x'], 'score': 95, 'ratio': 1.5, 'id': '42', 'name': 'alice'}
+> {"tags": [], "level": 0, "codes": [], "pair": [1, -1], "score": "high", "ratio": "half", "id": "x1", "name": 7}
+  invalid
+  errors: {'codes': ['missing members {1, 2, 3}'], 'id': ['none or more than one rule validate', {'oneof definition 0': ['must be of integer type'], 'oneof definition 1': ["value does not match regex '[0-9]+'"]}], 'level': ['unallowed value 0', 'unallowed value 0'], 'pair': [{0: ['must be of string type'], 1: ['min value is 0']}], 'ratio': ["one or more definitions don't validate", {'allof definition 0': ['must be of float type']}], 'score': ['one or more definitions validate', {'noneof definition 0': ['must be of integer type']}], 'tags': ["missing members {'release'}"]}
+  document: {'tags': [], 'level': 0, 'codes': [], 'pair': [1, -1], 'score': 'high', 'ratio': 'half', 'id': 'x1', 'name': 7}
+> {"level": 4, "codes": [1, 2, 3], "pair": ["a", 1, 2], "id": true, "name": null, "ratio": 0}
+  invalid
+  errors: {'level': ['unallowed value 4'], 'name': ['null value not allowed'], 'pair': ['length of list should be 2, it is 3']}
+  document: {'level': 4, 'codes': [1, 2, 3], 'pair': ['a', 1, 2], 'id': True, 'name': None, 'ratio': 0}
+== validate schemas/anyof.json docs/anyof.jsonl
+> {"contact": {"email": "a@b.c"}, "price": 3, "ids": [1, "abc"]}
+  valid
+  document: {'contact': {'email': 'a@b.c'}, 'price': 3, 'ids': [1, 'abc']}
+> {"contact": {"phone": "+351912345678", "email": "x@y.z"}, "price": 0.5, "ids": [0, "ab", 2.5]}
+  invalid
+  errors: {'contact': ['no definitions validate', {'anyof definition 0': [{'phone': ['unknown field']}], 'anyof definition 1': [{'email': ['unknown field']}]}], 'ids': [{0: ['none or more than one rule validate', {'oneof definition 0': ['min value is 1'], 'oneof definition 1': ['must be of string type']}], 1: ['none or more than one rule validate', {'oneof definition 0': ['must be of integer type'], 'oneof definition 1': ['min length is 3']}], 2: ['none or more than one rule validate', {'oneof definition 0': ['must be of integer type'], 'oneof definition 1': ['must be of string type']}]}]}
+  document: {'contact': {'phone': '+351912345678', 'email': 'x@y.z'}, 'price': 0.5, 'ids': [0, 'ab', 2.5]}
+> {"contact": {"phone": "12345"}, "price": -1.5, "ids": []}
+  invalid
+  errors: {'contact': ['no definitions validate', {'anyof definition 0': [{'email': ['required field'], 'phone': ['unknown field']}], 'anyof definition 1': [{'phone': ["value does not match regex '\\+[0-9]{7,15}'"]}]}], 'price': ['no definitions validate', {'anyof definition 0': ['must be of integer type'], 'anyof definition 1': ['min value is 0.0']}]}
+  document: {'contact': {'phone': '12345'}, 'price': -1.5, 'ids': []}
+> {"contact": {}, "price": null, "ids": ["abcd", -2]}
+  invalid
+  errors: {'contact': ['no definitions validate', {'anyof definition 0': [{'email': ['required field']}], 'anyof definition 1': [{'phone': ['required field']}]}], 'ids': [{1: ['none or more than one rule validate', {'oneof definition 0': ['min value is 1'], 'oneof definition 1': ['must be of string type']}]}]}
+  document: {'contact': {}, 'price': None, 'ids': ['abcd', -2]}
+== rules_set_registry money schemas/money.json
+== rules_set_registry positive schemas/positive.json
+== validate schemas/product.json docs/products.jsonl
+> {"name": "Desk", "price": 199.0, "weight": 30, "dims": [120, 60, 75], "ships_to": [{"street": "Main St 1", "city": "Porto"}]}
+  valid
+  document: {'name': 'Desk', 'price': 199.0, 'weight': 30, 'dims': [120, 60, 75], 'ships_to': [{'street': 'Main St 1', 'city': 'Porto', 'country': 'PT'}]}
+> {"name": "Lamp", "price": -5, "weight": 0, "dims": [10, -1], "ships_to": [{"city": "Faro", "zip": "80"}]}
+  invalid
+  errors: {'dims': [{1: ['min value is 0']}], 'price': ['min value is 0'], 'ships_to': [{0: [{'street': ['required field'], 'zip': ["value does not match regex '[0-9]{4,5}(-[0-9]{3,4})?'"]}]}], 'weight': ['unallowed value 0']}
+  document: {'name': 'Lamp', 'price': -5, 'weight': 0, 'dims': [10, -1], 'ships_to': [{'city': 'Faro', 'zip': '80', 'country': 'PT'}]}
+== validate schemas/strict.json docs/strict.jsonl
+> {"host": "a", "port": 1, "tls": {"cert": "c"}}
+  valid
+  document: {'host': 'a', 'port': 1, 'tls': {'cert': 'c'}}
+> {"host": "a"}
+  valid
+  document: {'host': 'a'}
+> {"port": "x", "extra": 1, "tls": {"cert": 1, "ca": "y"}}
+  invalid
+  errors: {'extra': ['unknown field'], 'port': ['must be of integer type'], 'tls': [{'ca': ['unknown field'], 'cert': ['must be of string type']}]}
+  document: {'port': 'x', 'extra': 1, 'tls': {'cert': 1, 'ca': 'y'}}
+> {"host": null, "port": null}
+  invalid
+  errors: {'host': ['null value not allowed'], 'port': ['null value not allowed']}
+  document: {'host': None, 'port': None}
+== validate schemas/strict.json docs/strict.jsonl allow_unknown
+> {"host": "a", "port": 1, "tls": {"cert": "c"}}
+  valid
+  document: {'host': 'a', 'port': 1, 'tls': {'cert': 'c'}}
+> {"host": "a"}
+  valid
+  document: {'host': 'a'}
+> {"port": "x", "extra": 1, "tls": {"cert": 1, "ca": "y"}}
+  invalid
+  errors: {'port': ['must be of integer type'], 'tls': [{'cert': ['must be of string type']}]}
+  document: {'port': 'x', 'extra': 1, 'tls': {'cert': 1, 'ca': 'y'}}
+> {"host": null, "port": null}
+  invalid
+  errors: {'host': ['null value not allowed'], 'port': ['null value not allowed']}
+  document: {'host': None, 'port': None}
+== validate schemas/strict.json docs/strict.jsonl allow_unknown={"type": "string", "maxlength": 5}
+> {"host": "a", "port": 1, "tls": {"cert": "c"}}
+  valid
+  document: {'host': 'a', 'port': 1, 'tls': {'cert': 'c'}}
+> {"host": "a"}
+  valid
+  document: {'host': 'a'}
+> {"port": "x", "extra": 1, "tls": {"cert": 1, "ca": "y"}}
+  invalid
+  errors: {'extra': ['must be of string type'], 'port': ['must be of integer type'], 'tls': [{'cert': ['must be of string type']}]}
+  document: {'port': 'x', 'extra': 1, 'tls': {'cert': 1, 'ca': 'y'}}
+> {"host": null, "port": null}
+  invalid
+  errors: {'host': ['null value not allowed'], 'port': ['null value not allowed']}
+  document: {'host': None, 'port': None}
+== validate schemas/strict.json docs/strict.jsonl require_all ignore_none_values
+> {"host": "a", "port": 1, "tls": {"cert": "c"}}
+  invalid
+  errors: {'tls': [{'key': ['required field']}]}
+  document: {'host': 'a', 'port': 1, 'tls': {'cert': 'c'}}
+> {"host": "a"}
+  invalid
+  errors: {'port': ['required field'], 'tls': ['required field']}
+  document: {'host': 'a'}
+> {"port": "x", "extra": 1, "tls": {"cert": 1, "ca": "y"}}
+  invalid
+  errors: {'extra': ['unknown field'], 'host': ['required field'], 'port': ['must be of integer type'], 'tls': [{'ca': ['unknown field'], 'cert': ['must be of string type'], 'key': ['required field']}]}
+  document: {'port': 'x', 'extra': 1, 'tls': {'cert': 1, 'ca': 'y'}}
+> {"host": null, "port": null}
+  invalid
+  errors: {'host': ['required field'], 'port': ['required field'], 'tls': ['required field']}
+  document: {'host': None, 'port': None}
+== schemas broken.jsonl
+> {"name": {"type": "strin"}}
+  SchemaError: {'name': [{'type': ['Unsupported types: strin']}]}
+> {"name": {"typ": "string"}}
+  SchemaError: {'name': [{'typ': ['unknown rule']}]}
+> {"age": {"type": "integer", "min": "zero", "max": 10}}
+  ok
+> {"age": "integer"}
+  SchemaError: {'age': ['must be of dict type']}
+> {"tags": {"type": "list", "schema": {"type": "string", "minlength": "3"}}}
+  SchemaError: {'tags': [{'schema': ['no definitions validate', {'anyof definition 0': [{'minlength': ['null value not allowed'], 'type': ['null value not allowed']}], 'anyof definition 1': [{'minlength': ['must be of integer type']}]}]}]}
+> {"tags": {"type": "list", "schema": {"tpye": "string"}}}
+  SchemaError: {'tags': [{'schema': ['no definitions validate', {'anyof definition 0': [{'tpye': ['null value not allowed']}], 'anyof definition 1': [{'tpye': ['unknown rule']}]}]}]}
+> {"role": {"allowed": "admin"}}
+  SchemaError: {'role': [{'allowed': ['must be of container type']}]}
+> {"role": {"required": "yes", "nullable": 1}}
+  SchemaError: {'role': [{'nullable': ['must be of boolean type'], 'required': ['must be of boolean type']}]}
+> {"x": {"coerce": "to_upper"}}
+  SchemaError: {'x': [{'coerce': ['none or more than one rule validate', {'oneof definition 0': ['must be of callable type'], 'oneof definition 1': ['must be of list type'], 'oneof definition 2': ['unallowed value to_upper']}]}]}
+> {"x": {"check_with": "odd"}}
+  SchemaError: {'x': [{'check_with': ['none or more than one rule validate', {'oneof definition 0': ['must be of callable type'], 'oneof definition 1': ['must be of list type'], 'oneof definition 2': ['unallowed value odd']}]}]}
+> {"x": {"default_setter": "nowhere"}}
+  SchemaError: {'x': [{'default_setter': ['none or more than one rule validate', {'oneof definition 0': ['must be of callable type'], 'oneof definition 1': ['unallowed value nowhere']}]}]}
+> {"x": {"anyof": {"type": "string"}}}
+  SchemaError: {'x': [{'anyof': ['must be of list type']}]}
+> {"x": {"anyof": [{"type": "string"}, {"typo": 1}]}}
+  SchemaError: {'x': [{'anyof': [{'typo': ['unknown rule']}]}]}
+> {"x": {"oneof_type": ["string", "nope"]}}
+  SchemaError: {'x': [{'oneof': [{'type': ['Unsupported types: nope']}]}]}
+> {"x": {"regex": 5}}
+  SchemaError: {'x': [{'regex': ['must be of string type']}]}
+> {"x": {"items": [{"type": "string"}, {"tpe": "int"}]}}
+  SchemaError: {'x': [{'items': [{1: [{'tpe': ['unknown rule']}]}]}]}
+> {"x": {"dependencies": 5}}
+  ok
+> {"x": {"dependencies": {"y": 5}}}
+  ok
+> {"x": {"excludes": ["a", {"b": 1}]}}
+  SchemaError: {'x': [{'excludes': [{1: ['must be of hashable type']}]}]}
+> {"x": {"keysrules": {"type": "string", "rename": "y"}}}
+  ok
+> {"x": {"valuesrules": {"type": "bogus"}}}
+  SchemaError: {'x': [{'valuesrules': [{'type': ['Unsupported types: bogus']}]}]}
+> {"x": {"schema": "no_such_schema"}}
+  SchemaError: {'x': [{'schema': ['no definitions validate', {'anyof definition 0': ['Schema definition no_such_schema not found.'], 'anyof definition 1': ['Rules set definition no_such_schema not found.']}]}]}
+> {"x": "no_such_rules"}
+  SchemaError: {'x': ['must be of dict type']}
+> {"x": {"type": "dict", "schema": {"y": {"type": "dict", "schema": {"z": {"maxlength": -1, "regexx": "a"}}}}}}
+  SchemaError: {'x': [{'schema': ['no definitions validate', {'anyof definition 0': [{'y': [{'schema': ['no definitions validate', {'anyof definition 0': [{'z': [{'regexx': ['unknown rule']}]}], 'anyof definition 1': [{'z': ['unknown rule']}]}]}]}], 'anyof definition 1': [{'y': ['unknown rule']}]}]}]}
+> {"x": {"type": ["string", "integer", "colour"]}}
+  SchemaError: {'x': [{'type': ['Unsupported types: colour']}]}
+> {"x": {"empty": "no", "readonly": "no", "purge_unknown": 1}}
+  SchemaError: {'x': [{'empty': ['must be of boolean type'], 'purge_unknown': ['must be of boolean type'], 'readonly': ['must be of boolean type']}]}
+> {"x": {"min": 1, "max": 2, "meta": {"anything": [1, 2]}}}
+  ok
+> {"x": {"minlength": 1.5, "contains": []}}
+  SchemaError: {'x': [{'contains': ['empty values not allowed'], 'minlength': ['must be of integer type']}]}
+> {"x": {"allow_unknown": {"type": "nonsense"}, "type": "dict"}}
+  SchemaError: {'x': [{'allow_unknown': ['none or more than one rule validate', {'oneof definition 0': ['must be of boolean type'], 'oneof definition 1': [{'type': ['Unsupported types: nonsense']}]}]}]}
+> {"x": {"rename": ["not", "hashable"]}}
+  SchemaError: {'x': [{'rename': ['must be of hashable type']}]}
