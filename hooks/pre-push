@@ -33,6 +33,19 @@ if [ ! -x "$lint" ]; then
     exit 0
 fi
 
+# Dark llvm test targets (CI's Lint step, 60 ms): a new llvm-gated tests/*.rs
+# that no CI job runs turned Lint red on main five times from 10-12 to 10-20, each time
+# found only by the next CI run. Check it here, where it is still cheap to fix.
+dark="$repo_root/scripts/dark-llvm-tests.py"
+if [ -f "$dark" ] && ! python3 "$dark" >&2; then
+    echo >&2
+    echo "pre-push: a llvm-gated test target is run by no CI job — push blocked." >&2
+    echo "  Add \`--test <target>\` to the codegen-e2e line in .github/workflows/ci.yml" >&2
+    echo "  (or allowlist it with a reason in scripts/dark-llvm-tests.py)." >&2
+    echo "  Or bypass this one push with:  git push --no-verify" >&2
+    exit 1
+fi
+
 if "$lint"; then
     exit 0
 fi
