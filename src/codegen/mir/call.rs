@@ -6,7 +6,7 @@
 //! result comes back through a temporary that is then copied to the
 //! destination, so neither can alias a place the callee reads.
 
-use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
 use super::{Cx, R};
@@ -57,6 +57,9 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     fn call_body(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
+        if let Some(v) = self.value_function(name)? {
+            return self.call_by_value(name, v, args, dest);
+        }
         let f = self.direct_function(name)?;
         let dty = self.place_type(dest)?;
         let ret = self.temp(dty, "ret")?;
@@ -86,6 +89,56 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_call(f, &vals, "").map_err(e)?;
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
+    }
+
+    /// [`Self::call_body`] for a body with a by-value function: each
+    /// argument is built in its slot as for the pointer convention, then
+    /// passed loaded, and the result is stored from the register.
+    fn call_by_value(
+        &mut self,
+        name: &str,
+        v: inkwell::values::FunctionValue<'ctx>,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<()> {
+        let program = self.program;
+        let body = &program.bodies[name];
+        let (params, ret) = self
+            .value_sig(body)
+            .ok_or("a by-value call to a body passed in memory")?;
+        let mut vals: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            let Some(rt) = params.get(i).copied().flatten() else {
+                continue;
+            };
+            let t = self.operand_type(a)?;
+            let w = body.locals[1 + i].ty;
+            let slot = if w != t && self.widens(t, w) {
+                let src = self.operand_ptr(a)?;
+                let slot = self.temp(w, "arg")?;
+                self.widen_into(slot, src, t, w)?;
+                slot
+            } else {
+                let slot = self.temp(t, "arg")?;
+                self.store_operand(slot, a)?;
+                slot
+            };
+            let x = self.builder.build_load(rt, slot, "").map_err(e)?;
+            if let Some(i) = x.as_instruction_value() {
+                let _ = i.set_alignment(1);
+            }
+            vals.push(x.into());
+        }
+        let r = self.builder.build_call(v, &vals, "").map_err(e)?;
+        if ret.is_some() {
+            let x = r.try_as_basic_value().unwrap_basic();
+            let dty = self.place_type(dest)?;
+            let tmp = self.temp(dty, "ret")?;
+            self.store(tmp, x)?;
+            let d = self.place_ptr(dest)?;
+            self.copy(d, tmp, dty)?;
+        }
+        Ok(())
     }
 
     /// Whether a `from` value converts to `to` by widening its integers

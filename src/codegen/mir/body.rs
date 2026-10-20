@@ -76,9 +76,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_switch(v, self.blocks[targets.otherwise.index()], &cases)
                     .map_err(e)?;
             }
-            TerminatorKind::Return => {
-                self.builder.build_return(None).map_err(e)?;
-            }
+            TerminatorKind::Return => match self.ret_by_value {
+                Some(Some(t)) => {
+                    let v = self.builder.build_load(t, self.locals[0], "").map_err(e)?;
+                    if let Some(i) = v.as_instruction_value() {
+                        let _ = i.set_alignment(1);
+                    }
+                    self.builder.build_return(Some(&v)).map_err(e)?;
+                }
+                _ => {
+                    self.builder.build_return(None).map_err(e)?;
+                }
+            },
             TerminatorKind::Call {
                 func,
                 args,

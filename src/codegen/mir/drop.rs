@@ -33,7 +33,7 @@ use inkwell::module::Linkage;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
-use super::{fn_symbol, Cx, R};
+use super::{Cx, R};
 use crate::mir::coroutine;
 use crate::mir::layout::{self, SHARED_COUNTS};
 use crate::mir::place_ty::place_ty;
@@ -579,7 +579,6 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder
             .build_call(f, &[ret.into(), slot.into()], "")
             .map_err(|e| e.to_string())?;
-        debug_assert_eq!(f.get_name().to_str().ok(), Some(fn_symbol(name).as_str()));
         Ok(())
     }
 

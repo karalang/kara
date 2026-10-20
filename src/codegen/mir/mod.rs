@@ -52,8 +52,8 @@ use inkwell::basic_block::BasicBlock as LlBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
+use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -146,6 +146,18 @@ pub struct Cx<'ctx, 'p> {
     shims: callable::Shims<'ctx>,
     /// Bodies declared and not lowered yet.
     todo: Vec<&'p Body>,
+    /// The bodies already put on `todo`.
+    scheduled: std::collections::HashSet<String>,
+    /// The by-value function of each body that has one ([`Cx::value_sig`]):
+    /// a direct call passes its arguments and takes its result in
+    /// registers, and the pointer-convention function in `fns`, when
+    /// something asks for one, wraps it.
+    vfns: HashMap<String, FunctionValue<'ctx>>,
+    /// Pointer-convention wrappers declared and not built yet.
+    wrap_todo: Vec<String>,
+    /// How the body being lowered returns: `Some` when by value, with the
+    /// result's register type (`None` for nothing).
+    ret_by_value: Option<Option<BasicTypeEnum<'ctx>>>,
     /// The global holding each static, by index.
     statics: HashMap<u32, PointerValue<'ctx>>,
     /// Line tables, when the program has a source file (`debug.rs`).
@@ -175,6 +187,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             keys: key::Keys::default(),
             shims: callable::Shims::default(),
             todo: Vec::new(),
+            scheduled: std::collections::HashSet::new(),
+            vfns: HashMap::new(),
+            wrap_todo: Vec::new(),
+            ret_by_value: None,
             statics: HashMap::new(),
             debug: None,
             site: crate::token::Span::default(),
@@ -299,11 +315,144 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let params: Vec<BasicMetadataTypeEnum> =
             (0..=body.arg_count).map(|_| self.ptr_ty().into()).collect();
         let ty = self.llcx.void_type().fn_type(&params, false);
+        // A body with a by-value function keeps the plain symbol for it.
+        let symbol = match self.value_sig(body) {
+            Some(_) => format!("{}.ptr", fn_symbol(name)),
+            None => fn_symbol(name),
+        };
+        let f = self
+            .module
+            .add_function(&symbol, ty, Some(Linkage::Internal));
+        self.fns.insert(name.to_string(), f);
+        f
+    }
+
+    /// The register type a value of `t` is passed in by value: `Some(None)`
+    /// for a value with no bytes, a scalar or pointer as it is loaded, an
+    /// integer for any other value of 1, 2, 4 or 8 bytes; `None` when it
+    /// is passed in memory.
+    fn reg_class(&self, t: Ty) -> Option<Option<BasicTypeEnum<'ctx>>> {
+        let l = self.layout(t).ok()?;
+        if l.size == 0 {
+            return Some(None);
+        }
+        let lt = self.llvm_ty(t).ok()?;
+        if !lt.is_array_type() {
+            return Some(Some(lt));
+        }
+        matches!(l.size, 1 | 2 | 4 | 8).then(|| Some(self.int_ty(l.size as u32 * 8).into()))
+    }
+
+    /// The by-value signature of `body`, when every parameter and the
+    /// result have a register class: each parameter's register type
+    /// (`None` for one passed as nothing), then the result's.
+    /// `KARAC_MIR_BYVALUE=0` passes everything in memory.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn value_sig(
+        &self,
+        body: &Body,
+    ) -> Option<(
+        Vec<Option<BasicTypeEnum<'ctx>>>,
+        Option<BasicTypeEnum<'ctx>>,
+    )> {
+        if body.arg_count > 8 || std::env::var("KARAC_MIR_BYVALUE").as_deref() == Ok("0") {
+            return None;
+        }
+        let ret = self.reg_class(body.locals[0].ty)?;
+        let params = (1..=body.arg_count)
+            .map(|i| self.reg_class(body.locals[i].ty))
+            .collect::<Option<Vec<_>>>()?;
+        Some((params, ret))
+    }
+
+    /// The by-value function of the body `name`, declared now (and the
+    /// body scheduled) when it has one.
+    pub(super) fn value_function(&mut self, name: &str) -> R<Option<FunctionValue<'ctx>>> {
+        if let Some(&f) = self.vfns.get(name) {
+            return Ok(Some(f));
+        }
+        let program = self.program;
+        let body = program
+            .bodies
+            .get(name)
+            .ok_or_else(|| format!("no body named `{name}`"))?;
+        let Some((params, ret)) = self.value_sig(body) else {
+            return Ok(None);
+        };
+        let ps: Vec<BasicMetadataTypeEnum> = params.iter().flatten().map(|t| (*t).into()).collect();
+        let ty = match ret {
+            Some(r) => r.fn_type(&ps, false),
+            None => self.llcx.void_type().fn_type(&ps, false),
+        };
         let f = self
             .module
             .add_function(&fn_symbol(name), ty, Some(Linkage::Internal));
-        self.fns.insert(name.to_string(), f);
-        f
+        self.vfns.insert(name.to_string(), f);
+        self.schedule(body);
+        Ok(Some(f))
+    }
+
+    fn schedule(&mut self, body: &'p Body) {
+        if self.scheduled.insert(body.instance.name.clone()) {
+            self.todo.push(body);
+        }
+    }
+
+    /// Builds the pointer-convention function of the body `name` as a
+    /// call of its by-value function: the arguments loaded from their
+    /// slots, the result stored to its own.
+    fn build_wrapper(&mut self, name: &str) -> R<()> {
+        let program = self.program;
+        let body = &program.bodies[name];
+        let (params, ret) = self
+            .value_sig(body)
+            .ok_or("a wrapper of a body passed in memory")?;
+        let v = self
+            .value_function(name)?
+            .ok_or("a wrapper of a body passed in memory")?;
+        let f = self.fns[name];
+        let always = self
+            .llcx
+            .create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
+        f.add_attribute(AttributeLoc::Function, always);
+        let entry = self.llcx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.unset_current_debug_location();
+        let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        for (i, t) in params.iter().enumerate() {
+            if let Some(t) = t {
+                let p = f
+                    .get_nth_param(i as u32 + 1)
+                    .ok_or("a parameter is missing")?
+                    .into_pointer_value();
+                let x = self
+                    .builder
+                    .build_load(*t, p, "")
+                    .map_err(|e| e.to_string())?;
+                if let Some(i) = x.as_instruction_value() {
+                    let _ = i.set_alignment(1);
+                }
+                args.push(x.into());
+            }
+        }
+        let r = self
+            .builder
+            .build_call(v, &args, "")
+            .map_err(|e| e.to_string())?;
+        if ret.is_some() {
+            let out = f
+                .get_nth_param(0)
+                .ok_or("the result slot is missing")?
+                .into_pointer_value();
+            let x = r.try_as_basic_value().unwrap_basic();
+            let st = self
+                .builder
+                .build_store(out, x)
+                .map_err(|e| e.to_string())?;
+            let _ = st.set_alignment(1);
+        }
+        self.builder.build_return(None).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Marks every pointer parameter `noalias` on the bodies only direct
@@ -467,7 +616,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .get(name)
             .ok_or_else(|| format!("no body named `{name}`"))?;
         let f = self.declare(name, body);
-        self.todo.push(body);
+        if self.value_sig(body).is_some() {
+            self.wrap_todo.push(name.to_string());
+        }
+        self.schedule(body);
         Ok(f)
     }
 
@@ -477,6 +629,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         loop {
             if let Some(body) = self.todo.pop() {
                 self.lower_body(body)?;
+            } else if let Some(name) = self.wrap_todo.pop() {
+                self.build_wrapper(&name)?;
             } else if self.glue_pending() {
                 self.finish_glue()?;
             } else if self.fmt_pending() {
@@ -497,7 +651,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// that is not the return place or an argument, an LLVM block per MIR
     /// block, then each block's statements and terminator.
     fn lower_body(&mut self, body: &'p Body) -> R<()> {
-        let f = self.direct_function(&body.instance.name)?;
+        let sig = self.value_sig(body);
+        let f = match self.value_function(&body.instance.name)? {
+            Some(v) => v,
+            None => self.direct_function(&body.instance.name)?,
+        };
+        self.ret_by_value = sig.as_ref().map(|(_, r)| *r);
         // A small body (an iterator's `next`, an accessor) is hinted for
         // inlining, which lifts O2's inline threshold for it from 225 to 325:
         // with every value passed by pointer, a body this size can cost
@@ -519,8 +678,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.debug_enter(name, &fn_symbol(name), start, f);
         self.body = Some(body);
         self.locals.clear();
+        // A by-value body's parameters, in order, skipping those passed as
+        // nothing.
+        let mut incoming = f.get_param_iter();
         for (i, decl) in body.locals.iter().enumerate() {
-            let slot = if i <= body.arg_count {
+            let slot = if i <= body.arg_count && sig.is_none() {
                 f.get_nth_param(i as u32)
                     .ok_or("a parameter is missing")?
                     .into_pointer_value()
@@ -539,6 +701,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                     .map_err(|e| e.to_string())?;
                 a
             };
+            if let Some((params, _)) = &sig {
+                if (1..=body.arg_count).contains(&i) && params[i - 1].is_some() {
+                    let v = incoming.next().ok_or("a parameter is missing")?;
+                    let st = self
+                        .builder
+                        .build_store(slot, v)
+                        .map_err(|e| e.to_string())?;
+                    let _ = st.set_alignment(1);
+                }
+            }
             self.locals.push(slot);
         }
         self.assume_ref_params(body)?;
