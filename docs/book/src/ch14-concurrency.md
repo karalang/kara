@@ -25,7 +25,7 @@ This is possible *because* of the effect system. Without knowing which resources
 
 When you want to be explicit about parallelism:
 
-A `par` block runs each of its branches concurrently and waits for all of them before control falls through. It's structured concurrency — no dangling tasks, no fire-and-forget. Each branch is an independent statement; they share data through a concurrency-safe type rather than by writing the same plain variable:
+A `par` block runs each of its branches concurrently and waits for all of them before control falls through. It's structured concurrency — no dangling tasks, no fire-and-forget. Each branch is an expression, separated by commas; they share data through a concurrency-safe type rather than by writing the same plain variable:
 
 ```kara,run
 sync struct Counter { count: Atomic[i64] }
@@ -37,10 +37,10 @@ fn bump(counter: ref Counter) {
 fn main() {
     let counter: Counter = Counter { count: Atomic.new(0) };
     par {
-        bump(counter);
-        bump(counter);
-        bump(counter);
-    }
+        bump(counter),
+        bump(counter),
+        bump(counter),
+    };
     println(counter.count.load(MemoryOrdering.Relaxed));   // 3
 }
 ```
