@@ -7930,6 +7930,14 @@ Effect: `reads(Env)` on `.parse()` (consumes `env.args()`). API surface inspired
 
 **Why non-breaking:** a generic lookup parameter that defaults to the current form keeps every existing call valid.
 
+### String Patterns (`Pattern` trait: `char`, `Str`, predicate)
+
+**Decision (2026-10-20, review thread, asked by Thread A on B-2026-10-20-22):** in v1 every pattern parameter of the string methods (`find`, `rfind`, `contains`, `starts_with`, `ends_with`, `split`, `split_once`, `strip_prefix`, `strip_suffix` and the rest) takes `pat: Str`, as docs/library/strings.md says. A `char` argument is a type error with a fix: a char literal becomes the string literal (`','` to `","`, machine-applicable), and a char variable becomes `c.to_string()`.
+
+**Why deferred:** real programs (CLIs, parsers, config readers) want three needle kinds: a substring, a single char, and a char-class predicate such as `s.find(|c| c.is_whitespace())`. One `Pattern` trait implemented by `Str`, `char` and `Fn(char) -> bool` covers all three without per-method overloads. A char-only special case now would be a second mechanism to keep later, and accepting only some methods (as `find` did) is the inconsistency B-2026-10-20-22 reported.
+
+**Why non-breaking:** widening `pat: Str` to `pat: P` where `P: Pattern` accepts every program that compiles today. The fix-its become unnecessary but stay correct.
+
 ### Terminal Control Library (`std.terminal` or `kara-terminal`)
 
 A stdlib module or external package providing cursor movement, screen clearing, and color control — the minimum needed to write CLIs, TUI dashboards, and game-of-life–style display loops without embedding raw ANSI escape sequences.

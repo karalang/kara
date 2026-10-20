@@ -1394,7 +1394,7 @@ fn greeting(name: String) -> String {
 
 ```kara
 fn first_word(s: Str) -> Str {
-    let end = s.find(' ').unwrap_or(s.len());
+    let end = s.find(" ").unwrap_or(s.len());
     s[0..end]                         // no allocation: a view into the caller's text
 }
 
