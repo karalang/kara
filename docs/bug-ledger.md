@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 302 |
+| missing-feature | 303 |
 | codegen-gap | 278 |
 | false-positive | 255 |
 | other | 185 |
-| diagnostics | 181 |
+| diagnostics | 182 |
 | perf | 180 |
 | crash | 126 |
 | soundness | 125 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2977 |
-| interp | 996 |
-| typecheck | 517 |
+| interp | 997 |
+| typecheck | 519 |
 | ownership | 124 |
 | other | 122 |
 | runtime | 81 |
@@ -174,6 +174,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
 | B-2026-10-20-30 | 2026-10-20 | typecheck | low | A `sync struct` field may still be declared `mut` when its type is `Atomic[T]` or `Mutex[T]`, though core-semantics §6.3 and Amendment 7 say a `sync` type's fields are never `mut` | — |
 | B-2026-10-20-31 | 2026-10-20 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitialized ('discriminant of a value that is not an initialized enum'); the same value bound with `let` first, or an `Option[i64]`, works | — |
+| B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
+| B-2026-10-20-33 | 2026-10-20 | typecheck | low | A `flat_map` closure that returns a collection (`|x| pairs(*x)` returning `Vec[i64]`) gets E0200 listing all 29 `Iterator` implementors and no `.into_iter()` hint, then a second E0236 at the same span; design.md promises the `.into_iter()` suggestion for the `for` case only, but the fix here is the same one call | — |
 
 ### Relocated
 
