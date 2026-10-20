@@ -1,0 +1,519 @@
+== construct from strings
+  new 3.14 -> Decimal('3.14')
+  new   -0.000   -> Decimal('-0.000')
+  new 1_000.5 -> Decimal('1000.5')
+  new 1e+3 -> Decimal('1E+3')
+  new -1E-3 -> Decimal('-0.001')
+  new .5 -> Decimal('0.5')
+  new 5. -> Decimal('5')
+  new +12.3400 -> Decimal('12.3400')
+  new Inf -> Decimal('Infinity')
+  new -infinity -> Decimal('-Infinity')
+  new nan -> Decimal('NaN')
+  new sNaN123 -> Decimal('sNaN123')
+  new -NaN0045 -> Decimal('-NaN45')
+  new 0E-1000 -> Decimal('0E-1000')
+  new 1.5e999999 -> Decimal('1.5E+999999')
+  new abc -> InvalidOperation: Invalid literal for Decimal: 'abc' {InvalidOperation}
+  new 1.2.3 -> InvalidOperation: Invalid literal for Decimal: '1.2.3' {InvalidOperation}
+  new  -> InvalidOperation: Invalid literal for Decimal: '' {InvalidOperation}
+  new 1 000 -> InvalidOperation: Invalid literal for Decimal: '1 000' {InvalidOperation}
+  new ١٢٣ -> Decimal('123')
+== conversion syntax with the trap off
+  ctx traps= -> Context(prec=28, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[])
+  new abc -> Decimal('NaN') {InvalidOperation}
+  new 12e -> Decimal('NaN') {InvalidOperation}
+  add 1 foo -> Decimal('NaN') {InvalidOperation}
+  create  7  -> Decimal('NaN') {InvalidOperation}
+  create 1_0 -> Decimal('NaN') {InvalidOperation}
+  create NaN12345678901234567890123456789 -> Decimal('NaN') {InvalidOperation}
+== ints, floats and tuples
+  new i:12345678901234567890 -> Decimal('12345678901234567890')
+  new i:-7 -> Decimal('-7')
+  new f:0.1 -> Decimal('0.1000000000000000055511151231257827021181583404541015625') {FloatOperation}
+  new f:-0.0 -> Decimal('-0') {FloatOperation}
+  new f:1e300 -> Decimal('1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160') {FloatOperation}
+  new f:inf -> Decimal('Infinity') {FloatOperation}
+  new f:nan -> Decimal('NaN') {FloatOperation}
+  fromfloat 2.5 -> Decimal('2.5')
+  fromfloat 1.1 -> Decimal('1.100000000000000088817841970012523233890533447265625')
+  fromfloat 1e-7 -> Decimal('9.99999999999999954748111825886258685613938723690807819366455078125E-8')
+  tuple 3.14 -> DecimalTuple(sign=0, digits=(3, 1, 4), exponent=-2)
+  tuple -0 -> DecimalTuple(sign=1, digits=(0,), exponent=0)
+  tuple Inf -> DecimalTuple(sign=0, digits=(0,), exponent='F')
+  tuple sNaN7 -> DecimalTuple(sign=0, digits=(7,), exponent='N')
+  tuple 1.500E+8 -> DecimalTuple(sign=0, digits=(1, 5, 0, 0), exponent=5)
+  ratio 3.14 -> (157, 50)
+  ratio -123e5 -> (-12300000, 1)
+  ratio 0.00 -> (0, 1)
+  ratio 0.0625 -> (1, 16)
+  ratio Inf -> OverflowError: cannot convert Infinity to integer ratio
+  ratio NaN -> ValueError: cannot convert NaN to integer ratio
+== str, repr and to_eng_string
+  str 123E+1 -> '1.23E+3'
+  str 0.000001 -> '0.000001'
+  str 0.0000001 -> '1E-7'
+  str -1.20E-7 -> '-1.20E-7'
+  str 1E+2 -> '1E+2'
+  str 0E-8 -> '0E-8'
+  eng 123E+1 -> '1.23E+3'
+  eng 1E+7 -> '10E+6'
+  eng 0.0000001 -> '100E-9'
+  eng 0E-8 -> '0.00E-6'
+  eng 0E+1 -> '0.00E+3'
+  eng -12.3E-10 -> '-1.23E-9'
+  eng 5E+2 -> '500'
+  ctx capitals=0 -> Context(prec=28, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=0, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  str 1E+5 -> '1e+5'
+  eng 1E+5 -> '100e+3'
+== addition and subtraction
+  add 1.1 2.2 -> Decimal('3.3')
+  add 1.30 1.20 -> Decimal('2.50')
+  add 1E+2 1E-2 -> Decimal('100.01')
+  add -5 5 -> Decimal('0')
+  add 0.00 -0 -> Decimal('0.00')
+  sub 1.3 1.07 -> Decimal('0.23')
+  sub 1.3 2.07 -> Decimal('-0.77')
+  add 9999999999999999999999999999 1 -> Decimal('1.000000000000000000000000000E+28') {Rounded}
+  add 1E+50 1 -> Decimal('1.000000000000000000000000000E+50') {Inexact, Rounded}
+  add 1 1E-40 -> Decimal('1.000000000000000000000000000') {Inexact, Rounded}
+  add Inf -Inf -> InvalidOperation: -INF + INF {InvalidOperation}
+  add Inf 5 -> Decimal('Infinity')
+  add NaN3 1 -> Decimal('NaN3')
+  sub -Inf -Inf -> InvalidOperation: -INF + INF {InvalidOperation}
+  add 1 i:41 -> Decimal('42')
+  add 1 f:0.5 -> TypeError: unsupported operand type(s) for +: 'Decimal' and 'float'
+  ctx rounding=ROUND_FLOOR -> Context(prec=28, rounding=ROUND_FLOOR, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  add 5 -5 -> Decimal('-0')
+  sub 0 0 -> Decimal('-0')
+  neg 0 -> Decimal('-0')
+  pos -0 -> Decimal('-0')
+== multiplication and division
+  mul 1.20 3 -> Decimal('3.60')
+  mul -7 1E-3 -> Decimal('-0.007')
+  mul 0 -Inf -> InvalidOperation: 0 * (+-)INF {InvalidOperation}
+  mul Inf -2 -> Decimal('-Infinity')
+  mul 1.5 1.5 -> Decimal('2.25')
+  div 1 3 -> Decimal('0.3333333333333333333333333333') {Inexact, Rounded}
+  div 2 3 -> Decimal('0.6666666666666666666666666667') {Inexact, Rounded}
+  div 1 4 -> Decimal('0.25')
+  div 12 12 -> Decimal('1')
+  div 8.00 2 -> Decimal('4.00')
+  div 2.400 2.0 -> Decimal('1.20')
+  div 1000 1E-3 -> Decimal('1.000E+6')
+  div 1 0 -> DivisionByZero: x / 0 {DivisionByZero}
+  div 0 0 -> InvalidOperation: 0 / 0 {InvalidOperation}
+  div -0 5 -> Decimal('-0')
+  div Inf Inf -> InvalidOperation: (+-)INF/(+-)INF {InvalidOperation}
+  div 5 Inf -> Decimal('0E-1000026') {Clamped}
+  div 2.40E+6 2 -> Decimal('1.20E+6')
+  div 1 i:7 -> Decimal('0.1428571428571428571428571429') {Inexact, Rounded}
+== integer division and remainders
+  floordiv 7 2 -> Decimal('3')
+  floordiv -7 2 -> Decimal('-3')
+  mod -7 2 -> Decimal('-1')
+  mod 7 -2 -> Decimal('1')
+  mod 10 3.3 -> Decimal('0.1')
+  divmod 7.5 2 -> (Decimal('3'), Decimal('1.5'))
+  divmod -7.5 2 -> (Decimal('-3'), Decimal('-1.5'))
+  divmod 1 0 -> DivisionByZero: x // 0 {DivisionByZero}
+  divmod Inf 3 -> InvalidOperation: INF % x {InvalidOperation}
+  floordiv 1E+40 3 -> InvalidOperation: quotient too large in //, % or divmod {InvalidOperation}
+  remnear 10 6 -> Decimal('-2')
+  remnear 2.1 3 -> Decimal('-0.9')
+  remnear -10 3 -> Decimal('-1')
+  remnear 3.6 1.3 -> Decimal('-0.3')
+  remnear 10 0.3 -> Decimal('0.1')
+  remnear 1E+40 3 -> InvalidOperation: None {InvalidOperation}
+  mod 5 0 -> InvalidOperation: x % 0 {InvalidOperation}
+  floordiv 0 0 -> InvalidOperation: 0 // 0 {InvalidOperation}
+== powers
+  pow 2 10 -> Decimal('1024')
+  pow 2 -2 -> Decimal('0.25')
+  pow 10 -3 -> Decimal('0.001')
+  pow 1.1 2 -> Decimal('1.21')
+  pow -2 3 -> Decimal('-8')
+  pow -2 -3 -> Decimal('-0.125')
+  pow 4 0.5 -> Decimal('2.000000000000000000000000000') {Inexact, Rounded}
+  pow 2 0.5 -> Decimal('1.414213562373095048801688724') {Inexact, Rounded}
+  pow 8 1/3 -> InvalidOperation: Invalid literal for Decimal: '1/3' {InvalidOperation}
+  pow 8 0.333 -> Decimal('1.998614185980905043844758711') {Inexact, Rounded}
+  pow 1.0 5 -> Decimal('1.00000')
+  pow 1.00 -3 -> Decimal('1')
+  pow 0 0 -> InvalidOperation: 0 ** 0 {InvalidOperation}
+  pow 0 -1 -> Decimal('Infinity')
+  pow -0 -1 -> Decimal('-Infinity')
+  pow Inf -1 -> Decimal('0')
+  pow -1.5 0.5 -> InvalidOperation: x ** y with x negative and y not an integer {InvalidOperation}
+  pow 1.0001 10000 -> Decimal('2.718145926825224864037664675') {Inexact, Rounded}
+  pow 0.9 100 -> Decimal('0.00002656139888758747693387813220') {Inexact, Rounded}
+  pow 10 1000000 -> Overflow: above Emax {Overflow}
+  pow 3 -0.75 -> Decimal('0.4386913376508308202730729673') {Inexact, Rounded}
+  pow 25 -0.5 -> Decimal('0.2000000000000000000000000000') {Inexact, Rounded}
+  pow 1E-5 2.5 -> Decimal('3.162277660168379331998893544E-13') {Inexact, Rounded}
+  powmod 3 200 7 -> Decimal('2')
+  powmod -2 3 5 -> Decimal('-3')
+  powmod 2.5 2 3 -> InvalidOperation: pow() 3rd argument not allowed unless all arguments are integers {InvalidOperation}
+  powmod 2 -1 3 -> InvalidOperation: pow() 2nd argument cannot be negative when 3rd argument specified {InvalidOperation}
+== quantize and rounding modes
+  quantize 1.41421356 0.001 -> Decimal('1.414') {Inexact, Rounded}
+  quantize 2.5 1 -> Decimal('2') {Inexact, Rounded}
+  quantize 3.5 1 -> Decimal('4') {Inexact, Rounded}
+  quantize -2.5 1 -> Decimal('-2') {Inexact, Rounded}
+  quantize 1.005 0.01 ROUND_HALF_UP -> Decimal('1.01') {Inexact, Rounded}
+  quantize 1.005 0.01 ROUND_HALF_DOWN -> Decimal('1.00') {Inexact, Rounded}
+  quantize 1.015 0.01 ROUND_HALF_EVEN -> Decimal('1.02') {Inexact, Rounded}
+  quantize 1.001 0.01 ROUND_UP -> Decimal('1.01') {Inexact, Rounded}
+  quantize -1.009 0.01 ROUND_DOWN -> Decimal('-1.00') {Inexact, Rounded}
+  quantize -1.001 0.01 ROUND_FLOOR -> Decimal('-1.01') {Inexact, Rounded}
+  quantize -1.009 0.01 ROUND_CEILING -> Decimal('-1.00') {Inexact, Rounded}
+  quantize 1.04 0.1 ROUND_05UP -> Decimal('1.1') {Inexact, Rounded}
+  quantize 1.06 0.1 ROUND_05UP -> Decimal('1.1') {Inexact, Rounded}
+  quantize 1.51 0.1 ROUND_05UP -> Decimal('1.6') {Inexact, Rounded}
+  quantize 123.456 1E+1 -> Decimal('1.2E+2') {Inexact, Rounded}
+  quantize 0 1E-5 -> Decimal('0.00000')
+  quantize 1E+30 0.01 -> InvalidOperation: quantize result has too many digits for current context {InvalidOperation}
+  quantize Inf 1 -> InvalidOperation: quantize with one INF {InvalidOperation}
+  quantize Inf -Inf -> Decimal('Infinity')
+  quantize 1 NaN -> Decimal('NaN')
+  quantize 5 1E+1000000 -> InvalidOperation: target exponent out of bounds in quantize {InvalidOperation}
+  round 2.675 2 -> Decimal('2.68') {Inexact, Rounded}
+  round 2.5 -> 2
+  round -0.5 -> 0
+  round 123.456 -1 -> Decimal('1.2E+2') {Inexact, Rounded}
+  round Inf -> OverflowError: cannot round an infinity
+  round NaN -> ValueError: cannot round a NaN
+  floor -1.5 -> -2
+  ceil -1.5 -> -1
+  int -9.99 -> -9
+  int 1E+3 -> 1000
+  int Inf -> OverflowError: Cannot convert infinity to integer
+  int NaN -> ValueError: Cannot convert NaN to integer
+== rounding to the context
+  ctx prec=5 -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos 1.23456789 -> Decimal('1.2346') {Inexact, Rounded}
+  pos 99999.5 -> Decimal('1.0000E+5') {Inexact, Rounded}
+  pos -99999.5 -> Decimal('-1.0000E+5') {Inexact, Rounded}
+  add 12345 0.5 -> Decimal('12346') {Inexact, Rounded}
+  mul 123 456 -> Decimal('56088')
+  ctx prec=5 rounding=ROUND_DOWN -> Context(prec=5, rounding=ROUND_DOWN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos 1.23459 -> Decimal('1.2345') {Inexact, Rounded}
+  ctx prec=5 rounding=ROUND_UP -> Context(prec=5, rounding=ROUND_UP, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos 1.23451 -> Decimal('1.2346') {Inexact, Rounded}
+  ctx prec=5 rounding=ROUND_CEILING -> Context(prec=5, rounding=ROUND_CEILING, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos -1.23459 -> Decimal('-1.2345') {Inexact, Rounded}
+  ctx prec=5 rounding=ROUND_05UP -> Context(prec=5, rounding=ROUND_05UP, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos 1.23409 -> Decimal('1.2341') {Inexact, Rounded}
+  pos 1.23459 -> Decimal('1.2346') {Inexact, Rounded}
+  ctx prec=3 rounding=ROUND_HALF_DOWN -> Context(prec=3, rounding=ROUND_HALF_DOWN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  pos 2.345 -> Decimal('2.34') {Inexact, Rounded}
+  pos 2.3451 -> Decimal('2.35') {Inexact, Rounded}
+== overflow, underflow and clamping
+  ctx prec=5 Emax=99 Emin=-99 traps= -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[])
+  mul 1E+99 10 -> Decimal('Infinity') {Inexact, Overflow, Rounded}
+  pos 9.99999E+99 -> Decimal('Infinity') {Inexact, Overflow, Rounded}
+  mul 1E-99 1E-3 -> Decimal('1E-102') {Subnormal}
+  div 1E-99 1E+10 -> Decimal('0E-103') {Clamped, Inexact, Rounded, Underflow, Subnormal}
+  pos 1.2345E-102 -> Decimal('1.2E-102') {Inexact, Rounded, Underflow, Subnormal}
+  pos 0E-200 -> Decimal('0E-103') {Clamped}
+  pos 0E+200 -> Decimal('0E+99') {Clamped}
+  ctx prec=5 Emax=99 Emin=-99 traps= rounding=ROUND_DOWN -> Context(prec=5, rounding=ROUND_DOWN, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[])
+  mul 1E+99 10 -> Decimal('9.9999E+99') {Inexact, Overflow, Rounded}
+  mul -1E+99 10 -> Decimal('-9.9999E+99') {Inexact, Overflow, Rounded}
+  ctx prec=5 Emax=99 Emin=-99 traps= rounding=ROUND_FLOOR -> Context(prec=5, rounding=ROUND_FLOOR, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[])
+  mul 1E+99 10 -> Decimal('9.9999E+99') {Inexact, Overflow, Rounded}
+  mul -1E+99 10 -> Decimal('-Infinity') {Inexact, Overflow, Rounded}
+  ctx prec=5 Emax=99 Emin=-99 clamp=1 traps= -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-99, Emax=99, capitals=1, clamp=1, flags=[], traps=[])
+  pos 1E+99 -> Decimal('1.0000E+99') {Clamped}
+  pos 1.2E+97 -> Decimal('1.20E+97') {Clamped}
+  normalize 1.20000E+98 -> Decimal('1.200E+98') {Rounded}
+  ctx prec=5 Emax=99 Emin=-99 -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  mul 1E+99 10 -> Overflow: above Emax {Overflow}
+  ctx prec=5 Emax=99 Emin=-99 traps=Underflow,Inexact -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[Inexact, Underflow])
+  div 1 3 -> Inexact: None {Inexact}
+  mul 1E-99 1E-3 -> Decimal('1E-102') {Subnormal}
+== square roots, exp and logs
+  sqrt 2 -> Decimal('1.414213562373095048801688724') {Inexact, Rounded}
+  sqrt 100 -> Decimal('10')
+  sqrt 0.0100 -> Decimal('0.10')
+  sqrt 1E-7 -> Decimal('0.0003162277660168379331998893544') {Inexact, Rounded}
+  sqrt -1 -> InvalidOperation: sqrt(-x), x > 0 {InvalidOperation}
+  sqrt -0 -> Decimal('-0')
+  sqrt Inf -> Decimal('Infinity')
+  sqrt 1.21 -> Decimal('1.1')
+  sqrt 9E+5 -> Decimal('948.6832980505137995996680633') {Inexact, Rounded}
+  exp 1 -> Decimal('2.718281828459045235360287471') {Inexact, Rounded}
+  exp 0 -> Decimal('1')
+  exp -1 -> Decimal('0.3678794411714423215955237702') {Inexact, Rounded}
+  exp 2.302585092994045684017991455 -> Decimal('10.00000000000000000000000000') {Inexact, Rounded}
+  exp 100 -> Decimal('2.688117141816135448412625552E+43') {Inexact, Rounded}
+  exp -Inf -> Decimal('0')
+  exp 1E-30 -> Decimal('1.000000000000000000000000000') {Inexact, Rounded}
+  exp 1E+10 -> Overflow: above Emax {Overflow}
+  ln 10 -> Decimal('2.302585092994045684017991455') {Inexact, Rounded}
+  ln 2 -> Decimal('0.6931471805599453094172321215') {Inexact, Rounded}
+  ln 0.5 -> Decimal('-0.6931471805599453094172321215') {Inexact, Rounded}
+  ln 1 -> Decimal('0')
+  ln 0 -> Decimal('-Infinity')
+  ln -1 -> InvalidOperation: ln of a negative value {InvalidOperation}
+  ln 1E+100 -> Decimal('230.2585092994045684017991455') {Inexact, Rounded}
+  log10 1000 -> Decimal('3')
+  log10 2 -> Decimal('0.3010299956639811952137388947') {Inexact, Rounded}
+  log10 0.001 -> Decimal('-3')
+  log10 0.002 -> Decimal('-2.698970004336018804786261105') {Inexact, Rounded}
+  log10 1.0000001 -> Decimal('4.342944601885291801367019736E-8') {Inexact, Rounded}
+  logb 250 -> Decimal('2')
+  logb 0 -> DivisionByZero: logb(0) {DivisionByZero}
+  logb -0.001 -> Decimal('-3')
+  ctx prec=50 -> Context(prec=50, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  sqrt 2 -> Decimal('1.4142135623730950488016887242096980785696718753769') {Inexact, Rounded}
+  ln 3 -> Decimal('1.0986122886681096913952452369225257046474905578227') {Inexact, Rounded}
+  exp 0.5 -> Decimal('1.6487212707001281468486507878141635716537761007101') {Inexact, Rounded}
+  ctx prec=6 -> Context(prec=6, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  sqrt 2 -> Decimal('1.41421') {Inexact, Rounded}
+  exp 10 -> Decimal('22026.5') {Inexact, Rounded}
+  ln 1.000001 -> Decimal('0.00000100000') {Inexact, Rounded}
+  log10 31622.8 -> Decimal('4.50000') {Inexact, Rounded}
+== comparisons
+  eq 1.0 1 -> True
+  eq 0 -0 -> True
+  eq NaN NaN -> False
+  eq sNaN 1 -> InvalidOperation: sNaN {InvalidOperation}
+  lt 1.1 1.10001 -> True
+  lt NaN 1 -> InvalidOperation: comparison involving NaN {InvalidOperation}
+  ge -Inf -1E+999 -> False
+  lt 1.1 f:1.1 -> True {FloatOperation}
+  eq 0.5 f:0.5 -> True {FloatOperation}
+  eq 2 i:2 -> True
+  compare 2.1 3 -> Decimal('-1')
+  compare 2.1 2.10 -> Decimal('0')
+  compare NaN 1 -> Decimal('NaN')
+  cmpsignal NaN 1 -> InvalidOperation: comparison involving NaN {InvalidOperation}
+  cmptotal 12.30 12.3 -> Decimal('-1')
+  cmptotal -0 0 -> Decimal('-1')
+  cmptotal NaN Inf -> Decimal('1')
+  cmptotal sNaN2 NaN1 -> Decimal('-1')
+  cmptotal -NaN -sNaN -> Decimal('-1')
+  cmptotalmag -3 2 -> Decimal('1')
+  max 1 2 -> Decimal('2')
+  max 1.0 1 -> Decimal('1')
+  max -0 0 -> Decimal('0')
+  max NaN 3 -> Decimal('3')
+  min 1.00 1.0 -> Decimal('1.00')
+  min sNaN 3 -> InvalidOperation: sNaN {InvalidOperation}
+  maxmag -3 2 -> Decimal('-3')
+  minmag -3 2 -> Decimal('2')
+  minmag -2 2 -> Decimal('-2')
+== next values and classes
+  nextplus 1 -> Decimal('1.000000000000000000000000001')
+  nextplus -1E-1000007 -> Decimal('-9.999999999999999999E-1000008')
+  nextminus 1 -> Decimal('0.9999999999999999999999999999')
+  nextminus Inf -> Decimal('9.999999999999999999999999999E+999999')
+  nextplus -Inf -> Decimal('-9.999999999999999999999999999E+999999')
+  nexttoward 1 2 -> Decimal('1.000000000000000000000000001')
+  nexttoward 1 0 -> Decimal('0.9999999999999999999999999999')
+  nexttoward 1 1.0 -> Decimal('1')
+  nexttoward -1 -1 -> Decimal('-1')
+  ctx prec=5 Emax=99 Emin=-99 traps= -> Context(prec=5, rounding=ROUND_HALF_EVEN, Emin=-99, Emax=99, capitals=1, clamp=0, flags=[], traps=[])
+  nexttoward 9.9999E+99 Inf -> Decimal('Infinity') {Inexact, Overflow, Rounded}
+  nexttoward 1E-103 0 -> Decimal('0E-103') {Clamped, Inexact, Rounded, Underflow, Subnormal}
+  nextplus 9.9999E+99 -> Decimal('Infinity')
+  class 0 -> '+Zero'
+  class -0 -> '-Zero'
+  class 1E-100 -> '+Subnormal'
+  class -1E-101 -> '-Subnormal'
+  class 2.50 -> '+Normal'
+  class -Inf -> '-Infinity'
+  class NaN -> 'NaN'
+  class sNaN -> 'sNaN'
+  isnormal 1E-99 -> True
+  issubnormal 1E-100 -> True
+  adjusted 123.45 -> 2
+  adjusted 0.001 -> -3
+  adjusted Inf -> 0
+  samequantum 2.17 0.001 -> False
+  samequantum 2.17 0.01 -> True
+  samequantum Inf -Inf -> True
+  samequantum NaN 1 -> False
+== digit operations
+  ctx prec=9 -> Context(prec=9, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  scaleb 7.50 -2 -> Decimal('0.0750')
+  scaleb 7.50 3 -> Decimal('7.50E+3')
+  scaleb 1 1.5 -> InvalidOperation: None {InvalidOperation}
+  rotate 34 8 -> Decimal('400000003')
+  rotate 12 9 -> Decimal('12')
+  rotate 123456789 -2 -> Decimal('891234567')
+  rotate 123456789 10 -> InvalidOperation: None {InvalidOperation}
+  shift 34 8 -> Decimal('400000000')
+  shift 12 9 -> Decimal('0')
+  shift 123456789 -2 -> Decimal('1234567')
+  shift 123456789 +2 -> Decimal('345678900')
+  and 1101 1011 -> Decimal('1001')
+  or 1101 1011 -> Decimal('1111')
+  xor 1101 1011 -> Decimal('110')
+  invert 101 -> Decimal('111111010')
+  invert 0 -> Decimal('111111111')
+  and 12 1 -> InvalidOperation: None {InvalidOperation}
+  copysign 1.50 -7 -> Decimal('-1.50')
+  copyabs -Inf -> Decimal('Infinity')
+  copynegate 0 -> Decimal('-0')
+  normalize 120.000 -> Decimal('1.2E+2')
+  normalize 0.00 -> Decimal('0')
+  normalize -1E+1 -> Decimal('-1E+1')
+  integral 2.5 -> Decimal('2')
+  integral -1.7 -> Decimal('-2')
+  integralx 2.5 -> Decimal('2') {Inexact, Rounded}
+  integralx 7.0 -> Decimal('7') {Rounded}
+  integralx 1E+3 -> Decimal('1E+3')
+  fma 2 3 4 -> Decimal('10')
+  fma 1E+27 1E+27 -1E+54 -> Decimal('0E+54')
+  fma Inf 0 1 -> InvalidOperation: INF * 0 in fma {InvalidOperation}
+== formatting
+  format 1234567.891 ,.2f -> '1,234,567.89'
+  format 1234567.891 _.1f -> '1_234_567.9'
+  format -0.000 .2f -> '-0.00'
+  format -0.000 z.2f -> '0.00'
+  format 0.5 .0% -> '50%'
+  format 0.12345 .1% -> '12.3%'
+  format 123.456 e -> '1.23456e+2'
+  format 123.456 .2E -> '1.23E+2'
+  format 0.000012 g -> '0.000012'
+  format 12345678 .3g -> '1.23e+7'
+  format 1.5 #.0f -> '2.'
+  format 42 >10 -> '        42'
+  format 42 *^9.1f -> '**42.0***'
+  format -42 =+10.2f -> '-    42.00'
+  format 42 010,.1f -> '0,000,042.0'
+  format 42  08.3f -> ' 042.000'
+  format Inf >8 -> 'Infinity'
+  format -Inf .2% -> '-Infinity%'
+  format NaN +f -> '+NaN'
+  format 1E+5  -> '1E+5'
+  format 1E+5 f -> '100000'
+  format 0E+3 f -> '0'
+  format 0E-3 e -> '0e-3'
+  format 123.456 .0e -> '1e+2'
+  format 1234567 n -> '1234567'
+  format 1 .2x -> ValueError: Invalid format specifier: .2x
+  format 1 0<5 -> '10000'
+  ctx capitals=0 -> Context(prec=28, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=0, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  format 1E+20  -> '1e+20'
+  format 7E+2 .3 -> '7e+2'
+  ctx rounding=ROUND_DOWN -> Context(prec=28, rounding=ROUND_DOWN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  format 2.999 .2f -> '2.99'
+  format -2.999 .0f -> '-2'
+== contexts
+  Context(prec=28, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+  ctx base=basic -> Context(prec=9, rounding=ROUND_HALF_UP, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[Clamped, DivisionByZero, Overflow, Underflow, InvalidOperation])
+  div 1 3 -> Decimal('0.333333333') {Inexact, Rounded}
+  ctx base=extended -> Context(prec=9, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[])
+  div 1 0 -> Decimal('Infinity') {DivisionByZero}
+  div 0 0 -> Decimal('NaN') {InvalidOperation}
+  sqrt -4 -> Decimal('NaN') {InvalidOperation}
+  ctx base=extended prec=3 rounding=ROUND_UP capitals=0 clamp=1 -> Context(prec=3, rounding=ROUND_UP, Emin=-999999, Emax=999999, capitals=0, clamp=1, flags=[], traps=[])
+  div 2 3 -> Decimal('0.667') {Inexact, Rounded}
+  ctx prec=0 -> ValueError: prec must be in [1, inf]. got: 0
+  ctx Emin=5 -> ValueError: Emin must be in [-inf, 0]. got: 5
+  ctx capitals=2 -> ValueError: capitals must be in [0, 1]. got 2
+  ctx rounding=ROUND_SIDEWAYS -> TypeError: ROUND_SIDEWAYS: invalid rounding mode
+  ctx prec=7 traps=Inexact -> Context(prec=7, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, capitals=1, clamp=0, flags=[], traps=[Inexact])
+  div 1 8 -> Decimal('0.125')
+  div 1 3 -> Inexact: None {Inexact}
+  add 1.0000001 0 -> Inexact: None {Inexact}
+== invoices
+  INV-1001
+    Desk lamp              2 x     34.99 =      69.98  VAT  20%    14.00
+    LED bulb              12 x      2.49 =      29.88  VAT  20%     5.98
+    Shipping               1 x      5.95 =       5.95  VAT   0%     0.00
+    net 105.81  vat 19.98  gross 125.79
+    vat by rate 19.97  difference -0.01
+  INV-1002
+    Notebook              25 x      1.15 =      28.75  VAT   5%     1.44
+    Fountain pen           3 x    18.333 =      55.00  VAT  20%    11.00
+    Ink cartridge         10 x     0.875 =       8.75  VAT  20%     1.75
+    net 92.50  vat 14.19  gross 106.69
+    vat by rate 14.19  difference +0.00
+  INV-1003
+    Consulting hours     7.5 x    120.00 =     900.00  VAT  20%   180.00
+    Travel                 1 x    86.415 =      86.42  VAT   0%     0.00
+    Discount               1 x    -50.00 =     -50.00  VAT  20%   -10.00
+    net 936.42  vat 170.00  gross 1,106.42
+    vat by rate 170.00  difference +0.00
+  INV-1004
+    Paper (ream)          40 x     4.125 =     165.00  VAT   5%     8.25
+    Toner                  2 x      1E+2 =     200.00  VAT  20%    40.00
+    net 365.00  vat 48.25  gross 413.25
+    vat by rate 48.25  difference +0.00
+  all invoices 1,752.15
+== currency conversion
+      100.00 USD = 91.87 EUR  (rate 0.9187, exact 91.870000)
+        2500 EUR = 407736 JPY  (rate 163.0945902, exact 407736.4754544465004898225754)
+       19.99 GBP = 25.42 USD  (rate 1.271536652, exact 25.41801767435946341153283743)
+     1000000 JPY = 554793.61 INR  (rate 0.5547936063, exact 554793.6063002636233189842159)
+      75.125 BHD = 176.06 CHF  (rate 2.343617021, exact 176.0642287234042553191489361)
+        0.01 USD = 1 JPY  (rate 149.8350, exact 1.498350)
+      12.345 CHF = 11.02 GBP  (rate 0.8924761689, exact 11.01761830458465728551974580)
+       9.995 USD = 9.18 EUR  (rate 0.9187, exact 9.1824065)
+  strict GBP rate: Inexact: None
+== loan amortization
+  car: 18,500.00 at 6.9% over 60 months, payment 365.45
+      1 interest    106.38 principal     259.07 balance    18,240.93
+      2 interest    104.89 principal     260.56 balance    17,980.37
+      3 interest    103.39 principal     262.06 balance    17,718.31
+     60 interest      2.09 principal     363.43 balance         0.00
+    total interest 3,427.07, last payment 365.52
+  mortgage: 320,000.00 at 5.875% over 360 months, payment 1,892.92
+      1 interest  1,566.67 principal     326.25 balance   319,673.75
+      2 interest  1,565.07 principal     327.85 balance   319,345.90
+      3 interest  1,563.46 principal     329.46 balance   319,016.44
+    360 interest      9.23 principal   1,884.49 balance         0.00
+    total interest 361,452.00, last payment 1,893.72
+  student: 27,350.50 at 4.53% over 120 months, payment 283.85
+      1 interest    103.25 principal     180.60 balance    27,169.90
+      2 interest    102.57 principal     181.28 balance    26,988.62
+      3 interest    101.88 principal     181.97 balance    26,806.65
+    120 interest      1.07 principal     283.13 balance         0.00
+    total interest 6,711.85, last payment 284.20
+  zero: 2,400.00 at 0% over 12 months, payment 200.00
+      1 interest      0.00 principal     200.00 balance     2,200.00
+      2 interest      0.00 principal     200.00 balance     2,000.00
+      3 interest      0.00 principal     200.00 balance     1,800.00
+     12 interest      0.00 principal     200.00 balance         0.00
+    total interest 0.00, last payment 200.00
+  tiny: 500.00 at 19.99% over 6 months, payment 88.26
+      1 interest      8.33 principal      79.93 balance       420.07
+      2 interest      7.00 principal      81.26 balance       338.81
+      3 interest      5.64 principal      82.62 balance       256.19
+      6 interest      1.45 principal      86.81 balance         0.00
+    total interest 29.56, last payment 88.26
+== bill splitting
+  team lunch: 187.40 + tax 16.63 + tip 33.73 = 237.76 for 7
+    33.97 33.97 33.97 33.97 33.96 33.96 33.96 (sum 237.76)
+  birthday: 432.15 + tax 38.35 + tip 86.43 = 556.93 for 9
+    61.89 61.88 61.88 61.88 61.88 61.88 61.88 61.88 61.88 (sum 556.93)
+  coffee: 14.85 + tax 0.00 + tip 2.23 = 17.08 for 4
+    4.27 4.27 4.27 4.27 (sum 17.08)
+  pizza: 60 + tax 0.00 + tip 0.00 = 60.00 for 3
+    20.00 20.00 20.00 (sum 60.00)
+== income tax
+        9,500.00 tax       950.00 effective 10.00% marginal 10%
+       11,600.00 tax     1,160.00 effective 10.00% marginal 10%
+       58,250.75 tax     7,868.16 effective 13.51% marginal 22%
+      150,000.00 tax    29,042.50 effective 19.36% marginal 24%
+      243,725.00 tax    55,678.50 effective 22.84% marginal 32%
+    1,000,000.00 tax   328,187.75 effective 32.82% marginal 37%
+== savings growth
+  1000 at 5% for 10 years: yearly 1628.89 continuous 1648.72
+    doubles in 14.207 years, log10 of final 3.211893, 1628.89462678
+  2500.50 at 3.25% for 30 years: yearly 6527.23 continuous 6629.24
+    doubles in 21.672 years, log10 of final 3.814729, 6527.22628074
+  100 at 7% for 72 years: yearly 13050.65 continuous 15447.00
+    doubles in 10.245 years, log10 of final 4.115632, 13050.6455127
+  1 at 100% for 1 years: yearly 2.00 continuous 2.72
+    doubles in 1.000 years, log10 of final 0.301030, 2
+== price statistics
+  n 10 mean 102.48 median 102.775
+  variance 5.6526
+  stdev 2.37751971600657814608002113577 ~ 2.3775
+  log return 0.0496128709 = ln(106.40/101.25) 0.0496128709
+  best day 0.054227 worst day -0.033418

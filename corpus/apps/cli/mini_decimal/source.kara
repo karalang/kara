@@ -1,0 +1,4926 @@
+// mini_decimal: Python 3.13's decimal module, ported from _pydecimal.py,
+// the pure-Python implementation the C one is checked against. A Decimal
+// is a sign, a string of coefficient digits and an exponent, or one of
+// the specials (Infinity, NaN and the signaling sNaN). Every operation
+// rounds its result to a Context: a precision, one of the eight rounding
+// modes, the exponent limits Emin and Emax, and the clamp. Conditions
+// such as Inexact or DivisionByZero set a flag in the context, and raise
+// an exception when the context traps them.
+//
+// The port covers construction from strings, ints and floats; the
+// arithmetic (+ - * / // % divmod, remainder_near, fma, pow with and
+// without a modulus); quantize and the integral roundings; sqrt, exp, ln,
+// log10 and logb, with the integer series _pydecimal uses for them; the
+// comparisons, including the total ordering; next_plus, next_minus and
+// next_toward; the digit operations (scaleb, rotate, shift and the
+// logical ones); str, to_eng_string and __format__.
+//
+// The run writes data/ first: the files the programs read and
+// data/jobs.tsv. Each job starts from the default context; a ctx line
+// sets a new one. An operation prints its result and the flags it set.
+// The last seven jobs are programs: invoices with VAT, currency
+// conversion, loan amortization, bill splitting, income tax, savings
+// growth and price statistics.
+
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+// s[lo:hi] for 0 <= lo, with hi clipped to the end.
+fn sub(s: ref String, lo: i64, hi: i64) -> String {
+    text(slice(chars(s), lo, hi))
+}
+
+// s[:n] and s[n:], with Python's meaning for a negative n.
+fn head(s: ref String, n: i64) -> String {
+    let len = width(s);
+    let k = if n < 0 { len + n } else { n };
+    sub(s, 0, k)
+}
+
+fn tail_from(s: ref String, n: i64) -> String {
+    let len = width(s);
+    let k = if n < 0 { len + n } else { n };
+    sub(s, k, len)
+}
+
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn char_at(s: ref String, i: i64) -> char {
+    chars(s)[i]
+}
+
+fn repeat(c: ref String, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(c);
+    }
+    out
+}
+
+fn zeros(n: i64) -> String {
+    repeat("0", n)
+}
+
+fn lstrip_zeros(s: ref String) -> String {
+    let v = chars(s);
+    let mut i = 0;
+    while i < v.len() and v[i] == '0' {
+        i += 1;
+    }
+    text(slice(v, i, v.len()))
+}
+
+fn rstrip_zeros(s: ref String) -> String {
+    let v = chars(s);
+    let mut i = v.len();
+    while i > 0 and v[i - 1] == '0' {
+        i -= 1;
+    }
+    text(slice(v, 0, i))
+}
+
+// The first code point of each run of ten decimal digits in Unicode
+// (category Nd), which Python's \d and int() both accept.
+fn digit_zeros() -> Vec[i64] {
+    vec![
+        0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6,
+        0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0,
+        0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0,
+        0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136,
+        0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950,
+        0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8,
+        0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0,
+    ]
+}
+
+// The value of a decimal digit, or -1.
+fn digit_value(c: char) -> i64 {
+    let o = c as i64;
+    if o >= 0x30 and o <= 0x39 {
+        return o - 0x30;
+    }
+    if o < 0x660 {
+        return -1;
+    }
+    for z in digit_zeros().iter() {
+        if o >= z and o < z + 10 {
+            return o - z;
+        }
+    }
+    -1
+}
+
+fn is_digit(c: char) -> bool {
+    digit_value(c) >= 0
+}
+
+// str.isspace, which str.strip uses.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn split_on(s: ref String, sep: ref String) -> Vec[String] {
+    s.split(sep).map(|p| p.to_string()).collect()
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max_i(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+// Python's // and % on ints.
+fn floordiv_i(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floormod_i(a: i64, b: i64) -> i64 {
+    a - floordiv_i(a, b) * b
+}
+
+// len(str(n)) for an i64, the sign included.
+fn len_str_i(n: i64) -> i64 {
+    width(f"{n}")
+}
+// ------------------------------------------------------------ integers
+
+// A Python int: a sign and base-10000 digits, least significant first,
+// with no zero digit at the top (zero has no digits and is never
+// negative). The Decimal code turns coefficients into these to do its
+// arithmetic, the way _pydecimal turns its digit strings into ints.
+#[derive(Clone)]
+struct Big {
+    neg: bool,
+    d: Vec[i64],
+}
+
+const BASE: i64 = 10000;
+
+fn big_zero() -> Big {
+    Big { neg: false, d: Vec.new() }
+}
+
+fn trim(d: mut ref Vec[i64]) {
+    while d.len() > 0 and d[d.len() - 1] == 0 {
+        d.pop();
+    }
+}
+
+fn big_make(neg: bool, d: own Vec[i64]) -> Big {
+    let mut v = d;
+    trim(mut v);
+    let n = neg and v.len() > 0;
+    Big { neg: n, d: v }
+}
+
+fn big(x: i64) -> Big {
+    let mut d: Vec[i64] = Vec.new();
+    let mut v = if x < 0 { -x } else { x };
+    while v > 0 {
+        d.push(v % BASE);
+        v = v / BASE;
+    }
+    big_make(x < 0, d)
+}
+
+fn big_is_zero(a: ref Big) -> bool {
+    a.d.len() == 0
+}
+
+fn cmp_mag(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn big_cmp(a: ref Big, b: ref Big) -> i64 {
+    if a.neg != b.neg {
+        return if a.neg { -1 } else { 1 };
+    }
+    let c = cmp_mag(a.d, b.d);
+    if a.neg { -c } else { c }
+}
+
+fn big_eq(a: ref Big, b: ref Big) -> bool {
+    big_cmp(a, b) == 0
+}
+
+fn big_lt(a: ref Big, b: ref Big) -> bool {
+    big_cmp(a, b) < 0
+}
+
+fn big_cmp_i(a: ref Big, x: i64) -> i64 {
+    big_cmp(a, big(x))
+}
+
+fn add_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        let s = x + y + carry;
+        out.push(s % BASE);
+        carry = s / BASE;
+    }
+    if carry > 0 {
+        out.push(carry);
+    }
+    out
+}
+
+// a - b for |a| >= |b|
+fn sub_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut borrow = 0;
+    for i in 0..a.len() {
+        let y = if i < b.len() { b[i] } else { 0 };
+        let mut s = a[i] - y - borrow;
+        if s < 0 {
+            s += BASE;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out.push(s);
+    }
+    trim(mut out);
+    out
+}
+
+fn big_add(a: ref Big, b: ref Big) -> Big {
+    if a.neg == b.neg {
+        return big_make(a.neg, add_mag(a.d, b.d));
+    }
+    let c = cmp_mag(a.d, b.d);
+    if c == 0 {
+        return big_zero();
+    }
+    if c > 0 {
+        big_make(a.neg, sub_mag(a.d, b.d))
+    } else {
+        big_make(b.neg, sub_mag(b.d, a.d))
+    }
+}
+
+fn big_neg(a: ref Big) -> Big {
+    big_make(not a.neg, a.d.clone())
+}
+
+fn big_abs(a: ref Big) -> Big {
+    big_make(false, a.d.clone())
+}
+
+fn big_sub(a: ref Big, b: ref Big) -> Big {
+    big_add(a, big_neg(b))
+}
+
+fn big_add_i(a: ref Big, x: i64) -> Big {
+    big_add(a, big(x))
+}
+
+fn big_mul(a: ref Big, b: ref Big) -> Big {
+    if a.d.len() == 0 or b.d.len() == 0 {
+        return big_zero();
+    }
+    let mut out: Vec[i64] = Vec.filled(a.d.len() + b.d.len() + 1, 0);
+    for i in 0..a.d.len() {
+        let x = a.d[i];
+        if x == 0 {
+            continue;
+        }
+        let mut carry = 0;
+        for j in 0..b.d.len() {
+            let t = out[i + j] + x * b.d[j] + carry;
+            out[i + j] = t % BASE;
+            carry = t / BASE;
+        }
+        let mut k = i + b.d.len();
+        while carry > 0 {
+            let t = out[k] + carry;
+            out[k] = t % BASE;
+            carry = t / BASE;
+            k += 1;
+        }
+    }
+    big_make(a.neg != b.neg, out)
+}
+
+fn big_mul_i(a: ref Big, x: i64) -> Big {
+    big_mul(a, big(x))
+}
+
+// |a| divided by a small positive m: the quotient's digits and the remainder
+fn divmod_small(a: ref Vec[i64], m: i64) -> (Vec[i64], i64) {
+    let mut q: Vec[i64] = Vec.filled(a.len(), 0);
+    let mut r = 0;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let cur = r * BASE + a[i];
+        q[i] = cur / m;
+        r = cur % m;
+        i -= 1;
+    }
+    trim(mut q);
+    (q, r)
+}
+
+// The digits of a at and above position k, as one i64 (a has at most
+// three of them).
+fn top_value(a: ref Vec[i64], k: i64) -> i64 {
+    let mut v = 0;
+    let mut i = a.len() - 1;
+    while i >= k {
+        v = v * BASE + a[i];
+        i -= 1;
+    }
+    v
+}
+
+// |a| divmod |b|, b not zero: schoolbook long division, each quotient
+// digit estimated from the top digits and then corrected.
+fn divmod_mag(a: ref Vec[i64], b: ref Vec[i64]) -> (Vec[i64], Vec[i64]) {
+    if cmp_mag(a, b) < 0 {
+        return (Vec.new(), a.clone());
+    }
+    if b.len() == 1 {
+        let (q, r) = divmod_small(a, b[0]);
+        return (q, big(r).d);
+    }
+    let m = b.len();
+    let bt = top_value(b, m - 2);
+    let mut q: Vec[i64] = Vec.filled(a.len(), 0);
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        r.insert(0, a[i]);
+        trim(mut r);
+        if cmp_mag(r, b) >= 0 {
+            let mut qd = top_value(r, m - 2) / bt;
+            if qd >= BASE {
+                qd = BASE - 1;
+            }
+            let mut t = mul_small_mag(b, qd);
+            while cmp_mag(t, r) > 0 {
+                qd -= 1;
+                t = sub_mag(t, b);
+            }
+            let mut rest = sub_mag(r, t);
+            while cmp_mag(rest, b) >= 0 {
+                qd += 1;
+                rest = sub_mag(rest, b);
+            }
+            q[i] = qd;
+            r = rest;
+        }
+        i -= 1;
+    }
+    trim(mut q);
+    (q, r)
+}
+
+fn mul_small_mag(a: ref Vec[i64], m: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    for x in a.iter() {
+        let t = x * m + carry;
+        out.push(t % BASE);
+        carry = t / BASE;
+    }
+    while carry > 0 {
+        out.push(carry % BASE);
+        carry = carry / BASE;
+    }
+    trim(mut out);
+    out
+}
+
+// Python's divmod: the quotient rounds toward minus infinity and the
+// remainder takes the divisor's sign.
+fn big_divmod(a: ref Big, b: ref Big) -> (Big, Big) {
+    let (qm, rm) = divmod_mag(a.d, b.d);
+    let mut q = big_make(a.neg != b.neg, qm);
+    let mut r = big_make(a.neg, rm);
+    if not big_is_zero(r) and a.neg != b.neg {
+        q = big_add_i(q, -1);
+        r = big_add(r, b);
+    }
+    (q, r)
+}
+
+fn big_floordiv(a: ref Big, b: ref Big) -> Big {
+    let (q, _) = big_divmod(a, b);
+    q
+}
+
+fn big_mod(a: ref Big, b: ref Big) -> Big {
+    let (_, r) = big_divmod(a, b);
+    r
+}
+
+fn big_mod_i(a: ref Big, m: i64) -> i64 {
+    big_to_i64(big_mod(a, big(m)))
+}
+
+fn big_pow(b: ref Big, n: i64) -> Big {
+    let mut r = big(1);
+    let mut x = b.clone();
+    let mut e = n;
+    while e > 0 {
+        if e % 2 == 1 {
+            r = big_mul(r, x);
+        }
+        e = e / 2;
+        if e > 0 {
+            x = big_mul(x, x);
+        }
+    }
+    r
+}
+
+// 10**k
+fn pow10(k: i64) -> Big {
+    let mut d: Vec[i64] = Vec.filled(k / 4, 0);
+    let mut top = 1;
+    for _ in 0..(k % 4) {
+        top = top * 10;
+    }
+    d.push(top);
+    Big { neg: false, d: d }
+}
+
+// a * 10**k
+fn big_shift10(a: ref Big, k: i64) -> Big {
+    big_mul(a, pow10(k))
+}
+
+// a << k and a >> k (the second rounds toward minus infinity)
+fn big_shl(a: ref Big, k: i64) -> Big {
+    big_mul(a, big_pow(big(2), k))
+}
+
+fn big_shr(a: ref Big, k: i64) -> Big {
+    big_floordiv(a, big_pow(big(2), k))
+}
+
+// x & 1, which is x % 2 for negative x too
+fn big_odd(a: ref Big) -> i64 {
+    if a.d.len() == 0 {
+        return 0;
+    }
+    a.d[0] % 2
+}
+
+fn big_bit_length(a: ref Big) -> i64 {
+    let mut n = 0;
+    let mut p = big(1);
+    let m = big_abs(a);
+    while cmp_mag(p.d, m.d) <= 0 {
+        p = big_mul_i(p, 2);
+        n += 1;
+    }
+    n
+}
+
+// The value of an int that fits in an i64.
+fn big_to_i64(a: ref Big) -> i64 {
+    let mut v = 0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * BASE + a.d[i];
+        i -= 1;
+    }
+    if a.neg { -v } else { v }
+}
+
+fn mag_digits(d: ref Vec[i64]) -> String {
+    if d.len() == 0 {
+        return "0".to_string();
+    }
+    let mut s = f"{d[d.len() - 1]}";
+    let mut i = d.len() - 2;
+    while i >= 0 {
+        s.push_str(f"{d[i]:04}");
+        i -= 1;
+    }
+    s
+}
+
+// str(a)
+fn big_str(a: ref Big) -> String {
+    let s = mag_digits(a.d);
+    if a.neg { f"-{s}" } else { s }
+}
+
+// len(str(abs(a)))
+fn big_ndigits(a: ref Big) -> i64 {
+    if a.d.len() == 0 {
+        return 1;
+    }
+    let mut n = (a.d.len() - 1) * 4;
+    let mut top = a.d[a.d.len() - 1];
+    while top > 0 {
+        n += 1;
+        top = top / 10;
+    }
+    n
+}
+
+// int(s) for a string of ASCII digits
+fn big_from_digits(s: ref String) -> Big {
+    let b = s.bytes().to_vec();
+    let mut d: Vec[i64] = Vec.new();
+    let mut end = b.len();
+    while end > 0 {
+        let start = if end >= 4 { end - 4 } else { 0 };
+        let mut v = 0;
+        for i in start..end {
+            v = v * 10 + (b[i] - b'0') as i64;
+        }
+        d.push(v);
+        end = start;
+    }
+    big_make(false, d)
+}
+// ------------------------------------------------------------ signals and contexts
+
+// The signals, in the order _signals lists them (which is the order the
+// context's repr prints its flags and traps in).
+const S_CLAMPED: i64 = 0;
+const S_DIVZERO: i64 = 1;
+const S_INEXACT: i64 = 2;
+const S_OVERFLOW: i64 = 3;
+const S_ROUNDED: i64 = 4;
+const S_UNDERFLOW: i64 = 5;
+const S_INVALID: i64 = 6;
+const S_SUBNORMAL: i64 = 7;
+const S_FLOAT: i64 = 8;
+// The conditions that signal InvalidOperation but answer differently.
+const C_CONVSYN: i64 = 9;
+const C_DIVIMP: i64 = 10;
+const C_DIVUNDEF: i64 = 11;
+
+fn signal_names() -> Vec[String] {
+    vec!["Clamped", "DivisionByZero", "Inexact", "Overflow", "Rounded", "Underflow", "InvalidOperation",
+        "Subnormal", "FloatOperation"].iter().map(|s| s.to_string()).collect()
+}
+
+fn signal_index(name: ref String) -> i64 {
+    let names = signal_names();
+    for i in 0..names.len() {
+        if names[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+const R_DOWN: i64 = 0;
+const R_HALF_UP: i64 = 1;
+const R_HALF_EVEN: i64 = 2;
+const R_CEILING: i64 = 3;
+const R_FLOOR: i64 = 4;
+const R_UP: i64 = 5;
+const R_HALF_DOWN: i64 = 6;
+const R_05UP: i64 = 7;
+
+fn rounding_names() -> Vec[String] {
+    vec!["ROUND_DOWN", "ROUND_HALF_UP", "ROUND_HALF_EVEN", "ROUND_CEILING", "ROUND_FLOOR", "ROUND_UP",
+        "ROUND_HALF_DOWN", "ROUND_05UP"].iter().map(|s| s.to_string()).collect()
+}
+
+fn rounding_index(name: ref String) -> i64 {
+    let names = rounding_names();
+    for i in 0..names.len() {
+        if names[i] == name {
+            return i;
+        }
+    }
+    -1
+}
+
+#[derive(Clone)]
+struct Ctx {
+    prec: i64,
+    rounding: i64,
+    emin: i64,
+    emax: i64,
+    capitals: i64,
+    clamp: i64,
+    flags: Vec[bool],
+    traps: Vec[bool],
+    // _ignored_flags, which only ever holds all of the signals here
+    ignore_all: bool,
+}
+
+fn new_ctx(prec: i64, rounding: i64, traps: ref Vec[i64]) -> Ctx {
+    let mut t: Vec[bool] = Vec.filled(9, false);
+    for s in traps.iter() {
+        t[s] = true;
+    }
+    Ctx {
+        prec: prec,
+        rounding: rounding,
+        emin: -999999,
+        emax: 999999,
+        capitals: 1,
+        clamp: 0,
+        flags: Vec.filled(9, false),
+        traps: t,
+        ignore_all: false,
+    }
+}
+
+fn default_context() -> Ctx {
+    new_ctx(28, R_HALF_EVEN, vec![S_DIVZERO, S_OVERFLOW, S_INVALID])
+}
+
+fn basic_context() -> Ctx {
+    new_ctx(9, R_HALF_UP, vec![S_DIVZERO, S_OVERFLOW, S_INVALID, S_CLAMPED, S_UNDERFLOW])
+}
+
+fn extended_context() -> Ctx {
+    new_ctx(9, R_HALF_EVEN, Vec.new())
+}
+
+impl Ctx {
+    fn etiny(ref self) -> i64 {
+        self.emin - self.prec + 1
+    }
+
+    fn etop(ref self) -> i64 {
+        self.emax - self.prec + 1
+    }
+
+    fn clear_flags(mut ref self) {
+        for i in 0..9 {
+            self.flags[i] = false;
+        }
+    }
+
+    fn clear_traps(mut ref self) {
+        for i in 0..9 {
+            self.traps[i] = false;
+        }
+    }
+
+    // Context.copy(): its own flags and traps.
+    fn copy(ref self) -> Ctx {
+        self.clone()
+    }
+
+    fn set_flag_names(ref self, which: ref Vec[bool]) -> String {
+        let names = signal_names();
+        let mut out: Vec[String] = Vec.new();
+        for i in 0..9 {
+            if which[i] {
+                out.push(names[i].clone());
+            }
+        }
+        out.join(", ")
+    }
+
+    fn repr(ref self) -> String {
+        f"Context(prec={self.prec}, rounding={rounding_names()[self.rounding]}, Emin={self.emin}, Emax={self.emax}, capitals={self.capitals}, clamp={self.clamp}, flags=[{self.set_flag_names(self.flags)}], traps=[{self.set_flag_names(self.traps)}])"
+    }
+}
+
+// ------------------------------------------------------------ the Decimal type
+
+// _exp is 'n', 'N' or 'F' for the specials.
+const K_FIN: i64 = 0;
+const K_NAN: i64 = 1;
+const K_SNAN: i64 = 2;
+const K_INF: i64 = 3;
+
+#[derive(Clone)]
+struct Dec {
+    sign: i64,
+    int: String,
+    exp: i64,
+    kind: i64,
+}
+
+// _dec_from_triple
+fn triple(sign: i64, coeff: ref String, exp: i64) -> Dec {
+    Dec { sign: sign, int: coeff.clone(), exp: exp, kind: K_FIN }
+}
+
+fn special(sign: i64, coeff: ref String, kind: i64) -> Dec {
+    Dec { sign: sign, int: coeff.clone(), exp: 0, kind: kind }
+}
+
+fn infinity(sign: i64) -> Dec {
+    special(sign, "0", K_INF)
+}
+
+fn nan() -> Dec {
+    special(0, "", K_NAN)
+}
+
+// Decimal(n) for an int
+fn dec_i(n: i64) -> Dec {
+    let s = if n < 0 { 1 } else { 0 };
+    let m = if n < 0 { -n } else { n };
+    triple(s, f"{m}", 0)
+}
+
+fn dec_big(n: ref Big) -> Dec {
+    triple(if n.neg { 1 } else { 0 }, mag_digits(n.d), 0)
+}
+
+fn one() -> Dec {
+    dec_i(1)
+}
+
+impl Dec {
+    fn is_special(ref self) -> bool {
+        self.kind != K_FIN
+    }
+
+    // 1 for a quiet NaN, 2 for a signaling one
+    fn isnan(ref self) -> i64 {
+        if self.kind == K_NAN {
+            1
+        } else if self.kind == K_SNAN {
+            2
+        } else {
+            0
+        }
+    }
+
+    fn isinfinity(ref self) -> i64 {
+        if self.kind == K_INF {
+            if self.sign == 1 { -1 } else { 1 }
+        } else {
+            0
+        }
+    }
+
+    // __bool__
+    fn truth(ref self) -> bool {
+        self.is_special() or self.int != "0"
+    }
+
+    fn adjusted(ref self) -> i64 {
+        if self.is_special() {
+            return 0;
+        }
+        self.exp + width(self.int) - 1
+    }
+
+    fn n(ref self) -> i64 {
+        width(self.int)
+    }
+
+    // int(self._int)
+    fn coeff(ref self) -> Big {
+        big_from_digits(self.int)
+    }
+
+    fn is_nan(ref self) -> bool {
+        self.kind == K_NAN or self.kind == K_SNAN
+    }
+
+    fn is_snan(ref self) -> bool {
+        self.kind == K_SNAN
+    }
+
+    fn is_qnan(ref self) -> bool {
+        self.kind == K_NAN
+    }
+
+    fn is_infinite(ref self) -> bool {
+        self.kind == K_INF
+    }
+
+    fn is_zero(ref self) -> bool {
+        not self.is_special() and self.int == "0"
+    }
+
+    fn copy_abs(ref self) -> Dec {
+        Dec { sign: 0, int: self.int.clone(), exp: self.exp, kind: self.kind }
+    }
+
+    fn copy_negate(ref self) -> Dec {
+        Dec { sign: 1 - self.sign, int: self.int.clone(), exp: self.exp, kind: self.kind }
+    }
+
+    fn copy_sign(ref self, other: ref Dec) -> Dec {
+        Dec { sign: other.sign, int: self.int.clone(), exp: self.exp, kind: self.kind }
+    }
+
+    fn isinteger(ref self) -> bool {
+        if self.is_special() {
+            return false;
+        }
+        if self.exp >= 0 {
+            return true;
+        }
+        let rest = tail_from(self.int, self.exp);
+        rest == zeros(width(rest))
+    }
+
+    // Assumes self is an integer.
+    fn iseven(ref self) -> bool {
+        if not self.truth() or self.exp > 0 {
+            return true;
+        }
+        let c = char_at(self.int, self.n() - 1 + self.exp);
+        c == '0' or c == '2' or c == '4' or c == '6' or c == '8'
+    }
+
+    fn repr(ref self, ctx: ref Ctx) -> String {
+        f"Decimal('{dec_str(self, false, ctx)}')"
+    }
+}
+
+// The signed coefficient, as a _WorkRep holds it.
+#[derive(Clone)]
+struct Work {
+    sign: i64,
+    int: Big,
+    exp: i64,
+}
+
+fn work(d: ref Dec) -> Work {
+    Work { sign: d.sign, int: d.coeff(), exp: d.exp }
+}
+
+// ------------------------------------------------------------ raising conditions
+
+// What a condition's handle() returns when it is not trapped. The ones
+// whose handle returns None answer NaN here; nothing reads it.
+fn handle(ctx: ref Ctx, cond: i64, sign: i64, arg: ref Option[Dec]) -> Dec {
+    if cond == S_INVALID {
+        if let Some(a) = arg {
+            return fix_nan(special(a.sign, a.int, K_NAN), ctx);
+        }
+        return nan();
+    }
+    if cond == S_DIVZERO {
+        return infinity(sign);
+    }
+    if cond == S_OVERFLOW {
+        let r = ctx.rounding;
+        if r == R_HALF_UP or r == R_HALF_EVEN or r == R_HALF_DOWN or r == R_UP {
+            return infinity(sign);
+        }
+        if sign == 0 {
+            if r == R_CEILING {
+                return infinity(sign);
+            }
+            return triple(sign, repeat("9", ctx.prec), ctx.emax - ctx.prec + 1);
+        }
+        if r == R_FLOOR {
+            return infinity(sign);
+        }
+        return triple(sign, repeat("9", ctx.prec), ctx.emax - ctx.prec + 1);
+    }
+    nan()
+}
+
+// Context._raise_error
+fn raise_full(ctx: mut ref Ctx, cond: i64, expl: ref String, sign: i64, arg: ref Option[Dec]) -> Result[Dec, String] {
+    let error = if cond >= 9 { S_INVALID } else { cond };
+    if ctx.ignore_all {
+        return Ok(handle(ctx, error, sign, arg));
+    }
+    ctx.flags[error] = true;
+    if not ctx.traps[error] {
+        return Ok(handle(ctx, cond, sign, arg));
+    }
+    Err(f"{signal_names()[error]}: {expl}")
+}
+
+fn raise(ctx: mut ref Ctx, cond: i64, expl: ref String) -> Result[Dec, String] {
+    raise_full(mut ctx, cond, expl, 0, None)
+}
+
+// A condition raised for its flag alone: _raise_error(cond), whose
+// explanation is None.
+fn signal(ctx: mut ref Ctx, cond: i64) -> Result[(), String] {
+    raise_full(mut ctx, cond, "None", 0, None)?;
+    Ok(())
+}
+
+fn raise_sign(ctx: mut ref Ctx, cond: i64, expl: ref String, sign: i64) -> Result[Dec, String] {
+    raise_full(mut ctx, cond, expl, sign, None)
+}
+
+fn raise_nan(ctx: mut ref Ctx, expl: ref String, d: ref Dec) -> Result[Dec, String] {
+    raise_full(mut ctx, S_INVALID, expl, 0, Some(d.clone()))
+}
+
+// ------------------------------------------------------------ construction
+
+// The ASCII digit with the value of a Unicode one, as int() reads it.
+fn ascii_digit(c: char) -> char {
+    chars("0123456789")[digit_value(c)]
+}
+
+// The numeric string grammar of _parser: the sign, the digits, the
+// point, the exponent, or Inf, Infinity, NaN and sNaN with a diagnostic.
+fn parse_numeric(v: ref Vec[char]) -> Option[Dec] {
+    let mut i = 0;
+    let mut sign = 0;
+    if i < v.len() and (v[i] == '-' or v[i] == '+') {
+        sign = if v[i] == '-' { 1 } else { 0 };
+        i += 1;
+    }
+    let rest = text(slice(v, i, v.len())).to_lowercase();
+    let starts_number = i < v.len() and (is_digit(v[i]) or (v[i] == '.' and i + 1 < v.len() and is_digit(v[i + 1])));
+    if starts_number {
+        let mut digits = String.new();
+        while i < v.len() and is_digit(v[i]) {
+            digits.push(ascii_digit(v[i]));
+            i += 1;
+        }
+        let mut frac = String.new();
+        if i < v.len() and v[i] == '.' {
+            i += 1;
+            while i < v.len() and is_digit(v[i]) {
+                frac.push(ascii_digit(v[i]));
+                i += 1;
+            }
+        }
+        let mut exp = 0;
+        if i < v.len() and (v[i] == 'e' or v[i] == 'E') {
+            let mut j = i + 1;
+            let mut eneg = false;
+            if j < v.len() and (v[j] == '-' or v[j] == '+') {
+                eneg = v[j] == '-';
+                j += 1;
+            }
+            let start = j;
+            let mut e = 0;
+            while j < v.len() and is_digit(v[j]) {
+                e = e * 10 + digit_value(v[j]);
+                j += 1;
+            }
+            if j > start {
+                exp = if eneg { -e } else { e };
+                i = j;
+            }
+        }
+        if i != v.len() {
+            return None;
+        }
+        let all = f"{digits}{frac}";
+        let mut c = lstrip_zeros(all);
+        if c.is_empty() {
+            c = "0".to_string();
+        }
+        return Some(triple(sign, c, exp - width(frac)));
+    }
+    if rest == "inf" or rest == "infinity" {
+        return Some(infinity(sign));
+    }
+    let mut kind = K_NAN;
+    let mut w = chars(rest);
+    if w.len() > 0 and w[0] == 's' {
+        kind = K_SNAN;
+        w = slice(w, 1, w.len());
+    }
+    if w.len() < 3 or text(slice(w, 0, 3)) != "nan" {
+        return None;
+    }
+    let mut diag = String.new();
+    // the diagnostic's digits come from the original, not the lowercased
+    // copy, but digits have no case
+    for k in 3..w.len() {
+        if not is_digit(w[k]) {
+            return None;
+        }
+        diag.push(ascii_digit(w[k]));
+    }
+    Some(special(sign, lstrip_zeros(diag), kind))
+}
+
+// Decimal(str)
+fn dec_from_str(s: ref String, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let t = py_strip(s).replace("_", "");
+    match parse_numeric(chars(t)) {
+        Some(d) => Ok(d),
+        None => raise(mut ctx, C_CONVSYN, f"Invalid literal for Decimal: {repr_str(s)}"),
+    }
+}
+
+// Context.create_decimal(str)
+fn create_decimal(s: ref String, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if s != py_strip(s) or s.contains("_") {
+        return raise(mut ctx, C_CONVSYN, "trailing or leading whitespace and underscores are not permitted.");
+    }
+    let d = dec_from_str(s, mut ctx)?;
+    if d.isnan() > 0 and d.n() > ctx.prec - ctx.clamp {
+        return raise(mut ctx, C_CONVSYN, "diagnostic info too long in NaN");
+    }
+    dec_fix(d, mut ctx)
+}
+
+// float.as_integer_ratio for a finite float: the numerator and the
+// power of two in the denominator.
+fn float_ratio(x: f64) -> (Big, i64) {
+    let bits = x.to_bits();
+    let e = ((bits >> 52) & 0x7ff) as i64;
+    let mut m = (bits & 0xfffffffffffff) as i64;
+    let mut ex = e - 1075;
+    if e == 0 {
+        ex = -1074;
+    } else {
+        m = m | 0x10000000000000;
+    }
+    if m == 0 {
+        return (big_zero(), 0);
+    }
+    while ex < 0 and m % 2 == 0 {
+        m = m / 2;
+        ex += 1;
+    }
+    if ex >= 0 {
+        return (big_shl(big(m), ex), 0);
+    }
+    (big(m), -ex)
+}
+
+// Decimal.from_float
+fn from_float(x: f64) -> Dec {
+    let bits = x.to_bits();
+    let neg = (bits >> 63) == 1;
+    let sign = if neg { 1 } else { 0 };
+    if ((bits >> 52) & 0x7ff) == 0x7ff {
+        // repr(f) is 'nan' (unsigned) or 'inf' / '-inf'
+        if (bits & 0xfffffffffffff) != 0 {
+            return nan();
+        }
+        return infinity(sign);
+    }
+    let (n, k) = float_ratio(x);
+    let c = big_mul(n, big_pow(big(5), k));
+    triple(sign, big_str(c), -k)
+}
+
+// Decimal(float), which flags FloatOperation first.
+fn dec_from_float(x: f64, ctx: mut ref Ctx) -> Result[Dec, String] {
+    raise(mut ctx, S_FLOAT, "strict semantics for mixing floats and Decimals are enabled")?;
+    Ok(from_float(x))
+}
+
+// ------------------------------------------------------------ str and repr
+
+fn dec_str(d: ref Dec, eng: bool, ctx: ref Ctx) -> String {
+    let sign = if d.sign == 1 { "-" } else { "" };
+    if d.is_special() {
+        if d.kind == K_INF {
+            return f"{sign}Infinity";
+        }
+        if d.kind == K_NAN {
+            return f"{sign}NaN{d.int}";
+        }
+        return f"{sign}sNaN{d.int}";
+    }
+    let n = d.n();
+    let leftdigits = d.exp + n;
+    let dotplace = if d.exp <= 0 and leftdigits > -6 {
+        leftdigits
+    } else if not eng {
+        1
+    } else if d.int == "0" {
+        floormod_i(leftdigits + 1, 3) - 1
+    } else {
+        floormod_i(leftdigits - 1, 3) + 1
+    };
+    let mut intpart = String.new();
+    let mut fracpart = String.new();
+    if dotplace <= 0 {
+        intpart = "0".to_string();
+        fracpart = f".{zeros(-dotplace)}{d.int}";
+    } else if dotplace >= n {
+        intpart = f"{d.int}{zeros(dotplace - n)}";
+    } else {
+        intpart = head(d.int, dotplace);
+        fracpart = f".{tail_from(d.int, dotplace)}";
+    }
+    let mut exp = String.new();
+    if leftdigits != dotplace {
+        let e = if ctx.capitals == 1 { "E" } else { "e" };
+        let v = leftdigits - dotplace;
+        exp = if v >= 0 { f"{e}+{v}" } else { f"{e}{v}" };
+    }
+    f"{sign}{intpart}{fracpart}{exp}"
+}
+
+// ------------------------------------------------------------ NaNs and comparisons
+
+fn fix_nan(d: ref Dec, ctx: ref Ctx) -> Dec {
+    let payload = d.int.clone();
+    let max_payload_len = ctx.prec - ctx.clamp;
+    if width(payload) > max_payload_len {
+        let p = lstrip_zeros(tail_from(payload, width(payload) - max_payload_len));
+        return special(d.sign, p, d.kind);
+    }
+    d.clone()
+}
+
+// _check_nans: Some(answer) when either operand is a NaN.
+fn check_nans(a: ref Dec, b: ref Option[Dec], ctx: mut ref Ctx) -> Result[Option[Dec], String] {
+    let an = a.isnan();
+    let bn = match b {
+        Some(x) => x.isnan(),
+        None => 0,
+    };
+    if an == 0 and bn == 0 {
+        return Ok(None);
+    }
+    if an == 2 {
+        return Ok(Some(raise_nan(mut ctx, "sNaN", a)?));
+    }
+    if let Some(x) = b {
+        if bn == 2 {
+            return Ok(Some(raise_nan(mut ctx, "sNaN", x)?));
+        }
+    }
+    if an > 0 {
+        return Ok(Some(fix_nan(a, ctx)));
+    }
+    match b {
+        Some(x) => Ok(Some(fix_nan(x, ctx))),
+        None => Ok(None),
+    }
+}
+
+fn check_nans2(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Option[Dec], String] {
+    check_nans(a, Some(b.clone()), mut ctx)
+}
+
+fn check_nans1(a: ref Dec, ctx: mut ref Ctx) -> Result[Option[Dec], String] {
+    check_nans(a, None, mut ctx)
+}
+
+// _compare_check_nans: any NaN signals. Some(the quiet NaN answer) when
+// one is there and the condition is not trapped.
+fn compare_check_nans(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Option[Dec], String] {
+    if a.is_special() or b.is_special() {
+        if a.is_snan() {
+            return Ok(Some(raise_nan(mut ctx, "comparison involving sNaN", a)?));
+        }
+        if b.is_snan() {
+            return Ok(Some(raise_nan(mut ctx, "comparison involving sNaN", b)?));
+        }
+        if a.is_qnan() {
+            return Ok(Some(raise_nan(mut ctx, "comparison involving NaN", a)?));
+        }
+        if b.is_qnan() {
+            return Ok(Some(raise_nan(mut ctx, "comparison involving NaN", b)?));
+        }
+    }
+    Ok(None)
+}
+
+// _cmp, for operands that are not NaNs.
+fn dec_cmp(a: ref Dec, b: ref Dec) -> i64 {
+    if a.is_special() or b.is_special() {
+        let ai = a.isinfinity();
+        let bi = b.isinfinity();
+        if ai == bi {
+            return 0;
+        }
+        return if ai < bi { -1 } else { 1 };
+    }
+    let s_a = if a.sign == 1 { -1 } else { 1 };
+    let s_b = if b.sign == 1 { -1 } else { 1 };
+    if not a.truth() {
+        if not b.truth() {
+            return 0;
+        }
+        return -s_b;
+    }
+    if not b.truth() {
+        return s_a;
+    }
+    if b.sign < a.sign {
+        return -1;
+    }
+    if a.sign < b.sign {
+        return 1;
+    }
+    let aa = a.adjusted();
+    let ba = b.adjusted();
+    if aa == ba {
+        let ap = f"{a.int}{zeros(a.exp - b.exp)}";
+        let bp = f"{b.int}{zeros(b.exp - a.exp)}";
+        if ap == bp {
+            return 0;
+        }
+        return if ap < bp { -s_a } else { s_a };
+    }
+    if aa > ba { s_a } else { -s_a }
+}
+
+// ==, which is quiet for quiet NaNs.
+fn dec_eq(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[bool, String] {
+    if check_nans2(a, b, mut ctx)?.is_some() {
+        return Ok(false);
+    }
+    Ok(dec_cmp(a, b) == 0)
+}
+
+// <, <=, >, >= as a comparison with -1, 0 or 1 wanted: the op names
+// which results count as true.
+fn dec_order(a: ref Dec, b: ref Dec, op: ref String, ctx: mut ref Ctx) -> Result[bool, String] {
+    if compare_check_nans(a, b, mut ctx)?.is_some() {
+        return Ok(false);
+    }
+    let c = dec_cmp(a, b);
+    Ok(if op == "<" {
+        c < 0
+    } else if op == "<=" {
+        c <= 0
+    } else if op == ">" {
+        c > 0
+    } else {
+        c >= 0
+    })
+}
+
+fn dec_compare(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if a.is_special() or b.is_special() {
+        if let Some(ans) = check_nans2(a, b, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    Ok(dec_i(dec_cmp(a, b)))
+}
+
+fn compare_signal(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = compare_check_nans(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    dec_compare(a, b, mut ctx)
+}
+
+fn neg_one() -> Dec {
+    dec_i(-1)
+}
+
+fn compare_total(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if a.sign == 1 and b.sign == 0 {
+        return Ok(neg_one());
+    }
+    if a.sign == 0 and b.sign == 1 {
+        return Ok(one());
+    }
+    let sign = a.sign;
+    let an = a.isnan();
+    let bn = b.isnan();
+    if an > 0 or bn > 0 {
+        if an == bn {
+            let ak = a.n();
+            let bk = b.n();
+            let lt = ak < bk or (ak == bk and a.int < b.int);
+            let gt = ak > bk or (ak == bk and a.int > b.int);
+            if lt {
+                return Ok(if sign == 1 { one() } else { neg_one() });
+            }
+            if gt {
+                return Ok(if sign == 1 { neg_one() } else { one() });
+            }
+            return Ok(dec_i(0));
+        }
+        if sign == 1 {
+            if an == 1 {
+                return Ok(neg_one());
+            }
+            if bn == 1 {
+                return Ok(one());
+            }
+            if an == 2 {
+                return Ok(neg_one());
+            }
+            if bn == 2 {
+                return Ok(one());
+            }
+        } else {
+            if an == 1 {
+                return Ok(one());
+            }
+            if bn == 1 {
+                return Ok(neg_one());
+            }
+            if an == 2 {
+                return Ok(one());
+            }
+            if bn == 2 {
+                return Ok(neg_one());
+            }
+        }
+    }
+    if dec_order(a, b, "<", mut ctx)? {
+        return Ok(neg_one());
+    }
+    if dec_order(a, b, ">", mut ctx)? {
+        return Ok(one());
+    }
+    if a.exp < b.exp {
+        return Ok(if sign == 1 { one() } else { neg_one() });
+    }
+    if a.exp > b.exp {
+        return Ok(if sign == 1 { neg_one() } else { one() });
+    }
+    Ok(dec_i(0))
+}
+
+fn compare_total_mag(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    compare_total(a.copy_abs(), b.copy_abs(), mut ctx)
+}
+
+// The -1, 0 or 1 a compare_total answer holds.
+fn total_sign(d: ref Dec) -> i64 {
+    if d.int == "0" {
+        0
+    } else if d.sign == 1 {
+        -1
+    } else {
+        1
+    }
+}
+
+// max, min, max_mag and min_mag: which picks self when c is not -1
+// (for max) or when c is -1 (for min).
+fn dec_maxmin(a: ref Dec, b: ref Dec, is_max: bool, mag: bool, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if a.is_special() or b.is_special() {
+        let sn = a.isnan();
+        let on = b.isnan();
+        if sn > 0 or on > 0 {
+            if on == 1 and sn == 0 {
+                return dec_fix(a, mut ctx);
+            }
+            if sn == 1 and on == 0 {
+                return dec_fix(b, mut ctx);
+            }
+            return Ok(check_nans2(a, b, mut ctx)?.unwrap());
+        }
+    }
+    let mut c = if mag { dec_cmp(a.copy_abs(), b.copy_abs()) } else { dec_cmp(a, b) };
+    if c == 0 {
+        c = total_sign(compare_total(a, b, mut ctx)?);
+    }
+    let pick_b = if is_max { c == -1 } else { c != -1 };
+    if pick_b { dec_fix(b, mut ctx) } else { dec_fix(a, mut ctx) }
+}
+
+// ------------------------------------------------------------ rounding
+
+fn all_zeros(s: ref String, from: i64) -> bool {
+    let v = chars(s);
+    for i in from..v.len() {
+        if v[i] != '0' {
+            return false;
+        }
+    }
+    true
+}
+
+fn exact_half(s: ref String, from: i64) -> bool {
+    let v = chars(s);
+    if from >= v.len() or v[from] != '5' {
+        return false;
+    }
+    all_zeros(s, from + 1)
+}
+
+// The rounding functions: 1 to round away from zero, 0 when the dropped
+// digits are all zeros, -1 to truncate nonzero digits.
+fn round_down(d: ref Dec, prec: i64) -> i64 {
+    if all_zeros(d.int, prec) { 0 } else { -1 }
+}
+
+fn round_half_up(d: ref Dec, prec: i64) -> i64 {
+    let c = char_at(d.int, prec);
+    if c >= '5' and c <= '9' {
+        1
+    } else if all_zeros(d.int, prec) {
+        0
+    } else {
+        -1
+    }
+}
+
+fn round_dir(d: ref Dec, prec: i64, mode: i64) -> i64 {
+    if mode == R_DOWN {
+        return round_down(d, prec);
+    }
+    if mode == R_UP {
+        return -round_down(d, prec);
+    }
+    if mode == R_HALF_UP {
+        return round_half_up(d, prec);
+    }
+    if mode == R_HALF_DOWN {
+        if exact_half(d.int, prec) {
+            return -1;
+        }
+        return round_half_up(d, prec);
+    }
+    if mode == R_HALF_EVEN {
+        let even = prec == 0 or "02468".contains(f"{char_at(d.int, prec - 1)}");
+        if exact_half(d.int, prec) and even {
+            return -1;
+        }
+        return round_half_up(d, prec);
+    }
+    if mode == R_CEILING {
+        return if d.sign == 1 { round_down(d, prec) } else { -round_down(d, prec) };
+    }
+    if mode == R_FLOOR {
+        return if d.sign == 0 { round_down(d, prec) } else { -round_down(d, prec) };
+    }
+    // ROUND_05UP
+    if prec > 0 and not "05".contains(f"{char_at(d.int, prec - 1)}") {
+        return round_down(d, prec);
+    }
+    -round_down(d, prec)
+}
+
+// str(int(s) + 1)
+fn inc_digits(s: ref String) -> String {
+    big_str(big_add_i(big_from_digits(s), 1))
+}
+
+fn head_or_zero(s: ref String, n: i64) -> String {
+    let h = head(s, n);
+    if h.is_empty() { "0".to_string() } else { h }
+}
+
+// _fix: round to the context's precision and fit the exponent limits.
+fn dec_fix(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if d.isnan() > 0 {
+            return Ok(fix_nan(d, ctx));
+        }
+        return Ok(d.clone());
+    }
+    let etiny = ctx.etiny();
+    let etop = ctx.etop();
+    if not d.truth() {
+        let exp_max = if ctx.clamp == 0 { ctx.emax } else { etop };
+        let new_exp = min_i(max_i(d.exp, etiny), exp_max);
+        if new_exp != d.exp {
+            signal(mut ctx, S_CLAMPED)?;
+            return Ok(triple(d.sign, "0", new_exp));
+        }
+        return Ok(d.clone());
+    }
+    let mut exp_min = d.n() + d.exp - ctx.prec;
+    if exp_min > etop {
+        let ans = raise_sign(mut ctx, S_OVERFLOW, "above Emax", d.sign)?;
+        signal(mut ctx, S_INEXACT)?;
+        signal(mut ctx, S_ROUNDED)?;
+        return Ok(ans);
+    }
+    let subnormal = exp_min < etiny;
+    if subnormal {
+        exp_min = etiny;
+    }
+    if d.exp < exp_min {
+        let mut digits = d.n() + d.exp - exp_min;
+        let mut s = d.clone();
+        if digits < 0 {
+            s = triple(d.sign, "1", exp_min - 1);
+            digits = 0;
+        }
+        let changed = round_dir(s, digits, ctx.rounding);
+        let mut coeff = head_or_zero(s.int, digits);
+        if changed > 0 {
+            coeff = inc_digits(coeff);
+            if width(coeff) > ctx.prec {
+                coeff = head(coeff, -1);
+                exp_min += 1;
+            }
+        }
+        let ans = if exp_min > etop {
+            raise_sign(mut ctx, S_OVERFLOW, "above Emax", d.sign)?
+        } else {
+            triple(d.sign, coeff, exp_min)
+        };
+        if changed != 0 and subnormal {
+            signal(mut ctx, S_UNDERFLOW)?;
+        }
+        if subnormal {
+            signal(mut ctx, S_SUBNORMAL)?;
+        }
+        if changed != 0 {
+            signal(mut ctx, S_INEXACT)?;
+        }
+        signal(mut ctx, S_ROUNDED)?;
+        if not ans.truth() {
+            signal(mut ctx, S_CLAMPED)?;
+        }
+        return Ok(ans);
+    }
+    if subnormal {
+        signal(mut ctx, S_SUBNORMAL)?;
+    }
+    if ctx.clamp == 1 and d.exp > etop {
+        signal(mut ctx, S_CLAMPED)?;
+        return Ok(triple(d.sign, f"{d.int}{zeros(d.exp - etop)}", etop));
+    }
+    Ok(d.clone())
+}
+
+// _rescale: quiet, and it uses nothing from the context.
+fn rescale(d: ref Dec, exp: i64, rounding: i64) -> Dec {
+    if d.is_special() {
+        return d.clone();
+    }
+    if not d.truth() {
+        return triple(d.sign, "0", exp);
+    }
+    if d.exp >= exp {
+        return triple(d.sign, f"{d.int}{zeros(d.exp - exp)}", exp);
+    }
+    let mut digits = d.n() + d.exp - exp;
+    let mut s = d.clone();
+    if digits < 0 {
+        s = triple(d.sign, "1", exp - 1);
+        digits = 0;
+    }
+    let changed = round_dir(s, digits, rounding);
+    let mut coeff = head_or_zero(s.int, digits);
+    if changed == 1 {
+        coeff = inc_digits(coeff);
+    }
+    triple(d.sign, coeff, exp)
+}
+
+// _round: to a number of significant digits.
+fn round_places(d: ref Dec, places: i64, rounding: i64) -> Dec {
+    if d.is_special() or not d.truth() {
+        return d.clone();
+    }
+    let mut ans = rescale(d, d.adjusted() + 1 - places, rounding);
+    if ans.adjusted() != d.adjusted() {
+        ans = rescale(ans, ans.adjusted() + 1 - places, rounding);
+    }
+    ans
+}
+
+// ------------------------------------------------------------ the unary operations
+
+fn dec_neg(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    let ans = if not d.truth() and ctx.rounding != R_FLOOR { d.copy_abs() } else { d.copy_negate() };
+    dec_fix(ans, mut ctx)
+}
+
+fn dec_pos(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    let ans = if not d.truth() and ctx.rounding != R_FLOOR { d.copy_abs() } else { d.clone() };
+    dec_fix(ans, mut ctx)
+}
+
+fn dec_abs(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    if d.sign == 1 { dec_neg(d, mut ctx) } else { dec_pos(d, mut ctx) }
+}
+
+// ------------------------------------------------------------ addition and multiplication
+
+// _normalize: give the two the same exponent, dropping digits of the
+// smaller one that cannot matter after rounding.
+fn normalize_pair(a: ref Work, b: ref Work, prec: i64) -> (Work, Work) {
+    let mut op1 = a.clone();
+    let mut op2 = b.clone();
+    let swap = op1.exp < op2.exp;
+    let mut tmp = if swap { op2.clone() } else { op1.clone() };
+    let mut other = if swap { op1.clone() } else { op2.clone() };
+    let tmp_len = big_ndigits(tmp.int);
+    let other_len = big_ndigits(other.int);
+    let exp = tmp.exp + min_i(-1, tmp_len - prec - 2);
+    if other_len + other.exp - 1 < exp {
+        other.int = big(1);
+        other.exp = exp;
+    }
+    tmp.int = big_shift10(tmp.int, tmp.exp - other.exp);
+    tmp.exp = other.exp;
+    if swap {
+        op1 = other;
+        op2 = tmp;
+    } else {
+        op1 = tmp;
+        op2 = other;
+    }
+    (op1, op2)
+}
+
+fn dec_add(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if a.is_special() or b.is_special() {
+        if let Some(ans) = check_nans2(a, b, mut ctx)? {
+            return Ok(ans);
+        }
+        if a.isinfinity() != 0 {
+            if a.sign != b.sign and b.isinfinity() != 0 {
+                return raise(mut ctx, S_INVALID, "-INF + INF");
+            }
+            return Ok(a.clone());
+        }
+        if b.isinfinity() != 0 {
+            return Ok(b.clone());
+        }
+    }
+    let mut exp = min_i(a.exp, b.exp);
+    let mut negativezero = 0;
+    if ctx.rounding == R_FLOOR and a.sign != b.sign {
+        negativezero = 1;
+    }
+    if not a.truth() and not b.truth() {
+        let mut sign = min_i(a.sign, b.sign);
+        if negativezero == 1 {
+            sign = 1;
+        }
+        return dec_fix(triple(sign, "0", exp), mut ctx);
+    }
+    if not a.truth() {
+        exp = max_i(exp, b.exp - ctx.prec - 1);
+        return dec_fix(rescale(b, exp, ctx.rounding), mut ctx);
+    }
+    if not b.truth() {
+        exp = max_i(exp, a.exp - ctx.prec - 1);
+        return dec_fix(rescale(a, exp, ctx.rounding), mut ctx);
+    }
+    let (n1, n2) = normalize_pair(work(a), work(b), ctx.prec);
+    let mut op1 = n1;
+    let mut op2 = n2;
+    let mut rsign = 0;
+    if op1.sign != op2.sign {
+        if big_eq(op1.int, op2.int) {
+            return dec_fix(triple(negativezero, "0", exp), mut ctx);
+        }
+        if big_lt(op1.int, op2.int) {
+            let t = op1;
+            op1 = op2;
+            op2 = t;
+        }
+        if op1.sign == 1 {
+            rsign = 1;
+            let s = op1.sign;
+            op1.sign = op2.sign;
+            op2.sign = s;
+        }
+    } else if op1.sign == 1 {
+        rsign = 1;
+        op1.sign = 0;
+        op2.sign = 0;
+    }
+    let r = if op2.sign == 0 { big_add(op1.int, op2.int) } else { big_sub(op1.int, op2.int) };
+    dec_fix(triple(rsign, big_str(r), op1.exp), mut ctx)
+}
+
+fn dec_sub(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if a.is_special() or b.is_special() {
+        if let Some(ans) = check_nans2(a, b, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    dec_add(a, b.copy_negate(), mut ctx)
+}
+
+fn dec_mul(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let rsign = a.sign ^ b.sign;
+    if a.is_special() or b.is_special() {
+        if let Some(ans) = check_nans2(a, b, mut ctx)? {
+            return Ok(ans);
+        }
+        if a.isinfinity() != 0 {
+            if not b.truth() {
+                return raise(mut ctx, S_INVALID, "(+-)INF * 0");
+            }
+            return Ok(infinity(rsign));
+        }
+        if b.isinfinity() != 0 {
+            if not a.truth() {
+                return raise(mut ctx, S_INVALID, "0 * (+-)INF");
+            }
+            return Ok(infinity(rsign));
+        }
+    }
+    let rexp = a.exp + b.exp;
+    if not a.truth() or not b.truth() {
+        return dec_fix(triple(rsign, "0", rexp), mut ctx);
+    }
+    if a.int == "1" {
+        return dec_fix(triple(rsign, b.int, rexp), mut ctx);
+    }
+    if b.int == "1" {
+        return dec_fix(triple(rsign, a.int, rexp), mut ctx);
+    }
+    let p = big_mul(a.coeff(), b.coeff());
+    dec_fix(triple(rsign, big_str(p), rexp), mut ctx)
+}
+
+fn dec_fma(a: ref Dec, b: ref Dec, c: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let mut product = nan();
+    if a.is_special() or b.is_special() {
+        if a.kind == K_SNAN {
+            return raise_nan(mut ctx, "sNaN", a);
+        }
+        if b.kind == K_SNAN {
+            return raise_nan(mut ctx, "sNaN", b);
+        }
+        if a.kind == K_NAN {
+            product = a.clone();
+        } else if b.kind == K_NAN {
+            product = b.clone();
+        } else if a.kind == K_INF {
+            if not b.truth() {
+                return raise(mut ctx, S_INVALID, "INF * 0 in fma");
+            }
+            product = infinity(a.sign ^ b.sign);
+        } else if b.kind == K_INF {
+            if not a.truth() {
+                return raise(mut ctx, S_INVALID, "0 * INF in fma");
+            }
+            product = infinity(a.sign ^ b.sign);
+        }
+    } else {
+        product = triple(a.sign ^ b.sign, big_str(big_mul(a.coeff(), b.coeff())), a.exp + b.exp);
+    }
+    dec_add(product, c, mut ctx)
+}
+
+// ------------------------------------------------------------ division
+
+fn dec_div(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let sign = a.sign ^ b.sign;
+    if a.is_special() or b.is_special() {
+        if let Some(ans) = check_nans2(a, b, mut ctx)? {
+            return Ok(ans);
+        }
+        if a.isinfinity() != 0 and b.isinfinity() != 0 {
+            return raise(mut ctx, S_INVALID, "(+-)INF/(+-)INF");
+        }
+        if a.isinfinity() != 0 {
+            return Ok(infinity(sign));
+        }
+        if b.isinfinity() != 0 {
+            raise(mut ctx, S_CLAMPED, "Division by infinity")?;
+            return Ok(triple(sign, "0", ctx.etiny()));
+        }
+    }
+    if not b.truth() {
+        if not a.truth() {
+            return raise(mut ctx, C_DIVUNDEF, "0 / 0");
+        }
+        return raise_sign(mut ctx, S_DIVZERO, "x / 0", sign);
+    }
+    let mut exp = 0;
+    let mut coeff = big_zero();
+    if not a.truth() {
+        exp = a.exp - b.exp;
+    } else {
+        let shift = b.n() - a.n() + ctx.prec + 1;
+        exp = a.exp - b.exp - shift;
+        let (q, r) = if shift >= 0 {
+            big_divmod(big_shift10(a.coeff(), shift), b.coeff())
+        } else {
+            big_divmod(a.coeff(), big_shift10(b.coeff(), -shift))
+        };
+        coeff = q;
+        if not big_is_zero(r) {
+            if big_mod_i(coeff, 5) == 0 {
+                coeff = big_add_i(coeff, 1);
+            }
+        } else {
+            let ideal_exp = a.exp - b.exp;
+            while exp < ideal_exp and big_mod_i(coeff, 10) == 0 {
+                coeff = big_floordiv(coeff, big(10));
+                exp += 1;
+            }
+        }
+    }
+    dec_fix(triple(sign, big_str(coeff), exp), mut ctx)
+}
+
+// _divide: (a // b, a % b) to the context's precision.
+fn divide(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[(Dec, Dec), String] {
+    let sign = a.sign ^ b.sign;
+    let ideal_exp = if b.isinfinity() != 0 { a.exp } else { min_i(a.exp, b.exp) };
+    let expdiff = a.adjusted() - b.adjusted();
+    if not a.truth() or b.isinfinity() != 0 or expdiff <= -2 {
+        return Ok((triple(sign, "0", 0), rescale(a, ideal_exp, ctx.rounding)));
+    }
+    if expdiff <= ctx.prec {
+        let mut i1 = a.coeff();
+        let mut i2 = b.coeff();
+        if a.exp >= b.exp {
+            i1 = big_shift10(i1, a.exp - b.exp);
+        } else {
+            i2 = big_shift10(i2, b.exp - a.exp);
+        }
+        let (q, r) = big_divmod(i1, i2);
+        if big_lt(q, pow10(ctx.prec)) {
+            return Ok((triple(sign, big_str(q), 0), triple(a.sign, big_str(r), ideal_exp)));
+        }
+    }
+    let ans = raise(mut ctx, C_DIVIMP, "quotient too large in //, % or divmod")?;
+    Ok((ans.clone(), ans))
+}
+
+fn dec_divmod(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[(Dec, Dec), String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok((ans.clone(), ans));
+    }
+    let sign = a.sign ^ b.sign;
+    if a.isinfinity() != 0 {
+        if b.isinfinity() != 0 {
+            let ans = raise(mut ctx, S_INVALID, "divmod(INF, INF)")?;
+            return Ok((ans.clone(), ans));
+        }
+        let r = raise(mut ctx, S_INVALID, "INF % x")?;
+        return Ok((infinity(sign), r));
+    }
+    if not b.truth() {
+        if not a.truth() {
+            let ans = raise(mut ctx, C_DIVUNDEF, "divmod(0, 0)")?;
+            return Ok((ans.clone(), ans));
+        }
+        let q = raise_sign(mut ctx, S_DIVZERO, "x // 0", sign)?;
+        let r = raise(mut ctx, S_INVALID, "x % 0")?;
+        return Ok((q, r));
+    }
+    let (q, r) = divide(a, b, mut ctx)?;
+    let r2 = dec_fix(r, mut ctx)?;
+    Ok((q, r2))
+}
+
+fn dec_mod(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if a.isinfinity() != 0 {
+        return raise(mut ctx, S_INVALID, "INF % x");
+    }
+    if not b.truth() {
+        if a.truth() {
+            return raise(mut ctx, S_INVALID, "x % 0");
+        }
+        return raise(mut ctx, C_DIVUNDEF, "0 % 0");
+    }
+    let (_, r) = divide(a, b, mut ctx)?;
+    dec_fix(r, mut ctx)
+}
+
+fn dec_floordiv(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if a.isinfinity() != 0 {
+        if b.isinfinity() != 0 {
+            return raise(mut ctx, S_INVALID, "INF // INF");
+        }
+        return Ok(infinity(a.sign ^ b.sign));
+    }
+    if not b.truth() {
+        if a.truth() {
+            return raise_sign(mut ctx, S_DIVZERO, "x // 0", a.sign ^ b.sign);
+        }
+        return raise(mut ctx, C_DIVUNDEF, "0 // 0");
+    }
+    let (q, _) = divide(a, b, mut ctx)?;
+    Ok(q)
+}
+
+fn remainder_near(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if a.isinfinity() != 0 {
+        return raise(mut ctx, S_INVALID, "remainder_near(infinity, x)");
+    }
+    if not b.truth() {
+        if a.truth() {
+            return raise(mut ctx, S_INVALID, "remainder_near(x, 0)");
+        }
+        return raise(mut ctx, C_DIVUNDEF, "remainder_near(0, 0)");
+    }
+    if b.isinfinity() != 0 {
+        return dec_fix(a, mut ctx);
+    }
+    let ideal = min_i(a.exp, b.exp);
+    if not a.truth() {
+        return dec_fix(triple(a.sign, "0", ideal), mut ctx);
+    }
+    let expdiff = a.adjusted() - b.adjusted();
+    if expdiff >= ctx.prec + 1 {
+        return raise(mut ctx, C_DIVIMP, "None");
+    }
+    if expdiff <= -2 {
+        return dec_fix(rescale(a, ideal, ctx.rounding), mut ctx);
+    }
+    let mut i1 = a.coeff();
+    let mut i2 = b.coeff();
+    if a.exp >= b.exp {
+        i1 = big_shift10(i1, a.exp - b.exp);
+    } else {
+        i2 = big_shift10(i2, b.exp - a.exp);
+    }
+    let (q0, r0) = big_divmod(i1, i2);
+    let mut q = q0;
+    let mut r = r0;
+    if big_cmp(big_add_i(big_mul_i(r, 2), big_odd(q)), i2) > 0 {
+        r = big_sub(r, i2);
+        q = big_add_i(q, 1);
+    }
+    if big_cmp(q, pow10(ctx.prec)) >= 0 {
+        return raise(mut ctx, C_DIVIMP, "None");
+    }
+    let mut sign = a.sign;
+    if r.neg {
+        sign = 1 - sign;
+        r = big_neg(r);
+    }
+    dec_fix(triple(sign, big_str(r), ideal), mut ctx)
+}
+
+// ------------------------------------------------------------ conversion to int
+
+// int(d), truncating
+fn dec_to_int(d: ref Dec) -> Result[Big, String] {
+    if d.is_special() {
+        if d.isnan() > 0 {
+            return Err("ValueError: Cannot convert NaN to integer".to_string());
+        }
+        return Err("OverflowError: Cannot convert infinity to integer".to_string());
+    }
+    let v = if d.exp >= 0 {
+        big_shift10(d.coeff(), d.exp)
+    } else {
+        let h = head(d.int, d.exp);
+        if h.is_empty() { big_zero() } else { big_from_digits(h) }
+    };
+    Ok(if d.sign == 1 { big_neg(v) } else { v })
+}
+
+// round(), math.floor() and math.ceil(): rescale to 0 and take the int.
+fn dec_round_int(d: ref Dec, rounding: i64) -> Result[Big, String] {
+    if d.is_special() {
+        if d.is_nan() {
+            return Err("ValueError: cannot round a NaN".to_string());
+        }
+        return Err("OverflowError: cannot round an infinity".to_string());
+    }
+    dec_to_int(rescale(d, 0, rounding))
+}
+
+fn as_integer_ratio(d: ref Dec) -> Result[(Big, Big), String] {
+    if d.is_special() {
+        if d.is_nan() {
+            return Err("ValueError: cannot convert NaN to integer ratio".to_string());
+        }
+        return Err("OverflowError: cannot convert Infinity to integer ratio".to_string());
+    }
+    if not d.truth() {
+        return Ok((big_zero(), big(1)));
+    }
+    let mut n = d.coeff();
+    let mut den = big(1);
+    if d.exp >= 0 {
+        n = big_shift10(n, d.exp);
+    } else {
+        let mut d5 = -d.exp;
+        while d5 > 0 and big_mod_i(n, 5) == 0 {
+            n = big_floordiv(n, big(5));
+            d5 -= 1;
+        }
+        let mut d2 = -d.exp;
+        // the trailing zero bits of n, but no more than d2
+        let mut shift2 = 0;
+        while shift2 < d2 and big_odd(n) == 0 {
+            n = big_floordiv(n, big(2));
+            shift2 += 1;
+        }
+        d2 -= shift2;
+        den = big_shl(big_pow(big(5), d5), d2);
+    }
+    if d.sign == 1 {
+        n = big_neg(n);
+    }
+    Ok((n, den))
+}
+
+// ------------------------------------------------------------ quantize and friends
+
+fn normalize(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+    }
+    let dup = dec_fix(d, mut ctx)?;
+    if dup.isinfinity() != 0 {
+        return Ok(dup);
+    }
+    if not dup.truth() {
+        return Ok(triple(dup.sign, "0", 0));
+    }
+    let exp_max = if ctx.clamp == 0 { ctx.emax } else { ctx.etop() };
+    let v = chars(dup.int);
+    let mut end = v.len();
+    let mut exp = dup.exp;
+    while v[end - 1] == '0' and exp < exp_max {
+        exp += 1;
+        end -= 1;
+    }
+    Ok(triple(dup.sign, text(slice(v, 0, end)), exp))
+}
+
+fn quantize(d: ref Dec, e: ref Dec, rounding: i64, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() or e.is_special() {
+        if let Some(ans) = check_nans2(d, e, mut ctx)? {
+            return Ok(ans);
+        }
+        if e.isinfinity() != 0 or d.isinfinity() != 0 {
+            if e.isinfinity() != 0 and d.isinfinity() != 0 {
+                return Ok(d.clone());
+            }
+            return raise(mut ctx, S_INVALID, "quantize with one INF");
+        }
+    }
+    if not (ctx.etiny() <= e.exp and e.exp <= ctx.emax) {
+        return raise(mut ctx, S_INVALID, "target exponent out of bounds in quantize");
+    }
+    if not d.truth() {
+        return dec_fix(triple(d.sign, "0", e.exp), mut ctx);
+    }
+    let adj = d.adjusted();
+    if adj > ctx.emax {
+        return raise(mut ctx, S_INVALID, "exponent of quantize result too large for current context");
+    }
+    if adj - e.exp + 1 > ctx.prec {
+        return raise(mut ctx, S_INVALID, "quantize result has too many digits for current context");
+    }
+    let ans = rescale(d, e.exp, rounding);
+    if ans.adjusted() > ctx.emax {
+        return raise(mut ctx, S_INVALID, "exponent of quantize result too large for current context");
+    }
+    if ans.n() > ctx.prec {
+        return raise(mut ctx, S_INVALID, "quantize result has too many digits for current context");
+    }
+    if ans.truth() and ans.adjusted() < ctx.emin {
+        signal(mut ctx, S_SUBNORMAL)?;
+    }
+    if ans.exp > d.exp {
+        if dec_cmp(ans, d) != 0 {
+            signal(mut ctx, S_INEXACT)?;
+        }
+        signal(mut ctx, S_ROUNDED)?;
+    }
+    dec_fix(ans, mut ctx)
+}
+
+fn same_quantum(a: ref Dec, b: ref Dec) -> bool {
+    if a.is_special() or b.is_special() {
+        return (a.is_nan() and b.is_nan()) or (a.is_infinite() and b.is_infinite());
+    }
+    a.exp == b.exp
+}
+
+fn to_integral_exact(d: ref Dec, rounding: i64, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+        return Ok(d.clone());
+    }
+    if d.exp >= 0 {
+        return Ok(d.clone());
+    }
+    if not d.truth() {
+        return Ok(triple(d.sign, "0", 0));
+    }
+    let ans = rescale(d, 0, rounding);
+    if dec_cmp(ans, d) != 0 {
+        signal(mut ctx, S_INEXACT)?;
+    }
+    signal(mut ctx, S_ROUNDED)?;
+    Ok(ans)
+}
+
+fn to_integral_value(d: ref Dec, rounding: i64, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+        return Ok(d.clone());
+    }
+    if d.exp >= 0 {
+        return Ok(d.clone());
+    }
+    Ok(rescale(d, 0, rounding))
+}
+
+// _fix with ROUND_HALF_EVEN, as sqrt, exp, ln and log10 do through a
+// shallow copy of the context (so the flags still land in it).
+fn fix_half_even(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let saved = ctx.rounding;
+    ctx.rounding = R_HALF_EVEN;
+    let r = dec_fix(d, mut ctx);
+    ctx.rounding = saved;
+    r
+}
+
+fn dec_sqrt(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if d.is_special() {
+        if let Some(ans) = check_nans1(d, mut ctx)? {
+            return Ok(ans);
+        }
+        if d.isinfinity() != 0 and d.sign == 0 {
+            return Ok(d.clone());
+        }
+    }
+    if not d.truth() {
+        return dec_fix(triple(d.sign, "0", floordiv_i(d.exp, 2)), mut ctx);
+    }
+    if d.sign == 1 {
+        return raise(mut ctx, S_INVALID, "sqrt(-x), x > 0");
+    }
+    let prec = ctx.prec + 1;
+    let mut e = floordiv_i(d.exp, 2);
+    let mut c = d.coeff();
+    let mut l = 0;
+    if floormod_i(d.exp, 2) == 1 {
+        c = big_mul_i(c, 10);
+        l = d.n() / 2 + 1;
+    } else {
+        l = (d.n() + 1) / 2;
+    }
+    let shift = prec - l;
+    let mut exact = true;
+    if shift >= 0 {
+        c = big_shift10(c, 2 * shift);
+    } else {
+        let (q, r) = big_divmod(c, pow10(-2 * shift));
+        c = q;
+        exact = big_is_zero(r);
+    }
+    e -= shift;
+    let mut n = pow10(prec);
+    loop {
+        let q = big_floordiv(c, n);
+        if big_cmp(n, q) <= 0 {
+            break;
+        }
+        n = big_shr(big_add(n, q), 1);
+    }
+    exact = exact and big_eq(big_mul(n, n), c);
+    if exact {
+        if shift >= 0 {
+            n = big_floordiv(n, pow10(shift));
+        } else {
+            n = big_shift10(n, -shift);
+        }
+        e += shift;
+    } else if big_mod_i(n, 5) == 0 {
+        n = big_add_i(n, 1);
+    }
+    fix_half_even(triple(0, big_str(n), e), mut ctx)
+}
+
+fn logb(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if d.isinfinity() != 0 {
+        return Ok(infinity(0));
+    }
+    if not d.truth() {
+        return raise_sign(mut ctx, S_DIVZERO, "logb(0)", 1);
+    }
+    dec_fix(dec_i(d.adjusted()), mut ctx)
+}
+
+fn number_class(d: ref Dec, ctx: ref Ctx) -> String {
+    if d.is_snan() {
+        return "sNaN".to_string();
+    }
+    if d.is_qnan() {
+        return "NaN".to_string();
+    }
+    let inf = d.isinfinity();
+    if inf == 1 {
+        return "+Infinity".to_string();
+    }
+    if inf == -1 {
+        return "-Infinity".to_string();
+    }
+    let s = if d.sign == 1 { "-" } else { "+" };
+    if d.is_zero() {
+        return f"{s}Zero";
+    }
+    if is_subnormal(d, ctx) {
+        return f"{s}Subnormal";
+    }
+    f"{s}Normal"
+}
+
+fn is_normal(d: ref Dec, ctx: ref Ctx) -> bool {
+    if d.is_special() or not d.truth() {
+        return false;
+    }
+    ctx.emin <= d.adjusted()
+}
+
+fn is_subnormal(d: ref Dec, ctx: ref Ctx) -> bool {
+    if d.is_special() or not d.truth() {
+        return false;
+    }
+    d.adjusted() < ctx.emin
+}
+
+// ------------------------------------------------------------ next values
+
+fn next_minus(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if d.isinfinity() == -1 {
+        return Ok(infinity(1));
+    }
+    if d.isinfinity() == 1 {
+        return Ok(triple(0, repeat("9", ctx.prec), ctx.etop()));
+    }
+    let mut c = ctx.copy();
+    c.rounding = R_FLOOR;
+    c.ignore_all = true;
+    let new_self = dec_fix(d, mut c)?;
+    if dec_cmp(new_self, d) != 0 {
+        return Ok(new_self);
+    }
+    let tiny = triple(0, "1", c.etiny() - 1);
+    dec_sub(d, tiny, mut c)
+}
+
+fn next_plus(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if d.isinfinity() == 1 {
+        return Ok(infinity(0));
+    }
+    if d.isinfinity() == -1 {
+        return Ok(triple(1, repeat("9", ctx.prec), ctx.etop()));
+    }
+    let mut c = ctx.copy();
+    c.rounding = R_CEILING;
+    c.ignore_all = true;
+    let new_self = dec_fix(d, mut c)?;
+    if dec_cmp(new_self, d) != 0 {
+        return Ok(new_self);
+    }
+    let tiny = triple(0, "1", c.etiny() - 1);
+    dec_add(d, tiny, mut c)
+}
+
+fn next_toward(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    let comparison = dec_cmp(a, b);
+    if comparison == 0 {
+        return Ok(a.copy_sign(b));
+    }
+    let ans = if comparison == -1 { next_plus(a, mut ctx)? } else { next_minus(a, mut ctx)? };
+    if ans.isinfinity() != 0 {
+        raise_sign(mut ctx, S_OVERFLOW, "Infinite result from next_toward", ans.sign)?;
+        signal(mut ctx, S_INEXACT)?;
+        signal(mut ctx, S_ROUNDED)?;
+    } else if ans.adjusted() < ctx.emin {
+        signal(mut ctx, S_UNDERFLOW)?;
+        signal(mut ctx, S_SUBNORMAL)?;
+        signal(mut ctx, S_INEXACT)?;
+        signal(mut ctx, S_ROUNDED)?;
+        if not ans.truth() {
+            signal(mut ctx, S_CLAMPED)?;
+        }
+    }
+    Ok(ans)
+}
+
+// ------------------------------------------------------------ digit operations
+
+fn scaleb(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if b.exp != 0 {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    let liminf = -2 * (ctx.emax + ctx.prec);
+    let limsup = 2 * (ctx.emax + ctx.prec);
+    let k = big_to_i64(dec_to_int(b)?);
+    if not (liminf <= k and k <= limsup) {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    if a.isinfinity() != 0 {
+        return Ok(a.clone());
+    }
+    dec_fix(triple(a.sign, a.int, a.exp + k), mut ctx)
+}
+
+// The coefficient padded or cut to exactly prec digits, for rotate and
+// shift.
+fn padded_digits(a: ref Dec, ctx: ref Ctx) -> String {
+    let topad = ctx.prec - a.n();
+    if topad > 0 {
+        return f"{zeros(topad)}{a.int}";
+    }
+    if topad < 0 {
+        return tail_from(a.int, -topad);
+    }
+    a.int.clone()
+}
+
+fn or_zero(s: ref String) -> String {
+    let t = lstrip_zeros(s);
+    if t.is_empty() { "0".to_string() } else { t }
+}
+
+fn rotate(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if b.exp != 0 {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    let k = big_to_i64(dec_to_int(b)?);
+    if not (-ctx.prec <= k and k <= ctx.prec) {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    if a.isinfinity() != 0 {
+        return Ok(a.clone());
+    }
+    let rotdig = padded_digits(a, ctx);
+    let rotated = f"{tail_from(rotdig, k)}{head(rotdig, k)}";
+    Ok(triple(a.sign, or_zero(rotated), a.exp))
+}
+
+fn shift(a: ref Dec, b: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(a, b, mut ctx)? {
+        return Ok(ans);
+    }
+    if b.exp != 0 {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    let k = big_to_i64(dec_to_int(b)?);
+    if not (-ctx.prec <= k and k <= ctx.prec) {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    if a.isinfinity() != 0 {
+        return Ok(a.clone());
+    }
+    let rotdig = padded_digits(a, ctx);
+    let shifted = if k < 0 {
+        head(rotdig, k)
+    } else {
+        tail_from(f"{rotdig}{zeros(k)}", -ctx.prec)
+    };
+    Ok(triple(a.sign, or_zero(shifted), a.exp))
+}
+
+fn islogical(d: ref Dec) -> bool {
+    if d.sign != 0 or d.exp != 0 or d.is_special() {
+        return false;
+    }
+    for c in d.int.chars() {
+        if c != '0' and c != '1' {
+            return false;
+        }
+    }
+    true
+}
+
+// _fill_logical: both operands padded to the same length (at most prec).
+fn fill_logical(ctx: ref Ctx, opa: ref String, opb: ref String) -> (String, String) {
+    let mut a = opa.clone();
+    let mut b = opb.clone();
+    let dif = ctx.prec - width(a);
+    if dif > 0 {
+        a = f"{zeros(dif)}{a}";
+    } else if dif < 0 {
+        a = tail_from(a, -ctx.prec);
+    }
+    let dif2 = ctx.prec - width(b);
+    if dif2 > 0 {
+        b = f"{zeros(dif2)}{b}";
+    } else if dif2 < 0 {
+        b = tail_from(b, -ctx.prec);
+    }
+    (a, b)
+}
+
+// logical_and, logical_or and logical_xor: op is "and", "or" or "xor".
+fn logical(a: ref Dec, b: ref Dec, op: ref String, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if not islogical(a) or not islogical(b) {
+        return raise(mut ctx, S_INVALID, "None");
+    }
+    let (x, y) = fill_logical(ctx, a.int, b.int);
+    let xv = chars(x);
+    let yv = chars(y);
+    let mut out = String.new();
+    for i in 0..xv.len() {
+        let p = xv[i] == '1';
+        let q = yv[i] == '1';
+        let r = if op == "and" { p and q } else if op == "or" { p or q } else { p != q };
+        out.push(if r { '1' } else { '0' });
+    }
+    Ok(triple(0, or_zero(out), 0))
+}
+
+fn logical_invert(a: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let ones = triple(0, repeat("1", ctx.prec), 0);
+    logical(a, ones, "xor", mut ctx)
+}
+// ------------------------------------------------------------ the integer series
+
+// len(str(n)), the sign included
+fn len_str(n: ref Big) -> i64 {
+    big_ndigits(n) + if n.neg { 1 } else { 0 }
+}
+
+// _div_nearest: the int closest to a/b, ties to even (b positive).
+fn div_nearest(a: ref Big, b: ref Big) -> Big {
+    let (q, r) = big_divmod(a, b);
+    let t = big_add_i(big_mul_i(r, 2), big_odd(q));
+    if big_cmp(t, b) > 0 { big_add_i(q, 1) } else { q }
+}
+
+// _rshift_nearest: the int closest to x / 2**shift, ties to even.
+fn rshift_nearest(x: ref Big, shift: i64) -> Big {
+    let b = big_pow(big(2), shift);
+    let (q, low) = big_divmod(x, b);
+    let t = big_add_i(big_mul_i(low, 2), big_odd(q));
+    if big_cmp(t, b) > 0 { big_add_i(q, 1) } else { q }
+}
+
+// _sqrt_nearest: the int closest to sqrt(n), starting from a.
+fn sqrt_nearest(n: ref Big, a0: ref Big) -> Big {
+    let mut a = a0.clone();
+    let mut b = big_zero();
+    while not big_eq(a, b) {
+        let next = big_shr(big_sub(a, big_floordiv(big_neg(n), a)), 1);
+        b = a;
+        a = next;
+    }
+    a
+}
+
+// ceil(10 * len(str(M)) / (3 * L)), the number of series terms
+fn terms(m: ref Big, l: i64) -> i64 {
+    -floordiv_i(-10 * len_str(m), 3 * l)
+}
+
+// _ilog: an integer near M * log(x / M).
+fn ilog(x: ref Big, m: ref Big) -> Big {
+    let l = 8;
+    let mut y = big_sub(x, m);
+    let mut r = 0;
+    loop {
+        let ay = big_abs(y);
+        let go = if r <= l { big_cmp(big_shl(ay, l - r), m) >= 0 } else { big_cmp(big_shr(ay, r - l), m) >= 0 };
+        if not go {
+            break;
+        }
+        let inner = big_mul(m, big_add(m, rshift_nearest(y, r)));
+        let den = big_add(m, sqrt_nearest(inner, m));
+        y = div_nearest(big_shl(big_mul(m, y), 1), den);
+        r += 1;
+    }
+    let t = terms(m, l);
+    let yshift = rshift_nearest(y, r);
+    let mut w = div_nearest(m, big(t));
+    let mut k = t - 1;
+    while k > 0 {
+        w = big_sub(div_nearest(m, big(k)), div_nearest(big_mul(yshift, w), m));
+        k -= 1;
+    }
+    div_nearest(big_mul(w, y), m)
+}
+
+// _log10_digits: floor(10**p * log(10)), from the 47 digits kept in the
+// module, or computed when more are wanted.
+fn log10_digits(p: i64) -> Big {
+    let mut digits = "23025850929940456840179914546843642076011014886".to_string();
+    if p >= width(digits) {
+        let mut extra = 3;
+        loop {
+            let m = pow10(p + extra + 2);
+            let ds = big_str(div_nearest(ilog(big_mul_i(m, 10), m), big(100)));
+            if tail_from(ds, -extra) != zeros(extra) {
+                digits = head(rstrip_zeros(ds), -1);
+                break;
+            }
+            extra += 3;
+        }
+    }
+    big_from_digits(head(digits, p + 1))
+}
+
+// _dlog10: an integer near 10**p * log10(c * 10**e).
+fn dlog10(c0: ref Big, e: i64, p0: i64) -> Big {
+    let p = p0 + 2;
+    let mut c = c0.clone();
+    let l = len_str(c);
+    let f = e + l - if e + l >= 1 { 1 } else { 0 };
+    let mut log_d = big_zero();
+    let mut log_tenpower = big_zero();
+    if p > 0 {
+        let m = pow10(p);
+        let k = e + p - f;
+        if k >= 0 {
+            c = big_shift10(c, k);
+        } else {
+            c = div_nearest(c, pow10(-k));
+        }
+        log_d = ilog(c, m);
+        let log_10 = log10_digits(p);
+        log_d = div_nearest(big_mul(log_d, m), log_10);
+        log_tenpower = big_mul_i(m, f);
+    } else {
+        log_tenpower = div_nearest(big(f), pow10(-p));
+    }
+    div_nearest(big_add(log_tenpower, log_d), big(100))
+}
+
+// _dlog: an integer near 10**p * log(c * 10**e).
+fn dlog(c0: ref Big, e: i64, p0: i64) -> Big {
+    let p = p0 + 2;
+    let mut c = c0.clone();
+    let l = len_str(c);
+    let f = e + l - if e + l >= 1 { 1 } else { 0 };
+    let mut log_d = big_zero();
+    if p > 0 {
+        let k = e + p - f;
+        if k >= 0 {
+            c = big_shift10(c, k);
+        } else {
+            c = div_nearest(c, pow10(-k));
+        }
+        log_d = ilog(c, pow10(p));
+    }
+    let mut f_log_ten = big_zero();
+    if f != 0 {
+        let extra = len_str(big(if f < 0 { -f } else { f })) - 1;
+        if p + extra >= 0 {
+            f_log_ten = div_nearest(big_mul_i(log10_digits(p + extra), f), pow10(extra));
+        }
+    }
+    div_nearest(big_add(f_log_ten, log_d), big(100))
+}
+
+// _iexp: an integer near M * exp(x / M).
+fn iexp(x: ref Big, m: ref Big) -> Big {
+    let l = 8;
+    let r = big_bit_length(big_floordiv(big_shl(x, l), m));
+    let t = terms(m, l);
+    let mut y = div_nearest(x, big(t));
+    let mut mshift = big_shl(m, r);
+    let mut i = t - 1;
+    while i > 0 {
+        y = div_nearest(big_mul(x, big_add(mshift, y)), big_mul_i(mshift, i));
+        i -= 1;
+    }
+    let mut k = r - 1;
+    while k >= 0 {
+        mshift = big_shl(m, k + 2);
+        y = div_nearest(big_mul(y, big_add(y, mshift)), mshift);
+        k -= 1;
+    }
+    big_add(m, y)
+}
+
+// _dexp: (d, f) with d * 10**f near exp(c * 10**e), to p digits.
+fn dexp(c: ref Big, e: i64, p0: i64) -> (Big, i64) {
+    let p = p0 + 2;
+    let extra = max_i(0, e + len_str(c) - 1);
+    let q = p + extra;
+    let shift = e + q;
+    let cshift = if shift >= 0 { big_shift10(c, shift) } else { big_floordiv(c, pow10(-shift)) };
+    let (quot, rem0) = big_divmod(cshift, log10_digits(q));
+    let rem = div_nearest(rem0, pow10(extra));
+    (div_nearest(iexp(rem, pow10(p)), big(1000)), big_to_i64(quot) - p + 3)
+}
+
+// _dpower: (c, e) with c * 10**e near x**y, to p digits.
+fn dpower(xc: ref Big, xe: i64, yc: ref Big, ye: i64, p: i64) -> (Big, i64) {
+    let b = big_ndigits(yc) + ye;
+    let lxc = dlog(xc, xe, p + b + 1);
+    let shift = ye - b;
+    let pc = if shift >= 0 {
+        big_shift10(big_mul(lxc, yc), shift)
+    } else {
+        div_nearest(big_mul(lxc, yc), pow10(-shift))
+    };
+    if big_is_zero(pc) {
+        let above_one = (len_str(xc) + xe >= 1) == (big_cmp_i(yc, 0) > 0);
+        if above_one {
+            return (big_add_i(pow10(p - 1), 1), 1 - p);
+        }
+        return (big_add_i(pow10(p), -1), -p);
+    }
+    let (coeff, exp) = dexp(pc, -(p + 1), p + 1);
+    (div_nearest(coeff, big(10)), exp + 1)
+}
+
+// _log10_lb: a lower bound for 100 * log10(c).
+fn log10_lb(c: ref Big) -> i64 {
+    let s = big_str(c);
+    let corr = vec![0, 100, 70, 53, 40, 31, 23, 16, 10, 5];
+    100 * width(s) - corr[digit_value(char_at(s, 0))]
+}
+
+// Whether coeff % (5 * 10**(len(str(coeff)) - p - 1)) is nonzero, the
+// test the loops use to know they have enough digits.
+fn enough_digits(coeff: ref Big, p: i64) -> bool {
+    let k = big_ndigits(coeff) - p - 1;
+    let m = big_mul_i(pow10(k), 5);
+    not big_is_zero(big_mod(big_abs(coeff), m))
+}
+
+// ------------------------------------------------------------ exp and the logs
+
+fn dec_exp(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if d.isinfinity() == -1 {
+        return Ok(dec_i(0));
+    }
+    if not d.truth() {
+        return Ok(one());
+    }
+    if d.isinfinity() == 1 {
+        return Ok(d.clone());
+    }
+    let p = ctx.prec;
+    let adj = d.adjusted();
+    let ans = if d.sign == 0 and adj > len_str_i((ctx.emax + 1) * 3) {
+        triple(0, "1", ctx.emax + 1)
+    } else if d.sign == 1 and adj > len_str_i((-ctx.etiny() + 1) * 3) {
+        triple(0, "1", ctx.etiny() - 1)
+    } else if d.sign == 0 and adj < -p {
+        triple(0, f"1{zeros(p - 1)}1", -p)
+    } else if d.sign == 1 and adj < -p - 1 {
+        triple(0, repeat("9", p + 1), -p - 1)
+    } else {
+        let mut c = d.coeff();
+        if d.sign == 1 {
+            c = big_neg(c);
+        }
+        let mut extra = 3;
+        let mut res = (big_zero(), 0);
+        loop {
+            res = dexp(c, d.exp, p + extra);
+            if enough_digits(res.0, p) {
+                break;
+            }
+            extra += 3;
+        }
+        triple(0, big_str(res.0), res.1)
+    };
+    fix_half_even(ans, mut ctx)
+}
+
+// _ln_exp_bound: r with ln(self) >= 10**r.
+fn ln_exp_bound(d: ref Dec) -> i64 {
+    let adj = d.exp + d.n() - 1;
+    if adj >= 1 {
+        return len_str_i(adj * 23 / 10) - 1;
+    }
+    if adj <= -2 {
+        return len_str_i((-1 - adj) * 23 / 10) - 1;
+    }
+    let c = d.coeff();
+    let e = d.exp;
+    if adj == 0 {
+        let num = big_str(big_sub(c, pow10(-e)));
+        let den = big_str(c);
+        return width(num) - width(den) - if num < den { 1 } else { 0 };
+    }
+    e + width(big_str(big_sub(pow10(-e), c))) - 1
+}
+
+fn dec_ln(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if not d.truth() {
+        return Ok(infinity(1));
+    }
+    if d.isinfinity() == 1 {
+        return Ok(infinity(0));
+    }
+    if dec_cmp(d, one()) == 0 {
+        return Ok(dec_i(0));
+    }
+    if d.sign == 1 {
+        return raise(mut ctx, S_INVALID, "ln of a negative value");
+    }
+    let c = d.coeff();
+    let p = ctx.prec;
+    let mut places = p - ln_exp_bound(d) + 2;
+    let mut coeff = big_zero();
+    loop {
+        coeff = dlog(c, d.exp, places);
+        if enough_digits(coeff, p) {
+            break;
+        }
+        places += 3;
+    }
+    let ans = triple(if coeff.neg { 1 } else { 0 }, mag_digits(coeff.d), -places);
+    fix_half_even(ans, mut ctx)
+}
+
+// _log10_exp_bound: r with log10(self) >= 10**r.
+fn log10_exp_bound(d: ref Dec) -> i64 {
+    let adj = d.exp + d.n() - 1;
+    if adj >= 1 {
+        return len_str_i(adj) - 1;
+    }
+    if adj <= -2 {
+        return len_str_i(-1 - adj) - 1;
+    }
+    let c = d.coeff();
+    let e = d.exp;
+    if adj == 0 {
+        let num = big_str(big_sub(c, pow10(-e)));
+        let den = big_str(big_mul_i(c, 231));
+        return width(num) - width(den) - if num < den { 1 } else { 0 } + 2;
+    }
+    let num = big_str(big_sub(pow10(-e), c));
+    width(num) + e - if num < "231".to_string() { 1 } else { 0 } - 1
+}
+
+fn dec_log10(d: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans1(d, mut ctx)? {
+        return Ok(ans);
+    }
+    if not d.truth() {
+        return Ok(infinity(1));
+    }
+    if d.isinfinity() == 1 {
+        return Ok(infinity(0));
+    }
+    if d.sign == 1 {
+        return raise(mut ctx, S_INVALID, "log10 of a negative value");
+    }
+    let ans = if char_at(d.int, 0) == '1' and tail_from(d.int, 1) == zeros(d.n() - 1) {
+        dec_i(d.exp + d.n() - 1)
+    } else {
+        let c = d.coeff();
+        let p = ctx.prec;
+        let mut places = p - log10_exp_bound(d) + 2;
+        let mut coeff = big_zero();
+        loop {
+            coeff = dlog10(c, d.exp, places);
+            if enough_digits(coeff, p) {
+                break;
+            }
+            places += 3;
+        }
+        triple(if coeff.neg { 1 } else { 0 }, mag_digits(coeff.d), -places)
+    };
+    fix_half_even(ans, mut ctx)
+}
+
+// ------------------------------------------------------------ powers
+
+// _decimal_lshift_exact: n * 10**e when that is an int.
+fn lshift_exact(n: ref Big, e: i64) -> Option[Big] {
+    if big_is_zero(n) {
+        return Some(big_zero());
+    }
+    if e >= 0 {
+        return Some(big_shift10(n, e));
+    }
+    let s = mag_digits(n.d);
+    let val_n = width(s) - width(rstrip_zeros(s));
+    if val_n < -e {
+        return None;
+    }
+    Some(big_floordiv(n, pow10(-e)))
+}
+
+fn is_pow2(x: ref Big) -> bool {
+    let mut v = x.clone();
+    while big_odd(v) == 0 and not big_is_zero(v) {
+        v = big_floordiv(v, big(2));
+    }
+    big_eq(v, big(1))
+}
+
+// Strip the trailing decimal zeros of c into the exponent.
+fn strip10(c: ref Big, e: i64) -> (Big, i64) {
+    let mut x = c.clone();
+    let mut k = e;
+    while big_mod_i(x, 10) == 0 {
+        x = big_floordiv(x, big(10));
+        k += 1;
+    }
+    (x, k)
+}
+
+// _power_exact: self ** other exactly in p digits, or None. Self is
+// positive and not 1, other is not zero, neither is special.
+fn power_exact(a: ref Dec, b: ref Dec, p: i64) -> Option[Dec] {
+    let (xc0, xe0) = strip10(a.coeff(), a.exp);
+    let mut xc = xc0;
+    let mut xe = xe0;
+    let (yc, ye0) = strip10(b.coeff(), b.exp);
+    let mut ye = ye0;
+    let ysign = b.sign;
+
+    if big_eq(xc, big(1)) {
+        let mut xeb = big_mul_i(yc, xe);
+        while big_mod_i(xeb, 10) == 0 {
+            xeb = big_floordiv(xeb, big(10));
+            ye += 1;
+        }
+        if ye < 0 {
+            return None;
+        }
+        let mut exponent = big_to_i64(big_shift10(xeb, ye));
+        if ysign == 1 {
+            exponent = -exponent;
+        }
+        let mut nz = 0;
+        if b.isinteger() and b.sign == 0 {
+            let ideal = a.exp * big_to_i64(dec_to_int(b).unwrap());
+            nz = min_i(exponent - ideal, p - 1);
+        }
+        return Some(triple(0, f"1{zeros(nz)}", exponent - nz));
+    }
+
+    if ysign == 1 {
+        let last = big_mod_i(xc, 10);
+        let mut e = 0;
+        if last == 2 or last == 4 or last == 6 or last == 8 {
+            if not is_pow2(xc) {
+                return None;
+            }
+            e = big_bit_length(xc) - 1;
+            let emax = p * 93 / 65;
+            if ye >= len_str_i(emax) {
+                return None;
+            }
+            let eb = lshift_exact(big_mul_i(yc, e), ye);
+            let xb = lshift_exact(big_mul_i(yc, xe), ye);
+            if eb.is_none() or xb.is_none() {
+                return None;
+            }
+            let ebig = eb.unwrap();
+            if big_cmp_i(ebig, emax) > 0 {
+                return None;
+            }
+            e = big_to_i64(ebig);
+            xe = big_to_i64(xb.unwrap());
+            xc = big_pow(big(5), e);
+        } else if last == 5 {
+            e = big_bit_length(xc) * 28 / 65;
+            let (q, rem) = big_divmod(big_pow(big(5), e), xc);
+            if not big_is_zero(rem) {
+                return None;
+            }
+            xc = q;
+            while big_mod_i(xc, 5) == 0 {
+                xc = big_floordiv(xc, big(5));
+                e -= 1;
+            }
+            let emax = p * 10 / 3;
+            if ye >= len_str_i(emax) {
+                return None;
+            }
+            let eb = lshift_exact(big_mul_i(yc, e), ye);
+            let xb = lshift_exact(big_mul_i(yc, xe), ye);
+            if eb.is_none() or xb.is_none() {
+                return None;
+            }
+            let ebig = eb.unwrap();
+            if big_cmp_i(ebig, emax) > 0 {
+                return None;
+            }
+            e = big_to_i64(ebig);
+            xe = big_to_i64(xb.unwrap());
+            xc = big_pow(big(2), e);
+        } else {
+            return None;
+        }
+        let strxc = big_str(xc);
+        if width(strxc) > p {
+            return None;
+        }
+        return Some(triple(0, strxc, -e - xe));
+    }
+
+    let mut m = big_zero();
+    let mut n = big(1);
+    let mut xc_bits = 0;
+    if ye >= 0 {
+        m = big_shift10(yc, ye);
+    } else {
+        if xe != 0 and len_str(big_abs(big_mul_i(yc, xe))) <= -ye {
+            return None;
+        }
+        xc_bits = big_bit_length(xc);
+        if len_str(big_mul_i(big_abs(yc), xc_bits)) <= -ye {
+            return None;
+        }
+        m = yc.clone();
+        n = pow10(-ye);
+        while big_odd(m) == 0 and big_odd(n) == 0 {
+            m = big_floordiv(m, big(2));
+            n = big_floordiv(n, big(2));
+        }
+        while big_mod_i(m, 5) == 0 and big_mod_i(n, 5) == 0 {
+            m = big_floordiv(m, big(5));
+            n = big_floordiv(n, big(5));
+        }
+    }
+    if big_cmp_i(n, 1) > 0 {
+        if big_cmp_i(n, xc_bits) >= 0 {
+            return None;
+        }
+        let nn = big_to_i64(n);
+        if floormod_i(xe, nn) != 0 {
+            return None;
+        }
+        xe = floordiv_i(xe, nn);
+        let mut a2 = big_shl(big(1), -floordiv_i(-big_bit_length(xc), nn));
+        let mut q = big_zero();
+        let mut r = big_zero();
+        loop {
+            let (q2, r2) = big_divmod(xc, big_pow(a2, nn - 1));
+            q = q2;
+            r = r2;
+            if big_cmp(a2, q) <= 0 {
+                break;
+            }
+            a2 = big_floordiv(big_add(big_mul_i(a2, nn - 1), q), big(nn));
+        }
+        if not (big_eq(a2, q) and big_is_zero(r)) {
+            return None;
+        }
+        xc = a2;
+    }
+    if big_cmp_i(xc, 1) > 0 and big_cmp_i(m, p * 100 / log10_lb(xc)) > 0 {
+        return None;
+    }
+    let mm = big_to_i64(m);
+    xc = big_pow(xc, mm);
+    xe = xe * mm;
+    let str_xc = big_str(xc);
+    if width(str_xc) > p {
+        return None;
+    }
+    let mut nz = 0;
+    if b.isinteger() and b.sign == 0 {
+        let ideal = a.exp * big_to_i64(dec_to_int(b).unwrap());
+        nz = min_i(xe - ideal, p - width(str_xc));
+    }
+    Some(triple(0, f"{str_xc}{zeros(nz)}", xe - nz))
+}
+
+fn dec_pow(base: ref Dec, other: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    if let Some(ans) = check_nans2(base, other, mut ctx)? {
+        return Ok(ans);
+    }
+    if not other.truth() {
+        if not base.truth() {
+            return raise(mut ctx, S_INVALID, "0 ** 0");
+        }
+        return Ok(one());
+    }
+    let mut result_sign = 0;
+    let mut x = base.clone();
+    if x.sign == 1 {
+        if other.isinteger() {
+            if not other.iseven() {
+                result_sign = 1;
+            }
+        } else if x.truth() {
+            return raise(mut ctx, S_INVALID, "x ** y with x negative and y not an integer");
+        }
+        x = x.copy_negate();
+    }
+    if not x.truth() {
+        if other.sign == 0 {
+            return Ok(triple(result_sign, "0", 0));
+        }
+        return Ok(infinity(result_sign));
+    }
+    if x.isinfinity() != 0 {
+        if other.sign == 0 {
+            return Ok(infinity(result_sign));
+        }
+        return Ok(triple(result_sign, "0", 0));
+    }
+    if dec_cmp(x, one()) == 0 {
+        let mut exp = 0;
+        if other.isinteger() {
+            let multiplier = if other.sign == 1 {
+                0
+            } else if dec_cmp(other, dec_i(ctx.prec)) > 0 {
+                ctx.prec
+            } else {
+                big_to_i64(dec_to_int(other)?)
+            };
+            exp = x.exp * multiplier;
+            if exp < 1 - ctx.prec {
+                exp = 1 - ctx.prec;
+                signal(mut ctx, S_ROUNDED)?;
+            }
+        } else {
+            signal(mut ctx, S_INEXACT)?;
+            signal(mut ctx, S_ROUNDED)?;
+            exp = 1 - ctx.prec;
+        }
+        return Ok(triple(result_sign, f"1{zeros(-exp)}", exp));
+    }
+    let self_adj = x.adjusted();
+    if other.isinfinity() != 0 {
+        if (other.sign == 0) == (self_adj < 0) {
+            return Ok(triple(result_sign, "0", 0));
+        }
+        return Ok(infinity(result_sign));
+    }
+    let mut ans: Option[Dec] = None;
+    let mut exact = false;
+    let bound = log10_exp_bound(x) + other.adjusted();
+    if (self_adj >= 0) == (other.sign == 0) {
+        if bound >= len_str_i(ctx.emax) {
+            ans = Some(triple(result_sign, "1", ctx.emax + 1));
+        }
+    } else {
+        let etiny = ctx.etiny();
+        if bound >= len_str_i(-etiny) {
+            ans = Some(triple(result_sign, "1", etiny - 1));
+        }
+    }
+    if ans.is_none() {
+        if let Some(a) = power_exact(x, other, ctx.prec + 1) {
+            let a2 = if result_sign == 1 { triple(1, a.int, a.exp) } else { a };
+            ans = Some(a2);
+            exact = true;
+        }
+    }
+    if ans.is_none() {
+        let p = ctx.prec;
+        let xc = x.coeff();
+        let mut yc = other.coeff();
+        if other.sign == 1 {
+            yc = big_neg(yc);
+        }
+        let mut extra = 3;
+        let mut res = (big_zero(), 0);
+        loop {
+            res = dpower(xc, x.exp, yc, other.exp, p + extra);
+            if enough_digits(res.0, p) {
+                break;
+            }
+            extra += 3;
+        }
+        ans = Some(triple(result_sign, big_str(res.0), res.1));
+    }
+    let mut a = ans.unwrap();
+    if exact and not other.isinteger() {
+        if a.n() <= ctx.prec {
+            let expdiff = ctx.prec + 1 - a.n();
+            a = triple(a.sign, f"{a.int}{zeros(expdiff)}", a.exp - expdiff);
+        }
+        let mut nc = ctx.copy();
+        nc.clear_flags();
+        nc.clear_traps();
+        a = dec_fix(a, mut nc)?;
+        signal(mut nc, S_INEXACT)?;
+        if nc.flags[S_SUBNORMAL] {
+            signal(mut nc, S_UNDERFLOW)?;
+        }
+        if nc.flags[S_OVERFLOW] {
+            raise_sign(mut ctx, S_OVERFLOW, "above Emax", a.sign)?;
+        }
+        for s in vec![S_UNDERFLOW, S_SUBNORMAL, S_INEXACT, S_ROUNDED, S_CLAMPED].iter() {
+            if nc.flags[s] {
+                signal(mut ctx, s)?;
+            }
+        }
+        return Ok(a);
+    }
+    dec_fix(a, mut ctx)
+}
+
+// pow(x, y, modulo), which is exact.
+fn power_modulo(x: ref Dec, y: ref Dec, modulo: ref Dec, ctx: mut ref Ctx) -> Result[Dec, String] {
+    let xn = x.isnan();
+    let yn = y.isnan();
+    let mn = modulo.isnan();
+    if xn > 0 or yn > 0 or mn > 0 {
+        if xn == 2 {
+            return raise_nan(mut ctx, "sNaN", x);
+        }
+        if yn == 2 {
+            return raise_nan(mut ctx, "sNaN", y);
+        }
+        if mn == 2 {
+            return raise_nan(mut ctx, "sNaN", modulo);
+        }
+        if xn > 0 {
+            return Ok(fix_nan(x, ctx));
+        }
+        if yn > 0 {
+            return Ok(fix_nan(y, ctx));
+        }
+        return Ok(fix_nan(modulo, ctx));
+    }
+    if not (x.isinteger() and y.isinteger() and modulo.isinteger()) {
+        return raise(mut ctx, S_INVALID, "pow() 3rd argument not allowed unless all arguments are integers");
+    }
+    if dec_order(y, dec_i(0), "<", mut ctx)? {
+        return raise(mut ctx, S_INVALID, "pow() 2nd argument cannot be negative when 3rd argument specified");
+    }
+    if not modulo.truth() {
+        return raise(mut ctx, S_INVALID, "pow() 3rd argument cannot be 0");
+    }
+    if modulo.adjusted() >= ctx.prec {
+        return raise(mut ctx, S_INVALID, "insufficient precision: pow() 3rd argument must not have more than precision digits");
+    }
+    if not y.truth() and not x.truth() {
+        return raise(mut ctx, S_INVALID, "at least one of pow() 1st argument and 2nd argument must be nonzero; 0**0 is not defined");
+    }
+    let sign = if y.iseven() { 0 } else { x.sign };
+    let m = big_abs(dec_to_int(modulo)?);
+    let bw = to_integral_value(x, ctx.rounding, mut ctx)?;
+    let ew = to_integral_value(y, ctx.rounding, mut ctx)?;
+    let mut b = big_mod(big_mul(big_mod(bw.coeff(), m), powmod(big(10), big(bw.exp), m)), m);
+    for _ in 0..ew.exp {
+        b = powmod(b, big(10), m);
+    }
+    b = powmod(b, ew.coeff(), m);
+    Ok(triple(sign, big_str(b), 0))
+}
+
+// pow(b, e, m) on ints, e >= 0
+fn powmod(b: ref Big, e: ref Big, m: ref Big) -> Big {
+    let mut r = big_mod(big(1), m);
+    let mut x = big_mod(b, m);
+    let mut k = e.clone();
+    let two = big(2);
+    while not big_is_zero(k) {
+        if big_odd(k) == 1 {
+            r = big_mod(big_mul(r, x), m);
+        }
+        k = big_floordiv(k, two);
+        x = big_mod(big_mul(x, x), m);
+    }
+    r
+}
+// ------------------------------------------------------------ __format__
+
+#[derive(Clone)]
+struct Spec {
+    fill: String,
+    align: String,
+    sign: String,
+    no_neg_0: bool,
+    alt: bool,
+    zeropad: bool,
+    minimumwidth: i64,
+    thousands_sep: String,
+    // [3, 0] (every three digits) or [] (the C locale's 'n')
+    grouping: bool,
+    precision: i64,
+    has_precision: bool,
+    typ: String,
+}
+
+fn is_align(c: char) -> bool {
+    c == '<' or c == '>' or c == '=' or c == '^'
+}
+
+// _parse_format_specifier, the regex walked by hand: no part of it ever
+// needs to give back what an earlier part took.
+fn parse_spec(spec: ref String) -> Result[Spec, String] {
+    let bad = f"ValueError: Invalid format specifier: {spec}";
+    let v = chars(spec);
+    let mut i = 0;
+    let mut fill = String.new();
+    let mut align = String.new();
+    if v.len() >= 2 and is_align(v[1]) {
+        fill.push(v[0]);
+        align.push(v[1]);
+        i = 2;
+    } else if v.len() >= 1 and is_align(v[0]) {
+        align.push(v[0]);
+        i = 1;
+    }
+    let mut sign = String.new();
+    if i < v.len() and (v[i] == '-' or v[i] == '+' or v[i] == ' ') {
+        sign.push(v[i]);
+        i += 1;
+    }
+    let mut no_neg_0 = false;
+    if i < v.len() and v[i] == 'z' {
+        no_neg_0 = true;
+        i += 1;
+    }
+    let mut alt = false;
+    if i < v.len() and v[i] == '#' {
+        alt = true;
+        i += 1;
+    }
+    let mut zeropad = false;
+    if i < v.len() and v[i] == '0' {
+        zeropad = true;
+        i += 1;
+    }
+    let mut minimumwidth = 0;
+    if i < v.len() and is_digit(v[i]) and digit_value(v[i]) != 0 {
+        while i < v.len() and is_digit(v[i]) {
+            minimumwidth = minimumwidth * 10 + digit_value(v[i]);
+            i += 1;
+        }
+    }
+    let mut thousands_sep = String.new();
+    let mut has_sep = false;
+    if i < v.len() and (v[i] == ',' or v[i] == '_') {
+        thousands_sep.push(v[i]);
+        has_sep = true;
+        i += 1;
+    }
+    let mut precision = 0;
+    let mut has_precision = false;
+    if i + 1 < v.len() and v[i] == '.' and is_digit(v[i + 1]) {
+        i += 1;
+        has_precision = true;
+        if digit_value(v[i]) == 0 {
+            i += 1;
+        } else {
+            while i < v.len() and is_digit(v[i]) {
+                precision = precision * 10 + digit_value(v[i]);
+                i += 1;
+            }
+        }
+    }
+    let mut typ = String.new();
+    if i < v.len() and "eEfFgGn%".contains(f"{v[i]}") {
+        typ.push(v[i]);
+        i += 1;
+    }
+    if i != v.len() {
+        return Err(bad);
+    }
+    if zeropad {
+        if not fill.is_empty() {
+            return Err(f"ValueError: Fill character conflicts with '0' in format specifier: {spec}");
+        }
+        if not align.is_empty() {
+            return Err(f"ValueError: Alignment conflicts with '0' in format specifier: {spec}");
+        }
+    }
+    if fill.is_empty() {
+        fill = " ".to_string();
+    }
+    if align.is_empty() {
+        align = ">".to_string();
+    }
+    if sign.is_empty() {
+        sign = "-".to_string();
+    }
+    if has_precision and precision == 0 {
+        if typ.is_empty() or "gGn".contains(typ) {
+            precision = 1;
+        }
+    }
+    let mut grouping = true;
+    if typ == "n" {
+        typ = "g".to_string();
+        if has_sep {
+            return Err(f"ValueError: Explicit thousands separator conflicts with 'n' type in format specifier: {spec}");
+        }
+        // localeconv() in the C locale
+        thousands_sep = String.new();
+        grouping = false;
+    }
+    Ok(Spec {
+        fill: fill,
+        align: align,
+        sign: sign,
+        no_neg_0: no_neg_0,
+        alt: alt,
+        zeropad: zeropad,
+        minimumwidth: minimumwidth,
+        thousands_sep: thousands_sep,
+        grouping: grouping,
+        precision: precision,
+        has_precision: has_precision,
+        typ: typ,
+    })
+}
+
+fn format_align(sign: ref String, body: ref String, spec: ref Spec) -> String {
+    let padding = repeat(spec.fill, spec.minimumwidth - width(sign) - width(body));
+    if spec.align == "<" {
+        return f"{sign}{body}{padding}";
+    }
+    if spec.align == ">" {
+        return f"{padding}{sign}{body}";
+    }
+    if spec.align == "=" {
+        return f"{sign}{padding}{body}";
+    }
+    let half = width(padding) / 2;
+    f"{head(padding, half)}{sign}{body}{tail_from(padding, half)}"
+}
+
+fn insert_thousands_sep(digits0: ref String, spec: ref Spec, min_width0: i64) -> String {
+    let sep = spec.thousands_sep.clone();
+    let mut digits = digits0.clone();
+    let mut min_width = min_width0;
+    let mut groups: Vec[String] = Vec.new();
+    if spec.grouping {
+        loop {
+            let l = min_i(max_i(max_i(width(digits), min_width), 1), 3);
+            groups.push(f"{zeros(l - width(digits))}{tail_from(digits, -l)}");
+            digits = head(digits, -l);
+            min_width -= l;
+            if digits.is_empty() and min_width <= 0 {
+                break;
+            }
+            min_width -= width(sep);
+        }
+    } else {
+        let l = max_i(max_i(width(digits), min_width), 1);
+        groups.push(f"{zeros(l - width(digits))}{tail_from(digits, -l)}");
+    }
+    groups.reverse();
+    groups.join(sep)
+}
+
+fn format_sign(is_negative: bool, spec: ref Spec) -> String {
+    if is_negative {
+        return "-".to_string();
+    }
+    if spec.sign == " " or spec.sign == "+" {
+        return spec.sign.clone();
+    }
+    String.new()
+}
+
+fn format_number(is_negative: bool, intpart0: ref String, fracpart0: ref String, exp: i64, spec: ref Spec) -> String {
+    let sign = format_sign(is_negative, spec);
+    let mut fracpart = fracpart0.clone();
+    if not fracpart.is_empty() or spec.alt {
+        fracpart = f".{fracpart}";
+    }
+    if exp != 0 or spec.typ == "e" or spec.typ == "E" {
+        let echar = if spec.typ == "E" or spec.typ == "G" { "E" } else { "e" };
+        let es = if exp >= 0 { f"+{exp}" } else { f"{exp}" };
+        fracpart.push_str(f"{echar}{es}");
+    }
+    if spec.typ == "%" {
+        fracpart.push_str("%");
+    }
+    let min_width = if spec.zeropad { spec.minimumwidth - width(fracpart) - width(sign) } else { 0 };
+    let intpart = insert_thousands_sep(intpart0, spec, min_width);
+    format_align(sign, f"{intpart}{fracpart}", spec)
+}
+
+// format(d, spec), with the context for the default type and rounding.
+fn dec_format(d0: ref Dec, specifier: ref String, ctx: ref Ctx) -> Result[String, String] {
+    let mut spec = parse_spec(specifier)?;
+    let mut d = d0.clone();
+    if d.is_special() {
+        let sign = format_sign(d.sign == 1, spec);
+        let mut body = dec_str(d.copy_abs(), false, ctx);
+        if spec.typ == "%" {
+            body.push_str("%");
+        }
+        return Ok(format_align(sign, body, spec));
+    }
+    if spec.typ.is_empty() {
+        spec.typ = if ctx.capitals == 1 { "G".to_string() } else { "g".to_string() };
+    }
+    let t = spec.typ.clone();
+    if t == "%" {
+        d = triple(d.sign, d.int, d.exp + 2);
+    }
+    let rounding = ctx.rounding;
+    if spec.has_precision {
+        let precision = spec.precision;
+        if t == "e" or t == "E" {
+            d = round_places(d, precision + 1, rounding);
+        } else if t == "f" or t == "F" or t == "%" {
+            d = rescale(d, -precision, rounding);
+        } else if (t == "g" or t == "G") and d.n() > precision {
+            d = round_places(d, precision, rounding);
+        }
+    }
+    let fixed = t == "f" or t == "F" or t == "%";
+    if not d.truth() and d.exp > 0 and fixed {
+        d = rescale(d, 0, rounding);
+    }
+    let adjusted_sign = if not d.truth() and spec.no_neg_0 and d.sign == 1 { 0 } else { d.sign };
+    let leftdigits = d.exp + d.n();
+    let dotplace = if t == "e" or t == "E" {
+        if not d.truth() and spec.has_precision { 1 - spec.precision } else { 1 }
+    } else if fixed {
+        leftdigits
+    } else if d.exp <= 0 and leftdigits > -6 {
+        leftdigits
+    } else {
+        1
+    };
+    let mut intpart = String.new();
+    let mut fracpart = String.new();
+    if dotplace < 0 {
+        intpart = "0".to_string();
+        fracpart = f"{zeros(-dotplace)}{d.int}";
+    } else if dotplace > d.n() {
+        intpart = f"{d.int}{zeros(dotplace - d.n())}";
+    } else {
+        intpart = head_or_zero(d.int, dotplace);
+        fracpart = tail_from(d.int, dotplace);
+    }
+    let exp = leftdigits - dotplace;
+    Ok(format_number(adjusted_sign == 1, intpart, fracpart, exp, spec))
+}
+
+// ------------------------------------------------------------ as_tuple
+
+fn as_tuple(d: ref Dec) -> String {
+    let digits: Vec[String] = d.int.chars().map(|c| f"{c}").collect();
+    let ds = if digits.len() == 1 { f"({digits[0]},)" } else { f"({digits.join(", ")})" };
+    let exp = if d.kind == K_INF {
+        "'F'".to_string()
+    } else if d.kind == K_NAN {
+        "'n'".to_string()
+    } else if d.kind == K_SNAN {
+        "'N'".to_string()
+    } else {
+        f"{d.exp}"
+    };
+    f"DecimalTuple(sign={d.sign}, digits={ds}, exponent={exp})"
+}
+// ------------------------------------------------------------ the job runner
+
+// An operand: a Decimal from a string, an int (i:) or a float (f:).
+enum Operand {
+    D(Dec),
+    I(Big),
+    F(f64),
+}
+
+fn parse_int(s: ref String) -> Big {
+    let neg = s.starts_with("-");
+    let digits = if neg or s.starts_with("+") { tail_from(s, 1) } else { s.clone() };
+    let b = big_from_digits(digits);
+    if neg { big_neg(b) } else { b }
+}
+
+fn parse_float(s: ref String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(x) => x,
+        Err(_) => 0.0,
+    }
+}
+
+fn arg(a: ref String, ctx: mut ref Ctx) -> Result[Operand, String] {
+    if a.starts_with("i:") {
+        return Ok(Operand.I(parse_int(tail_from(a, 2))));
+    }
+    if a.starts_with("f:") {
+        return Ok(Operand.F(parse_float(tail_from(a, 2))));
+    }
+    Ok(Operand.D(dec_from_str(a, mut ctx)?))
+}
+
+// Python's repr of a float, for the error messages that print one.
+fn float_repr(x: f64) -> String {
+    f"{x}"
+}
+
+// The operand of an arithmetic operator: ints convert, floats do not.
+fn arith(y: ref Operand, sym: ref String) -> Result[Dec, String] {
+    match y {
+        Operand.D(d) => Ok(d.clone()),
+        Operand.I(n) => Ok(dec_big(n)),
+        Operand.F(_) => Err(f"TypeError: unsupported operand type(s) for {sym}: 'Decimal' and 'float'"),
+    }
+}
+
+// The operand of a comparison: a float converts exactly, and flags
+// FloatOperation (raising it, trap permitting, for the orderings).
+fn comparand(y: ref Operand, equality: bool, ctx: mut ref Ctx) -> Result[Dec, String] {
+    match y {
+        Operand.D(d) => Ok(d.clone()),
+        Operand.I(n) => Ok(dec_big(n)),
+        Operand.F(x) => {
+            if equality {
+                ctx.flags[S_FLOAT] = true;
+            } else {
+                raise(mut ctx, S_FLOAT, "strict semantics for mixing floats and Decimals are enabled")?;
+            }
+            Ok(from_float(x))
+        }
+    }
+}
+
+fn first(x: ref Operand) -> Dec {
+    match x {
+        Operand.D(d) => d.clone(),
+        Operand.I(n) => dec_big(n),
+        Operand.F(f) => from_float(f),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// One operation of a job: what it shows, or the exception it raised.
+fn run_op(name: ref String, a: ref Vec[String], ctx: mut ref Ctx) -> Result[String, String] {
+    if name == "new" {
+        let x = arg(a[0], mut ctx)?;
+        let d = match x {
+            Operand.D(d) => d,
+            Operand.I(n) => dec_big(n),
+            Operand.F(f) => dec_from_float(f, mut ctx)?,
+        };
+        return Ok(d.repr(ctx));
+    }
+    if name == "create" {
+        return Ok(create_decimal(a[0], mut ctx)?.repr(ctx));
+    }
+    if name == "fromfloat" {
+        return Ok(from_float(parse_float(a[0])).repr(ctx));
+    }
+    let x = first(arg(a[0], mut ctx)?);
+    let r = ctx.rounding;
+    if name == "tuple" {
+        return Ok(as_tuple(x));
+    }
+    if name == "ratio" {
+        let (n, d) = as_integer_ratio(x)?;
+        return Ok(f"({big_str(n)}, {big_str(d)})");
+    }
+    if name == "str" {
+        return Ok(repr_str(dec_str(x, false, ctx)));
+    }
+    if name == "eng" {
+        return Ok(repr_str(dec_str(x, true, ctx)));
+    }
+    if name == "neg" {
+        return Ok(dec_neg(x, mut ctx)?.repr(ctx));
+    }
+    if name == "pos" {
+        return Ok(dec_pos(x, mut ctx)?.repr(ctx));
+    }
+    if name == "round" {
+        if a.len() > 1 {
+            let n = big_to_i64(parse_int(a[1]));
+            return Ok(quantize(x, triple(0, "1", -n), r, mut ctx)?.repr(ctx));
+        }
+        return Ok(big_str(dec_round_int(x, R_HALF_EVEN)?));
+    }
+    if name == "floor" {
+        return Ok(big_str(dec_round_int(x, R_FLOOR)?));
+    }
+    if name == "ceil" {
+        return Ok(big_str(dec_round_int(x, R_CEILING)?));
+    }
+    if name == "int" {
+        return Ok(big_str(dec_to_int(x)?));
+    }
+    if name == "sqrt" {
+        return Ok(dec_sqrt(x, mut ctx)?.repr(ctx));
+    }
+    if name == "exp" {
+        return Ok(dec_exp(x, mut ctx)?.repr(ctx));
+    }
+    if name == "ln" {
+        return Ok(dec_ln(x, mut ctx)?.repr(ctx));
+    }
+    if name == "log10" {
+        return Ok(dec_log10(x, mut ctx)?.repr(ctx));
+    }
+    if name == "logb" {
+        return Ok(logb(x, mut ctx)?.repr(ctx));
+    }
+    if name == "nextplus" {
+        return Ok(next_plus(x, mut ctx)?.repr(ctx));
+    }
+    if name == "nextminus" {
+        return Ok(next_minus(x, mut ctx)?.repr(ctx));
+    }
+    if name == "class" {
+        return Ok(repr_str(number_class(x, ctx)));
+    }
+    if name == "isnormal" {
+        return Ok(py_bool(is_normal(x, ctx)));
+    }
+    if name == "issubnormal" {
+        return Ok(py_bool(is_subnormal(x, ctx)));
+    }
+    if name == "adjusted" {
+        return Ok(f"{x.adjusted()}");
+    }
+    if name == "invert" {
+        return Ok(logical_invert(x, mut ctx)?.repr(ctx));
+    }
+    if name == "copyabs" {
+        return Ok(x.copy_abs().repr(ctx));
+    }
+    if name == "copynegate" {
+        return Ok(x.copy_negate().repr(ctx));
+    }
+    if name == "normalize" {
+        return Ok(normalize(x, mut ctx)?.repr(ctx));
+    }
+    if name == "integral" {
+        return Ok(to_integral_value(x, r, mut ctx)?.repr(ctx));
+    }
+    if name == "integralx" {
+        return Ok(to_integral_exact(x, r, mut ctx)?.repr(ctx));
+    }
+    if name == "format" {
+        return Ok(repr_str(dec_format(x, a[1], ctx)?));
+    }
+    if name == "quantize" {
+        let e = first(arg(a[1], mut ctx)?);
+        let mode = if a.len() > 2 { rounding_index(a[2]) } else { r };
+        return Ok(quantize(x, e, mode, mut ctx)?.repr(ctx));
+    }
+    let y = arg(a[1], mut ctx)?;
+    if name == "add" {
+        return Ok(dec_add(x, arith(y, "+")?, mut ctx)?.repr(ctx));
+    }
+    if name == "sub" {
+        return Ok(dec_sub(x, arith(y, "-")?, mut ctx)?.repr(ctx));
+    }
+    if name == "mul" {
+        return Ok(dec_mul(x, arith(y, "*")?, mut ctx)?.repr(ctx));
+    }
+    if name == "div" {
+        return Ok(dec_div(x, arith(y, "/")?, mut ctx)?.repr(ctx));
+    }
+    if name == "floordiv" {
+        return Ok(dec_floordiv(x, arith(y, "//")?, mut ctx)?.repr(ctx));
+    }
+    if name == "mod" {
+        return Ok(dec_mod(x, arith(y, "%")?, mut ctx)?.repr(ctx));
+    }
+    if name == "divmod" {
+        let (q, m) = dec_divmod(x, arith(y, "divmod()")?, mut ctx)?;
+        return Ok(f"({q.repr(ctx)}, {m.repr(ctx)})");
+    }
+    if name == "pow" {
+        return Ok(dec_pow(x, arith(y, "** or pow()")?, mut ctx)?.repr(ctx));
+    }
+    if name == "eq" {
+        let b = comparand(y, true, mut ctx)?;
+        return Ok(py_bool(dec_eq(x, b, mut ctx)?));
+    }
+    if name == "lt" {
+        let b = comparand(y, false, mut ctx)?;
+        return Ok(py_bool(dec_order(x, b, "<", mut ctx)?));
+    }
+    if name == "ge" {
+        let b = comparand(y, false, mut ctx)?;
+        return Ok(py_bool(dec_order(x, b, ">=", mut ctx)?));
+    }
+    let b = arith(y, "a method")?;
+    if name == "remnear" {
+        return Ok(remainder_near(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "compare" {
+        return Ok(dec_compare(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "cmpsignal" {
+        return Ok(compare_signal(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "cmptotal" {
+        return Ok(compare_total(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "cmptotalmag" {
+        return Ok(compare_total_mag(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "max" {
+        return Ok(dec_maxmin(x, b, true, false, mut ctx)?.repr(ctx));
+    }
+    if name == "min" {
+        return Ok(dec_maxmin(x, b, false, false, mut ctx)?.repr(ctx));
+    }
+    if name == "maxmag" {
+        return Ok(dec_maxmin(x, b, true, true, mut ctx)?.repr(ctx));
+    }
+    if name == "minmag" {
+        return Ok(dec_maxmin(x, b, false, true, mut ctx)?.repr(ctx));
+    }
+    if name == "nexttoward" {
+        return Ok(next_toward(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "samequantum" {
+        return Ok(py_bool(same_quantum(x, b)));
+    }
+    if name == "scaleb" {
+        return Ok(scaleb(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "rotate" {
+        return Ok(rotate(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "shift" {
+        return Ok(shift(x, b, mut ctx)?.repr(ctx));
+    }
+    if name == "and" or name == "or" or name == "xor" {
+        return Ok(logical(x, b, name, mut ctx)?.repr(ctx));
+    }
+    if name == "copysign" {
+        return Ok(x.copy_sign(b).repr(ctx));
+    }
+    let c = arith(arg(a[2], mut ctx)?, "a method")?;
+    if name == "powmod" {
+        return Ok(power_modulo(x, b, c, mut ctx)?.repr(ctx));
+    }
+    if name == "fma" {
+        return Ok(dec_fma(x, b, c, mut ctx)?.repr(ctx));
+    }
+    Err(f"AssertionError: {name}")
+}
+
+fn flag_note(ctx: ref Ctx) -> String {
+    let names = ctx.set_flag_names(ctx.flags);
+    if names.is_empty() { String.new() } else { f" {{{names}}}" }
+}
+
+// A ctx line: a copy of the base context (default unless base= names
+// another) with the settings applied in order, checked the way
+// Context.__setattr__ checks them.
+fn make_context(spec: ref String) -> Result[Ctx, String] {
+    let words = if spec.is_empty() { Vec.new() } else { split_on(spec, " ") };
+    let mut c = default_context();
+    for w in words.iter() {
+        if w.starts_with("base=") {
+            let b = tail_from(w, 5);
+            c = if b == "basic" { basic_context() } else if b == "extended" { extended_context() } else { default_context() };
+        }
+    }
+    c.clear_flags();
+    for w in words.iter() {
+        let parts = split_on(w, "=");
+        let k = parts[0].clone();
+        let v = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+        if k == "base" {
+            continue;
+        }
+        if k == "traps" {
+            c.clear_traps();
+            if not v.is_empty() {
+                for t in split_on(v, ",").iter() {
+                    c.traps[signal_index(t)] = true;
+                }
+            }
+            continue;
+        }
+        if k == "rounding" {
+            let i = rounding_index(v);
+            if i < 0 {
+                return Err(f"TypeError: {v}: invalid rounding mode");
+            }
+            c.rounding = i;
+            continue;
+        }
+        let n = big_to_i64(parse_int(v));
+        if k == "prec" {
+            if n < 1 {
+                return Err(f"ValueError: prec must be in [1, inf]. got: {n}");
+            }
+            c.prec = n;
+        } else if k == "Emin" {
+            if n > 0 {
+                return Err(f"ValueError: Emin must be in [-inf, 0]. got: {n}");
+            }
+            c.emin = n;
+        } else if k == "Emax" {
+            if n < 0 {
+                return Err(f"ValueError: Emax must be in [0, inf]. got: {n}");
+            }
+            c.emax = n;
+        } else if k == "capitals" or k == "clamp" {
+            if n < 0 or n > 1 {
+                return Err(f"ValueError: {k} must be in [0, 1]. got {n}");
+            }
+            if k == "capitals" {
+                c.capitals = n;
+            } else {
+                c.clamp = n;
+            }
+        }
+    }
+    Ok(c)
+}
+
+fn run() -> Result[(), String] {
+    let t = read_file("data/jobs.tsv")?;
+    let mut ctx = default_context();
+    for line in t.lines() {
+        if py_strip(line.to_string()).is_empty() {
+            continue;
+        }
+        let a = split_on(line.to_string(), "\t");
+        let name = a[0].clone();
+        if name == "job" {
+            println(f"== {a[1]}");
+            ctx = default_context();
+            continue;
+        }
+        if name == "ctx" {
+            match make_context(a[1]) {
+                Ok(c) => {
+                    ctx = c;
+                    println(f"  ctx {a[1]} -> {ctx.repr()}");
+                }
+                Err(e) => println(f"  ctx {a[1]} -> {e}"),
+            }
+            continue;
+        }
+        if name == "ctxrepr" {
+            println(f"  {ctx.repr()}");
+            continue;
+        }
+        if is_program(name) {
+            run_program(name, a, mut ctx)?;
+            continue;
+        }
+        ctx.clear_flags();
+        let rest: Vec[String] = slice_strings(a, 1);
+        let v = match run_op(name, rest, mut ctx) {
+            Ok(s) => s,
+            Err(e) => e,
+        };
+        println(f"  {a.join(" ")} -> {v}{flag_note(ctx)}");
+    }
+    Ok(())
+}
+
+fn slice_strings(v: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..v.len() {
+        out.push(v[i].clone());
+    }
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn read_file(p: ref String) -> Result[String, String] {
+    match fs.read_to_string(p.clone()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"FileNotFoundError: [Errno 2] No such file or directory: {repr_str(p)}"),
+    }
+}
+
+fn dirname(p: ref String) -> String {
+    let v = chars(p);
+    let mut i = v.len() - 1;
+    while i >= 0 and v[i] != '/' {
+        i -= 1;
+    }
+    if i < 0 { String.new() } else { text(slice(v, 0, i)) }
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// ------------------------------------------------------------ the programs
+
+fn is_program(name: ref String) -> bool {
+    name == "invoices" or name == "fx" or name == "loans" or name == "bills" or name == "tax"
+        or name == "growth" or name == "stats"
+}
+
+fn run_program(name: ref String, a: ref Vec[String], ctx: mut ref Ctx) -> Result[(), String] {
+    if name == "invoices" {
+        return invoices(a[1], mut ctx);
+    }
+    if name == "fx" {
+        return fx(a[1], a[2], mut ctx);
+    }
+    if name == "loans" {
+        return loans(a[1], mut ctx);
+    }
+    if name == "bills" {
+        return bills(a[1], mut ctx);
+    }
+    if name == "tax" {
+        return tax(a[1], a[2], mut ctx);
+    }
+    if name == "growth" {
+        return growth(a[1], mut ctx);
+    }
+    stats(a[1], mut ctx)
+}
+
+fn read_rows(name: ref String, sep: ref String) -> Result[Vec[Vec[String]], String] {
+    let t = read_file(f"data/{name}")?;
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for line in t.split("\n") {
+        if py_strip(line.to_string()).is_empty() {
+            continue;
+        }
+        rows.push(split_on(line.to_string(), sep));
+    }
+    Ok(rows)
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    f"{repeat(" ", n - width(s))}{s}"
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    f"{s}{repeat(" ", n - width(s))}"
+}
+
+fn cent() -> Dec {
+    triple(0, "1", -2)
+}
+
+// Decimal(s), str(d) and format(d, spec) against a context
+fn dnum(s: ref String, ctx: mut ref Ctx) -> Result[Dec, String] {
+    dec_from_str(s, mut ctx)
+}
+
+fn dstr(d: ref Dec, ctx: ref Ctx) -> String {
+    dec_str(d, false, ctx)
+}
+
+fn fmt(d: ref Dec, spec: ref String, ctx: ref Ctx) -> Result[String, String] {
+    dec_format(d, spec, ctx)
+}
+
+// sum(xs): 0 + xs[0] + xs[1] + ...
+fn dsum(xs: ref Vec[Dec], ctx: mut ref Ctx) -> Result[Dec, String] {
+    let mut acc = dec_i(0);
+    for x in xs.iter() {
+        acc = dec_add(acc, x, mut ctx)?;
+    }
+    Ok(acc)
+}
+
+fn invoices(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    let rows = read_rows(path, ",")?;
+    let mut order: Vec[String] = Vec.new();
+    let mut groups: Vec[Vec[Vec[String]]] = Vec.new();
+    for k in 1..rows.len() {
+        let row = rows[k].clone();
+        let mut at = -1;
+        for i in 0..order.len() {
+            if order[i] == row[0] {
+                at = i;
+            }
+        }
+        if at < 0 {
+            order.push(row[0].clone());
+            groups.push(Vec.new());
+            at = order.len() - 1;
+        }
+        groups[at].push(row);
+    }
+    let mut grand = dec_i(0);
+    for g in 0..order.len() {
+        println(f"  {order[g]}");
+        let mut net_total = dec_i(0);
+        let mut vat_total = dec_i(0);
+        let mut rates: Vec[Dec] = Vec.new();
+        let mut nets: Vec[Dec] = Vec.new();
+        for row in groups[g].iter() {
+            let qty = dnum(row[2], mut ctx)?;
+            let price = dnum(row[3], mut ctx)?;
+            let rate = dnum(row[4], mut ctx)?;
+            let net = quantize(dec_mul(qty, price, mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+            let vat = quantize(dec_div(dec_mul(net, rate, mut ctx)?, dec_i(100), mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+            net_total = dec_add(net_total, net, mut ctx)?;
+            vat_total = dec_add(vat_total, vat, mut ctx)?;
+            let mut at = -1;
+            for i in 0..rates.len() {
+                if dec_cmp(rates[i], rate) == 0 {
+                    at = i;
+                }
+            }
+            if at < 0 {
+                rates.push(rate.clone());
+                nets.push(dec_add(dec_i(0), net, mut ctx)?);
+            } else {
+                nets[at] = dec_add(nets[at], net, mut ctx)?;
+            }
+            println(f"    {pad_right(row[1], 18)}{fmt(qty, ">6", ctx)?} x {fmt(price, ">9", ctx)?} = {fmt(net, ">10,.2f", ctx)?}  VAT {fmt(rate, ">3", ctx)?}% {fmt(vat, ">8,.2f", ctx)?}");
+        }
+        // sorted(by_rate.items())
+        let mut idx: Vec[i64] = (0..rates.len()).collect();
+        for i in 1..idx.len() {
+            let mut j = i;
+            while j > 0 and dec_cmp(rates[idx[j]], rates[idx[j - 1]]) < 0 {
+                let t = idx[j];
+                idx[j] = idx[j - 1];
+                idx[j - 1] = t;
+                j -= 1;
+            }
+        }
+        let mut on_totals = dec_i(0);
+        for i in idx.iter() {
+            let v = quantize(dec_div(dec_mul(nets[i], rates[i], mut ctx)?, dec_i(100), mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+            on_totals = dec_add(on_totals, v, mut ctx)?;
+        }
+        let gross = dec_add(net_total, vat_total, mut ctx)?;
+        grand = dec_add(grand, gross, mut ctx)?;
+        println(f"    net {fmt(net_total, ",.2f", ctx)?}  vat {fmt(vat_total, ",.2f", ctx)?}  gross {fmt(gross, ",.2f", ctx)?}");
+        let diff = dec_sub(on_totals, vat_total, mut ctx)?;
+        println(f"    vat by rate {fmt(on_totals, ",.2f", ctx)?}  difference {fmt(diff, "+.2f", ctx)?}");
+    }
+    println(f"  all invoices {fmt(grand, ",.2f", ctx)?}");
+    Ok(())
+}
+
+fn find_cur(curs: ref Vec[String], c: ref String) -> i64 {
+    let mut at = 0;
+    for i in 0..curs.len() {
+        if curs[i] == c {
+            at = i;
+        }
+    }
+    at
+}
+
+fn fx(rates_path: ref String, conv_path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    let mut curs: Vec[String] = Vec.new();
+    let mut rates: Vec[Dec] = Vec.new();
+    let mut places: Vec[Dec] = Vec.new();
+    for row in read_rows(rates_path, "\t")?.iter() {
+        curs.push(row[0].clone());
+        rates.push(dnum(row[1], mut ctx)?);
+        let p = big_to_i64(parse_int(row[2]));
+        places.push(dec_pow(dec_i(10), dec_i(-p), mut ctx)?);
+    }
+    for row in read_rows(conv_path, "\t")?.iter() {
+        let a = dnum(row[0], mut ctx)?;
+        let src = find_cur(curs, row[1]);
+        let dst = find_cur(curs, row[2]);
+        let usd = dec_div(a, rates[src], mut ctx)?;
+        let out = quantize(dec_mul(usd, rates[dst], mut ctx)?, places[dst], ctx.rounding, mut ctx)?;
+        let mut local = ctx.copy();
+        local.prec = 10;
+        let cross = dec_div(rates[dst], rates[src], mut local)?;
+        let exact = dec_mul(usd, rates[dst], mut ctx)?;
+        println(f"  {pad_left(row[0], 10)} {row[1]} = {dstr(out, ctx)} {row[2]}  (rate {dstr(cross, ctx)}, exact {dstr(exact, ctx)})");
+    }
+    let mut local = ctx.copy();
+    local.prec = 6;
+    local.traps[S_INEXACT] = true;
+    let gbp = find_cur(curs, "GBP");
+    match dec_div(dec_i(1), rates[gbp], mut local) {
+        Ok(v) => println(f"  strict {dstr(v, local)}"),
+        Err(e) => println(f"  strict GBP rate: {e}"),
+    }
+    Ok(())
+}
+
+fn loans(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    for row in read_rows(path, "\t")?.iter() {
+        let p = dnum(row[1], mut ctx)?;
+        let n = big_to_i64(parse_int(row[3]));
+        let r = dec_div(dec_div(dnum(row[2], mut ctx)?, dec_i(100), mut ctx)?, dec_i(12), mut ctx)?;
+        let payment = if r.truth() {
+            let grown = dec_pow(dec_add(r, dec_i(1), mut ctx)?, dec_i(-n), mut ctx)?;
+            let den = dec_sub(dec_i(1), grown, mut ctx)?;
+            quantize(dec_div(dec_mul(p, r, mut ctx)?, den, mut ctx)?, cent(), R_HALF_UP, mut ctx)?
+        } else {
+            quantize(dec_div(p, dec_i(n), mut ctx)?, cent(), R_HALF_UP, mut ctx)?
+        };
+        println(f"  {row[0]}: {fmt(p, ",.2f", ctx)?} at {row[2]}% over {n} months, payment {fmt(payment, ",.2f", ctx)?}");
+        let mut balance = p.clone();
+        let mut paid_interest = dec_i(0);
+        let mut pay = payment.clone();
+        for m in 1..(n + 1) {
+            let interest = quantize(dec_mul(balance, r, mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+            pay = if m < n { payment.clone() } else { dec_add(balance, interest, mut ctx)? };
+            balance = dec_sub(dec_add(balance, interest, mut ctx)?, pay, mut ctx)?;
+            paid_interest = dec_add(paid_interest, interest, mut ctx)?;
+            if m <= 3 or m == n {
+                let princ = dec_sub(pay, interest, mut ctx)?;
+                println(f"    {pad_left(f"{m}", 3)} interest {fmt(interest, ">9,.2f", ctx)?} principal {fmt(princ, ">10,.2f", ctx)?} balance {fmt(balance, ">12,.2f", ctx)?}");
+            }
+        }
+        println(f"    total interest {fmt(paid_interest, ",.2f", ctx)?}, last payment {fmt(pay, ",.2f", ctx)?}");
+    }
+    Ok(())
+}
+
+fn bills(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    for row in read_rows(path, "\t")?.iter() {
+        let s = dnum(row[1], mut ctx)?;
+        let t = quantize(dec_div(dec_mul(s, dnum(row[2], mut ctx)?, mut ctx)?, dec_i(100), mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+        let g = quantize(dec_div(dec_mul(s, dnum(row[3], mut ctx)?, mut ctx)?, dec_i(100), mut ctx)?, cent(), R_HALF_UP, mut ctx)?;
+        let total = dec_add(dec_add(s, t, mut ctx)?, g, mut ctx)?;
+        let k = big_to_i64(parse_int(row[4]));
+        let share = quantize(dec_div(total, dec_i(k), mut ctx)?, cent(), R_DOWN, mut ctx)?;
+        let left = dec_sub(total, dec_mul(share, dec_i(k), mut ctx)?, mut ctx)?;
+        let extra = big_to_i64(dec_to_int(dec_div(left, cent(), mut ctx)?)?);
+        let mut shares: Vec[Dec] = Vec.new();
+        for i in 0..k {
+            shares.push(if i < extra { dec_add(share, cent(), mut ctx)? } else { share.clone() });
+        }
+        println(f"  {row[0]}: {dstr(s, ctx)} + tax {dstr(t, ctx)} + tip {dstr(g, ctx)} = {dstr(total, ctx)} for {k}");
+        let parts: Vec[String] = shares.iter().map(|x| dstr(x, ctx)).collect();
+        let sum = dsum(shares, mut ctx)?;
+        println(f"    {parts.join(" ")} (sum {dstr(sum, ctx)})");
+    }
+    Ok(())
+}
+
+fn tax(brackets_path: ref String, incomes_path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    let mut los: Vec[Dec] = Vec.new();
+    let mut rates: Vec[Dec] = Vec.new();
+    for row in read_rows(brackets_path, "\t")?.iter() {
+        los.push(dnum(row[0], mut ctx)?);
+        rates.push(dec_div(dnum(row[1], mut ctx)?, dec_i(100), mut ctx)?);
+    }
+    for row in read_rows(incomes_path, "\t")?.iter() {
+        let income = dnum(row[0], mut ctx)?;
+        let mut owed = dec_i(0);
+        let mut marginal = rates[0].clone();
+        for i in 0..los.len() {
+            if dec_order(income, los[i], "<=", mut ctx)? {
+                break;
+            }
+            let top = if i + 1 >= los.len() or dec_order(income, los[i + 1], "<", mut ctx)? {
+                income.clone()
+            } else {
+                los[i + 1].clone()
+            };
+            owed = dec_add(owed, dec_mul(dec_sub(top, los[i], mut ctx)?, rates[i], mut ctx)?, mut ctx)?;
+            marginal = rates[i].clone();
+        }
+        owed = quantize(owed, cent(), R_HALF_EVEN, mut ctx)?;
+        let effective = dec_div(owed, income, mut ctx)?;
+        println(f"  {fmt(income, ">14,.2f", ctx)?} tax {fmt(owed, ">12,.2f", ctx)?} effective {fmt(effective, ".2%", ctx)?} marginal {fmt(marginal, ".0%", ctx)?}");
+    }
+    Ok(())
+}
+
+fn growth(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    let mut c = ctx.copy();
+    c.prec = 12;
+    for row in read_rows(path, "\t")?.iter() {
+        let principal = dnum(row[0], mut c)?;
+        let r = dec_div(dnum(row[1], mut c)?, dec_i(100), mut c)?;
+        let y = big_to_i64(parse_int(row[2]));
+        let one_r = dec_add(r, dec_i(1), mut c)?;
+        let yearly = dec_mul(principal, dec_pow(one_r, dec_i(y), mut c)?, mut c)?;
+        let continuous = dec_mul(principal, dec_exp(dec_mul(r, dec_i(y), mut c)?, mut c)?, mut c)?;
+        let doubling = dec_div(dec_ln(dec_i(2), mut c)?, dec_ln(one_r, mut c)?, mut c)?;
+        println(f"  {dstr(principal, c)} at {row[1]}% for {y} years: yearly {fmt(yearly, ".2f", c)?} continuous {fmt(continuous, ".2f", c)?}");
+        let lg = dec_log10(yearly, mut c)?;
+        println(f"    doubles in {fmt(doubling, ".3f", c)?} years, log10 of final {fmt(lg, ".6f", c)?}, {dec_str(yearly, true, c)}");
+    }
+    Ok(())
+}
+
+fn stats(path: ref String, ctx: mut ref Ctx) -> Result[(), String] {
+    let mut prices: Vec[Dec] = Vec.new();
+    for row in read_rows(path, "\t")?.iter() {
+        prices.push(dnum(row[0], mut ctx)?);
+    }
+    let mut c = ctx.copy();
+    c.prec = 30;
+    let n = prices.len();
+    let mean = dec_div(dsum(prices, mut c)?, dec_i(n), mut c)?;
+    // sorted(), which is stable
+    let mut srt = prices.clone();
+    for i in 1..srt.len() {
+        let mut j = i;
+        while j > 0 and dec_order(srt[j], srt[j - 1], "<", mut c)? {
+            let t = srt[j].clone();
+            srt[j] = srt[j - 1].clone();
+            srt[j - 1] = t;
+            j -= 1;
+        }
+    }
+    let median = if n % 2 == 0 {
+        dec_div(dec_add(srt[n / 2 - 1], srt[n / 2], mut c)?, dec_i(2), mut c)?
+    } else {
+        srt[n / 2].clone()
+    };
+    let mut squares: Vec[Dec] = Vec.new();
+    for x in prices.iter() {
+        squares.push(dec_pow(dec_sub(x, mean, mut c)?, dec_i(2), mut c)?);
+    }
+    let var = dec_div(dsum(squares, mut c)?, dec_i(n), mut c)?;
+    let sd = dec_sqrt(var, mut c)?;
+    let mut returns: Vec[Dec] = Vec.new();
+    for i in 1..n {
+        returns.push(dec_ln(dec_div(prices[i], prices[i - 1], mut c)?, mut c)?);
+    }
+    let total = dsum(returns, mut c)?;
+    println(f"  n {n} mean {dstr(mean, ctx)} median {dstr(median, ctx)}");
+    println(f"  variance {dstr(var, ctx)}");
+    let q = quantize(sd, triple(0, "1", -4), ctx.rounding, mut ctx)?;
+    println(f"  stdev {dstr(sd, ctx)} ~ {dstr(q, ctx)}");
+    let whole = dec_ln(dec_div(prices[n - 1], prices[0], mut ctx)?, mut ctx)?;
+    println(f"  log return {fmt(total, ".10f", ctx)?} = ln({dstr(prices[n - 1], ctx)}/{dstr(prices[0], ctx)}) {fmt(whole, ".10f", ctx)?}");
+    // max() keeps the first of equals, testing item > best; min() item < best
+    let mut best = returns[0].clone();
+    let mut worst = returns[0].clone();
+    for i in 1..returns.len() {
+        if dec_order(returns[i], best, ">", mut ctx)? {
+            best = returns[i].clone();
+        }
+        if dec_order(returns[i], worst, "<", mut ctx)? {
+            worst = returns[i].clone();
+        }
+    }
+    println(f"  best day {fmt(best, ".6f", ctx)?} worst day {fmt(worst, ".6f", ctx)?}");
+    Ok(())
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("team lunch\t187.40\t8.875\t18\t7\n");
+    t.push_str("birthday\t432.15\t8.875\t20\t9\n");
+    t.push_str("coffee\t14.85\t0\t15\t4\n");
+    t.push_str("pizza\t60\t0\t0\t3\n");
+    v.push(DataFile { path: "bills.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("0\t10\n");
+    t.push_str("11600\t12\n");
+    t.push_str("47150\t22\n");
+    t.push_str("100525\t24\n");
+    t.push_str("191950\t32\n");
+    t.push_str("243725\t35\n");
+    t.push_str("609350\t37\n");
+    v.push(DataFile { path: "brackets.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("100.00\tUSD\tEUR\n");
+    t.push_str("2500\tEUR\tJPY\n");
+    t.push_str("19.99\tGBP\tUSD\n");
+    t.push_str("1000000\tJPY\tINR\n");
+    t.push_str("75.125\tBHD\tCHF\n");
+    t.push_str("0.01\tUSD\tJPY\n");
+    t.push_str("12.345\tCHF\tGBP\n");
+    t.push_str("9.995\tUSD\tEUR\n");
+    v.push(DataFile { path: "conversions.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("1000\t5\t10\n");
+    t.push_str("2500.50\t3.25\t30\n");
+    t.push_str("100\t7\t72\n");
+    t.push_str("1\t100\t1\n");
+    v.push(DataFile { path: "growth.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("9500\n");
+    t.push_str("11600\n");
+    t.push_str("58250.75\n");
+    t.push_str("150000\n");
+    t.push_str("243725\n");
+    t.push_str("1000000\n");
+    v.push(DataFile { path: "incomes.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("invoice,item,qty,unit_price,vat_rate\n");
+    t.push_str("INV-1001,Desk lamp,2,34.99,20\n");
+    t.push_str("INV-1001,LED bulb,12,2.49,20\n");
+    t.push_str("INV-1001,Shipping,1,5.95,0\n");
+    t.push_str("INV-1002,Notebook,25,1.15,5\n");
+    t.push_str("INV-1002,Fountain pen,3,18.333,20\n");
+    t.push_str("INV-1002,Ink cartridge,10,0.875,20\n");
+    t.push_str("INV-1003,Consulting hours,7.5,120.00,20\n");
+    t.push_str("INV-1003,Travel,1,86.415,0\n");
+    t.push_str("INV-1003,Discount,1,-50.00,20\n");
+    t.push_str("INV-1004,Paper (ream),40,4.125,5\n");
+    t.push_str("INV-1004,Toner,2,1E2,20\n");
+    v.push(DataFile { path: "invoices.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("job\tconstruct from strings\n");
+    t.push_str("new\t3.14\n");
+    t.push_str("new\t  -0.000  \n");
+    t.push_str("new\t1_000.5\n");
+    t.push_str("new\t1e+3\n");
+    t.push_str("new\t-1E-3\n");
+    t.push_str("new\t.5\n");
+    t.push_str("new\t5.\n");
+    t.push_str("new\t+12.3400\n");
+    t.push_str("new\tInf\n");
+    t.push_str("new\t-infinity\n");
+    t.push_str("new\tnan\n");
+    t.push_str("new\tsNaN123\n");
+    t.push_str("new\t-NaN0045\n");
+    t.push_str("new\t0E-1000\n");
+    t.push_str("new\t1.5e999999\n");
+    t.push_str("new\tabc\n");
+    t.push_str("new\t1.2.3\n");
+    t.push_str("new\t\n");
+    t.push_str("new\t1 000\n");
+    t.push_str("new\t١٢٣\n");
+    t.push_str("job\tconversion syntax with the trap off\n");
+    t.push_str("ctx\ttraps=\n");
+    t.push_str("new\tabc\n");
+    t.push_str("new\t12e\n");
+    t.push_str("add\t1\tfoo\n");
+    t.push_str("create\t 7 \n");
+    t.push_str("create\t1_0\n");
+    t.push_str("create\tNaN12345678901234567890123456789\n");
+    t.push_str("job\tints, floats and tuples\n");
+    t.push_str("new\ti:12345678901234567890\n");
+    t.push_str("new\ti:-7\n");
+    t.push_str("new\tf:0.1\n");
+    t.push_str("new\tf:-0.0\n");
+    t.push_str("new\tf:1e300\n");
+    t.push_str("new\tf:inf\n");
+    t.push_str("new\tf:nan\n");
+    t.push_str("fromfloat\t2.5\n");
+    t.push_str("fromfloat\t1.1\n");
+    t.push_str("fromfloat\t1e-7\n");
+    t.push_str("tuple\t3.14\n");
+    t.push_str("tuple\t-0\n");
+    t.push_str("tuple\tInf\n");
+    t.push_str("tuple\tsNaN7\n");
+    t.push_str("tuple\t1.500E+8\n");
+    t.push_str("ratio\t3.14\n");
+    t.push_str("ratio\t-123e5\n");
+    t.push_str("ratio\t0.00\n");
+    t.push_str("ratio\t0.0625\n");
+    t.push_str("ratio\tInf\n");
+    t.push_str("ratio\tNaN\n");
+    t.push_str("job\tstr, repr and to_eng_string\n");
+    t.push_str("str\t123E+1\n");
+    t.push_str("str\t0.000001\n");
+    t.push_str("str\t0.0000001\n");
+    t.push_str("str\t-1.20E-7\n");
+    t.push_str("str\t1E+2\n");
+    t.push_str("str\t0E-8\n");
+    t.push_str("eng\t123E+1\n");
+    t.push_str("eng\t1E+7\n");
+    t.push_str("eng\t0.0000001\n");
+    t.push_str("eng\t0E-8\n");
+    t.push_str("eng\t0E+1\n");
+    t.push_str("eng\t-12.3E-10\n");
+    t.push_str("eng\t5E+2\n");
+    t.push_str("ctx\tcapitals=0\n");
+    t.push_str("str\t1E+5\n");
+    t.push_str("eng\t1E+5\n");
+    t.push_str("job\taddition and subtraction\n");
+    t.push_str("add\t1.1\t2.2\n");
+    t.push_str("add\t1.30\t1.20\n");
+    t.push_str("add\t1E+2\t1E-2\n");
+    t.push_str("add\t-5\t5\n");
+    t.push_str("add\t0.00\t-0\n");
+    t.push_str("sub\t1.3\t1.07\n");
+    t.push_str("sub\t1.3\t2.07\n");
+    t.push_str("add\t9999999999999999999999999999\t1\n");
+    t.push_str("add\t1E+50\t1\n");
+    t.push_str("add\t1\t1E-40\n");
+    t.push_str("add\tInf\t-Inf\n");
+    t.push_str("add\tInf\t5\n");
+    t.push_str("add\tNaN3\t1\n");
+    t.push_str("sub\t-Inf\t-Inf\n");
+    t.push_str("add\t1\ti:41\n");
+    t.push_str("add\t1\tf:0.5\n");
+    t.push_str("ctx\trounding=ROUND_FLOOR\n");
+    t.push_str("add\t5\t-5\n");
+    t.push_str("sub\t0\t0\n");
+    t.push_str("neg\t0\n");
+    t.push_str("pos\t-0\n");
+    t.push_str("job\tmultiplication and division\n");
+    t.push_str("mul\t1.20\t3\n");
+    t.push_str("mul\t-7\t1E-3\n");
+    t.push_str("mul\t0\t-Inf\n");
+    t.push_str("mul\tInf\t-2\n");
+    t.push_str("mul\t1.5\t1.5\n");
+    t.push_str("div\t1\t3\n");
+    t.push_str("div\t2\t3\n");
+    t.push_str("div\t1\t4\n");
+    t.push_str("div\t12\t12\n");
+    t.push_str("div\t8.00\t2\n");
+    t.push_str("div\t2.400\t2.0\n");
+    t.push_str("div\t1000\t1E-3\n");
+    t.push_str("div\t1\t0\n");
+    t.push_str("div\t0\t0\n");
+    t.push_str("div\t-0\t5\n");
+    t.push_str("div\tInf\tInf\n");
+    t.push_str("div\t5\tInf\n");
+    t.push_str("div\t2.40E+6\t2\n");
+    t.push_str("div\t1\ti:7\n");
+    t.push_str("job\tinteger division and remainders\n");
+    t.push_str("floordiv\t7\t2\n");
+    t.push_str("floordiv\t-7\t2\n");
+    t.push_str("mod\t-7\t2\n");
+    t.push_str("mod\t7\t-2\n");
+    t.push_str("mod\t10\t3.3\n");
+    t.push_str("divmod\t7.5\t2\n");
+    t.push_str("divmod\t-7.5\t2\n");
+    t.push_str("divmod\t1\t0\n");
+    t.push_str("divmod\tInf\t3\n");
+    t.push_str("floordiv\t1E+40\t3\n");
+    t.push_str("remnear\t10\t6\n");
+    t.push_str("remnear\t2.1\t3\n");
+    t.push_str("remnear\t-10\t3\n");
+    t.push_str("remnear\t3.6\t1.3\n");
+    t.push_str("remnear\t10\t0.3\n");
+    t.push_str("remnear\t1E+40\t3\n");
+    t.push_str("mod\t5\t0\n");
+    t.push_str("floordiv\t0\t0\n");
+    t.push_str("job\tpowers\n");
+    t.push_str("pow\t2\t10\n");
+    t.push_str("pow\t2\t-2\n");
+    t.push_str("pow\t10\t-3\n");
+    t.push_str("pow\t1.1\t2\n");
+    t.push_str("pow\t-2\t3\n");
+    t.push_str("pow\t-2\t-3\n");
+    t.push_str("pow\t4\t0.5\n");
+    t.push_str("pow\t2\t0.5\n");
+    t.push_str("pow\t8\t1/3\n");
+    t.push_str("pow\t8\t0.333\n");
+    t.push_str("pow\t1.0\t5\n");
+    t.push_str("pow\t1.00\t-3\n");
+    t.push_str("pow\t0\t0\n");
+    t.push_str("pow\t0\t-1\n");
+    t.push_str("pow\t-0\t-1\n");
+    t.push_str("pow\tInf\t-1\n");
+    t.push_str("pow\t-1.5\t0.5\n");
+    t.push_str("pow\t1.0001\t10000\n");
+    t.push_str("pow\t0.9\t100\n");
+    t.push_str("pow\t10\t1000000\n");
+    t.push_str("pow\t3\t-0.75\n");
+    t.push_str("pow\t25\t-0.5\n");
+    t.push_str("pow\t1E-5\t2.5\n");
+    t.push_str("powmod\t3\t200\t7\n");
+    t.push_str("powmod\t-2\t3\t5\n");
+    t.push_str("powmod\t2.5\t2\t3\n");
+    t.push_str("powmod\t2\t-1\t3\n");
+    t.push_str("job\tquantize and rounding modes\n");
+    t.push_str("quantize\t1.41421356\t0.001\n");
+    t.push_str("quantize\t2.5\t1\n");
+    t.push_str("quantize\t3.5\t1\n");
+    t.push_str("quantize\t-2.5\t1\n");
+    t.push_str("quantize\t1.005\t0.01\tROUND_HALF_UP\n");
+    t.push_str("quantize\t1.005\t0.01\tROUND_HALF_DOWN\n");
+    t.push_str("quantize\t1.015\t0.01\tROUND_HALF_EVEN\n");
+    t.push_str("quantize\t1.001\t0.01\tROUND_UP\n");
+    t.push_str("quantize\t-1.009\t0.01\tROUND_DOWN\n");
+    t.push_str("quantize\t-1.001\t0.01\tROUND_FLOOR\n");
+    t.push_str("quantize\t-1.009\t0.01\tROUND_CEILING\n");
+    t.push_str("quantize\t1.04\t0.1\tROUND_05UP\n");
+    t.push_str("quantize\t1.06\t0.1\tROUND_05UP\n");
+    t.push_str("quantize\t1.51\t0.1\tROUND_05UP\n");
+    t.push_str("quantize\t123.456\t1E+1\n");
+    t.push_str("quantize\t0\t1E-5\n");
+    t.push_str("quantize\t1E+30\t0.01\n");
+    t.push_str("quantize\tInf\t1\n");
+    t.push_str("quantize\tInf\t-Inf\n");
+    t.push_str("quantize\t1\tNaN\n");
+    t.push_str("quantize\t5\t1E+1000000\n");
+    t.push_str("round\t2.675\t2\n");
+    t.push_str("round\t2.5\n");
+    t.push_str("round\t-0.5\n");
+    t.push_str("round\t123.456\t-1\n");
+    t.push_str("round\tInf\n");
+    t.push_str("round\tNaN\n");
+    t.push_str("floor\t-1.5\n");
+    t.push_str("ceil\t-1.5\n");
+    t.push_str("int\t-9.99\n");
+    t.push_str("int\t1E+3\n");
+    t.push_str("int\tInf\n");
+    t.push_str("int\tNaN\n");
+    t.push_str("job\trounding to the context\n");
+    t.push_str("ctx\tprec=5\n");
+    t.push_str("pos\t1.23456789\n");
+    t.push_str("pos\t99999.5\n");
+    t.push_str("pos\t-99999.5\n");
+    t.push_str("add\t12345\t0.5\n");
+    t.push_str("mul\t123\t456\n");
+    t.push_str("ctx\tprec=5 rounding=ROUND_DOWN\n");
+    t.push_str("pos\t1.23459\n");
+    t.push_str("ctx\tprec=5 rounding=ROUND_UP\n");
+    t.push_str("pos\t1.23451\n");
+    t.push_str("ctx\tprec=5 rounding=ROUND_CEILING\n");
+    t.push_str("pos\t-1.23459\n");
+    t.push_str("ctx\tprec=5 rounding=ROUND_05UP\n");
+    t.push_str("pos\t1.23409\n");
+    t.push_str("pos\t1.23459\n");
+    t.push_str("ctx\tprec=3 rounding=ROUND_HALF_DOWN\n");
+    t.push_str("pos\t2.345\n");
+    t.push_str("pos\t2.3451\n");
+    t.push_str("job\toverflow, underflow and clamping\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 traps=\n");
+    t.push_str("mul\t1E+99\t10\n");
+    t.push_str("pos\t9.99999E+99\n");
+    t.push_str("mul\t1E-99\t1E-3\n");
+    t.push_str("div\t1E-99\t1E+10\n");
+    t.push_str("pos\t1.2345E-102\n");
+    t.push_str("pos\t0E-200\n");
+    t.push_str("pos\t0E+200\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 traps= rounding=ROUND_DOWN\n");
+    t.push_str("mul\t1E+99\t10\n");
+    t.push_str("mul\t-1E+99\t10\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 traps= rounding=ROUND_FLOOR\n");
+    t.push_str("mul\t1E+99\t10\n");
+    t.push_str("mul\t-1E+99\t10\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 clamp=1 traps=\n");
+    t.push_str("pos\t1E+99\n");
+    t.push_str("pos\t1.2E+97\n");
+    t.push_str("normalize\t1.20000E+98\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99\n");
+    t.push_str("mul\t1E+99\t10\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 traps=Underflow,Inexact\n");
+    t.push_str("div\t1\t3\n");
+    t.push_str("mul\t1E-99\t1E-3\n");
+    t.push_str("job\tsquare roots, exp and logs\n");
+    t.push_str("sqrt\t2\n");
+    t.push_str("sqrt\t100\n");
+    t.push_str("sqrt\t0.0100\n");
+    t.push_str("sqrt\t1E-7\n");
+    t.push_str("sqrt\t-1\n");
+    t.push_str("sqrt\t-0\n");
+    t.push_str("sqrt\tInf\n");
+    t.push_str("sqrt\t1.21\n");
+    t.push_str("sqrt\t9E+5\n");
+    t.push_str("exp\t1\n");
+    t.push_str("exp\t0\n");
+    t.push_str("exp\t-1\n");
+    t.push_str("exp\t2.302585092994045684017991455\n");
+    t.push_str("exp\t100\n");
+    t.push_str("exp\t-Inf\n");
+    t.push_str("exp\t1E-30\n");
+    t.push_str("exp\t1E+10\n");
+    t.push_str("ln\t10\n");
+    t.push_str("ln\t2\n");
+    t.push_str("ln\t0.5\n");
+    t.push_str("ln\t1\n");
+    t.push_str("ln\t0\n");
+    t.push_str("ln\t-1\n");
+    t.push_str("ln\t1E+100\n");
+    t.push_str("log10\t1000\n");
+    t.push_str("log10\t2\n");
+    t.push_str("log10\t0.001\n");
+    t.push_str("log10\t0.002\n");
+    t.push_str("log10\t1.0000001\n");
+    t.push_str("logb\t250\n");
+    t.push_str("logb\t0\n");
+    t.push_str("logb\t-0.001\n");
+    t.push_str("ctx\tprec=50\n");
+    t.push_str("sqrt\t2\n");
+    t.push_str("ln\t3\n");
+    t.push_str("exp\t0.5\n");
+    t.push_str("ctx\tprec=6\n");
+    t.push_str("sqrt\t2\n");
+    t.push_str("exp\t10\n");
+    t.push_str("ln\t1.000001\n");
+    t.push_str("log10\t31622.8\n");
+    t.push_str("job\tcomparisons\n");
+    t.push_str("eq\t1.0\t1\n");
+    t.push_str("eq\t0\t-0\n");
+    t.push_str("eq\tNaN\tNaN\n");
+    t.push_str("eq\tsNaN\t1\n");
+    t.push_str("lt\t1.1\t1.10001\n");
+    t.push_str("lt\tNaN\t1\n");
+    t.push_str("ge\t-Inf\t-1E+999\n");
+    t.push_str("lt\t1.1\tf:1.1\n");
+    t.push_str("eq\t0.5\tf:0.5\n");
+    t.push_str("eq\t2\ti:2\n");
+    t.push_str("compare\t2.1\t3\n");
+    t.push_str("compare\t2.1\t2.10\n");
+    t.push_str("compare\tNaN\t1\n");
+    t.push_str("cmpsignal\tNaN\t1\n");
+    t.push_str("cmptotal\t12.30\t12.3\n");
+    t.push_str("cmptotal\t-0\t0\n");
+    t.push_str("cmptotal\tNaN\tInf\n");
+    t.push_str("cmptotal\tsNaN2\tNaN1\n");
+    t.push_str("cmptotal\t-NaN\t-sNaN\n");
+    t.push_str("cmptotalmag\t-3\t2\n");
+    t.push_str("max\t1\t2\n");
+    t.push_str("max\t1.0\t1\n");
+    t.push_str("max\t-0\t0\n");
+    t.push_str("max\tNaN\t3\n");
+    t.push_str("min\t1.00\t1.0\n");
+    t.push_str("min\tsNaN\t3\n");
+    t.push_str("maxmag\t-3\t2\n");
+    t.push_str("minmag\t-3\t2\n");
+    t.push_str("minmag\t-2\t2\n");
+    t.push_str("job\tnext values and classes\n");
+    t.push_str("nextplus\t1\n");
+    t.push_str("nextplus\t-1E-1000007\n");
+    t.push_str("nextminus\t1\n");
+    t.push_str("nextminus\tInf\n");
+    t.push_str("nextplus\t-Inf\n");
+    t.push_str("nexttoward\t1\t2\n");
+    t.push_str("nexttoward\t1\t0\n");
+    t.push_str("nexttoward\t1\t1.0\n");
+    t.push_str("nexttoward\t-1\t-1\n");
+    t.push_str("ctx\tprec=5 Emax=99 Emin=-99 traps=\n");
+    t.push_str("nexttoward\t9.9999E+99\tInf\n");
+    t.push_str("nexttoward\t1E-103\t0\n");
+    t.push_str("nextplus\t9.9999E+99\n");
+    t.push_str("class\t0\n");
+    t.push_str("class\t-0\n");
+    t.push_str("class\t1E-100\n");
+    t.push_str("class\t-1E-101\n");
+    t.push_str("class\t2.50\n");
+    t.push_str("class\t-Inf\n");
+    t.push_str("class\tNaN\n");
+    t.push_str("class\tsNaN\n");
+    t.push_str("isnormal\t1E-99\n");
+    t.push_str("issubnormal\t1E-100\n");
+    t.push_str("adjusted\t123.45\n");
+    t.push_str("adjusted\t0.001\n");
+    t.push_str("adjusted\tInf\n");
+    t.push_str("samequantum\t2.17\t0.001\n");
+    t.push_str("samequantum\t2.17\t0.01\n");
+    t.push_str("samequantum\tInf\t-Inf\n");
+    t.push_str("samequantum\tNaN\t1\n");
+    t.push_str("job\tdigit operations\n");
+    t.push_str("ctx\tprec=9\n");
+    t.push_str("scaleb\t7.50\t-2\n");
+    t.push_str("scaleb\t7.50\t3\n");
+    t.push_str("scaleb\t1\t1.5\n");
+    t.push_str("rotate\t34\t8\n");
+    t.push_str("rotate\t12\t9\n");
+    t.push_str("rotate\t123456789\t-2\n");
+    t.push_str("rotate\t123456789\t10\n");
+    t.push_str("shift\t34\t8\n");
+    t.push_str("shift\t12\t9\n");
+    t.push_str("shift\t123456789\t-2\n");
+    t.push_str("shift\t123456789\t+2\n");
+    t.push_str("and\t1101\t1011\n");
+    t.push_str("or\t1101\t1011\n");
+    t.push_str("xor\t1101\t1011\n");
+    t.push_str("invert\t101\n");
+    t.push_str("invert\t0\n");
+    t.push_str("and\t12\t1\n");
+    t.push_str("copysign\t1.50\t-7\n");
+    t.push_str("copyabs\t-Inf\n");
+    t.push_str("copynegate\t0\n");
+    t.push_str("normalize\t120.000\n");
+    t.push_str("normalize\t0.00\n");
+    t.push_str("normalize\t-1E+1\n");
+    t.push_str("integral\t2.5\n");
+    t.push_str("integral\t-1.7\n");
+    t.push_str("integralx\t2.5\n");
+    t.push_str("integralx\t7.0\n");
+    t.push_str("integralx\t1E+3\n");
+    t.push_str("fma\t2\t3\t4\n");
+    t.push_str("fma\t1E+27\t1E+27\t-1E+54\n");
+    t.push_str("fma\tInf\t0\t1\n");
+    t.push_str("job\tformatting\n");
+    t.push_str("format\t1234567.891\t,.2f\n");
+    t.push_str("format\t1234567.891\t_.1f\n");
+    t.push_str("format\t-0.000\t.2f\n");
+    t.push_str("format\t-0.000\tz.2f\n");
+    t.push_str("format\t0.5\t.0%\n");
+    t.push_str("format\t0.12345\t.1%\n");
+    t.push_str("format\t123.456\te\n");
+    t.push_str("format\t123.456\t.2E\n");
+    t.push_str("format\t0.000012\tg\n");
+    t.push_str("format\t12345678\t.3g\n");
+    t.push_str("format\t1.5\t#.0f\n");
+    t.push_str("format\t42\t>10\n");
+    t.push_str("format\t42\t*^9.1f\n");
+    t.push_str("format\t-42\t=+10.2f\n");
+    t.push_str("format\t42\t010,.1f\n");
+    t.push_str("format\t42\t 08.3f\n");
+    t.push_str("format\tInf\t>8\n");
+    t.push_str("format\t-Inf\t.2%\n");
+    t.push_str("format\tNaN\t+f\n");
+    t.push_str("format\t1E+5\t\n");
+    t.push_str("format\t1E+5\tf\n");
+    t.push_str("format\t0E+3\tf\n");
+    t.push_str("format\t0E-3\te\n");
+    t.push_str("format\t123.456\t.0e\n");
+    t.push_str("format\t1234567\tn\n");
+    t.push_str("format\t1\t.2x\n");
+    t.push_str("format\t1\t0<5\n");
+    t.push_str("ctx\tcapitals=0\n");
+    t.push_str("format\t1E+20\t\n");
+    t.push_str("format\t7E+2\t.3\n");
+    t.push_str("ctx\trounding=ROUND_DOWN\n");
+    t.push_str("format\t2.999\t.2f\n");
+    t.push_str("format\t-2.999\t.0f\n");
+    t.push_str("job\tcontexts\n");
+    t.push_str("ctxrepr\n");
+    t.push_str("ctx\tbase=basic\n");
+    t.push_str("div\t1\t3\n");
+    t.push_str("ctx\tbase=extended\n");
+    t.push_str("div\t1\t0\n");
+    t.push_str("div\t0\t0\n");
+    t.push_str("sqrt\t-4\n");
+    t.push_str("ctx\tbase=extended prec=3 rounding=ROUND_UP capitals=0 clamp=1\n");
+    t.push_str("div\t2\t3\n");
+    t.push_str("ctx\tprec=0\n");
+    t.push_str("ctx\tEmin=5\n");
+    t.push_str("ctx\tcapitals=2\n");
+    t.push_str("ctx\trounding=ROUND_SIDEWAYS\n");
+    t.push_str("ctx\tprec=7 traps=Inexact\n");
+    t.push_str("div\t1\t8\n");
+    t.push_str("div\t1\t3\n");
+    t.push_str("add\t1.0000001\t0\n");
+    t.push_str("job\tinvoices\n");
+    t.push_str("invoices\tinvoices.csv\n");
+    t.push_str("job\tcurrency conversion\n");
+    t.push_str("fx\trates.tsv\tconversions.tsv\n");
+    t.push_str("job\tloan amortization\n");
+    t.push_str("loans\tloans.tsv\n");
+    t.push_str("job\tbill splitting\n");
+    t.push_str("bills\tbills.tsv\n");
+    t.push_str("job\tincome tax\n");
+    t.push_str("tax\tbrackets.tsv\tincomes.tsv\n");
+    t.push_str("job\tsavings growth\n");
+    t.push_str("growth\tgrowth.tsv\n");
+    t.push_str("job\tprice statistics\n");
+    t.push_str("stats\tprices.tsv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("car\t18500.00\t6.9\t60\n");
+    t.push_str("mortgage\t320000\t5.875\t360\n");
+    t.push_str("student\t27350.50\t4.53\t120\n");
+    t.push_str("zero\t2400\t0\t12\n");
+    t.push_str("tiny\t500\t19.99\t6\n");
+    v.push(DataFile { path: "loans.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("101.25\n");
+    t.push_str("99.80\n");
+    t.push_str("102.10\n");
+    t.push_str("103.45\n");
+    t.push_str("100.05\n");
+    t.push_str("98.70\n");
+    t.push_str("104.20\n");
+    t.push_str("105.00\n");
+    t.push_str("103.85\n");
+    t.push_str("106.40\n");
+    v.push(DataFile { path: "prices.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("USD\t1\t2\n");
+    t.push_str("EUR\t0.9187\t2\n");
+    t.push_str("GBP\t0.78645\t2\n");
+    t.push_str("JPY\t149.8350\t0\n");
+    t.push_str("BHD\t0.376\t3\n");
+    t.push_str("CHF\t0.8812\t2\n");
+    t.push_str("INR\t83.1275\t2\n");
+    v.push(DataFile { path: "rates.tsv".to_string(), body: t });
+}
