@@ -2171,7 +2171,7 @@ fn resolve_option(s: ref String) -> Option[(String, Option[String])] {
     let shorts = ["-h", "-c", "-i", "-f"];
     let longs = split_on(LONG_OPTS.to_string(), ',');
     if s.starts_with("--") {
-        let (name, val) = match s.find('=') {
+        let (name, val) = match s.find("=") {
             Some(k) => (s[0..k].to_string(), Some(s[k + 1..].to_string())),
             None => (s.clone(), None),
         };
@@ -2502,7 +2502,7 @@ fn read_conf(path: ref String) -> Result[Conf, String] {
             let w = split_ws(l);
             c.endpoints.push(w[1..w.len()].to_vec());
         } else {
-            match l.find('=') {
+            match l.find("=") {
                 Some(k) => {
                     c.keys.push(strip(l[0..k].to_string()));
                     c.vals.push(strip(l[k + 1..].to_string()));
@@ -3133,7 +3133,7 @@ fn synth(path: ref String) -> Result[(), String] {
     let mut keys: Vec[String] = Vec.new();
     let mut vals: Vec[Vec[String]] = Vec.new();
     for l in lines_of(read_data(path)?) {
-        match l.find(':') {
+        match l.find(":") {
             Some(k) => {
                 keys.push(l[0..k].to_string());
                 vals.push(split_ws(l[k + 2..].to_string()));

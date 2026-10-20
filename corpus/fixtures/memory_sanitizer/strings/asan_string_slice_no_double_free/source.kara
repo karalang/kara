@@ -1,6 +1,6 @@
 
 fn first_word(s: ref String) -> StringSlice {
-    let sp = s.find(' ');
+    let sp = s.find(" ");
     let end = sp.unwrap_or(s.len());
     s.slice(0, end)
 }

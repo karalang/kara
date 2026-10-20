@@ -287,7 +287,8 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !is_str_like(&arg_ty) {
+                    if self.char_pattern_for_str(Some("contains"), &args[0].value, &arg_ty) {
+                    } else if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'contains' expects a String substring, found '{}'",
@@ -477,7 +478,8 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !is_str_like(&arg_ty) {
+                    if self.char_pattern_for_str(Some(method), &args[0].value, &arg_ty) {
+                    } else if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'{method}' expects a String argument, found '{}'",
@@ -922,7 +924,8 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !is_str_like(&arg_ty) && !is_char_arg(&arg_ty) {
+                    if self.char_pattern_for_str(Some("find"), &args[0].value, &arg_ty) {
+                    } else if !is_str_like(&arg_ty) && !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'find' expects a String or char needle, found '{}'",

@@ -10582,3 +10582,38 @@ fn a_par_block_takes_branches_not_statements() {
         "v7 v8 v9\n",
     );
 }
+
+/// B-2026-10-20-22: every pattern parameter of the string methods is
+/// `pat: Str` (docs/library/strings.md), `find` included, so a char is
+/// refused with a fix: the string literal for a literal, `c.to_string()`
+/// for anything else. A `Vec[char]`'s `contains` takes its element and is
+/// left alone.
+#[test]
+fn a_string_pattern_is_a_str_not_a_char() {
+    rejected_then_fixed_by(
+        "char-pattern-literals",
+        "fn main() {\n\
+             let s = \"a/b#d\";\n\
+             println(f\"{s.find('/')} {s.starts_with('#')} {s.ends_with('d')}\");\n\
+         }\n",
+        "'find' takes a `Str` pattern, found 'char'",
+        "s.find(\"/\")",
+    );
+    rejected_then_fixed_by(
+        "char-pattern-variable",
+        "fn main() {\n\
+             let s = \"a/b#d\";\n\
+             let c = 'b';\n\
+             println(f\"{s.contains(c)} {s.rfind(c)}\");\n\
+         }\n",
+        "write it as `c.to_string()`",
+        "s.rfind(c.to_string())",
+    );
+    accepted(
+        "char-vec-contains",
+        "fn main() {\n\
+             let cs: Vec[char] = vec!['a', 'b'];\n\
+             println(f\"{cs.contains('a')} {\"ab\".contains(\"a\")}\");\n\
+         }\n",
+    );
+}

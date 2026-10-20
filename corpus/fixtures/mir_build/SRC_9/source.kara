@@ -9,6 +9,6 @@ fn main() {
     let owned = String.from("ba,c");
     for c in days.iter() {
         let sep = c.to_string();
-        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
+        println(f"{t.find(c.to_string())} {t.split(sep.as_str()).count()} {owned.find(c.to_string())} {owned.split(sep.as_str()).count()}");
     }
 }

@@ -1121,7 +1121,7 @@ fn main() {
 }
 
 // B-2026-10-14-2 — a `ref char` from `Vec[char].iter()` is read as its value
-// by text's char-taking methods (`push`, `find`, `split`), on a `String` and
+// by text's char-taking methods (`push`, `to_string`), on a `String` and
 // on a `Str`, as it is by a user fn's `char` parameter (§5.10).
 #[test]
 fn mir_text_methods_read_a_ref_char() {
@@ -1136,12 +1136,13 @@ fn mir_text_methods_read_a_ref_char() {
     let owned = String.from("ba,c");
     for c in days.iter() {
         let sep = c.to_string();
-        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
+        println(f"{t.find(c.to_string())} {t.split(sep.as_str()).count()} {owned.find(c.to_string())} {owned.split(sep.as_str()).count()}");
     }
 }
 "#;
-    // `split` takes a `Str` separator (docs/library/strings.md), so the
-    // char is given as text there; `find` and `push` read the `ref char`.
+    // `split` and `find` take a `Str` pattern (docs/library/strings.md,
+    // B-2026-10-20-22), so the char is given as text there; `push` and
+    // `to_string` read the `ref char`.
     let want = "ab,\nSome(4) 2 Some(1) 2\nSome(5) 2 Some(0) 2\nSome(1) 3 Some(2) 2\n";
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, want);

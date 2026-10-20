@@ -1,6 +1,6 @@
 
 fn first_word(s: ref String) -> StringSlice {
-    let sp = s.find(' ');
+    let sp = s.find(" ");
     let end = sp.unwrap_or(s.len());
     s.slice(0, end)
 }
@@ -9,7 +9,7 @@ fn main() {
     let w = s.slice(0, 5);
     println(w.to_string());
     println(w.len().to_string());
-    match s.find('o') {
+    match s.find("o") {
         Some(i) => println(i.to_string()),
         None => println("none"),
     }

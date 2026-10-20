@@ -726,6 +726,62 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// A char where a string method wants its `Str` pattern
+    /// (`s.contains(c)`, `s.find(' ')`; docs/library/strings.md gives every
+    /// pattern parameter as `pat: Str`, B-2026-10-20-22): reported with a
+    /// machine-applicable fix, the string literal for a char literal and
+    /// `c.to_string()` otherwise. `false` when `arg_ty` is not a char, or
+    /// on the legacy pipeline, which keeps its own arms.
+    pub(super) fn char_pattern_for_str(
+        &mut self,
+        method: Option<&str>,
+        arg: &Expr,
+        arg_ty: &Type,
+    ) -> bool {
+        if !self.library_methods_from_source {
+            return false;
+        }
+        let is_char = match arg_ty {
+            Type::Char => true,
+            Type::Ref(inner) => matches!(**inner, Type::Char),
+            _ => false,
+        };
+        if !is_char {
+            return false;
+        }
+        let replacement = match &arg.kind {
+            ExprKind::CharLit(c) => format!("{:?}", c.to_string()),
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. } => {
+                format!("{}.to_string()", crate::formatter::render_expr(arg))
+            }
+            _ => format!("({}).to_string()", crate::formatter::render_expr(arg)),
+        };
+        self.type_error_with_fix_it(
+            match method {
+                Some(m) => format!(
+                    "'{m}' takes a `Str` pattern, found 'char': write it as `{replacement}` \
+                     (docs/library/strings.md)"
+                ),
+                None => format!(
+                    "expected 'Str', found 'char': write it as `{replacement}` \
+                     (docs/library/strings.md)"
+                ),
+            },
+            arg.span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: arg.span,
+                replacement,
+            },
+        );
+        true
+    }
+
     /// B-2026-10-18-35: `let v: Vec[String] = s.split(",").collect();` from
     /// before `split` lent its pieces is fixed by copying each one first. The
     /// bound is discharged later; this records the edit for it.
@@ -3359,7 +3415,8 @@ impl<'a> super::TypeChecker<'a> {
                     // A literal falls through to `check_expr`, where it takes
                     // the `Str` type itself (B-2026-10-14-68).
                     let t = self.infer_expr(&arg.value);
-                    if !is_string_place_type(&t) {
+                    if !is_string_place_type(&t) && !self.char_pattern_for_str(None, &arg.value, &t)
+                    {
                         self.check_assignable(param_ty, &t, arg.value.span);
                     }
                     t
