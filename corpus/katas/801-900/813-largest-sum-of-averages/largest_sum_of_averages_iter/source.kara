@@ -1,0 +1,60 @@
+// LeetCode 813 — Largest Sum of Averages, rows built by iterators.
+//
+// A row holds, for each prefix length i, the largest sum of averages of
+// the first i numbers in at most so many groups. The first row is the
+// averages; each next row takes, for each i, the `fold` to the maximum
+// of the row before at i and every split into a shorter prefix and a
+// last group. `k - 1` rows on, the last entry is the answer. O(k n^2).
+fn largest_sum_of_averages(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let prefix: Vec[i64] = (0..n + 1).map(|i| nums[0..i].iter().sum()).collect();
+    let mut row: Vec[f64] = (0..n + 1).map(|i| if i == 0 { 0.0 } else { prefix[i] as f64 / i as f64 }).collect();
+    for _ in 1..k {
+        row = (0..n + 1)
+            .map(|i| (1..i).fold(row[i], |acc, p| acc.max(row[p] + (prefix[i] - prefix[p]) as f64 / (i - p) as f64)))
+            .collect();
+    }
+    row[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"nums = {nums}, k = {k} -> {largest_sum_of_averages(nums, k):.5}");
+}
+
+fn main() {
+    show(vec![9, 1, 2, 3, 9], 3);
+    show(vec![1, 2, 3, 4, 5, 6, 7], 4);
+    show(vec![5], 1);
+    show(vec![4, 1, 7], 1);
+    show(vec![4, 1, 7], 3);
+    show(vec![1, 1, 1, 1], 2);
+    show(vec![1, 1, 10000, 1], 2);
+    show(vec![3, 10, 3, 10, 3], 2);
+    // LeetCode's largest: 100 numbers up to 10000, cut into at most 1, 7, 50 and 100.
+    let mut seed = 813;
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        big.push(1 + next_random(mut seed) % 10000);
+    }
+    for k in [1, 7, 50, 100] {
+        println(f"100 numbers, k = {k} -> {largest_sum_of_averages(big, k):.5}");
+    }
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % 50);
+        }
+        let k = 1 + next_random(mut seed) % n;
+        total += largest_sum_of_averages(nums, k);
+    }
+    println(f"300 random rounds of 1 to 12 numbers: total {total:.5}");
+}

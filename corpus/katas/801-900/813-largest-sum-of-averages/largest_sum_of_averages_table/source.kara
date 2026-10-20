@@ -1,0 +1,82 @@
+// LeetCode 813 — Largest Sum of Averages, a full DP table.
+//
+// dp[g][i] is the largest sum of averages of the first i numbers cut into
+// exactly g groups, for g up to k and i at least g. One group is the
+// average; g groups end in a last group nums[p..i] after g - 1 groups of
+// the first p. The answer takes the best g up to k, since the numbers
+// are not negative and more groups never lose. O(k n^2) time and space.
+fn largest_sum_of_averages(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut dp: Vec[Vec[f64]] = Vec.new();
+    for _ in 0..k + 1 {
+        dp.push(Vec.filled(n + 1, 0.0));
+    }
+    for i in 1..n + 1 {
+        dp[1][i] = prefix[i] as f64 / i as f64;
+    }
+    for g in 2..k + 1 {
+        for i in g..n + 1 {
+            let mut best = 0.0;
+            for p in g - 1..i {
+                let candidate = dp[g - 1][p] + (prefix[i] - prefix[p]) as f64 / (i - p) as f64;
+                if candidate > best {
+                    best = candidate;
+                }
+            }
+            dp[g][i] = best;
+        }
+    }
+    let mut answer = 0.0;
+    for g in 1..k + 1 {
+        if dp[g][n] > answer {
+            answer = dp[g][n];
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"nums = {nums}, k = {k} -> {largest_sum_of_averages(nums, k):.5}");
+}
+
+fn main() {
+    show(vec![9, 1, 2, 3, 9], 3);
+    show(vec![1, 2, 3, 4, 5, 6, 7], 4);
+    show(vec![5], 1);
+    show(vec![4, 1, 7], 1);
+    show(vec![4, 1, 7], 3);
+    show(vec![1, 1, 1, 1], 2);
+    show(vec![1, 1, 10000, 1], 2);
+    show(vec![3, 10, 3, 10, 3], 2);
+    // LeetCode's largest: 100 numbers up to 10000, cut into at most 1, 7, 50 and 100.
+    let mut seed = 813;
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        big.push(1 + next_random(mut seed) % 10000);
+    }
+    for k in [1, 7, 50, 100] {
+        println(f"100 numbers, k = {k} -> {largest_sum_of_averages(big, k):.5}");
+    }
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % 50);
+        }
+        let k = 1 + next_random(mut seed) % n;
+        total += largest_sum_of_averages(nums, k);
+    }
+    println(f"300 random rounds of 1 to 12 numbers: total {total:.5}");
+}

@@ -1,0 +1,240 @@
+// LeetCode #813: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random arrays,
+// against every way to cut the numbers.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn largest_sum_of_averages_star(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut best_star: Vec[f64] = Vec.filled(n + 1, 0.0);
+    for i in 1..n + 1 {
+        best_star[i] = prefix[i] as f64 / i as f64;
+    }
+    for _ in 1..k {
+        let mut i = n;
+        while i >= 1 {
+            for p in 1..i {
+                let candidate = best_star[p] + (prefix[i] - prefix[p]) as f64 / (i - p) as f64;
+                if candidate > best_star[i] {
+                    best_star[i] = candidate;
+                }
+            }
+            i -= 1;
+        }
+    }
+    best_star[n]
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn largest_sum_of_averages_table(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut dp: Vec[Vec[f64]] = Vec.new();
+    for _ in 0..k + 1 {
+        dp.push(Vec.filled(n + 1, 0.0));
+    }
+    for i in 1..n + 1 {
+        dp[1][i] = prefix[i] as f64 / i as f64;
+    }
+    for g in 2..k + 1 {
+        for i in g..n + 1 {
+            let mut best_table = 0.0;
+            for p in g - 1..i {
+                let candidate = dp[g - 1][p] + (prefix[i] - prefix[p]) as f64 / (i - p) as f64;
+                if candidate > best_table {
+                    best_table = candidate;
+                }
+            }
+            dp[g][i] = best_table;
+        }
+    }
+    let mut answer = 0.0;
+    for g in 1..k + 1 {
+        if dp[g][n] > answer {
+            answer = dp[g][n];
+        }
+    }
+    answer
+}
+
+// ---- memoized arm ---------------------------------------------------
+
+fn largest_sum_of_averages_memo(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut prefix = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut memo: Vec[f64] = Vec.filled((n + 1) * (k + 1), -1.0);
+    best_memo(prefix, 0, k, mut memo)
+}
+
+fn best_memo(prefix: Vec[i64], start: i64, groups: i64, memo: mut ref Vec[f64]) -> f64 {
+    let n = prefix.len() - 1;
+    let slot = start * (memo.len() / (n + 1)) + groups;
+    if memo[slot] >= 0.0 {
+        return memo[slot];
+    }
+    let mut result = (prefix[n] - prefix[start]) as f64 / (n - start) as f64;
+    if groups > 1 {
+        for end in start + 1..n {
+            let first = (prefix[end] - prefix[start]) as f64 / (end - start) as f64;
+            let candidate = first + best_memo(prefix, end, groups - 1, mut memo);
+            if candidate > result {
+                result = candidate;
+            }
+        }
+    }
+    memo[slot] = result;
+    result
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn largest_sum_of_averages_iter(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let prefix: Vec[i64] = (0..n + 1).map(|i| nums[0..i].iter().sum()).collect();
+    let mut row: Vec[f64] = (0..n + 1).map(|i| if i == 0 { 0.0 } else { prefix[i] as f64 / i as f64 }).collect();
+    for _ in 1..k {
+        row = (0..n + 1)
+            .map(|i| (1..i).fold(row[i], |acc, p| acc.max(row[p] + (prefix[i] - prefix[p]) as f64 / (i - p) as f64)))
+            .collect();
+    }
+    row[n]
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The statement played out: every way to cut nums into at most k groups,
+// a cut after position i when bit i of `cuts` is set, and the largest
+// sum of the groups' averages.
+fn largest_by_every_cut(nums: Vec[i64], k: i64) -> f64 {
+    let n = nums.len();
+    let mut best = 0.0;
+    for cuts in 0..(1 << (n - 1)) {
+        let mut groups = 1;
+        for i in 0..n - 1 {
+            if (cuts >> i) & 1 == 1 {
+                groups += 1;
+            }
+        }
+        if groups > k {
+            continue;
+        }
+        let mut total = 0.0;
+        let mut sum = 0;
+        let mut len = 0;
+        for i in 0..n {
+            sum += nums[i];
+            len += 1;
+            if i == n - 1 or (cuts >> i) & 1 == 1 {
+                total += sum as f64 / len as f64;
+                sum = 0;
+                len = 0;
+            }
+        }
+        if total > best {
+            best = total;
+        }
+    }
+    best
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64], k: i64) -> f64 {
+    if which == 0 {
+        largest_sum_of_averages_star(nums, k)
+    } else if which == 1 {
+        largest_sum_of_averages_table(nums, k)
+    } else if which == 2 {
+        largest_sum_of_averages_memo(nums, k)
+    } else {
+        largest_sum_of_averages_iter(nums, k)
+    }
+}
+
+// Equal up to rounding: within a billionth of the larger.
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8130;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    for case in 0..cases {
+        // kind 0: numbers from 1 to 50; kind 1: from 1 to 3, so that many
+        // cuts tie; kind 2: mostly 1 with a few up to 10000, so that the
+        // best cuts isolate the large ones; kind 3: rising or falling runs.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        let step = next_random(mut seed) % 7 - 3;
+        let start = 40 + next_random(mut seed) % 10;
+        for i in 0..n {
+            let v = if kind == 0 {
+                1 + next_random(mut seed) % 50
+            } else if kind == 1 {
+                1 + next_random(mut seed) % 3
+            } else if kind == 2 {
+                if next_random(mut seed) % 4 == 0 { 1 + next_random(mut seed) % 10000 } else { 1 }
+            } else {
+                start + step * i
+            };
+            nums.push(v);
+        }
+        let k = 1 + next_random(mut seed) % n;
+        let want = largest_by_every_cut(nums, k);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let tripled: Vec[i64] = nums.iter().map(|v| 3 * *v).collect();
+        let mut sum = 0;
+        for v in nums.iter() {
+            sum += *v;
+        }
+        for which in 0..arms {
+            // 1: the statement's answer.
+            // 2: no less with one more group allowed, and the sum itself
+            //    with a group for every number.
+            // 3: the same answer for the numbers reversed.
+            // 4: three times the answer for the numbers tripled.
+            let got = arm(which, nums.clone(), k);
+            let more = if k < n { arm(which, nums.clone(), k + 1) } else { got };
+            let ok = [
+                close(got, want),
+                (more >= got or close(more, got)) and close(arm(which, nums.clone(), n), sum as f64),
+                close(arm(which, reversed.clone(), k), want),
+                close(arm(which, tripled.clone(), k), 3.0 * want),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases, {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, table {fails[1]}, memo {fails[2]}, iter {fails[3]}");
+    println(f"by property: answer {by_property[0]}, groups {by_property[1]}, reversed {by_property[2]}, tripled {by_property[3]}");
+}
