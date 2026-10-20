@@ -1,6 +1,6 @@
 
         effect resource Db;
-        pub fn poly() with _ { }
+        pub fn poly() { }
         fn main() {
             let x = poly();
             let y = 1 + 2;

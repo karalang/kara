@@ -1302,6 +1302,21 @@ impl Pipeline {
                 self.renames = renames;
             }
         }
+        // B-2026-10-19-50: Amendment 6 removes `with _`; what it said is now
+        // what an unannotated function-typed parameter means (core §12).
+        if let Some(src) = &self.source {
+            for span in with_underscore_spans(src) {
+                self.parsed.errors.push(crate::parser::ParseError {
+                    message: "the `with _` annotation is removed (core semantics §12): a \
+                              function's effects are what its body does, and a function-typed \
+                              parameter with no effect clause takes the effects of the \
+                              argument each caller passes; delete `with _`"
+                        .to_string(),
+                    span,
+                    kind: crate::parser::ParseErrorKind::ReservedSyntax,
+                });
+            }
+        }
         self.strict_core = true;
         self.lint_overrides.strict_core = true;
         self.lint_overrides
@@ -1669,6 +1684,9 @@ impl Pipeline {
         if self.has_parse_errors() {
             return;
         }
+        if self.strict_core {
+            fn_params_take_argument_effects(&mut self.parsed.program);
+        }
         // Thread the typechecker's `method_callee_types` resolution table so
         // method-call sites can reach the same `with E` / Fn-slot / polymorphic
         // arg propagation paths the free-call form already gets. Falls back to
@@ -1714,6 +1732,15 @@ impl Pipeline {
             node_call_subs,
             typeparam_nodes,
         ));
+        // B-2026-10-19-41: core semantics §7.11 lets a `Drop` body panic (a
+        // panic ends the process; there is no unwinding to panic during), so
+        // the v2 commands drop the legacy rule that refused one.
+        if self.strict_core {
+            if let Some(e) = self.effects.as_mut() {
+                e.errors
+                    .retain(|e| e.kind != crate::effectchecker::EffectErrorKind::DropBodyMayPanic);
+            }
+        }
         // Populate `Program.callee_effectful` from the effect-check result so
         // codegen can narrow the par-branch cooperative cancel-check to calls
         // whose callee actually carries reads/writes/sends/receives. Mirrors
@@ -2878,6 +2905,64 @@ fn uses_serde(src: &str) -> bool {
 
 /// The span at source `line:column` (both from 1) of `src`, over the name or
 /// path that starts there (`self.index`), else one character.
+/// Where `src` writes `with _`, each span covering both tokens.
+fn with_underscore_spans(src: &str) -> Vec<crate::token::Span> {
+    use crate::token::Token;
+    let tokens = crate::tokenize(src);
+    tokens
+        .windows(2)
+        .filter(|w| {
+            matches!(&w[0].token, Token::Identifier { name, raw: false } if name == "with")
+                && matches!(w[1].token, Token::Underscore)
+        })
+        .map(|w| crate::token::Span {
+            length: w[1].span.offset + w[1].span.length - w[0].span.offset,
+            ..w[0].span
+        })
+        .collect()
+}
+
+/// B-2026-10-19-40, core semantics §12: a call through a function-typed
+/// parameter has the effects of the argument each caller passes, charged to
+/// that caller. The legacy effect checker reads a parameter typed `Fn(...)`
+/// with no effect clause as pure and refuses an effectful argument (E0404);
+/// it already gives the §12 rule to `with _`, the spelling Amendment 6
+/// removed, so the v2 commands give an unannotated function-typed parameter
+/// that meaning before effect checking. Typechecking has run by then, so the
+/// type a parameter has is unchanged.
+fn fn_params_take_argument_effects(program: &mut crate::ast::Program) {
+    use crate::ast::{EffectSpec, ImplItem, Item, Param, TraitItem, TypeKind};
+    fn params(ps: &mut [Param]) {
+        for p in ps {
+            if let TypeKind::FnType { effect_spec, .. } = &mut p.ty.kind {
+                if effect_spec.is_none() {
+                    *effect_spec = Some(EffectSpec::Polymorphic);
+                }
+            }
+        }
+    }
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => params(&mut f.params),
+            Item::ImplBlock(b) => {
+                for i in &mut b.items {
+                    if let ImplItem::Method(m) = i {
+                        params(&mut m.params);
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for i in &mut t.items {
+                    if let TraitItem::Method(m) = i {
+                        params(&mut m.params);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn source_span_at(src: &str, at: Option<(usize, usize)>) -> Option<crate::token::Span> {
     let (line, column) = at?;
     let start: usize = src

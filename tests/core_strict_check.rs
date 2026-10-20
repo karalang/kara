@@ -9906,3 +9906,48 @@ fn check_refuses_the_par_conflicts_the_mir_effect_pass_refuses() {
         "1 2 3\n",
     );
 }
+
+/// B-2026-10-19-40, -41, -50: three rules of the v2 core that check's legacy
+/// effect rules contradicted. A function-typed parameter with no effect
+/// clause takes the argument's effects (§12), so a printing closure passes
+/// to it, and two printing closures in `par` branches conflict (§11.2); a
+/// `Drop` body may panic (§7.11); and the removed `with _` is refused.
+#[test]
+fn check_follows_the_core_effect_defaults() {
+    let apply = "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n";
+    accepted_and_runs(
+        "fn-param-takes-closure-effects",
+        &format!(
+            "{apply}fn main() {{\n    let y = apply(|x| {{ println(\"in closure\"); x + 1 }}, 1);\n    \
+             println(f\"{{y}}\");\n}}\n"
+        ),
+        "in closure\n2\n",
+    );
+    rejected(
+        "fn-param-closures-conflict-in-par",
+        &format!(
+            "{apply}fn main() {{\n    let (a, b) = par {{\n        apply(|x| {{ println(\"a\"); x }}, 1),\n        \
+             apply(|x| {{ println(\"b\"); x }}, 2),\n    }};\n    println(f\"{{a + b}}\");\n}}\n"
+        ),
+        "branches 1 and 2 of the `par` conflict: `writes(Stdout)`",
+    );
+    rejected(
+        "fn-param-effects-charged-to-a-pub-caller",
+        &format!(
+            "{apply}pub fn quiet() {{\n    let y = apply(|x| {{ println(\"c\"); x }}, 1);\n}}\n\
+             fn main() {{ quiet(); }}\n"
+        ),
+        "public function 'quiet' performs effects [writes(Stdout)]",
+    );
+    accepted(
+        "drop-body-may-panic",
+        "struct R {\n    n: i64,\n}\n\nimpl Drop for R {\n    fn drop(mut ref self) {\n        \
+         println(\"in drop\");\n        if self.n > 0 {\n            panic(\"drop\");\n        }\n    }\n}\n\n\
+         fn main() {\n    let r = R { n: 1 };\n    println(\"end\");\n}\n",
+    );
+    rejected(
+        "with-underscore-removed",
+        "fn apply(f: Fn() -> i64 with _) -> i64 { f() }\nfn main() {\n    println(f\"{apply(|| 1)}\");\n}\n",
+        "the `with _` annotation is removed",
+    );
+}
