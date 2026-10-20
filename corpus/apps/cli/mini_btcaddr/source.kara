@@ -1,0 +1,1661 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters property files hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or n == 0xfffe or n == 0xffff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ text helpers (from mini_urlparse)
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+// str.split(sep) for a one-byte separator
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let sep_s = (sep as char).to_string();
+    let mut out: Vec[String] = Vec.new();
+    for part in s.split(sep_s) {
+        out.push(part.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+// ------------------------------------------------------------ hashes and HMAC
+
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// One SHA-256 compression of the 16 words at the front of w into h,
+// in u64 arithmetic masked to 32 bits.
+fn compress256(h: mut ref Vec[u32], w: mut ref Vec[u32]) {
+    let m = 0xFFFFFFFFu64;
+    let mut ww: Vec[u64] = Vec.new();
+    for t in 0..16 {
+        ww.push(w[t] as u64);
+    }
+    for t in 16..64 {
+        let x = ww[t - 15];
+        let y = ww[t - 2];
+        let s0 = (((x >> 7u64) | (x << 25u64)) & m) ^ (((x >> 18u64) | (x << 14u64)) & m) ^ (x >> 3u64);
+        let s1 = (((y >> 17u64) | (y << 15u64)) & m) ^ (((y >> 19u64) | (y << 13u64)) & m) ^ (y >> 10u64);
+        ww.push((ww[t - 16] + s0 + ww[t - 7] + s1) & m);
+    }
+    let mut a = h[0] as u64;
+    let mut b = h[1] as u64;
+    let mut c = h[2] as u64;
+    let mut d = h[3] as u64;
+    let mut e = h[4] as u64;
+    let mut f = h[5] as u64;
+    let mut g = h[6] as u64;
+    let mut hh = h[7] as u64;
+    for t in 0..64 {
+        let s1 = (((e >> 6u64) | (e << 26u64)) & m) ^ (((e >> 11u64) | (e << 21u64)) & m) ^ (((e >> 25u64) | (e << 7u64)) & m);
+        let ch = (e & f) ^ ((e ^ m) & g);
+        let t1 = (hh + s1 + ch + (SHA256_K[t] as u64) + ww[t]) & m;
+        let s0 = (((a >> 2u64) | (a << 30u64)) & m) ^ (((a >> 13u64) | (a << 19u64)) & m) ^ (((a >> 22u64) | (a << 10u64)) & m);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        hh = g;
+        g = f;
+        f = e;
+        e = (d + t1) & m;
+        d = c;
+        c = b;
+        b = a;
+        a = (t1 + s0 + maj) & m;
+    }
+    h[0] = ((h[0] as u64 + a) & m) as u32;
+    h[1] = ((h[1] as u64 + b) & m) as u32;
+    h[2] = ((h[2] as u64 + c) & m) as u32;
+    h[3] = ((h[3] as u64 + d) & m) as u32;
+    h[4] = ((h[4] as u64 + e) & m) as u32;
+    h[5] = ((h[5] as u64 + f) & m) as u32;
+    h[6] = ((h[6] as u64 + g) & m) as u32;
+    h[7] = ((h[7] as u64 + hh) & m) as u32;
+}
+
+fn sha256(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        compress256(mut h, mut w);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..8 {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+// ------------------------------------------------------------ errors and input
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn value_error(msg: own String) -> Exc {
+    Exc { kind: "ValueError".to_string(), msg: msg }
+}
+
+// What base58's functions take: a str or a bytes object. They behave
+// differently: str.rstrip() strips Unicode whitespace and the str has to
+// encode as ASCII, bytes.rstrip() strips ASCII whitespace only.
+enum Input {
+    Text(String),
+    Raw(Vec[u8]),
+}
+
+// str.isspace(), for one character.
+fn py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f or n == 0x205f
+        or n == 0x3000
+}
+
+fn byte_space(b: u8) -> bool {
+    b == b' ' or (b >= 9 and b <= 13)
+}
+
+fn rstrip_input(v: ref Input) -> Input {
+    match v {
+        Input.Text(s) => {
+            let cs: Vec[char] = s.chars().collect();
+            let mut n = cs.len();
+            while n > 0 and py_space(cs[n - 1]) {
+                n -= 1;
+            }
+            let mut out = String.new();
+            for i in 0..n {
+                out.push(cs[i]);
+            }
+            Input.Text(out)
+        }
+        Input.Raw(b) => {
+            let mut n = b.len();
+            while n > 0 and byte_space(b[n - 1]) {
+                n -= 1;
+            }
+            Input.Raw(slice(b, 0, n))
+        }
+    }
+}
+
+// scrub_input: a str is encoded as ASCII. The error names the first run
+// of characters that do not fit, by character position.
+fn scrub(v: ref Input) -> Result[Vec[u8], Exc] {
+    match v {
+        Input.Raw(b) => Ok(b.clone()),
+        Input.Text(s) => {
+            let cs: Vec[char] = s.chars().collect();
+            let mut i = 0;
+            while i < cs.len() and (cs[i] as i64) < 128 {
+                i += 1;
+            }
+            if i == cs.len() {
+                return Ok(to_bytes(s));
+            }
+            let mut j = i;
+            while j < cs.len() and (cs[j] as i64) >= 128 {
+                j += 1;
+            }
+            let tail = "ordinal not in range(128)";
+            let msg = if j - i == 1 {
+                f"'ascii' codec can't encode character '{escape_char(cs[i])}' in position {i}: {tail}"
+            } else {
+                f"'ascii' codec can't encode characters in position {i}-{j - 1}: {tail}"
+            };
+            Err(Exc { kind: "UnicodeEncodeError".to_string(), msg: msg })
+        }
+    }
+}
+
+// How UnicodeEncodeError writes a character: always escaped.
+fn escape_char(c: char) -> String {
+    let n = c as i64;
+    if n < 0x100 {
+        f"\\x{hex_digits(n, 2)}"
+    } else if n < 0x10000 {
+        f"\\u{hex_digits(n, 4)}"
+    } else {
+        f"\\U{hex_digits(n, 8)}"
+    }
+}
+
+fn slice(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in from..to {
+        out.push(b[i]);
+    }
+    out
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push_str(hex_digits(*x as i64, 2));
+    }
+    out
+}
+
+fn prefix(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k = 0;
+    for c in s.chars() {
+        if k == n {
+            break;
+        }
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ big numbers
+
+// A number as big-endian digits in base `from`, rewritten in base `to`.
+// Zero is the empty list either way.
+fn convert_base(digits: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut num: Vec[i64] = Vec.new();
+    let mut started = false;
+    for d in digits.iter() {
+        if *d != 0 {
+            started = true;
+        }
+        if started {
+            num.push(*d);
+        }
+    }
+    let mut rev: Vec[i64] = Vec.new();
+    while num.len() > 0 {
+        let mut q: Vec[i64] = Vec.new();
+        let mut rem = 0;
+        for d in num.iter() {
+            let cur = rem * from + *d;
+            let qd = cur / to;
+            rem = cur % to;
+            if qd != 0 or q.len() > 0 {
+                q.push(qd);
+            }
+        }
+        rev.push(rem);
+        num = q;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len();
+    while k > 0 {
+        k -= 1;
+        out.push(rev[k]);
+    }
+    out
+}
+
+fn decimal_digits(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.bytes() {
+        out.push((c - b'0') as i64);
+    }
+    out
+}
+
+fn decimal_text(digits: ref Vec[i64]) -> String {
+    if digits.len() == 0 {
+        return "0".to_string();
+    }
+    let mut out = String.new();
+    for d in digits.iter() {
+        out.push((b'0' + *d as u8) as char);
+    }
+    out
+}
+
+fn byte_digits(b: ref Vec[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in b.iter() {
+        out.push(*x as i64);
+    }
+    out
+}
+
+// ------------------------------------------------------------ base58 2.1.1
+
+fn bitcoin_alphabet() -> Vec[u8] {
+    to_bytes("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+}
+
+fn spell(digits: ref Vec[i64], alphabet: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for d in digits.iter() {
+        out.push(alphabet[*d]);
+    }
+    out
+}
+
+fn b58encode_int(dec: ref String, default_one: bool, alphabet: ref Vec[u8]) -> Vec[u8] {
+    let digits = convert_base(decimal_digits(dec), 10, alphabet.len());
+    if digits.len() == 0 and default_one {
+        return slice(alphabet, 0, 1);
+    }
+    spell(digits, alphabet)
+}
+
+fn b58encode(v: ref Input, alphabet: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let b = scrub(v)?;
+    let mut zeros = 0;
+    while zeros < b.len() and b[zeros] == 0 {
+        zeros += 1;
+    }
+    let digits = convert_base(byte_digits(b), 256, alphabet.len());
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..zeros {
+        out.push(alphabet[0]);
+    }
+    for c in spell(digits, alphabet).iter() {
+        out.push(*c);
+    }
+    Ok(out)
+}
+
+// _get_base58_decode_map: byte -> digit, -1 for none. autofix maps the
+// look-alikes of a group to the group's one character in the alphabet.
+fn decode_map(alphabet: ref Vec[u8], autofix: bool) -> Vec[i64] {
+    let mut map: Vec[i64] = Vec.new();
+    for _ in 0..256 {
+        map.push(-1);
+    }
+    for i in 0..alphabet.len() {
+        map[alphabet[i] as i64] = i;
+    }
+    if autofix {
+        for group in ["0Oo", "Il1"] {
+            let g = to_bytes(group);
+            let mut pivots: Vec[u8] = Vec.new();
+            for c in g.iter() {
+                if map[*c as i64] >= 0 {
+                    pivots.push(*c);
+                }
+            }
+            if pivots.len() == 1 {
+                let to = map[pivots[0] as i64];
+                for c in g.iter() {
+                    map[*c as i64] = to;
+                }
+            }
+        }
+    }
+    map
+}
+
+fn has_space(alphabet: ref Vec[u8]) -> bool {
+    for c in alphabet.iter() {
+        if *c == b' ' {
+            return true;
+        }
+    }
+    false
+}
+
+// The digits of a scrubbed input, or "Invalid character" naming the
+// first byte the alphabet does not have.
+fn digits_of(b: ref Vec[u8], alphabet: ref Vec[u8], autofix: bool) -> Result[Vec[i64], Exc] {
+    let map = decode_map(alphabet, autofix);
+    let mut out: Vec[i64] = Vec.new();
+    for c in b.iter() {
+        let d = map[*c as i64];
+        if d < 0 {
+            let ch = char.try_from(*c as u32).unwrap();
+            return Err(value_error(f"Invalid character {py_repr_str(ch.to_string())}"));
+        }
+        out.push(d);
+    }
+    Ok(out)
+}
+
+fn b58decode_int(v: ref Input, alphabet: ref Vec[u8]) -> Result[String, Exc] {
+    let b = if has_space(alphabet) { scrub(v)? } else { scrub(rstrip_input(v))? };
+    let digits = digits_of(b, alphabet, false)?;
+    Ok(decimal_text(convert_base(digits, alphabet.len(), 10)))
+}
+
+fn b58decode(v: ref Input, alphabet: ref Vec[u8], autofix: bool) -> Result[Vec[u8], Exc] {
+    let b = scrub(rstrip_input(v))?;
+    let mut lead = 0;
+    while lead < b.len() and b[lead] == alphabet[0] {
+        lead += 1;
+    }
+    let mut rest = Input.Raw(slice(b, lead, b.len()));
+    if not has_space(alphabet) {
+        rest = rstrip_input(rest);
+    }
+    let rb = scrub(rest)?;
+    let digits = digits_of(rb, alphabet, autofix)?;
+    let mut out: Vec[u8] = Vec.new();
+    for _ in 0..lead {
+        out.push(0);
+    }
+    for d in convert_base(digits, alphabet.len(), 256).iter() {
+        out.push(*d as u8);
+    }
+    Ok(out)
+}
+
+fn double_sha(b: ref Vec[u8]) -> Vec[u8] {
+    sha256(sha256(b))
+}
+
+fn b58encode_check(v: ref Input, alphabet: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut b = scrub(v)?;
+    let digest = double_sha(b);
+    for i in 0..4 {
+        b.push(digest[i]);
+    }
+    b58encode(Input.Raw(b), alphabet)
+}
+
+fn b58decode_check(v: ref Input, alphabet: ref Vec[u8], autofix: bool) -> Result[Vec[u8], Exc] {
+    let result = b58decode(v, alphabet, autofix)?;
+    let cut = if result.len() >= 4 { result.len() - 4 } else { 0 };
+    let payload = slice(result, 0, cut);
+    let check = slice(result, cut, result.len());
+    let digest = double_sha(payload);
+    if check != slice(digest, 0, 4) {
+        return Err(value_error("Invalid checksum".to_string()));
+    }
+    Ok(payload)
+}
+
+fn from_ascii(b: ref Vec[u8]) -> String {
+    from_bytes(b.clone())
+}
+// ------------------------------------------------------------ bech32 1.2.0
+// Values are i64: Python's ints let bech32_encode take -1 (CHARSET[-1])
+// and let it reach the checksum.
+
+fn charset() -> Vec[u8] {
+    to_bytes("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
+}
+
+fn bech32_polymod(values: ref Vec[i64]) -> i64 {
+    let generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+    let mut chk: i64 = 1;
+    for value in values.iter() {
+        let top = chk >> 25;
+        chk = ((chk & 0x1ffffff) << 5) ^ *value;
+        for i in 0..5 {
+            if ((top >> i) & 1) != 0 {
+                chk = chk ^ generator[i];
+            }
+        }
+    }
+    chk
+}
+
+fn bech32_hrp_expand(hrp: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in hrp.chars() {
+        out.push((c as i64) >> 5);
+    }
+    out.push(0);
+    for c in hrp.chars() {
+        out.push((c as i64) & 31);
+    }
+    out
+}
+
+fn with_values(hrp: ref String, data: ref Vec[i64]) -> Vec[i64] {
+    let mut values = bech32_hrp_expand(hrp);
+    for d in data.iter() {
+        values.push(*d);
+    }
+    values
+}
+
+fn bech32_create_checksum(hrp: ref String, data: ref Vec[i64]) -> Vec[i64] {
+    let mut values = with_values(hrp, data);
+    for _ in 0..6 {
+        values.push(0);
+    }
+    let polymod = bech32_polymod(values) ^ 1;
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..6 {
+        out.push((polymod >> (5 * (5 - i))) & 31);
+    }
+    out
+}
+
+fn bech32_encode(hrp: ref String, data: ref Vec[i64]) -> Result[String, Exc] {
+    let mut combined = data.clone();
+    for d in bech32_create_checksum(hrp, data).iter() {
+        combined.push(*d);
+    }
+    let cs = charset();
+    let mut out = hrp.clone();
+    out.push('1');
+    for d in combined.iter() {
+        let k = if *d < 0 { *d + 32 } else { *d };
+        if k < 0 or k >= 32 {
+            return Err(Exc { kind: "IndexError".to_string(), msg: "string index out of range".to_string() });
+        }
+        out.push(cs[k] as char);
+    }
+    Ok(out)
+}
+
+fn charset_find(c: u8) -> i64 {
+    let cs = charset();
+    for i in 0..cs.len() {
+        if cs[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn bech32_decode(bech: ref String) -> Option[(String, Vec[i64])] {
+    for c in bech.chars() {
+        let n = c as i64;
+        if n < 33 or n > 126 {
+            return None;
+        }
+    }
+    let lower = bech.to_lowercase();
+    if lower != *bech and bech.to_uppercase() != *bech {
+        return None;
+    }
+    let b = to_bytes(lower);
+    let mut pos: i64 = -1;
+    for i in 0..b.len() {
+        if b[i] == b'1' {
+            pos = i;
+        }
+    }
+    if pos < 1 or pos > 83 or pos + 7 > b.len() {
+        return None;
+    }
+    let mut data: Vec[i64] = Vec.new();
+    for i in (pos + 1)..b.len() {
+        let d = charset_find(b[i]);
+        if d < 0 {
+            return None;
+        }
+        data.push(d);
+    }
+    let hrp = byte_str(b, 0, pos);
+    if bech32_polymod(with_values(hrp, data)) != 1 {
+        return None;
+    }
+    let mut kept: Vec[i64] = Vec.new();
+    for i in 0..(data.len() - 6) {
+        kept.push(data[i]);
+    }
+    Some((hrp, kept))
+}
+
+fn convertbits(data: ref Vec[i64], frombits: i64, tobits: i64, pad: bool) -> Option[Vec[i64]] {
+    let mut acc: i64 = 0;
+    let mut bits: i64 = 0;
+    let mut ret: Vec[i64] = Vec.new();
+    let maxv = (1 << tobits) - 1;
+    let max_acc = (1 << (frombits + tobits - 1)) - 1;
+    for value in data.iter() {
+        let v = *value;
+        if v < 0 or (v >> frombits) != 0 {
+            return None;
+        }
+        acc = ((acc << frombits) | v) & max_acc;
+        bits += frombits;
+        while bits >= tobits {
+            bits -= tobits;
+            ret.push((acc >> bits) & maxv);
+        }
+    }
+    if pad {
+        if bits != 0 {
+            ret.push((acc << (tobits - bits)) & maxv);
+        }
+    } else if bits >= frombits or ((acc << (tobits - bits)) & maxv) != 0 {
+        return None;
+    }
+    Some(ret)
+}
+
+fn tail_of(data: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 1..data.len() {
+        out.push(data[i]);
+    }
+    out
+}
+
+// decode(): a segwit address's witness version and program.
+fn seg_decode(hrp: ref String, addr: ref String) -> Option[(i64, Vec[i64])] {
+    let (got, data) = bech32_decode(addr)?;
+    if got != *hrp {
+        return None;
+    }
+    let decoded = convertbits(tail_of(data), 5, 8, false)?;
+    if decoded.len() < 2 or decoded.len() > 40 {
+        return None;
+    }
+    if data[0] > 16 {
+        return None;
+    }
+    if data[0] == 0 and decoded.len() != 20 and decoded.len() != 32 {
+        return None;
+    }
+    Some((data[0], decoded))
+}
+
+// encode(): None when the address would not decode back.
+fn seg_encode(hrp: ref String, witver: i64, witprog: ref Vec[i64]) -> Option[String] {
+    let five = convertbits(witprog, 8, 5, true)?;
+    let mut data: Vec[i64] = Vec.new();
+    data.push(witver);
+    for d in five.iter() {
+        data.push(*d);
+    }
+    let ret = match bech32_encode(hrp, data) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    seg_decode(hrp, ret)?;
+    Some(ret)
+}
+// repr() of a bytes object.
+fn py_repr_bytes(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b.iter() {
+        if *c == b'\'' {
+            has_single = true;
+        }
+        if *c == b'"' {
+            has_double = true;
+        }
+    }
+    let q = if has_single and not has_double { b'"' } else { b'\'' };
+    let mut out = "b".to_string();
+    out.push(q as u32 as u8 as char);
+    for c in b.iter() {
+        let n = *c as i64;
+        if *c == q or *c == b'\\' {
+            out.push('\\');
+            out.push(*c as char);
+        } else if *c == b'\t' {
+            out.push_str("\\t");
+        } else if *c == b'\n' {
+            out.push_str("\\n");
+        } else if *c == b'\r' {
+            out.push_str("\\r");
+        } else if n < 0x20 or n >= 0x7f {
+            out.push_str(f"\\x{hex_digits(n, 2)}");
+        } else {
+            out.push(*c as char);
+        }
+    }
+    out.push(q as char);
+    out
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+// ------------------------------------------------------------ output
+
+fn show(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        let n = c as i64;
+        if c == '\r' {
+            out.push_str("<CR>");
+        } else if (n < 0x20 and c != '\t' and c != '\n') or (n >= 0x7f and n <= 0x9f) {
+            out.push_str(f"<x{hex_digits(n, 2)}>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// Every line goes out through show().
+fn emit(out: mut ref String, line: ref String) {
+    out.push_str(show(line));
+    out.push_str("\n");
+}
+
+fn err_text(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// Job text with \xNN and \uNNNN escapes.
+fn unesc(s: ref String) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and i + 1 < b.len() and (b[i + 1] == b'x' or b[i + 1] == b'u') {
+            let width = if b[i + 1] == b'x' { 2 } else { 4 };
+            let mut n: u32 = 0;
+            for k in 0..width {
+                n = n * 16 + hex_val(b[i + 2 + k]) as u32;
+            }
+            let c = char.try_from(n).unwrap();
+            for x in c.to_string().bytes() {
+                out.push(x);
+            }
+            i += 2 + width;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+fn ints(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if s.len() == 0 {
+        return out;
+    }
+    for part in split_on(s, b',').iter() {
+        out.push(i64.parse(part).unwrap_or(0));
+    }
+    out
+}
+
+fn alphabet_named(name: ref String) -> Vec[u8] {
+    if name == "ripple" {
+        to_bytes("rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz")
+    } else if name == "base45" {
+        to_bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:")
+    } else if name == "xl" {
+        let mut a = bitcoin_alphabet();
+        for i in 0..a.len() {
+            if a[i] == b'x' {
+                a[i] = b'l';
+            }
+        }
+        a
+    } else {
+        bitcoin_alphabet()
+    }
+}
+
+fn int_list(v: ref Vec[i64]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{v[i]}");
+    }
+    out.push_str("]");
+    out
+}
+
+fn bytes_result(r: own Result[Vec[u8], Exc]) -> String {
+    match r {
+        Ok(b) => py_repr_bytes(b),
+        Err(e) => err_text(e),
+    }
+}
+
+fn str_option(r: ref Option[String]) -> String {
+    match r {
+        Some(s) => py_repr_str(s),
+        None => "None".to_string(),
+    }
+}
+
+// ------------------------------------------------------------ the library
+
+fn library_job(job: ref Vec[String], out: mut ref String) {
+    let kind = job[0].clone();
+    let line = if kind == "enc" {
+        bytes_result(b58encode(Input.Raw(unhex(job[2])), alphabet_named(job[1])))
+    } else if kind == "enc_str" {
+        bytes_result(b58encode(Input.Text(unesc(job[2])), alphabet_named(job[1])))
+    } else if kind == "dec" {
+        bytes_result(b58decode(Input.Text(unesc(job[2])), alphabet_named(job[1]), job[3] == "autofix"))
+    } else if kind == "enc_check" {
+        bytes_result(b58encode_check(Input.Raw(unhex(job[2])), alphabet_named(job[1])))
+    } else if kind == "dec_check" {
+        bytes_result(b58decode_check(Input.Text(unesc(job[2])), alphabet_named(job[1]), job[3] == "autofix"))
+    } else if kind == "enc_int" {
+        py_repr_bytes(b58encode_int(job[2], job[3] == "1", alphabet_named(job[1])))
+    } else if kind == "dec_int" {
+        match b58decode_int(Input.Text(unesc(job[2])), alphabet_named(job[1])) {
+            Ok(n) => n,
+            Err(e) => err_text(e),
+        }
+    } else if kind == "b32_decode" {
+        match bech32_decode(unesc(job[1])) {
+            Some((hrp, data)) => f"({py_repr_str(hrp)}, {int_list(data)})",
+            None => "(None, None)".to_string(),
+        }
+    } else if kind == "b32_encode" {
+        match bech32_encode(job[1], ints(job[2])) {
+            Ok(s) => py_repr_str(s),
+            Err(e) => err_text(e),
+        }
+    } else if kind == "seg_decode" {
+        match seg_decode(job[1], job[2]) {
+            Some((ver, prog)) => f"({ver}, {int_list(prog)})",
+            None => "(None, None)".to_string(),
+        }
+    } else if kind == "seg_encode" {
+        let ver = i64.parse(job[2]).unwrap_or(0);
+        str_option(seg_encode(job[1], ver, byte_digits(unhex(job[3]))))
+    } else {
+        let from = i64.parse(job[2]).unwrap_or(0);
+        let to = i64.parse(job[3]).unwrap_or(0);
+        match convertbits(ints(job[1]), from, to, job[4] == "1") {
+            Some(v) => int_list(v),
+            None => "None".to_string(),
+        }
+    };
+    emit(mut out, line);
+}
+
+// python -m base58 [flags] FILE: the file's bytes in, the result's bytes
+// out, or sys.exit(e) with the error on stderr.
+fn cli_job(flags: ref String, name: ref String, out: mut ref String) {
+    let data = match fs.read_bytes(f"data/{name}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    };
+    let alph = bitcoin_alphabet();
+    let input = Input.Raw(data);
+    let r = if flags.contains("d") {
+        if flags.contains("c") { b58decode_check(input, alph, false) } else { b58decode(input, alph, false) }
+    } else if flags.contains("c") {
+        b58encode_check(input, alph)
+    } else {
+        b58encode(input, alph)
+    };
+    match r {
+        Ok(b) => emit(mut out, f"stdout {py_repr_bytes(b)}"),
+        Err(e) => emit(mut out, f"exit 1, stderr: {e.msg}"),
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+struct Net {
+    hrp: String,
+    versions: Vec[(i64, String)],
+    alphabet: String,
+}
+
+fn net_of(coin: ref String) -> Option[Net] {
+    let v = |n: i64, s: Str| (n, s.to_string());
+    if coin == "btc" {
+        Some(Net { hrp: "bc".to_string(), versions: [v(0x00, "P2PKH"), v(0x05, "P2SH")], alphabet: "bitcoin".to_string() })
+    } else if coin == "tbtc" {
+        Some(Net { hrp: "tb".to_string(), versions: [v(0x6f, "P2PKH"), v(0xc4, "P2SH")], alphabet: "bitcoin".to_string() })
+    } else if coin == "ltc" {
+        Some(Net {
+            hrp: "ltc".to_string(),
+            versions: [v(0x30, "P2PKH"), v(0x32, "P2SH"), v(0x05, "P2SH (old 3-address)")],
+            alphabet: "bitcoin".to_string(),
+        })
+    } else if coin == "xrp" {
+        Some(Net { hrp: "".to_string(), versions: [v(0x00, "account")], alphabet: "ripple".to_string() })
+    } else {
+        None
+    }
+}
+
+fn owner_of(v: i64) -> String {
+    let name = if v == 0x00 {
+        "bitcoin"
+    } else if v == 0x05 {
+        "bitcoin P2SH"
+    } else if v == 0x6f {
+        "testnet"
+    } else if v == 0xc4 {
+        "testnet P2SH"
+    } else if v == 0x30 {
+        "litecoin"
+    } else if v == 0x32 {
+        "litecoin P2SH"
+    } else {
+        "unknown"
+    };
+    name.to_string()
+}
+
+fn to_u8s(v: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in v.iter() {
+        out.push(*x as u8);
+    }
+    out
+}
+
+fn bech32_verdict(hrp: ref String, a: ref String) -> String {
+    match seg_decode(hrp, a) {
+        None => {
+            match bech32_decode(a) {
+                None => "REJECT bech32: bad character, mixed case or checksum".to_string(),
+                Some((_, data)) => {
+                    match convertbits(tail_of(data), 5, 8, false) {
+                        None => "REJECT bech32: program is not whole bytes".to_string(),
+                        Some(prog8) => f"REJECT bech32: witness version {data[0]} with a {prog8.len()}-byte program",
+                    }
+                }
+            }
+        }
+        Some((ver, prog)) => {
+            let kind = if ver == 0 and prog.len() == 20 {
+                "P2WPKH".to_string()
+            } else if ver == 0 and prog.len() == 32 {
+                "P2WSH".to_string()
+            } else if ver == 1 and prog.len() == 32 {
+                "P2TR".to_string()
+            } else {
+                f"witness v{ver}"
+            };
+            let canon = seg_encode(hrp, ver, prog);
+            let note = match canon {
+                Some(c) => if c == *a { "".to_string() } else { f" (as {c})" },
+                None => " (as None)".to_string(),
+            };
+            f"OK {kind} {prefix(hex_of(to_u8s(prog)), 8)}{note}"
+        }
+    }
+}
+
+fn check_address(coin: ref String, a: ref String) -> String {
+    let net = match net_of(coin) {
+        Some(n) => n,
+        None => return "REJECT no such coin".to_string(),
+    };
+    let alph = alphabet_named(net.alphabet);
+    if a.len() == 0 {
+        return "REJECT empty address".to_string();
+    }
+    let lower = a.to_lowercase();
+    if net.hrp.len() > 0 and lower.starts_with(f"{net.hrp}1") {
+        return bech32_verdict(net.hrp, a);
+    }
+    for (other, name) in [("bc", "bitcoin"), ("tb", "testnet"), ("ltc", "litecoin")] {
+        let o = other.to_string();
+        if o != net.hrp and lower.starts_with(f"{o}1") and seg_decode(o, a).is_some() {
+            return f"REJECT a {name} address";
+        }
+    }
+    let payload = match b58decode_check(Input.Text(a.clone()), alph, false) {
+        Ok(p) => p,
+        Err(e) => {
+            return match b58decode_check(Input.Text(a.clone()), alph, true) {
+                Err(_) => f"REJECT base58: {e.msg}",
+                Ok(fixed) => {
+                    let again = b58encode_check(Input.Raw(fixed), alph).unwrap_or(Vec.new());
+                    f"REJECT base58: {e.msg}; did you mean {from_ascii(again)}?"
+                }
+            };
+        }
+    };
+    if payload.len() != 21 {
+        return f"REJECT {payload.len()}-byte payload, want 21";
+    }
+    let v = payload[0] as i64;
+    let mut kind = String.new();
+    for (n, s) in net.versions.iter() {
+        if *n == v {
+            kind = s.clone();
+        }
+    }
+    if kind.len() == 0 {
+        return f"REJECT version 0x{hex_digits(v, 2)} ({owner_of(v)})";
+    }
+    let canon = from_ascii(b58encode_check(Input.Raw(payload.clone()), alph).unwrap_or(Vec.new()));
+    let note = if canon == *a { "".to_string() } else { f" (as {canon})" };
+    f"OK {kind} {hex_of(slice(payload, 1, 5))}{note}"
+}
+
+fn data_rows(name: ref String) -> Vec[String] {
+    let all = split_on(read_text(name), b'\n');
+    let mut out: Vec[String] = Vec.new();
+    for i in 1..(all.len() - 1) {
+        out.push(all[i].clone());
+    }
+    out
+}
+
+fn withdrawals_job(name: ref String, out: mut ref String) {
+    let mut keys: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for row in data_rows(name).iter() {
+        let f = split_on(row, b',');
+        let verdict = check_address(f[1], f[2]);
+        emit(mut out, f"{f[0]} {f[1]} {f[3]}: {verdict}");
+        let word = split_on(verdict, b' ')[0].clone();
+        let key = f"{f[1]}\x01{word}";
+        let mut found = false;
+        for i in 0..keys.len() {
+            if keys[i] == key {
+                counts[i] += 1;
+                found = true;
+            }
+        }
+        if not found {
+            keys.push(key);
+            counts.push(1);
+        }
+    }
+    for key in sort_strings(keys.clone()).iter() {
+        let mut n = 0;
+        for i in 0..keys.len() {
+            if keys[i] == *key {
+                n = counts[i];
+            }
+        }
+        let parts = split_on(key, 1u8);
+        emit(mut out, f"  {parts[0]} {parts[1]}: {n}");
+    }
+}
+
+// version -> (name, private, the plain x/t version it stands for)
+fn xkey_kind(ver: ref String) -> Option[(String, bool, String)] {
+    let e = |n: Str, p: bool, plain: Str| Some((n.to_string(), p, plain.to_string()));
+    if ver == "0488b21e" {
+        e("xpub", false, "0488b21e")
+    } else if ver == "0488ade4" {
+        e("xprv", true, "0488ade4")
+    } else if ver == "049d7cb2" {
+        e("ypub", false, "0488b21e")
+    } else if ver == "04b24746" {
+        e("zpub", false, "0488b21e")
+    } else if ver == "043587cf" {
+        e("tpub", false, "043587cf")
+    } else if ver == "04358394" {
+        e("tprv", true, "04358394")
+    } else {
+        None
+    }
+}
+
+fn xkeys_job(name: ref String, out: mut ref String) {
+    let alph = bitcoin_alphabet();
+    for line in lines_of(read_text(name)).iter() {
+        if line.starts_with("#") {
+            emit(mut out, line);
+            continue;
+        }
+        let head = f"{prefix(line, 12)}...";
+        let raw = match b58decode_check(Input.Text(line.clone()), alph, false) {
+            Ok(r) => r,
+            Err(e) => {
+                emit(mut out, f"{head} {e.msg}");
+                continue;
+            }
+        };
+        if raw.len() != 78 {
+            emit(mut out, f"{head} {raw.len()} bytes, want 78");
+            continue;
+        }
+        let ver = hex_of(slice(raw, 0, 4));
+        let (kind, is_private, plain) = match xkey_kind(ver) {
+            Some(k) => k,
+            None => {
+                emit(mut out, f"{head} unknown version {ver}");
+                continue;
+            }
+        };
+        let depth = raw[4] as i64;
+        let fp = hex_of(slice(raw, 5, 9));
+        let mut child: i64 = 0;
+        for i in 9..13 {
+            child = child * 256 + raw[i] as i64;
+        }
+        let chain = slice(raw, 13, 45);
+        let key0 = raw[45] as i64;
+        let child_s = if child >= (1 << 31) { f"{child - (1 << 31)}'" } else { f"{child}" };
+        let mut problems: Vec[String] = Vec.new();
+        if depth == 0 and (fp != "00000000" or child != 0) {
+            problems.push("a master key with a parent".to_string());
+        }
+        if is_private and key0 != 0 {
+            problems.push(f"private key starts with 0x{hex_digits(key0, 2)}");
+        }
+        if not is_private and key0 != 2 and key0 != 3 {
+            problems.push(f"public key starts with 0x{hex_digits(key0, 2)}");
+        }
+        emit(mut out, f"{head} {kind} depth {depth} parent {fp} child {child_s} chain {prefix(hex_of(chain), 12)}...");
+        if problems.len() > 0 {
+            emit(mut out, f"  invalid: {join(problems, "; ")}");
+        } else if plain != ver {
+            let mut b = unhex(plain);
+            for i in 4..raw.len() {
+                b.push(raw[i]);
+            }
+            let plain_name = match xkey_kind(plain) {
+                Some((n, _, _)) => n,
+                None => "?".to_string(),
+            };
+            let enc = from_ascii(b58encode_check(Input.Raw(b), alph).unwrap_or(Vec.new()));
+            emit(mut out, f"  as {plain_name}: {enc}");
+        }
+    }
+}
+
+fn wif_job(name: ref String, out: mut ref String) {
+    let alph = bitcoin_alphabet();
+    for line in lines_of(read_text(name)).iter() {
+        let head = f"{prefix(line, 10)}...";
+        let raw = match b58decode_check(Input.Text(line.clone()), alph, false) {
+            Ok(r) => r,
+            Err(e) => {
+                emit(mut out, f"{head} {e.msg}");
+                continue;
+            }
+        };
+        let v = raw[0] as i64;
+        let net = if v == 0x80 {
+            "mainnet"
+        } else if v == 0xef {
+            "testnet"
+        } else {
+            emit(mut out, f"{head} not a private key (version 0x{hex_digits(v, 2)})");
+            continue;
+        };
+        let comp = if raw.len() == 33 {
+            "uncompressed"
+        } else if raw.len() == 34 and raw[33] == 1 {
+            "compressed"
+        } else {
+            emit(mut out, f"{head} {net}, {raw.len()} bytes: not a key");
+            continue;
+        };
+        let fpr = prefix(hex_of(sha256(slice(raw, 1, 33))), 8);
+        emit(mut out, f"{head} {net} {comp} key, fingerprint {fpr}");
+    }
+}
+
+fn scripts_job(name: ref String, out: mut ref String) {
+    for line in data_rows(name).iter() {
+        let f = split_on(line, b',');
+        let data = unhex(f[3]);
+        let wsh = f[2] == "wsh";
+        let prog = if wsh { sha256(data) } else { data.clone() };
+        match seg_encode(f[1], 0, byte_digits(prog)) {
+            None => emit(mut out, f"{f[0]}: cannot encode a {prog.len()}-byte program"),
+            Some(a) => {
+                if wsh {
+                    emit(mut out, f"{f[0]}: {a} ({data.len()}-byte script)");
+                } else {
+                    emit(mut out, f"{f[0]}: {a}");
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())).iter() {
+        let job = split_on(line, b'\t');
+        emit(mut out, f"== {join(job, " ")}");
+        let kind = job[0].clone();
+        if kind == "cli" {
+            cli_job(job[1], job[2], mut out);
+        } else if kind == "withdrawals" {
+            withdrawals_job(job[1], mut out);
+        } else if kind == "xkeys" {
+            xkeys_job(job[1], mut out);
+        } else if kind == "wif" {
+            wif_job(job[1], mut out);
+        } else if kind == "scripts" {
+            scripts_job(job[1], mut out);
+        } else {
+            library_job(job, mut out);
+        }
+    }
+    print(out);
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("StV1DL6Cw0TryKyV\n");
+    v.push(DataFile { path: "cli/bad-char.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("000f1e2d3c4b5a69788796a5b4c3d2e1f0ff0000");
+    v.push(DataFile { path: "cli/binary.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("3ke1HhjtW2WE3H67Tk3sx\n");
+    v.push(DataFile { path: "cli/checked.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("StV1DL6CwTryKyV\r\n");
+    v.push(DataFile { path: "cli/crlf.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "cli/empty.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2yGEbwRFyhPZZckJm\n");
+    v.push(DataFile { path: "cli/encoded.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("hello world\n");
+    v.push(DataFile { path: "cli/hello.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("3ke1HhjtW2WE3H67Tk3ax\n");
+    v.push(DataFile { path: "cli/tampered.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("enc\tbitcoin\t68656c6c6f20776f726c64\n");
+    t.push_str("enc\tbitcoin\t000068656c6c6f20776f726c64\n");
+    t.push_str("enc\tbitcoin\t\n");
+    t.push_str("enc\tbitcoin\t00\n");
+    t.push_str("enc\tbitcoin\t000000\n");
+    t.push_str("enc\tbitcoin\tffffffffffffffffffffffffffffffff\n");
+    t.push_str("enc\tripple\t68656c6c6f20776f726c64\n");
+    t.push_str("enc\tripple\t0000ff\n");
+    t.push_str("enc\tbase45\t68656c6c6f20776f726c64\n");
+    t.push_str("enc\tbase45\t00ff\n");
+    t.push_str("enc\txl\t0001020304\n");
+    t.push_str("enc_str\tbitcoin\thello world\n");
+    t.push_str("enc_str\tbitcoin\t\n");
+    t.push_str("enc_str\tbitcoin\tcaf\\xe9\n");
+    t.push_str("enc_str\tbitcoin\t\\u20ac\\u20ac and \\xe9\n");
+    t.push_str("dec\tbitcoin\tStV1DL6CwTryKyV\t\n");
+    t.push_str("dec\tbitcoin\t11StV1DL6CwTryKyV\t\n");
+    t.push_str("dec\tbitcoin\t1\t\n");
+    t.push_str("dec\tbitcoin\t\t\n");
+    t.push_str("dec\tbitcoin\t111\t\n");
+    t.push_str("dec\tbitcoin\tStVlDL6CwTryKyV\tautofix\n");
+    t.push_str("dec\tbitcoin\tStVlDL6CwTryKyV\t\n");
+    t.push_str("dec\tbitcoin\txyz\\x08\t\n");
+    t.push_str("dec\tbitcoin\tStV1DL6CwTryKyV  \\x0a\t\n");
+    t.push_str("dec\tbitcoin\t  StV1DL6CwTryKyV\t\n");
+    t.push_str("dec\tbitcoin\tStV1DL6CwTryKyV\\u3000\t\n");
+    t.push_str("dec\tbitcoin\tSt\\xe9V\t\n");
+    t.push_str("dec\tbitcoin\t\\xe9\\xe8V\t\n");
+    t.push_str("dec\tbitcoin\t0OoIl1\tautofix\n");
+    t.push_str("dec\tbitcoin\t0\t\n");
+    t.push_str("dec\tripple\trrr\t\n");
+    t.push_str("dec\tripple\tpzz\tautofix\n");
+    t.push_str("dec\tbase45\t00 A \t\n");
+    t.push_str("dec\tbase45\tZz\t\n");
+    t.push_str("dec\txl\t0Oo\tautofix\n");
+    t.push_str("dec\txl\tIl1\tautofix\n");
+    t.push_str("enc_check\tbitcoin\t68656c6c6f20776f726c64\n");
+    t.push_str("enc_check\tbitcoin\t\n");
+    t.push_str("enc_check\tbitcoin\t000000\n");
+    t.push_str("enc_check\tripple\t00abababababababababababababababababababab\n");
+    t.push_str("dec_check\tbitcoin\t3vQB7B6MrGQZaxCuFg4oh\t\n");
+    t.push_str("dec_check\tbitcoin\t3vQB7B6MrGQZaxCuFg4Oh\tautofix\n");
+    t.push_str("dec_check\tbitcoin\t3vQB7B6MrGQZaxCuFg4oH\t\n");
+    t.push_str("dec_check\tbitcoin\t3vQB7B6MrGQZaxCuFg4Oh\t\n");
+    t.push_str("dec_check\tbitcoin\t\t\n");
+    t.push_str("dec_check\tbitcoin\t1\t\n");
+    t.push_str("dec_check\tbitcoin\t3QJmnh\t\n");
+    t.push_str("dec_check\tbitcoin\t1111\t\n");
+    t.push_str("enc_int\tbitcoin\t0\t1\n");
+    t.push_str("enc_int\tbitcoin\t0\t0\n");
+    t.push_str("enc_int\tbitcoin\t57\t1\n");
+    t.push_str("enc_int\tbitcoin\t58\t1\n");
+    t.push_str("enc_int\tbitcoin\t18446744073709551616\t1\n");
+    t.push_str("enc_int\tbitcoin\t584889621711786543479188656466418868554454211731455017244085522414579008191811299673190496036017573\t1\n");
+    t.push_str("enc_int\tripple\t1000000\t1\n");
+    t.push_str("enc_int\tbase45\t123456789\t1\n");
+    t.push_str("dec_int\tbitcoin\t123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz\n");
+    t.push_str("dec_int\tbitcoin\t2\n");
+    t.push_str("dec_int\tbitcoin\t1111z\n");
+    t.push_str("dec_int\tbitcoin\tz \n");
+    t.push_str("dec_int\tbase45\tZ \n");
+    t.push_str("dec_int\tbitcoin\tzl\n");
+    t.push_str("dec_int\tripple\tr\n");
+    t.push_str("dec_int\tbitcoin\t\n");
+    t.push_str("cli\t\tcli/hello.txt\n");
+    t.push_str("cli\t-d\tcli/encoded.txt\n");
+    t.push_str("cli\t-c\tcli/hello.txt\n");
+    t.push_str("cli\t-dc\tcli/checked.txt\n");
+    t.push_str("cli\t-dc\tcli/tampered.txt\n");
+    t.push_str("cli\t-d\tcli/bad-char.txt\n");
+    t.push_str("cli\t-d\tcli/empty.txt\n");
+    t.push_str("cli\t\tcli/binary.bin\n");
+    t.push_str("cli\t-d\tcli/crlf.txt\n");
+    t.push_str("b32_decode\tA12UEL5L\n");
+    t.push_str("b32_decode\ta12uel5l\n");
+    t.push_str("b32_decode\tan83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1tt5tgs\n");
+    t.push_str("b32_decode\tabcdef1qpzry9x8gf2tvdw0s3jn54khce6mua7lmqqqxw\n");
+    t.push_str("b32_decode\t11qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8247j\n");
+    t.push_str("b32_decode\tsplit1checkupstagehandshakeupstreamerranterredcaperred2y9e3w\n");
+    t.push_str("b32_decode\t?1ezyfcl\n");
+    t.push_str("b32_decode\t 1nwldj5\n");
+    t.push_str("b32_decode\t\\x7f1axkwrx\n");
+    t.push_str("b32_decode\tan84characterslonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1569pvx\n");
+    t.push_str("b32_decode\tpzry9x0s0muk\n");
+    t.push_str("b32_decode\t1pzry9x0s0muk\n");
+    t.push_str("b32_decode\tx1b4n0q5v\n");
+    t.push_str("b32_decode\tli1dgmt3\n");
+    t.push_str("b32_decode\tde1lg7wt\\xff\n");
+    t.push_str("b32_decode\tA1G7SGD8\n");
+    t.push_str("b32_decode\t10a06t8\n");
+    t.push_str("b32_decode\t1qzzfhee\n");
+    t.push_str("b32_decode\tA12uEL5L\n");
+    t.push_str("b32_decode\ta1qqqqqq\n");
+    t.push_str("b32_decode\ta12uel5m\n");
+    t.push_str("b32_decode\t\n");
+    t.push_str("b32_encode\ta\t\n");
+    t.push_str("b32_encode\tabcdef\t0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n");
+    t.push_str("b32_encode\tbc\t0,1,2,31\n");
+    t.push_str("b32_encode\tBC\t0,1\n");
+    t.push_str("b32_encode\tx\t32\n");
+    t.push_str("b32_encode\tx\t-1\n");
+    t.push_str("seg_decode\tbc\tBC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4\n");
+    t.push_str("seg_decode\ttb\ttb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7\n");
+    t.push_str("seg_decode\tbc\tbc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k7grplx\n");
+    t.push_str("seg_decode\tbc\tBC1SW50QA3JX3S\n");
+    t.push_str("seg_decode\tbc\tbc1zw508d6qejxtdg4y5r3zarvaryvg6kdaj\n");
+    t.push_str("seg_decode\ttb\ttb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy\n");
+    t.push_str("seg_decode\tbc\tbc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0\n");
+    t.push_str("seg_decode\ttc\ttc1qw508d6qejxtdg4y5r3zarvary0c5xw7kg3g4ty\n");
+    t.push_str("seg_decode\tbc\tbc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5\n");
+    t.push_str("seg_decode\tbc\tBC13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2\n");
+    t.push_str("seg_decode\tbc\tbc1rw5uspcuh\n");
+    t.push_str("seg_decode\tbc\tbc10w508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kw5rljs90\n");
+    t.push_str("seg_decode\tbc\tBC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P\n");
+    t.push_str("seg_decode\ttb\ttb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7\n");
+    t.push_str("seg_decode\tbc\tbc1zw508d6qejxtdg4y5r3zarvaryvqyzf3du\n");
+    t.push_str("seg_decode\tbc\tbc1gmk9yu\n");
+    t.push_str("seg_decode\ttb\ttb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c\n");
+    t.push_str("seg_encode\tbc\t0\t751e76e8199196d454941c45d1b3a323f1433bd6\n");
+    t.push_str("seg_encode\tbc\t1\t751e76e8199196d454941c45d1b3a323f1433bd6\n");
+    t.push_str("seg_encode\tbc\t0\t751e76e8199196d454941c45d1b3a323f1433b\n");
+    t.push_str("seg_encode\tbc\t17\t751e\n");
+    t.push_str("seg_encode\tbc\t16\t751e\n");
+    t.push_str("seg_encode\tbc\t2\t75\n");
+    t.push_str("seg_encode\tbc\t2\t00000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    t.push_str("seg_encode\tbc\t2\t0000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    t.push_str("seg_encode\ttb\t0\t0000000000000000000000000000000000000000000000000000000000000000\n");
+    t.push_str("seg_encode\tan83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio\t0\t0000000000000000000000000000000000000000\n");
+    t.push_str("convert\t255\t8\t5\t1\n");
+    t.push_str("convert\t255\t8\t5\t0\n");
+    t.push_str("convert\t1,2,3\t5\t8\t0\n");
+    t.push_str("convert\t0,0,0,0,0,0,0,0\t5\t8\t0\n");
+    t.push_str("convert\t31,31,31,31,31,31,31,24\t5\t8\t0\n");
+    t.push_str("convert\t31,31,31,31,31,31,31,31\t5\t8\t0\n");
+    t.push_str("convert\t256\t8\t5\t1\n");
+    t.push_str("convert\t-1\t8\t5\t1\n");
+    t.push_str("convert\t\t8\t5\t1\n");
+    t.push_str("convert\t1,2\t8\t16\t1\n");
+    t.push_str("withdrawals\twithdrawals.csv\n");
+    t.push_str("xkeys\txkeys.txt\n");
+    t.push_str("wif\twif.txt\n");
+    t.push_str("scripts\tscripts.csv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# label,network,kind,hex\n");
+    t.push_str("2-of-3 treasury,bc,wsh,522102278ae6b78bddb5eea883f3aa128b825ec063fafc5c2efa3e6216a3ea612c3e2921029239c2b1b14ac8fc0cb5293ae264e891cf378e4c92c26ef9658f3600ce322eb621024681512289b2b84429d330d7a8b71a0d1cf2626852c053da98421eea8a685c5c53ae\n");
+    t.push_str("2-of-3 treasury,tb,wsh,522102278ae6b78bddb5eea883f3aa128b825ec063fafc5c2efa3e6216a3ea612c3e2921029239c2b1b14ac8fc0cb5293ae264e891cf378e4c92c26ef9658f3600ce322eb621024681512289b2b84429d330d7a8b71a0d1cf2626852c053da98421eea8a685c5c53ae\n");
+    t.push_str("hot wallet,bc,wpkh,7f5d1618e7d28cc7bf32788672be04c24877d9a8\n");
+    t.push_str("hot wallet,ltc,wpkh,7f5d1618e7d28cc7bf32788672be04c24877d9a8\n");
+    t.push_str("timelock,bc,wsh,03400d03b1752102278ae6b78bddb5eea883f3aa128b825ec063fafc5c2efa3e6216a3ea612c3e29ac\n");
+    t.push_str("bad hash,bc,wpkh,7f5d1618e7d28cc7bf32788672be04c24877d9\n");
+    t.push_str("empty script,bc,wsh,\n");
+    v.push(DataFile { path: "scripts.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ\n");
+    t.push_str("KzTpZadcDy2WTLnS9vpk8dA7Vgb459guWikQhaF3N3rPBqpgD5a7\n");
+    t.push_str("5HsMgnDn2J86bAwvqgcT2Ukp9eGaoyAjAjr96q1eutXrZchAm2P\n");
+    t.push_str("cQTiNdteYR6o3LqPiLUKNogSsL9Qz5ditvbRuiYEpHqA5Pu42WhU\n");
+    t.push_str("92ceCZC42KfoV2FwjgqjEXqAe6DYnJwWcXnHxkMozKh6xmCHdPG\n");
+    t.push_str("L3VcZoCYqC5rwjHUFPX8dM48nUqPW9GahLJrt3WBCAsqC7jLix6w\n");
+    t.push_str("yjv3rVR9XJvpqaXLbgpYEZxtcWYq461ojSzCuHnbte9vyYL7x\n");
+    t.push_str("CD9FCi47BD2JXbZuRhroMwme13ucyU2vAn89pLN7Vx5cTn9jTh\n");
+    t.push_str("5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTj\n");
+    v.push(DataFile { path: "wif.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("id,coin,address,amount\n");
+    t.push_str("w001,btc,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,0.5\n");
+    t.push_str("w002,btc,3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy,1.25\n");
+    t.push_str("w003,btc,BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4,0.01\n");
+    t.push_str("w004,btc,bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4,0.02\n");
+    t.push_str("w005,btc,bc1qumc2r7a58jy3jmw0e0hctyy0rx45chmucn6vg53gg6th2a5r6lhsytmxdz,12\n");
+    t.push_str("w006,btc,bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297,0.3\n");
+    t.push_str("w007,btc,bc1pud89pwgw2ckcumd4f7wjdmmlpuhyyq35l22rqy388zcwmkext3hsrsszwe,0.3\n");
+    t.push_str("w008,btc,1AlzP1eP5QGefi2DMPTfTL5SLmv7DivfNa,0.5\n");
+    t.push_str("w009,btc,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb,0.5\n");
+    t.push_str("w010,btc,1A1zP1eP5QGefi2DMPTf,0.5\n");
+    t.push_str("w011,btc, 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,0.5\n");
+    t.push_str("w012,btc,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa ,0.5\n");
+    t.push_str("w013,btc,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa​,0.5\n");
+    t.push_str("w014,btc,mujzEuWHa6DtjFMkBH2xQUd6znQYC8HPQe,0.1\n");
+    t.push_str("w015,btc,tb1qnsyv4mt37n0arnxudlg4rmmrpew37vn8dapjvr,0.1\n");
+    t.push_str("w016,btc,BC1QW508D6qEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4,0.01\n");
+    t.push_str("w017,btc,bc1qlxcq0z6a7ktd96seqyxqqxaaqqwshya0,0.01\n");
+    t.push_str("w018,btc,bc1saweaaz3anfqrvcfjadw7kkh5fexfdsgkjmu0cd829swchkpej9csujuawj,0.01\n");
+    t.push_str("w019,btc,3CjaEbgGyq2vc3zDM3V6WXrV3ZfbgtXYAz,3\n");
+    t.push_str("w020,btc,12kZZHibE1t6b39kYM1WVLNCnR1NqWPKiPnL,1\n");
+    t.push_str("w021,btc,LV9qZ4oX2ms6dKuo2ri8GJWpbPRyywMzXB,1\n");
+    t.push_str("w022,btc,bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5,0.01\n");
+    t.push_str("w023,btc,,1\n");
+    t.push_str("w101,tbtc,msiLNggMqzq7j52yfQB55U9UHZ8PhpwGXR,2\n");
+    t.push_str("w102,tbtc,2Mu7UzpUdFpjxkuYr6FRZ1pCjneH6W3Bcgv,2\n");
+    t.push_str("w103,tbtc,tb1qnhq9vekkmeqytym8guf9tpx2mxdxfv85cl29zff3sxgqf5t7ghash9wstw,2\n");
+    t.push_str("w104,tbtc,tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7,2\n");
+    t.push_str("w105,tbtc,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,2\n");
+    t.push_str("w201,ltc,LSAc9yvqaQd4hSaDzmn8jNtn7THnpgjbXt,10\n");
+    t.push_str("w202,ltc,MQS3MkAA9nUEgEXouX25sCcU7L6c5KFiu1,10\n");
+    t.push_str("w203,ltc,35rEVHmLBgXBY8Fz7Mgn8D3VGWUheV1a5t,10\n");
+    t.push_str("w204,ltc,ltc1qrv2rhfepdxf380mnkhq5d696vqhm6skkaulh0t,10\n");
+    t.push_str("w205,ltc,bc1qrv2rhfepdxf380mnkhq5d696vqhm6skkeq9nhm,10\n");
+    t.push_str("w301,xrp,rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh,25\n");
+    t.push_str("w302,xrp,r9v5uPWWHpjeuGq1V9fWPSuQP2EXtSG4ys,25\n");
+    t.push_str("w303,xrp,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,25\n");
+    t.push_str("w304,xrp,R9v5uPWWHpjeuGq1V9fWPSuQP2EXtSG4ys,25\n");
+    t.push_str("w305,doge,1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa,25\n");
+    v.push(DataFile { path: "withdrawals.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# BIP-32 test vector 1, master key\n");
+    t.push_str("xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8\n");
+    t.push_str("# an account xpub, m/84'/0'/0'\n");
+    t.push_str("xpub6DLA1JsVCu57FC5SC9CTPytftGrcy9YWgGX4KuWT8agk39kMvn7EhVNpxy5suoNMdSSpCrhf5LN66y4GXEvksmDPvYAjyK5z5i6niHXiAC5\n");
+    t.push_str("# the same key as a zpub and a ypub\n");
+    t.push_str("zpub6rzgceDKWGA4wnTfrrmhpA5gED9WrPXWWVZVthJDtbSW9MNpS6SMwch71P13ucgCSigRhotmzf5BsYHPxdknUEabfDZb98ixdAE5VPMG4AW\n");
+    t.push_str("ypub6YARJyYQMacb6VGZ2Vz5c4zB4F14umY1bP3H7JQLWb4d6FZbBSGoKZ2xzB3Tui2H35ZcxLJDXzidzFfqEwLmfztznssAZDuUMSAS6pSgt6o\n");
+    t.push_str("# testnet, and a private key\n");
+    t.push_str("tpubD8gYa92bC2v5TaryiuGTzxNQvUEMthpDstpbcrUFWJgbkfJgJ5ZtWouTNXeHPydmKJKW79zN9CwSmGe32CykTKdGorVqBe85CnGVww96H96\n");
+    t.push_str("xprv9s21ZrQH143K42biUTBRLGbasF8arp31uJ4hVAMqq919GD91jaR6VLexAtPG6HyD96yrefd7Y1KTTJQ3HKiBUvphaFC3X19yT2doPgeDvSp\n");
+    t.push_str("# broken ones\n");
+    t.push_str("xpub66LjZkstfTdQxAZdDVz5jf9yuKeH8eDgMSTCs8cBHERFQ2LffQkbLNAWCe5MKPLvZ5N4twba1o1YBK91Z643sNbG7r7kNP9AFHE2Ma9uEpA\n");
+    t.push_str("xprv9w7espP3FhR7gMB3qNs9sYBUB54xH9LY6TU3AM3mCSCy7f7WK2jV6PvzF39Wt7izjTuFd6RpTLgVmSRdYCf97yDkcSSK5qYVjFRRDVjHqPX\n");
+    t.push_str("xpub6A71HKuw64yQtSeTkvArZZnBg7S3c6Vfjd93M2tz22vh7xe95NZENNP5MWaEvf39ewB3twyoAncPydDnd1yo32yb3NdDXd2ebpZPdXNX2xE\n");
+    t.push_str("pGoh3VWoqFmVXgSp3bvb2UK1633zP4y7cXrSvEk2V4Zz2bXZBhAycuJUNKVskQZTPPuvt7opt8sHpA2jeLxjjQBH9FEEe1BWq2tgDe5q6nPHBzRr\n");
+    t.push_str("3hsfdyeV3AzUB1ugAUYN9qZxNLua9QUSDm9jvc\n");
+    t.push_str("xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet9\n");
+    t.push_str("xpub66lMyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8\n");
+    v.push(DataFile { path: "xkeys.txt".to_string(), hex: false, body: t });
+}

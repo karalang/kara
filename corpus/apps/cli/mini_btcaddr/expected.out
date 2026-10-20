@@ -1,0 +1,366 @@
+== enc bitcoin 68656c6c6f20776f726c64
+b'StV1DL6CwTryKyV'
+== enc bitcoin 000068656c6c6f20776f726c64
+b'11StV1DL6CwTryKyV'
+== enc bitcoin 
+b''
+== enc bitcoin 00
+b'1'
+== enc bitcoin 000000
+b'111'
+== enc bitcoin ffffffffffffffffffffffffffffffff
+b'YcVfxkQb6JRzqk5kF2tNLv'
+== enc ripple 68656c6c6f20776f726c64
+b'StVrDLaUATiyKyV'
+== enc ripple 0000ff
+b'rrnQ'
+== enc base45 68656c6c6f20776f726c64
+b'K3*J+EGLBVAYYB36'
+== enc base45 00ff
+b'05U'
+== enc xl 0001020304
+b'12VfUX'
+== enc_str bitcoin hello world
+b'StV1DL6CwTryKyV'
+== enc_str bitcoin 
+b''
+== enc_str bitcoin caf\xe9
+error: UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 3: ordinal not in range(128)
+== enc_str bitcoin \u20ac\u20ac and \xe9
+error: UnicodeEncodeError: 'ascii' codec can't encode characters in position 0-1: ordinal not in range(128)
+== dec bitcoin StV1DL6CwTryKyV 
+b'hello world'
+== dec bitcoin 11StV1DL6CwTryKyV 
+b'\x00\x00hello world'
+== dec bitcoin 1 
+b'\x00'
+== dec bitcoin  
+b''
+== dec bitcoin 111 
+b'\x00\x00\x00'
+== dec bitcoin StVlDL6CwTryKyV autofix
+b'hello world'
+== dec bitcoin StVlDL6CwTryKyV 
+error: ValueError: Invalid character 'l'
+== dec bitcoin xyz\x08 
+error: ValueError: Invalid character '\x08'
+== dec bitcoin StV1DL6CwTryKyV  \x0a 
+b'hello world'
+== dec bitcoin   StV1DL6CwTryKyV 
+error: ValueError: Invalid character ' '
+== dec bitcoin StV1DL6CwTryKyV\u3000 
+b'hello world'
+== dec bitcoin St\xe9V 
+error: UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 2: ordinal not in range(128)
+== dec bitcoin \xe9\xe8V 
+error: UnicodeEncodeError: 'ascii' codec can't encode characters in position 0-1: ordinal not in range(128)
+== dec bitcoin 0OoIl1 autofix
+b"\x07'+\xae\xd0"
+== dec bitcoin 0 
+error: ValueError: Invalid character '0'
+== dec ripple rrr 
+b'\x00\x00\x00'
+== dec ripple pzz autofix
+b'\x1aG'
+== dec base45 00 A  
+b'\x00\x00\x06^'
+== dec base45 Zz 
+error: ValueError: Invalid character 'z'
+== dec xl 0Oo autofix
+b'\x02g\x12'
+== dec xl Il1 autofix
+error: ValueError: Invalid character 'I'
+== enc_check bitcoin 68656c6c6f20776f726c64
+b'3vQB7B6MrGQZaxCuFg4oh'
+== enc_check bitcoin 
+b'3QJmnh'
+== enc_check bitcoin 000000
+b'11146EAsf'
+== enc_check ripple 00abababababababababababababababababababab
+b'rGe5Ug6AUNqjGSs6DZrgrSM9n6aEUMMzvf'
+== dec_check bitcoin 3vQB7B6MrGQZaxCuFg4oh 
+b'hello world'
+== dec_check bitcoin 3vQB7B6MrGQZaxCuFg4Oh autofix
+b'hello world'
+== dec_check bitcoin 3vQB7B6MrGQZaxCuFg4oH 
+error: ValueError: Invalid checksum
+== dec_check bitcoin 3vQB7B6MrGQZaxCuFg4Oh 
+error: ValueError: Invalid character 'O'
+== dec_check bitcoin  
+error: ValueError: Invalid checksum
+== dec_check bitcoin 1 
+error: ValueError: Invalid checksum
+== dec_check bitcoin 3QJmnh 
+b''
+== dec_check bitcoin 1111 
+error: ValueError: Invalid checksum
+== enc_int bitcoin 0 1
+b'1'
+== enc_int bitcoin 0 0
+b''
+== enc_int bitcoin 57 1
+b'z'
+== enc_int bitcoin 58 1
+b'21'
+== enc_int bitcoin 18446744073709551616 1
+b'jpXCZedGfVR'
+== enc_int bitcoin 584889621711786543479188656466418868554454211731455017244085522414579008191811299673190496036017573 1
+b'23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+== enc_int ripple 1000000 1
+b'a3GP'
+== enc_int base45 123456789 1
+b'U4 E9'
+== dec_int bitcoin 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+584889621711786543479188656466418868554454211731455017244085522414579008191811299673190496036017573
+== dec_int bitcoin 2
+1
+== dec_int bitcoin 1111z
+57
+== dec_int bitcoin z 
+57
+== dec_int base45 Z 
+1611
+== dec_int bitcoin zl
+error: ValueError: Invalid character 'l'
+== dec_int ripple r
+0
+== dec_int bitcoin 
+0
+== cli  cli/hello.txt
+stdout b'2yGEbwRFyhPZZckJm'
+== cli -d cli/encoded.txt
+stdout b'hello world\n'
+== cli -c cli/hello.txt
+stdout b'DthHcFYf2SzzprfBcpKfTG'
+== cli -dc cli/checked.txt
+stdout b'backup-2024'
+== cli -dc cli/tampered.txt
+exit 1, stderr: Invalid checksum
+== cli -d cli/bad-char.txt
+exit 1, stderr: Invalid character '0'
+== cli -d cli/empty.txt
+stdout b''
+== cli  cli/binary.bin
+stdout b'13mXMjH2FB3uThVBwPkWWWThuDy'
+== cli -d cli/crlf.txt
+stdout b'hello world'
+== b32_decode A12UEL5L
+('a', [])
+== b32_decode a12uel5l
+('a', [])
+== b32_decode an83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1tt5tgs
+('an83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio', [])
+== b32_decode abcdef1qpzry9x8gf2tvdw0s3jn54khce6mua7lmqqqxw
+('abcdef', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])
+== b32_decode 11qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqc8247j
+(None, None)
+== b32_decode split1checkupstagehandshakeupstreamerranterredcaperred2y9e3w
+('split', [24, 23, 25, 24, 22, 28, 1, 16, 11, 29, 8, 25, 23, 29, 19, 13, 16, 23, 29, 22, 25, 28, 1, 16, 11, 3, 25, 29, 27, 25, 3, 3, 29, 19, 11, 25, 3, 3, 25, 13, 24, 29, 1, 25, 3, 3, 25, 13])
+== b32_decode ?1ezyfcl
+('?', [])
+== b32_decode  1nwldj5
+(None, None)
+== b32_decode \x7f1axkwrx
+(None, None)
+== b32_decode an84characterslonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1569pvx
+(None, None)
+== b32_decode pzry9x0s0muk
+(None, None)
+== b32_decode 1pzry9x0s0muk
+(None, None)
+== b32_decode x1b4n0q5v
+(None, None)
+== b32_decode li1dgmt3
+(None, None)
+== b32_decode de1lg7wt\xff
+(None, None)
+== b32_decode A1G7SGD8
+(None, None)
+== b32_decode 10a06t8
+(None, None)
+== b32_decode 1qzzfhee
+(None, None)
+== b32_decode A12uEL5L
+(None, None)
+== b32_decode a1qqqqqq
+(None, None)
+== b32_decode a12uel5m
+(None, None)
+== b32_decode 
+(None, None)
+== b32_encode a 
+'a12uel5l'
+== b32_encode abcdef 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+'abcdef1qpzry9x8gf2tvdw0s3jn54khce6mua7lmqqqxw'
+== b32_encode bc 0,1,2,31
+'bc1qpzlh3llgr'
+== b32_encode BC 0,1
+'BC1qpdc2pyt'
+== b32_encode x 32
+error: IndexError: string index out of range
+== b32_encode x -1
+'x1lasql8s'
+== seg_decode bc BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4
+(0, [117, 30, 118, 232, 25, 145, 150, 212, 84, 148, 28, 69, 209, 179, 163, 35, 241, 67, 59, 214])
+== seg_decode tb tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7
+(0, [24, 99, 20, 60, 20, 197, 22, 104, 4, 189, 25, 32, 51, 86, 218, 19, 108, 152, 86, 120, 205, 77, 39, 161, 184, 198, 50, 150, 4, 144, 50, 98])
+== seg_decode bc bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k7grplx
+(1, [117, 30, 118, 232, 25, 145, 150, 212, 84, 148, 28, 69, 209, 179, 163, 35, 241, 67, 59, 214, 117, 30, 118, 232, 25, 145, 150, 212, 84, 148, 28, 69, 209, 179, 163, 35, 241, 67, 59, 214])
+== seg_decode bc BC1SW50QA3JX3S
+(16, [117, 30])
+== seg_decode bc bc1zw508d6qejxtdg4y5r3zarvaryvg6kdaj
+(2, [117, 30, 118, 232, 25, 145, 150, 212, 84, 148, 28, 69, 209, 179, 163, 35])
+== seg_decode tb tb1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesrxh6hy
+(0, [0, 0, 0, 196, 165, 202, 212, 98, 33, 178, 161, 135, 144, 94, 82, 102, 54, 43, 153, 213, 233, 28, 108, 226, 77, 22, 93, 171, 147, 232, 100, 51])
+== seg_decode bc bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0
+(None, None)
+== seg_decode tc tc1qw508d6qejxtdg4y5r3zarvary0c5xw7kg3g4ty
+(0, [117, 30, 118, 232, 25, 145, 150, 212, 84, 148, 28, 69, 209, 179, 163, 35, 241, 67, 59, 214])
+== seg_decode bc bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5
+(None, None)
+== seg_decode bc BC13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2
+(None, None)
+== seg_decode bc bc1rw5uspcuh
+(None, None)
+== seg_decode bc bc10w508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kw5rljs90
+(None, None)
+== seg_decode bc BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P
+(None, None)
+== seg_decode tb tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7
+(None, None)
+== seg_decode bc bc1zw508d6qejxtdg4y5r3zarvaryvqyzf3du
+(None, None)
+== seg_decode bc bc1gmk9yu
+(None, None)
+== seg_decode tb tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c
+(None, None)
+== seg_encode bc 0 751e76e8199196d454941c45d1b3a323f1433bd6
+'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4'
+== seg_encode bc 1 751e76e8199196d454941c45d1b3a323f1433bd6
+'bc1pw508d6qejxtdg4y5r3zarvary0c5xw7k8e76x7'
+== seg_encode bc 0 751e76e8199196d454941c45d1b3a323f1433b
+None
+== seg_encode bc 17 751e
+None
+== seg_encode bc 16 751e
+'bc1sw50qa3jx3s'
+== seg_encode bc 2 75
+None
+== seg_encode bc 2 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+'bc1zqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqw3zl8k'
+== seg_encode bc 2 0000000000000000000000000000000000000000000000000000000000000000000000000000000000
+None
+== seg_encode tb 0 0000000000000000000000000000000000000000000000000000000000000000
+'tb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqulkl3g'
+== seg_encode an83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio 0 0000000000000000000000000000000000000000
+'an83characterlonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqp6pnr0'
+== convert 255 8 5 1
+[31, 28]
+== convert 255 8 5 0
+None
+== convert 1,2,3 5 8 0
+None
+== convert 0,0,0,0,0,0,0,0 5 8 0
+[0, 0, 0, 0, 0]
+== convert 31,31,31,31,31,31,31,24 5 8 0
+[255, 255, 255, 255, 248]
+== convert 31,31,31,31,31,31,31,31 5 8 0
+[255, 255, 255, 255, 255]
+== convert 256 8 5 1
+None
+== convert -1 8 5 1
+None
+== convert  8 5 1
+[]
+== convert 1,2 8 16 1
+[258]
+== withdrawals withdrawals.csv
+w001 btc 0.5: OK P2PKH 62e907b1
+w002 btc 1.25: OK P2SH b472a266
+w003 btc 0.01: OK P2WPKH 751e76e8 (as bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4)
+w004 btc 0.02: OK P2WPKH 751e76e8
+w005 btc 12: OK P2WSH e6f0a1fb
+w006 btc 0.3: REJECT bech32: bad character, mixed case or checksum
+w007 btc 0.3: OK P2TR e34e50b9
+w008 btc 0.5: REJECT base58: Invalid character 'l'; did you mean 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa?
+w009 btc 0.5: REJECT base58: Invalid checksum
+w010 btc 0.5: REJECT base58: Invalid checksum
+w011 btc 0.5: REJECT base58: Invalid character ' '
+w012 btc 0.5: OK P2PKH 62e907b1 (as 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa)
+w013 btc 0.5: REJECT base58: 'ascii' codec can't encode character '\u200b' in position 34: ordinal not in range(128)
+w014 btc 0.1: REJECT version 0x6f (testnet)
+w015 btc 0.1: REJECT a testnet address
+w016 btc 0.01: REJECT bech32: bad character, mixed case or checksum
+w017 btc 0.01: REJECT bech32: witness version 0 with a 16-byte program
+w018 btc 0.01: OK witness v16 ebb3de8a
+w019 btc 3: OK P2SH 7925300a
+w020 btc 1: REJECT 22-byte payload, want 21
+w021 btc 1: REJECT version 0x30 (litecoin)
+w022 btc 0.01: REJECT bech32: bad character, mixed case or checksum
+w023 btc 1: REJECT empty address
+w101 tbtc 2: OK P2PKH 85c8842c
+w102 tbtc 2: OK P2SH 147973f4
+w103 tbtc 2: OK P2WSH 9dc05666
+w104 tbtc 2: OK P2WSH 1863143c
+w105 tbtc 2: REJECT version 0x00 (bitcoin)
+w201 ltc 10: OK P2PKH 4c26d907
+w202 ltc 10: OK P2SH b5592b58
+w203 ltc 10: OK P2SH (old 3-address) 2d9ebc34
+w204 ltc 10: OK P2WPKH 1b143ba7
+w205 ltc 10: REJECT a bitcoin address
+w301 xrp 25: OK account b5f76279
+w302 xrp 25: OK account 61ea0803
+w303 xrp 25: REJECT base58: Invalid checksum
+w304 xrp 25: REJECT base58: Invalid checksum
+w305 doge 25: REJECT no such coin
+  btc OK: 9
+  btc REJECT: 14
+  doge REJECT: 1
+  ltc OK: 4
+  ltc REJECT: 1
+  tbtc OK: 4
+  tbtc REJECT: 1
+  xrp OK: 2
+  xrp REJECT: 2
+== xkeys xkeys.txt
+# BIP-32 test vector 1, master key
+xpub661MyMwA... xpub depth 0 parent 00000000 child 0 chain 873dff81c02f...
+# an account xpub, m/84'/0'/0'
+xpub6DLA1JsV... xpub depth 3 parent e4712596 child 0' chain 9414886b1ebf...
+# the same key as a zpub and a ypub
+zpub6rzgceDK... zpub depth 3 parent e4712596 child 0' chain 9414886b1ebf...
+  as xpub: xpub6DLA1JsVCu57FC5SC9CTPytftGrcy9YWgGX4KuWT8agk39kMvn7EhVNpxy5suoNMdSSpCrhf5LN66y4GXEvksmDPvYAjyK5z5i6niHXiAC5
+ypub6YARJyYQ... ypub depth 3 parent e4712596 child 0' chain 9414886b1ebf...
+  as xpub: xpub6DLA1JsVCu57FC5SC9CTPytftGrcy9YWgGX4KuWT8agk39kMvn7EhVNpxy5suoNMdSSpCrhf5LN66y4GXEvksmDPvYAjyK5z5i6niHXiAC5
+# testnet, and a private key
+tpubD8gYa92b... tpub depth 1 parent 3946ca64 child 7 chain a0cbf3993894...
+xprv9s21ZrQH... xprv depth 0 parent 00000000 child 0 chain c5d6d101c748...
+# broken ones
+xpub66LjZkst... xpub depth 0 parent 2d711642 child 0 chain 3d76e8c6280c...
+  invalid: a master key with a parent
+xprv9w7espP3... xprv depth 2 parent 2d711642 child 5 chain 6412bc69e7e4...
+  invalid: private key starts with 0x01
+xpub6A71HKuw... xpub depth 2 parent 2d711642 child 5 chain 3ced8ff17191...
+  invalid: public key starts with 0x05
+pGoh3VWoqFmV... unknown version deadbeef
+3hsfdyeV3AzU... 24 bytes, want 78
+xpub661MyMwA... Invalid checksum
+xpub66lMyMwA... Invalid character 'l'
+== wif wif.txt
+5HueCGU8rM... mainnet uncompressed key, fingerprint 8670e885
+KzTpZadcDy... mainnet compressed key, fingerprint 7ab351c5
+5HsMgnDn2J... mainnet uncompressed key, fingerprint 24bcd759
+cQTiNdteYR... testnet compressed key, fingerprint 3cf71c06
+92ceCZC42K... testnet uncompressed key, fingerprint a648a976
+L3VcZoCYqC... mainnet, 34 bytes: not a key
+yjv3rVR9XJ... mainnet, 32 bytes: not a key
+CD9FCi47BD... not a private key (version 0x05)
+5HueCGU8rM... Invalid checksum
+== scripts scripts.csv
+2-of-3 treasury: bc1qzttnkcc0kd0t3ayeckmtmax4q8ldsjh0hmfxlv4lt3ehp5ns38sq0nmlah (105-byte script)
+2-of-3 treasury: tb1qzttnkcc0kd0t3ayeckmtmax4q8ldsjh0hmfxlv4lt3ehp5ns38sqcmds8c (105-byte script)
+hot wallet: bc1q0aw3vx8862xv00ej0zr890sycfy80kdgh4ddf7
+hot wallet: ltc1q0aw3vx8862xv00ej0zr890sycfy80kdgnfhf3w
+timelock: bc1qjertc5ax5zl3dyg2kt39pneajjqm74ey9strckaqhazhh9rjjcvsjml89s (41-byte script)
+bad hash: cannot encode a 19-byte program
+empty script: bc1quwcvgs5clswpfxhm7nyfjmaeysn6us0yvjdexn9yjkv3k7zjhp2sfl5g83 (0-byte script)
