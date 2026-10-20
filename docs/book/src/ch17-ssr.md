@@ -44,7 +44,7 @@ or DOM mutations is somebody else's job — the provider's.
 A provider is just a type whose methods realize the resource. On the
 server, `Sink` becomes HTML:
 
-```kara
+```kara,ignore
 struct StringSink {}
 impl Render for StringSink {
     fn heading(mut ref self, title: String) { print(f"<h1>{title}</h1>"); }
@@ -60,7 +60,7 @@ On the client, `Sink` becomes DOM mutation. The static heading is already
 present in the page the server rendered, so hydration leaves it alone —
 only the dynamic values cross to the host:
 
-```kara
+```kara,ignore
 effect resource Dom;
 host fn dom_set_count(value: i64) with writes(Dom);
 host fn dom_set_parity(value: i64) with writes(Dom);
