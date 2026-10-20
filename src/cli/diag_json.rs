@@ -1827,7 +1827,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
                 crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
-                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E0285",
+                // core-semantics.md §3.7 names this one (B-2026-10-19-61).
+                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",
                 crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
                 crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a

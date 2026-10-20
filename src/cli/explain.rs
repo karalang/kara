@@ -536,8 +536,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // parked. `code_table_has_no_duplicate_rows` caught the collision — the
     // second time a parked diagnostic collided on a number, so pick the code as
     // late as possible, the same discipline the ledger uses for bug ids.
+    // B-2026-10-19-61: renamed from E0285 to the code core-semantics.md §3.7
+    // gives it.
     (
-        "E0285",
+        "E_INDEX_MOVE_NON_COPY",
         ty("IndexMoveNonCopy", Some(DiagnosticClass::TypeMismatch)),
     ),
     (

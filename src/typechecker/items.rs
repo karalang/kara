@@ -8067,17 +8067,24 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let has_clone = self.type_supports_clone(ty);
+        // The element as written (`v[0]`), not a schematic `v[i]`
+        // (B-2026-10-19-61).
+        let text = crate::formatter::render_expr(value);
+        let shown = super::types::type_display(ty);
         let message = if has_clone {
-            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: ".to_owned()
-                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
-                + "Borrow it (`ref v[i]`), take an independent copy "
-                + "(`v[i].clone()`), or exchange two elements with `v.swap(i, j)`"
+            format!(
+                "error[E_INDEX_MOVE_NON_COPY]: cannot move `{text}` out of an index: it \
+                 evaluates to a `ref {shown}`, and `{shown}` is not `Copy`. Borrow it \
+                 (`ref {text}`), take an independent copy (`{text}.clone()`), or exchange \
+                 two elements with `swap`"
+            )
         } else {
-            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: ".to_owned()
-                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
-                + "Borrow it (`ref v[i]`), or exchange two elements with "
-                + "`v.swap(i, j)`. (No `.clone()` is offered: this element type "
-                + "does not have one.)"
+            format!(
+                "error[E_INDEX_MOVE_NON_COPY]: cannot move `{text}` out of an index: it \
+                 evaluates to a `ref {shown}`, and `{shown}` is not `Copy`. Borrow it \
+                 (`ref {text}`), or exchange two elements with `swap`. (No `.clone()` is \
+                 offered: `{shown}` does not have one.)"
+            )
         };
         if has_clone {
             // Behaviour-PRESERVING migration: reading an element already
