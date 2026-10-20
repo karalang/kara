@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 254 |
 | other | 185 |
 | perf | 180 |
-| diagnostics | 179 |
+| diagnostics | 180 |
 | crash | 126 |
 | soundness | 125 |
 | use-after-free | 92 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 121 |
 | runtime | 81 |
 | cli | 81 |
-| parser | 75 |
+| parser | 76 |
 | autopar | 59 |
 | resolver | 48 |
 | effect | 38 |
@@ -185,6 +185,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-24 | 2026-10-20 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) = t; *a + *b` are refused with "unary '*' requires 'ref T' .. found 'String'/'i64'" while `karac check` accepts them | — |
 | B-2026-10-20-25 | 2026-10-20 | parser | low | The struct-pattern field shorthand `P { ref name, ref n }` does not parse ("'ref' is a reserved keyword and cannot be used as an identifier"), though design.md's own example is `Foo { ref name, score, .. }`; `name: ref name` works | — |
 | B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
+| B-2026-10-20-27 | 2026-10-20 | parser | low | A Rust array type `[Str; 16]` / `[i64; 3]` gets only "Expected type, found LeftBracket" with no pointer to Kāra's `Array[Str, 16]`, though the parser already gives Rust-syntax fix-its elsewhere (`let (mut a, mut b)`) | — |
 
 ### Relocated
 
