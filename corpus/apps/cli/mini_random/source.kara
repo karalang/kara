@@ -2316,7 +2316,7 @@ fn parse_cli(argv: ref Vec[String]) -> Result[Cli, String] {
         }
         match seen_group {
             Some(ref g) => {
-                if g != long {
+                if *g != long {
                     return Err(f"argument {label}: not allowed with argument {opt_label(g)}");
                 }
             }

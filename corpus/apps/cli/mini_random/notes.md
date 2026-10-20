@@ -51,9 +51,9 @@ The quirks are kept. Some examples:
 - `python -m random` puts its first block of positionals in `input` and
   reports a later block as unrecognized arguments.
 
-It matched on every backend. One spot is written around a gap:
-`jobs.kara`'s argparse emulation compares `g != long` where the natural
-`*g != long` under `Some(ref g)` fails on MIR (B-2026-10-20-24). Floats
+It matched on every backend. `jobs.kara`'s argparse emulation compares
+`*g != long` under `Some(ref g)`, which failed on MIR until
+B-2026-10-20-24 was fixed (kara d9bd46cacb). Floats
 have no `PI`, `TAU` or `E`, so the module defines its own; an unknown
 constant like `f64.PI` passes `karac check` and stops MIR lowering
 (B-2026-10-20-23). The struct-pattern shorthand `P { ref name }` did not
