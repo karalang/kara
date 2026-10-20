@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 298 |
 | codegen-gap | 277 |
-| false-positive | 252 |
+| false-positive | 253 |
 | other | 185 |
 | perf | 180 |
 | diagnostics | 178 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2972 |
 | interp | 990 |
-| typecheck | 512 |
+| typecheck | 513 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -181,6 +181,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-15 | 2026-10-20 | typecheck | medium | `karac check` accepts storing an owned `String` into a `let mut` copy of a `for` item (`for s in v { let mut t = s; t = "z".to_string(); }`), and both MIR backends then stop with "invalid MIR: assigning String to _N of type ref String"; the same shape through a bare parameter gets the right diagnostic | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
 | B-2026-10-20-17 | 2026-10-20 | typecheck+interp+codegen | low | `karac check` accepts the statement form `par { let a = f(); let b = g(); }` with `a` and `b` used after the block, which core semantics §11.1 does not have (branches are comma-separated expressions); both MIR backends then refuse it in the move check because the bindings drop at the statement's `;` | — |
+| B-2026-10-20-18 | 2026-10-20 | typecheck | medium | `iter.fold(Vec.new(), |acc: Vec[i64], x| ...)` is refused (`expected 'Vec[?T1]', found 'Vec[i64]'`): the element type of a `Vec.new()` passed as fold's init is never solved from the closure's annotated accumulator or its result, nor from an annotated `let`; binding the init to a typed `let` first passes, and `String.new()` / `Option.None` inits pass | ../kara-katas/leetcode/801-900/809-expressive-words |
 
 ### Relocated
 
