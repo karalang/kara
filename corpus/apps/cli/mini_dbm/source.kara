@@ -1,0 +1,1859 @@
+// mini_dbm: Python 3.13's dbm.dumb, ported from Lib/dbm/dumb.py, with
+// dbm.whichdb from Lib/dbm/__init__.py. A dumb database is two files: a
+// .dat file of values, each starting on a 512-byte block, and a .dir
+// text file with one line per key, `repr(key), (pos, size)`, written in
+// Latin-1. The index lives in memory; a new key appends a line to .dir
+// at once, but an update only reaches .dir when the database commits
+// (sync, close, or any delete), which moves the old .dir to .bak first.
+//
+// The port reads .dir lines the way ast.literal_eval does for that
+// shape: str literals with every escape, tuples of ints, and the
+// errors for a key that is not Latin-1 or a line with three values.
+// The flags 'r', 'w', 'c' and 'n' behave as in dumb.open, with the
+// reading-only and already-closed errors, and whichdb tells dumb, ndbm,
+// GNU dbm and SQLite files apart.
+//
+// The run writes data/ first: data/jobs.tsv and hand-made database
+// files. The last jobs are programs on top of the database: a URL
+// shortener that survives a restart, a session store with expiry
+// sweeps, an HTTP response cache with compaction, a crash between
+// updates read back from a snapshot, and an index checker.
+
+// ------------------------------------------------------------ text
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split(sep, 1)
+fn split_once(s: ref String, sep: char) -> Option[(String, String)] {
+    let v = chars(s);
+    for i in 0..v.len() {
+        if v[i] == sep {
+            return Some((slice(v, 0, i), slice(v, i + 1, v.len())));
+        }
+    }
+    None
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn has_char(s: ref String, c: char) -> bool {
+    for d in s.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.find(c, start); -1 when absent
+fn find_from(v: ref Vec[char], c: char, start: i64) -> i64 {
+    let mut i = start;
+    while i < v.len() {
+        if v[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn rfind_char(v: ref Vec[char], c: char) -> i64 {
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        if v[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// The characters str.split() and str.strip() treat as whitespace.
+fn is_py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f
+        or n == 0x205f or n == 0x3000
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_py_space(c) {
+            if not cur.is_empty() {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and is_py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    slice(v, lo, hi)
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out
+}
+
+fn lower(s: ref String) -> String {
+    s.to_lowercase()
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: u32) -> String {
+    let d = chars(HEX.to_string());
+    let mut out = String.new();
+    out.push(d[((n >> 4) & 15) as i64]);
+    out.push(d[(n & 15) as i64]);
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    let d = chars(HEX.to_string());
+    let l = lower(f"{c}");
+    let lc = chars(l)[0];
+    for i in 0..16 {
+        if d[i] == lc {
+            return i;
+        }
+    }
+    -1
+}
+
+fn is_hex_digit(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ascii_alpha(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+// ------------------------------------------------------------ Python reprs
+
+fn repr_str(s: ref String) -> String {
+    let q = if has_char(s, '\'') and not has_char(s, '"') { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(t) => repr_str(t),
+        None => "None".to_string(),
+    }
+}
+
+fn repr_pair(t: ref (Option[String], Option[String])) -> String {
+    f"({repr_opt(t.0)}, {repr_opt(t.1)})"
+}
+
+fn repr_strs(v: ref Vec[String]) -> String {
+    let r: Vec[String] = v.iter().map(|s| repr_str(s)).collect();
+    f"[{join(r, ", ")}]"
+}
+
+fn opt_or(s: ref Option[String], d: Str) -> String {
+    match s {
+        Some(t) => t.clone(),
+        None => d.to_string(),
+    }
+}
+
+// ------------------------------------------------------------ bytes
+
+// A Latin-1 string: one char for each byte.
+fn l1(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push(*x as char);
+    }
+    out
+}
+
+fn l1_bytes(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        out.push((c as u32) as u8);
+    }
+    out
+}
+
+fn utf8(s: ref String) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for x in b.iter() {
+        if *x == 39 {
+            has_sq = true;
+        }
+        if *x == 34 {
+            has_dq = true;
+        }
+    }
+    let q: u8 = if has_sq and not has_dq { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(q as char);
+    for x in b.iter() {
+        let c = *x;
+        if c == q or c == 92 {
+            out.push('\\');
+            out.push(c as char);
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c < 32 or c >= 127 {
+            out.push_str(f"\\x{hex2(c as u32)}");
+        } else {
+            out.push(c as char);
+        }
+    }
+    out.push(q as char);
+    out
+}
+
+fn read_bytes(path: ref String) -> Option[Vec[u8]] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => Some(b),
+        Err(_) => None,
+    }
+}
+
+fn write_bytes(path: ref String, b: ref Vec[u8]) {
+    let _ = fs.write_bytes(path.clone(), b);
+}
+
+// ------------------------------------------------------------ errors
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.clone() }
+}
+
+fn show_exc(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+fn not_found(path: ref String) -> Exc {
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {repr_bytes(utf8(path))}")
+}
+
+fn closed_error() -> Exc {
+    exc("OSError", "DBM object has already been closed")
+}
+
+fn readonly_error() -> Exc {
+    exc("OSError", "The database is opened for reading only")
+}
+
+// ------------------------------------------------------------ keys and values
+
+// A Python value handed to the database: str, bytes or int.
+enum Val {
+    S(String),
+    B(Vec[u8]),
+    I(i64),
+}
+
+fn show_bytes(b: ref Vec[u8]) -> String {
+    if b.len() > 40 {
+        let mut head: Vec[u8] = Vec.new();
+        for k in 0..12 {
+            head.push(b[k]);
+        }
+        f"<{b.len()} bytes: {repr_bytes(head)}...>"
+    } else {
+        repr_bytes(b)
+    }
+}
+
+fn show_str(s: ref String) -> String {
+    let v = chars(s);
+    if v.len() > 40 {
+        f"<{v.len()} chars: {repr_str(slice(v, 0, 12))}...>"
+    } else {
+        repr_str(s)
+    }
+}
+
+fn show_val(v: ref Val) -> String {
+    match v {
+        Val.S(s) => show_str(s),
+        Val.B(b) => show_bytes(b),
+        Val.I(n) => f"{n}",
+    }
+}
+
+// The index key for a value: its bytes as a Latin-1 string, or None for
+// an int (which no index key equals).
+fn key_of(v: ref Val) -> Option[String] {
+    match v {
+        Val.S(s) => Some(l1(utf8(s))),
+        Val.B(b) => Some(l1(b)),
+        Val.I(_) => None,
+    }
+}
+
+fn key_error(v: ref Val) -> Exc {
+    match v {
+        Val.S(s) => exc("KeyError", repr_bytes(utf8(s))),
+        Val.B(b) => exc("KeyError", repr_bytes(b)),
+        Val.I(n) => exc("KeyError", f"{n}"),
+    }
+}
+
+// ------------------------------------------------------------ ast.literal_eval, for .dir lines
+
+enum Lit {
+    Str(String),
+    Int(i64),
+    Tuple(Vec[Lit]),
+}
+
+struct LitParser {
+    v: Vec[char],
+    i: i64,
+}
+
+fn syntax_error() -> Exc {
+    exc("SyntaxError", "invalid syntax")
+}
+
+impl LitParser {
+    fn ws(mut ref self) {
+        while self.i < self.v.len() and (self.v[self.i] == ' ' or self.v[self.i] == '\t') {
+            self.i += 1;
+        }
+    }
+
+    fn peek(ref self) -> char {
+        if self.i < self.v.len() { self.v[self.i] } else { '\u{0}' }
+    }
+
+    fn hex_n(mut ref self, n: i64) -> Result[u32, Exc] {
+        let mut x: u32 = 0;
+        for _ in 0..n {
+            if self.i >= self.v.len() or not is_hex_digit(self.v[self.i]) {
+                return Err(syntax_error());
+            }
+            x = x * 16 + (hex_val(self.v[self.i]) as u32);
+            self.i += 1;
+        }
+        Ok(x)
+    }
+
+    fn string(mut ref self) -> Result[String, Exc] {
+        let q = self.v[self.i];
+        self.i += 1;
+        let mut out = String.new();
+        loop {
+            if self.i >= self.v.len() {
+                return Err(syntax_error());
+            }
+            let c = self.v[self.i];
+            self.i += 1;
+            if c == q {
+                return Ok(out);
+            }
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            if self.i >= self.v.len() {
+                return Err(syntax_error());
+            }
+            let e = self.v[self.i];
+            self.i += 1;
+            if e == 'n' {
+                out.push('\n');
+            } else if e == 't' {
+                out.push('\t');
+            } else if e == 'r' {
+                out.push('\r');
+            } else if e == 'a' {
+                out.push('\u{7}');
+            } else if e == 'b' {
+                out.push('\u{8}');
+            } else if e == 'f' {
+                out.push('\u{c}');
+            } else if e == 'v' {
+                out.push('\u{b}');
+            } else if e == 'x' {
+                let x = self.hex_n(2)?;
+                out.push(char.try_from(x).unwrap());
+            } else if e == 'u' {
+                let x = self.hex_n(4)?;
+                out.push(char.try_from(x).unwrap());
+            } else if e == 'U' {
+                let x = self.hex_n(8)?;
+                out.push(char.try_from(x).unwrap());
+            } else if e >= '0' and e <= '7' {
+                let mut x = (e as u32) - 48;
+                let mut k = 0;
+                while k < 2 and self.i < self.v.len() and self.v[self.i] >= '0' and self.v[self.i] <= '7' {
+                    x = x * 8 + ((self.v[self.i] as u32) - 48);
+                    self.i += 1;
+                    k += 1;
+                }
+                out.push(char.try_from(x).unwrap());
+            } else if e == '\\' or e == '\'' or e == '"' {
+                out.push(e);
+            } else if e == '\n' {
+            } else {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+    }
+
+    fn int(mut ref self) -> Result[i64, Exc] {
+        let mut neg = false;
+        if self.peek() == '-' {
+            neg = true;
+            self.i += 1;
+        }
+        let start = self.i;
+        let mut n: i64 = 0;
+        while self.i < self.v.len() and is_digit(self.v[self.i]) {
+            n = n * 10 + ((self.v[self.i] as i64) - 48);
+            self.i += 1;
+        }
+        if self.i == start {
+            return Err(syntax_error());
+        }
+        Ok(if neg { -n } else { n })
+    }
+
+    #[allow(mutual_recursion_note)]
+    fn atom(mut ref self) -> Result[Lit, Exc] {
+        self.ws();
+        let c = self.peek();
+        if c == '\'' or c == '"' {
+            return Ok(Lit.Str(self.string()?));
+        }
+        if c == '(' {
+            self.i += 1;
+            let items = self.items(')')?;
+            return Ok(Lit.Tuple(items));
+        }
+        Ok(Lit.Int(self.int()?))
+    }
+
+    // a comma-separated list up to `end` ('\u{0}' for the end of the text)
+    fn items(mut ref self, end: char) -> Result[Vec[Lit], Exc] {
+        let mut out: Vec[Lit] = Vec.new();
+        loop {
+            self.ws();
+            if self.peek() == end {
+                if end != '\u{0}' {
+                    self.i += 1;
+                }
+                return Ok(out);
+            }
+            out.push(self.atom()?);
+            self.ws();
+            if self.peek() == ',' {
+                self.i += 1;
+                continue;
+            }
+            if self.peek() == end {
+                continue;
+            }
+            return Err(syntax_error());
+        }
+    }
+}
+
+// key, (pos, siz) = ast.literal_eval(line)
+fn parse_dir_line(line: ref String) -> Result[(String, (i64, i64)), Exc] {
+    let mut p = LitParser { v: chars(line), i: 0 };
+    let items = p.items('\u{0}')?;
+    if items.len() > 2 {
+        return Err(exc("ValueError", "too many values to unpack (expected 2)"));
+    }
+    if items.len() < 2 {
+        return Err(exc("ValueError", f"not enough values to unpack (expected 2, got {items.len()})"));
+    }
+    let key = match items[0] {
+        Lit.Str(ref s) => s.clone(),
+        _ => return Err(exc("AttributeError", "'int' object has no attribute 'encode'")),
+    };
+    let pair = match items[1] {
+        Lit.Tuple(ref t) => {
+            if t.len() != 2 {
+                return Err(syntax_error());
+            }
+            let a = match t[0] {
+                Lit.Int(n) => n,
+                _ => return Err(syntax_error()),
+            };
+            let b = match t[1] {
+                Lit.Int(n) => n,
+                _ => return Err(syntax_error()),
+            };
+            (a, b)
+        }
+        _ => return Err(syntax_error()),
+    };
+    // key.encode('Latin-1')
+    let kv = chars(key);
+    for i in 0..kv.len() {
+        let n = kv[i] as u32;
+        if n > 255 {
+            let shown = if n <= 0xffff { f"\\u{pad_hex(n, 4)}" } else { f"\\U{pad_hex(n, 8)}" };
+            return Err(exc(
+                "UnicodeEncodeError",
+                f"'latin-1' codec can't encode character '{shown}' in position {i}: ordinal not in range(256)",
+            ));
+        }
+    }
+    Ok((key, pair))
+}
+
+fn pad_hex(n: u32, w: i64) -> String {
+    let d = chars(HEX.to_string());
+    let mut out = String.new();
+    let mut x = n;
+    let mut k = 0;
+    while k < w {
+        out = f"{d[(x & 15) as i64]}{out}";
+        x = x >> 4;
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ the database
+
+const BLOCKSIZE: i64 = 512;
+
+struct Index {
+    keys: Vec[String],
+    m: Map[String, (i64, i64)],
+}
+
+impl Index {
+    fn new() -> Index {
+        Index { keys: Vec.new(), m: Map.new() }
+    }
+
+    fn set(mut ref self, k: ref String, v: (i64, i64)) {
+        if not self.m.contains_key(k) {
+            self.keys.push(k.clone());
+        }
+        self.m.insert(k.clone(), v);
+    }
+
+    fn get(ref self, k: ref String) -> Option[(i64, i64)] {
+        match self.m.get(k) {
+            Some(p) => Some(*p),
+            None => None,
+        }
+    }
+
+    fn remove(mut ref self, k: ref String) {
+        self.m.remove(k);
+        let mut out: Vec[String] = Vec.new();
+        for x in self.keys.iter() {
+            if x != k {
+                out.push(x.clone());
+            }
+        }
+        self.keys = out;
+    }
+}
+
+struct Dumb {
+    dirfile: String,
+    datfile: String,
+    bakfile: String,
+    index: Option[Index],
+    readonly: bool,
+    modified: bool,
+}
+
+fn dir_line(key: ref String, pos: i64, siz: i64) -> String {
+    f"{repr_str(key)}, ({pos}, {siz})\n"
+}
+
+// dbm.dumb.open(file, flag)
+fn dumb_open(file: ref String, flag: ref String) -> Result[Dumb, Exc] {
+    if flag != "r" and flag != "w" and flag != "c" and flag != "n" {
+        return Err(exc("ValueError", "Flag must be one of 'r', 'w', 'c', or 'n'"));
+    }
+    let mut db = Dumb {
+        dirfile: f"{file}.dir",
+        datfile: f"{file}.dat",
+        bakfile: f"{file}.bak",
+        index: None,
+        readonly: flag == "r",
+        modified: false,
+    };
+    let creates = flag == "c" or flag == "n";
+    // _create
+    if flag == "n" {
+        for f in [db.datfile.clone(), db.bakfile.clone(), db.dirfile.clone()] {
+            let _ = fs.remove_file(f);
+        }
+    }
+    if read_bytes(db.datfile).is_none() {
+        if not creates {
+            return Err(not_found(db.datfile));
+        }
+        write_bytes(db.datfile, Vec.new());
+    }
+    // _update
+    let mut index = Index.new();
+    match read_bytes(db.dirfile) {
+        None => {
+            if not creates {
+                return Err(not_found(db.dirfile));
+            }
+            write_bytes(db.dirfile, Vec.new());
+        }
+        Some(b) => {
+            let text = l1(b);
+            let mut lines = split_on(text, '\n');
+            if lines.len() > 0 and lines[lines.len() - 1].is_empty() {
+                lines.pop();
+            }
+            for line in lines.iter() {
+                let (key, pair) = parse_dir_line(rstrip(line))?;
+                index.set(key, pair);
+            }
+        }
+    }
+    db.index = Some(index);
+    Ok(db)
+}
+
+fn rstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut hi = v.len();
+    while hi > 0 and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    slice(v, 0, hi)
+}
+
+fn blocks(n: i64) -> i64 {
+    (n + BLOCKSIZE - 1) / BLOCKSIZE
+}
+
+impl Dumb {
+    fn commit(mut ref self) {
+        if self.index.is_none() or not self.modified {
+            return;
+        }
+        let _ = fs.remove_file(self.bakfile.clone());
+        let _ = fs.rename(self.dirfile.clone(), self.bakfile.clone());
+        let mut text = String.new();
+        match self.index {
+            Some(ref ix) => {
+                for k in ix.keys.iter() {
+                    let (pos, siz) = ix.get(k).unwrap();
+                    text.push_str(dir_line(k, pos, siz));
+                }
+            }
+            None => {}
+        }
+        write_bytes(self.dirfile, l1_bytes(text));
+        self.modified = false;
+    }
+
+    fn sync(mut ref self) {
+        self.commit();
+    }
+
+    fn close(mut ref self) {
+        self.commit();
+        self.index = None;
+    }
+
+    fn is_open(ref self) -> bool {
+        self.index.is_some()
+    }
+
+    fn lookup(ref self, k: ref String) -> Option[(i64, i64)] {
+        match self.index {
+            Some(ref ix) => ix.get(k),
+            None => None,
+        }
+    }
+
+    fn get(ref self, key: ref Val) -> Result[Vec[u8], Exc] {
+        if not self.is_open() {
+            return Err(closed_error());
+        }
+        let k = match key_of(key) {
+            Some(k) => k,
+            None => return Err(key_error(key)),
+        };
+        let (pos, siz) = match self.lookup(k) {
+            Some(p) => p,
+            None => return Err(key_error(key)),
+        };
+        let dat = read_bytes(self.datfile).unwrap_or(Vec.new());
+        let mut out: Vec[u8] = Vec.new();
+        let mut i = pos;
+        while i < pos + siz and i < dat.len() {
+            out.push(dat[i]);
+            i += 1;
+        }
+        Ok(out)
+    }
+
+    fn addval(ref self, val: ref Vec[u8]) -> (i64, i64) {
+        let mut dat = read_bytes(self.datfile).unwrap_or(Vec.new());
+        let pos = dat.len();
+        let npos = blocks(pos) * BLOCKSIZE;
+        while dat.len() < npos {
+            dat.push(0);
+        }
+        for x in val.iter() {
+            dat.push(*x);
+        }
+        write_bytes(self.datfile, dat);
+        (npos, val.len())
+    }
+
+    fn setval(ref self, pos: i64, val: ref Vec[u8]) -> (i64, i64) {
+        let mut dat = read_bytes(self.datfile).unwrap_or(Vec.new());
+        while dat.len() < pos {
+            dat.push(0);
+        }
+        for k in 0..val.len() {
+            if pos + k < dat.len() {
+                dat[pos + k] = val[k];
+            } else {
+                dat.push(val[k]);
+            }
+        }
+        write_bytes(self.datfile, dat);
+        (pos, val.len())
+    }
+
+    fn addkey(mut ref self, key: ref String, pair: (i64, i64)) {
+        match self.index {
+            Some(mut ref ix) => ix.set(key, pair),
+            None => {}
+        }
+        let mut b = read_bytes(self.dirfile).unwrap_or(Vec.new());
+        for x in l1_bytes(dir_line(key, pair.0, pair.1)).iter() {
+            b.push(*x);
+        }
+        write_bytes(self.dirfile, b);
+    }
+
+    fn set(mut ref self, key: ref Val, val: ref Val) -> Result[(), Exc] {
+        if self.readonly {
+            return Err(readonly_error());
+        }
+        let k = match key_of(key) {
+            Some(k) => k,
+            None => return Err(exc("TypeError", "keys must be bytes or strings")),
+        };
+        let v = match val {
+            Val.S(s) => utf8(s),
+            Val.B(b) => b.clone(),
+            Val.I(_) => return Err(exc("TypeError", "values must be bytes or strings")),
+        };
+        if not self.is_open() {
+            return Err(closed_error());
+        }
+        self.modified = true;
+        match self.lookup(k) {
+            None => {
+                let pair = self.addval(v);
+                self.addkey(k, pair);
+            }
+            Some((pos, siz)) => {
+                let pair = if blocks(v.len()) <= blocks(siz) { self.setval(pos, v) } else { self.addval(v) };
+                match self.index {
+                    Some(mut ref ix) => ix.set(k, pair),
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn del(mut ref self, key: ref Val) -> Result[(), Exc] {
+        if self.readonly {
+            return Err(readonly_error());
+        }
+        if not self.is_open() {
+            return Err(closed_error());
+        }
+        self.modified = true;
+        let k = match key_of(key) {
+            Some(k) => k,
+            None => return Err(key_error(key)),
+        };
+        if self.lookup(k).is_none() {
+            return Err(key_error(key));
+        }
+        match self.index {
+            Some(mut ref ix) => ix.remove(k),
+            None => {}
+        }
+        self.commit();
+        Ok(())
+    }
+
+    fn has(ref self, key: ref Val) -> Result[bool, Exc] {
+        if not self.is_open() {
+            return Err(closed_error());
+        }
+        match key_of(key) {
+            Some(k) => Ok(self.lookup(k).is_some()),
+            None => Ok(false),
+        }
+    }
+
+    fn keys(ref self) -> Result[Vec[String], Exc] {
+        match self.index {
+            Some(ref ix) => Ok(ix.keys.clone()),
+            None => Err(closed_error()),
+        }
+    }
+
+    fn len(ref self) -> Result[i64, Exc] {
+        match self.index {
+            Some(ref ix) => Ok(ix.keys.len()),
+            None => Err(closed_error()),
+        }
+    }
+
+    fn get_key(ref self, k: ref String) -> Vec[u8] {
+        match self.get(Val.B(l1_bytes(k))) {
+            Ok(b) => b,
+            Err(_) => Vec.new(),
+        }
+    }
+
+    fn items(ref self) -> Result[Vec[(String, Vec[u8])], Exc] {
+        let ks = self.keys()?;
+        let mut out: Vec[(String, Vec[u8])] = Vec.new();
+        for k in ks.iter() {
+            out.push((k.clone(), self.get_key(k)));
+        }
+        Ok(out)
+    }
+}
+
+// ------------------------------------------------------------ dbm.whichdb
+
+fn file_len(path: ref String) -> Option[i64] {
+    match read_bytes(path) {
+        Some(b) => Some(b.len()),
+        None => None,
+    }
+}
+
+fn whichdb(filename: ref String) -> Option[String] {
+    if file_len(f"{filename}.pag").is_some() and file_len(f"{filename}.dir").is_some() {
+        return Some("dbm.ndbm".to_string());
+    }
+    if file_len(f"{filename}.dat").is_some() {
+        match read_bytes(f"{filename}.dir") {
+            Some(b) => {
+                if b.len() == 0 or b[0] == 39 or b[0] == 34 {
+                    return Some("dbm.dumb".to_string());
+                }
+            }
+            None => {}
+        }
+    }
+    let b = match read_bytes(filename) {
+        Some(b) => b,
+        None => return None,
+    };
+    if b.len() < 4 {
+        return Some(String.new());
+    }
+    let sqlite = "SQLite format 3".bytes().to_vec();
+    if b.len() >= 16 {
+        let mut same = b[15] == 0;
+        for i in 0..15 {
+            if b[i] != sqlite[i] {
+                same = false;
+            }
+        }
+        if same {
+            return Some("dbm.sqlite3".to_string());
+        }
+    }
+    let magic = (b[0] as i64) | ((b[1] as i64) << 8) | ((b[2] as i64) << 16) | ((b[3] as i64) << 24);
+    if magic == 0x13579ace or magic == 0x13579acd or magic == 0x13579acf {
+        return Some("dbm.gnu".to_string());
+    }
+    Some(String.new())
+}
+
+// ------------------------------------------------------------ the jobs
+
+const BASE: Str = "data/db/";
+
+fn unesc(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\\' and i + 1 < v.len() {
+            if v[i + 1] == '\\' {
+                out.push('\\');
+                i += 2;
+                continue;
+            }
+            if v[i + 1] == 'x' and i + 3 < v.len() {
+                let n = hex_val(v[i + 2]) * 16 + hex_val(v[i + 3]);
+                out.push(char.try_from(n as u32).unwrap());
+                i += 4;
+                continue;
+            }
+            if v[i + 1] == 'n' {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn repeat(c: ref String, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(c);
+    }
+    out
+}
+
+// b:... bytes, i:... an int, r:c:n n copies of c, else a str
+fn arg(t: ref String) -> Val {
+    let v = chars(t);
+    if t.starts_with("b:") {
+        return Val.B(l1_bytes(unesc(slice(v, 2, v.len()))));
+    }
+    if t.starts_with("i:") {
+        return Val.I(i64.parse(slice(v, 2, v.len())).unwrap_or(0));
+    }
+    if t.starts_with("r:") {
+        let p = split_on(t, ':');
+        return Val.S(repeat(p[1], i64.parse(p[2]).unwrap_or(0)));
+    }
+    Val.S(unesc(t))
+}
+
+fn show_key(k: ref String) -> String {
+    show_bytes(l1_bytes(k))
+}
+
+fn files(name: ref String) -> Vec[String] {
+    let p = f"{BASE}{name}";
+    let mut out: Vec[String] = Vec.new();
+    match read_bytes(f"{p}.dir") {
+        Some(b) => {
+            let mut lines = split_on(l1(b), '\n');
+            lines.pop();
+            out.push(f"  {name}.dir: {lines.len()} lines");
+            for l in lines.iter() {
+                out.push(f"    {l}");
+            }
+        }
+        None => out.push(f"  {name}.dir: missing"),
+    }
+    match file_len(f"{p}.dat") {
+        Some(n) => out.push(f"  {name}.dat: {n} bytes"),
+        None => out.push(f"  {name}.dat: missing"),
+    }
+    match read_bytes(f"{p}.bak") {
+        Some(b) => out.push(f"  {name}.bak: {split_on(l1(b), '\n').len() - 1} lines"),
+        None => out.push(f"  {name}.bak: missing"),
+    }
+    out
+}
+
+fn say(head: ref String, r: Result[String, Exc]) {
+    match r {
+        Ok(tail) => println(f"{head}{tail}"),
+        Err(e) => println(f"{head} -> {show_exc(e)}"),
+    }
+}
+
+fn run_job(name: ref String, lines: ref Vec[String]) {
+    println(f"== {name}");
+    let mut db: Option[Dumb] = None;
+    for line in lines.iter() {
+        let f = split_on(line, '\t');
+        let op = f[0].clone();
+        if op == "open" {
+            match dumb_open(f"{BASE}{f[1]}", f[2]) {
+                Ok(d) => {
+                    db = Some(d);
+                    println(f"open({repr_str(f[1])}, {repr_str(f[2])})");
+                }
+                Err(e) => println(f"open({repr_str(f[1])}, {repr_str(f[2])}) -> {show_exc(e)}"),
+            }
+            continue;
+        }
+        if op == "files" {
+            println(f"files {f[1]}:");
+            for l in files(f[1]).iter() {
+                println(l);
+            }
+            continue;
+        }
+        let mut d = match db.take() {
+            Some(d) => d,
+            None => {
+                println(f"no database for {op}");
+                continue;
+            }
+        };
+        if op == "set" {
+            let k = arg(f[1]);
+            let v = arg(f[2]);
+            say(f"db[{show_val(k)}] = {show_val(v)}", d.set(k, v).map(|_| String.new()));
+        } else if op == "get" {
+            let k = arg(f[1]);
+            say(f"db[{show_val(k)}]", d.get(k).map(|b| f" = {show_bytes(b)}"));
+        } else if op == "del" {
+            let k = arg(f[1]);
+            say(f"del db[{show_val(k)}]", d.del(k).map(|_| String.new()));
+        } else if op == "has" {
+            let k = arg(f[1]);
+            say(f"{show_val(k)} in db", d.has(k).map(|b| if b { " = True".to_string() } else { " = False".to_string() }));
+        } else if op == "len" {
+            say("len(db)", d.len().map(|n| f" = {n}"));
+        } else if op == "keys" {
+            let r = match d.keys() {
+                Ok(ks) => {
+                    let shown: Vec[String] = ks.iter().map(|k| show_key(k)).collect();
+                    Ok(f" = [{join(shown, ", ")}]")
+                }
+                Err(e) => Err(e),
+            };
+            say("db.keys()", r);
+        } else if op == "items" {
+            let r = match d.items() {
+                Ok(its) => {
+                    let shown: Vec[String] = its.iter().map(|kv| f"({show_key(kv.0)}, {show_bytes(kv.1)})").collect();
+                    Ok(f" = [{join(shown, ", ")}]")
+                }
+                Err(e) => Err(e),
+            };
+            say("db.items()", r);
+        } else if op == "sync" {
+            d.sync();
+            println("db.sync()");
+        } else if op == "close" {
+            d.close();
+            println("db.close()");
+        } else {
+            println(f"bad op {op}");
+        }
+        db = Some(d);
+    }
+}
+
+// ------------------------------------------------------------ the run
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"OSError: {e}"),
+    };
+    let mut jobs = split_on(text, '\n');
+    jobs.pop();
+    let mut i = 0;
+    while i < jobs.len() {
+        let f = split_on(jobs[i], '\t');
+        if f[0] == "job" {
+            let mut body: Vec[String] = Vec.new();
+            i += 1;
+            while i < jobs.len() {
+                let head = split_on(jobs[i], '\t')[0].clone();
+                if head == "job" or head == "whichdb" or head == "program" {
+                    break;
+                }
+                body.push(jobs[i].clone());
+                i += 1;
+            }
+            run_job(f[1], body);
+            continue;
+        }
+        if f[0] == "whichdb" {
+            let r = match whichdb(f"data/{f[1]}") {
+                Some(s) => repr_str(s),
+                None => "None".to_string(),
+            };
+            println(f"whichdb({repr_str(f[1])}) = {r}");
+        } else if f[0] == "program" {
+            run_program(f[1]);
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn dirname(p: ref String) -> String {
+    let v = chars(p);
+    let i = rfind_char(v, '/');
+    if i < 0 { ".".to_string() } else { slice(v, 0, i) }
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+    }
+    write_binary_data()
+}
+
+// The files mk.py writes as bytes: whichdb's magic numbers.
+fn write_binary_data() -> Result[(), String] {
+    match fs.create_dir_all("data/bin") {
+        Ok(_) => {}
+        Err(e) => return Err(f"OSError: {e}"),
+    }
+    let mut gnu: Vec[u8] = vec![0xce, 0x9a, 0x57, 0x13];
+    for _ in 0..12 {
+        gnu.push(0);
+    }
+    let gnu2: Vec[u8] = vec![0xcf, 0x9a, 0x57, 0x13];
+    let mut sq = "SQLite format 3".bytes().to_vec();
+    for _ in 0..85 {
+        sq.push(0);
+    }
+    let mut bdb: Vec[u8] = Vec.new();
+    for _ in 0..12 {
+        bdb.push(0);
+    }
+    for x in [0x61, 0x15, 0x06, 0x00] {
+        bdb.push(x as u8);
+    }
+    for (p, b) in [("data/bin/gnu.db", gnu), ("data/bin/gnu2.db", gnu2), ("data/bin/sqlite.db", sq), ("data/bin/bdb.db", bdb)] {
+        match fs.write_bytes(p, b) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+const ALPHA: Str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+fn open_db(name: Str, flag: Str) -> Dumb {
+    dumb_open(f"{BASE}{name}", flag.to_string()).unwrap()
+}
+
+fn s(x: Str) -> Val {
+    Val.S(x.to_string())
+}
+
+fn sv(x: ref String) -> Val {
+    Val.S(x.clone())
+}
+
+fn text_of(b: ref Vec[u8]) -> String {
+    String.from_utf8(b.clone()).unwrap_or(String.new())
+}
+
+fn get_text(db: ref Dumb, k: ref String) -> String {
+    text_of(db.get(sv(k)).unwrap_or(Vec.new()))
+}
+
+fn has(db: ref Dumb, k: ref String) -> bool {
+    db.has(sv(k)).unwrap_or(false)
+}
+
+fn put(db: mut ref Dumb, k: ref String, v: ref String) {
+    let _ = db.set(sv(k), sv(v));
+}
+
+fn stats(name: Str) -> String {
+    let mut db = open_db(name, "r");
+    let mut live = 0;
+    let mut n = 0;
+    match db.index {
+        Some(ref ix) => {
+            for k in ix.keys.iter() {
+                live += ix.get(k).unwrap().1;
+                n += 1;
+            }
+        }
+        None => {}
+    }
+    db.close();
+    let size = file_len(f"{BASE}{name}.dat").unwrap_or(0);
+    f"{n} keys, {live} live bytes in a {size}-byte .dat ({size - live} padding or dead)"
+}
+
+fn base62(n0: i64) -> String {
+    let a = chars(ALPHA.to_string());
+    let mut n = n0;
+    let mut out = String.new();
+    loop {
+        out = f"{a[n % 62]}{out}";
+        n = n / 62;
+        if n == 0 {
+            return out;
+        }
+    }
+}
+
+fn data_lines(path: Str) -> Vec[String] {
+    let text = match fs.read_to_string(f"data/{path}") {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for l in split_on(text, '\n').into_iter() {
+        if strip(l).is_empty() or l.starts_with("#") {
+            continue;
+        }
+        out.push(l);
+    }
+    out
+}
+
+fn prog_shortener() {
+    println("== program: URL shortener");
+    let mut db = open_db("short", "n");
+    put(mut db, "next", "1");
+    for url in data_lines("shortener/urls.txt").iter() {
+        let k = f"url:{url}";
+        if has(db, k) {
+            println(f"  {get_text(db, k)} <- {url} (already short)");
+            continue;
+        }
+        let n = i64.parse(get_text(db, "next")).unwrap_or(0);
+        let code = base62(n);
+        put(mut db, f"code:{code}", url);
+        put(mut db, k, code);
+        put(mut db, "next", f"{n + 1}");
+        println(f"  {code} <- {url}");
+    }
+    db.close();
+    println("restarted");
+    let mut db = open_db("short", "c");
+    for c in data_lines("shortener/visits.txt").iter() {
+        let k = f"code:{c}";
+        if not has(db, k) {
+            println(f"  /{c}: 404");
+            continue;
+        }
+        let h = f"hits:{c}";
+        let hits = if has(db, h) { i64.parse(get_text(db, h)).unwrap_or(0) + 1 } else { 1 };
+        put(mut db, h, f"{hits}");
+        println(f"  /{c}: 301 {get_text(db, k)}");
+    }
+    let mut codes: Vec[String] = Vec.new();
+    for k in db.keys().unwrap_or(Vec.new()).iter() {
+        if k.starts_with("code:") {
+            let v = chars(k);
+            codes.push(slice(v, 5, v.len()));
+        }
+    }
+    codes.sort();
+    for c in codes.iter() {
+        let h = f"hits:{c}";
+        let hits = if has(db, h) { i64.parse(get_text(db, h)).unwrap_or(0) } else { 0 };
+        println(f"  {c} {hits} {show_str(get_text(db, f"code:{c}"))}");
+    }
+    db.close();
+    println(f"  {stats("short")}");
+}
+
+fn prog_sessions() {
+    println("== program: session store");
+    let mut db = open_db("sessions", "n");
+    for l in data_lines("sessions/events.txt").iter() {
+        let w = split_ws(l);
+        let t = i64.parse(w[0]).unwrap_or(0);
+        if w[1] == "login" {
+            put(mut db, w[2], f"{w[3]}|{t + 600}");
+            println(f"  {t} login {w[2]} {w[3]}, expires {t + 600}");
+        } else if w[1] == "touch" {
+            if has(db, w[2]) {
+                let user = split_on(get_text(db, w[2]), '|')[0].clone();
+                put(mut db, w[2], f"{user}|{t + 600}");
+                println(f"  {t} touch {w[2]}, expires {t + 600}");
+            } else {
+                println(f"  {t} touch {w[2]}: no such session");
+            }
+        } else if w[1] == "logout" {
+            let _ = db.del(sv(w[2]));
+            println(f"  {t} logout {w[2]}");
+        } else if w[1] == "sweep" {
+            let mut gone: Vec[String] = Vec.new();
+            for k in db.keys().unwrap_or(Vec.new()).iter() {
+                let exp = i64.parse(split_on(get_text(db, k), '|')[1]).unwrap_or(0);
+                if exp <= t {
+                    let _ = db.del(sv(k));
+                    gone.push(k.clone());
+                }
+            }
+            println(f"  {t} sweep: removed {repr_strs(gone)}, {db.len().unwrap_or(0)} left");
+        }
+    }
+    let mut left: Vec[String] = Vec.new();
+    for k in db.keys().unwrap_or(Vec.new()).iter() {
+        left.push(f"({repr_str(k)}, {repr_str(get_text(db, k))})");
+    }
+    println(f"  left: [{join(left, ", ")}]");
+    db.close();
+    for l in files("sessions").iter() {
+        println(l);
+    }
+    println(f"  {stats("sessions")}");
+}
+
+fn body(url: ref String, i: i64, n: i64) -> Vec[u8] {
+    let mut b = utf8(f"{url}#{i}");
+    while b.len() < n {
+        b.push(46);
+    }
+    b
+}
+
+fn prog_httpcache() {
+    println("== program: HTTP response cache");
+    let mut db = open_db("httpcache", "n");
+    for l in data_lines("httpcache/responses.txt").iter() {
+        let w = split_ws(l);
+        let url = w[0].clone();
+        for i in 1..w.len() {
+            let n = i64.parse(w[i]).unwrap_or(0);
+            let before = db.lookup(url);
+            let _ = db.set(sv(url), Val.B(body(url, i - 1, n)));
+            let (pos, siz) = db.lookup(url).unwrap();
+            let how = match before {
+                None => "new",
+                Some((p, _)) => if p == pos { "in place" } else { "moved" },
+            };
+            println(f"  {url} fetch {i}: {siz} bytes at {pos} ({how})");
+        }
+    }
+    db.close();
+    println(f"  before compaction: {stats("httpcache")}");
+    let mut src = open_db("httpcache", "r");
+    let mut dst = open_db("httpcache-compact", "n");
+    for k in src.keys().unwrap_or(Vec.new()).iter() {
+        let _ = dst.set(Val.B(l1_bytes(k)), Val.B(src.get_key(k)));
+    }
+    src.close();
+    dst.close();
+    println(f"  after compaction: {stats("httpcache-compact")}");
+    let mut a = open_db("httpcache", "r");
+    let mut b = open_db("httpcache-compact", "r");
+    let mut same = a.len().unwrap_or(0) == b.len().unwrap_or(0);
+    for k in a.keys().unwrap_or(Vec.new()).iter() {
+        if a.get_key(k) != b.get_key(k) {
+            same = false;
+        }
+    }
+    a.close();
+    b.close();
+    println(f"  same contents: {if same { "True" } else { "False" }}");
+}
+
+fn snapshot(name: Str, copy: Str) {
+    for ext in [".dir", ".dat", ".bak"] {
+        let from = f"{BASE}{name}{ext}";
+        if read_bytes(from).is_some() {
+            let _ = fs.copy(from, f"{BASE}{copy}{ext}");
+        }
+    }
+}
+
+fn prog_crash() {
+    println("== program: a crash between updates");
+    let mut db = open_db("crash", "n");
+    put(mut db, "a", repeat("x", 100));
+    put(mut db, "b", repeat("y", 600));
+    db.close();
+    let mut db = open_db("crash", "c");
+    put(mut db, "a", repeat("X", 400));
+    put(mut db, "b", repeat("Y", 1100));
+    put(mut db, "c", "new");
+    snapshot("crash", "crash-snap");
+    db.close();
+    for l in files("crash-snap").iter() {
+        println(l);
+    }
+    for l in files("crash").iter() {
+        println(l);
+    }
+    for name in ["crash-snap", "crash"] {
+        let mut db = open_db(name, "r");
+        let mut parts: Vec[String] = Vec.new();
+        for k in db.keys().unwrap_or(Vec.new()).iter() {
+            parts.push(f"{k}={show_bytes(db.get_key(k))}");
+        }
+        db.close();
+        println(f"  {name}: {join(parts, ", ")}");
+    }
+}
+
+fn prog_fsck() {
+    println("== program: index checker");
+    for name in ["notes", "cache", "handmade", "damaged", "httpcache", "crash-snap"] {
+        let mut db = open_db(name, "r");
+        let mut entries: Vec[(String, i64, i64)] = Vec.new();
+        match db.index {
+            Some(ref ix) => {
+                for k in ix.keys.iter() {
+                    let (pos, siz) = ix.get(k).unwrap();
+                    entries.push((k.clone(), pos, siz));
+                }
+            }
+            None => {}
+        }
+        db.close();
+        let size = file_len(f"{BASE}{name}.dat").unwrap_or(0);
+        let mut problems: Vec[String] = Vec.new();
+        for e in entries.iter() {
+            if e.1 % 512 != 0 {
+                problems.push(f"{repr_str(e.0)} starts at {e.1}, not on a 512-byte block");
+            }
+            if e.1 + e.2 > size {
+                problems.push(f"{repr_str(e.0)} ends at {e.1 + e.2}, past the end ({size})");
+            }
+        }
+        let mut order = entries.clone();
+        order.sort_by(|x, y| if x.1 != y.1 { x.1.cmp(y.1) } else { x.0.cmp(y.0) });
+        let mut end = 0;
+        let mut last: Option[String] = None;
+        for e in order.iter() {
+            if e.2 == 0 {
+                continue;
+            }
+            match last {
+                Some(ref l) => {
+                    if e.1 < end {
+                        problems.push(f"{repr_str(e.0)} overlaps {repr_str(l)}");
+                    }
+                }
+                None => {}
+            }
+            if e.1 + e.2 > end {
+                end = e.1 + e.2;
+                last = Some(e.0.clone());
+            }
+        }
+        let mut live = 0;
+        for e in entries.iter() {
+            live += e.2;
+        }
+        let verdict = if problems.is_empty() { "clean".to_string() } else { f"{problems.len()} problems" };
+        println(f"  {name}: {entries.len()} entries, {live} live bytes, .dat {size} bytes: {verdict}");
+        for p in problems.iter() {
+            println(f"    {p}");
+        }
+    }
+}
+
+fn run_program(name: ref String) {
+    if name == "shortener" {
+        prog_shortener();
+    } else if name == "sessions" {
+        prog_sessions();
+    } else if name == "httpcache" {
+        prog_httpcache();
+    } else if name == "crash" {
+        prog_crash();
+    } else if name == "fsck" {
+        prog_fsck();
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("abc\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}MISA\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}tail");
+    v.push(DataFile { path: "db/damaged.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("'ok', (0, 3)\n");
+    t.push_str("'past-end', (1024, 40)\n");
+    t.push_str("'misaligned', (100, 4)\n");
+    t.push_str("'overlap-a', (512, 300)\n");
+    t.push_str("'overlap-b', (700, 10)\n");
+    t.push_str("'empty', (0, 0)\n");
+    v.push(DataFile { path: "db/damaged.dir".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("10\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}E");
+    v.push(DataFile { path: "db/euro.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("'price', (0, 2)\n");
+    t.push_str("'\\u20ac', (512, 1)\n");
+    v.push(DataFile { path: "db/euro.dir".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("hello\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}beta\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}ccc\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}TT\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}Q\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}XYZ\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}OK\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}last");
+    v.push(DataFile { path: "db/handmade.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("'alpha', (0, 5)\n");
+    t.push_str("\"beta\", (512, 4)\n");
+    t.push_str("'gam\\x6da',(1024,3)\n");
+    t.push_str("'tab\\tkey', ( 1536 , 2 )\n");
+    t.push_str("'it\\'s', (2048, 1)\n");
+    t.push_str("'caf\\xc3\\xa9', (2560, 3)\n");
+    t.push_str("'oct\\101l', (3072, 2)\n");
+    t.push_str("'trailing',   (3584, 4)   \n");
+    v.push(DataFile { path: "db/handmade.dir".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("v");
+    v.push(DataFile { path: "db/triple.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("'k', (0, 1), 'extra'\n");
+    v.push(DataFile { path: "db/triple.dir".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# url, then the size of the body served each time it is fetched\n");
+    t.push_str("/api/prices 180 190 175 600 590 1400 300\n");
+    t.push_str("/api/news 2000 2100 2050\n");
+    t.push_str("/static/logo.svg 4096 4096\n");
+    t.push_str("/api/me 90 95 600\n");
+    v.push(DataFile { path: "httpcache/responses.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("job\tcreate, set, get and reopen\n");
+    t.push_str("open\tnotes\tn\n");
+    t.push_str("set\tgreeting\thello\n");
+    t.push_str("set\tb:bytes-key\tb:\\x00\\x01\\xff\n");
+    t.push_str("set\tcolor\tgreen\n");
+    t.push_str("get\tgreeting\n");
+    t.push_str("get\tb:bytes-key\n");
+    t.push_str("get\tmissing\n");
+    t.push_str("has\tcolor\n");
+    t.push_str("has\tb:color\n");
+    t.push_str("has\tnope\n");
+    t.push_str("len\n");
+    t.push_str("keys\n");
+    t.push_str("items\n");
+    t.push_str("files\tnotes\n");
+    t.push_str("close\n");
+    t.push_str("files\tnotes\n");
+    t.push_str("open\tnotes\tc\n");
+    t.push_str("keys\n");
+    t.push_str("get\tcolor\n");
+    t.push_str("close\n");
+    t.push_str("job\tupdates: in place, then past the block\n");
+    t.push_str("open\tcache\tn\n");
+    t.push_str("set\tpage\tr:a:100\n");
+    t.push_str("set\tother\tr:b:10\n");
+    t.push_str("files\tcache\n");
+    t.push_str("set\tpage\tr:c:512\n");
+    t.push_str("get\tpage\n");
+    t.push_str("files\tcache\n");
+    t.push_str("set\tpage\tr:d:513\n");
+    t.push_str("get\tpage\n");
+    t.push_str("files\tcache\n");
+    t.push_str("set\tpage\tshort\n");
+    t.push_str("get\tpage\n");
+    t.push_str("set\tpage\tr:e:1024\n");
+    t.push_str("get\tpage\n");
+    t.push_str("set\tother\t\n");
+    t.push_str("get\tother\n");
+    t.push_str("sync\n");
+    t.push_str("files\tcache\n");
+    t.push_str("close\n");
+    t.push_str("job\tdelete commits the index\n");
+    t.push_str("open\tdel\tn\n");
+    t.push_str("set\ta\t1\n");
+    t.push_str("set\tb\t2\n");
+    t.push_str("set\tc\t3\n");
+    t.push_str("files\tdel\n");
+    t.push_str("del\tb\n");
+    t.push_str("files\tdel\n");
+    t.push_str("del\tb\n");
+    t.push_str("set\tb\tagain\n");
+    t.push_str("keys\n");
+    t.push_str("files\tdel\n");
+    t.push_str("close\n");
+    t.push_str("files\tdel\n");
+    t.push_str("job\tkeys that are not ASCII\n");
+    t.push_str("open\tintl\tn\n");
+    t.push_str("set\tcafé\tcoffee\n");
+    t.push_str("set\t日本\tjapan\n");
+    t.push_str("set\tb:\\xe9t\\xe9\tlatin-1 bytes\n");
+    t.push_str("set\tb:new\\nline\tnl\n");
+    t.push_str("set\tb:\\x7f\\x80\\xa0\\xad\tcontrols\n");
+    t.push_str("set\tit's\tquote\n");
+    t.push_str("set\tsay \"hi\"\tdouble\n");
+    t.push_str("set\tboth ' and \"\tmixed\n");
+    t.push_str("keys\n");
+    t.push_str("get\tcafé\n");
+    t.push_str("get\tb:caf\\xc3\\xa9\n");
+    t.push_str("close\n");
+    t.push_str("files\tintl\n");
+    t.push_str("open\tintl\tr\n");
+    t.push_str("keys\n");
+    t.push_str("get\t日本\n");
+    t.push_str("close\n");
+    t.push_str("job\tflags and errors\n");
+    t.push_str("open\tabsent\tr\n");
+    t.push_str("open\tabsent\tw\n");
+    t.push_str("open\tabsent\tx\n");
+    t.push_str("open\tro\tn\n");
+    t.push_str("set\tk\tv\n");
+    t.push_str("close\n");
+    t.push_str("open\tro\tr\n");
+    t.push_str("get\tk\n");
+    t.push_str("set\tk\tw\n");
+    t.push_str("del\tk\n");
+    t.push_str("set\ti:5\tv\n");
+    t.push_str("close\n");
+    t.push_str("open\tro\tw\n");
+    t.push_str("set\tk\tw\n");
+    t.push_str("set\tnum\ti:7\n");
+    t.push_str("set\ti:5\tv\n");
+    t.push_str("get\ti:5\n");
+    t.push_str("del\tnope\n");
+    t.push_str("close\n");
+    t.push_str("get\tk\n");
+    t.push_str("set\tk\tv\n");
+    t.push_str("len\n");
+    t.push_str("keys\n");
+    t.push_str("has\tk\n");
+    t.push_str("close\n");
+    t.push_str("open\tro\tc\n");
+    t.push_str("items\n");
+    t.push_str("close\n");
+    t.push_str("job\thand-made index files\n");
+    t.push_str("open\thandmade\tr\n");
+    t.push_str("keys\n");
+    t.push_str("items\n");
+    t.push_str("len\n");
+    t.push_str("close\n");
+    t.push_str("open\teuro\tr\n");
+    t.push_str("open\ttriple\tr\n");
+    t.push_str("open\tdamaged\tr\n");
+    t.push_str("get\tpast-end\n");
+    t.push_str("get\tmisaligned\n");
+    t.push_str("get\toverlap-b\n");
+    t.push_str("get\tempty\n");
+    t.push_str("close\n");
+    t.push_str("job\tthe n flag starts over\n");
+    t.push_str("open\tfresh\tn\n");
+    t.push_str("set\tx\t1\n");
+    t.push_str("close\n");
+    t.push_str("open\tfresh\tc\n");
+    t.push_str("set\ty\t2\n");
+    t.push_str("close\n");
+    t.push_str("files\tfresh\n");
+    t.push_str("open\tfresh\tn\n");
+    t.push_str("keys\n");
+    t.push_str("close\n");
+    t.push_str("files\tfresh\n");
+    t.push_str("whichdb\twhich/empty\n");
+    t.push_str("whichdb\twhich/notdumb\n");
+    t.push_str("whichdb\twhich/legacy\n");
+    t.push_str("whichdb\twhich/short\n");
+    t.push_str("whichdb\twhich/text.txt\n");
+    t.push_str("whichdb\tbin/gnu.db\n");
+    t.push_str("whichdb\tbin/gnu2.db\n");
+    t.push_str("whichdb\tbin/sqlite.db\n");
+    t.push_str("whichdb\tbin/bdb.db\n");
+    t.push_str("whichdb\twhich/missing\n");
+    t.push_str("whichdb\tdb/notes\n");
+    t.push_str("whichdb\tdb/handmade\n");
+    t.push_str("whichdb\tdb/damaged\n");
+    t.push_str("program\tshortener\n");
+    t.push_str("program\tsessions\n");
+    t.push_str("program\thttpcache\n");
+    t.push_str("program\tcrash\n");
+    t.push_str("program\tfsck\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# time, then what happens: login <sid> <user>, touch <sid>, logout <sid>, sweep\n");
+    t.push_str("100 login s-7f3a alice\n");
+    t.push_str("105 login s-91bc bob\n");
+    t.push_str("110 login s-02de carol\n");
+    t.push_str("130 touch s-7f3a\n");
+    t.push_str("160 logout s-91bc\n");
+    t.push_str("200 login s-55aa dave\n");
+    t.push_str("700 sweep\n");
+    t.push_str("760 touch s-02de\n");
+    t.push_str("900 login s-c0de erin\n");
+    t.push_str("1300 sweep\n");
+    t.push_str("1305 touch s-7f3a\n");
+    t.push_str("2500 sweep\n");
+    v.push(DataFile { path: "sessions/events.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# long URLs to shorten, in the order they are submitted\n");
+    t.push_str("https://docs.python.org/3/library/dbm.html#module-dbm.dumb\n");
+    t.push_str("https://en.wikipedia.org/wiki/DBM_(computing)\n");
+    t.push_str("https://example.com/blog/2026/10/20/why-we-moved-off-a-dumb-database\n");
+    t.push_str("https://docs.python.org/3/library/dbm.html#module-dbm.dumb\n");
+    t.push_str("https://example.com/search?q=key+value+store&page=2\n");
+    t.push_str("https://example.org/\n");
+    t.push_str("https://example.com/a/very/long/path/that/keeps/going/and/going/until/it/is/longer/than/most/people/would/ever/type/by/hand/index.html\n");
+    v.push(DataFile { path: "shortener/urls.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# short codes clicked, after a restart\n");
+    t.push_str("1\n");
+    t.push_str("2\n");
+    t.push_str("4\n");
+    t.push_str("zz\n");
+    t.push_str("3\n");
+    t.push_str("1\n");
+    v.push(DataFile { path: "shortener/visits.txt".to_string(), body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "which/empty.dat".to_string(), body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "which/empty.dir".to_string(), body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "which/legacy.dir".to_string(), body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "which/legacy.pag".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("a");
+    v.push(DataFile { path: "which/notdumb.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("alpha, (0, 1)\n");
+    v.push(DataFile { path: "which/notdumb.dir".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("ab");
+    v.push(DataFile { path: "which/short".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("just some text, nothing magic about it\n");
+    v.push(DataFile { path: "which/text.txt".to_string(), body: t });
+}

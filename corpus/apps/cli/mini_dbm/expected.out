@@ -1,0 +1,301 @@
+== create, set, get and reopen
+open('notes', 'n')
+db['greeting'] = 'hello'
+db[b'bytes-key'] = b'\x00\x01\xff'
+db['color'] = 'green'
+db['greeting'] = b'hello'
+db[b'bytes-key'] = b'\x00\x01\xff'
+db['missing'] -> KeyError: b'missing'
+'color' in db = True
+b'color' in db = True
+'nope' in db = False
+len(db) = 3
+db.keys() = [b'greeting', b'bytes-key', b'color']
+db.items() = [(b'greeting', b'hello'), (b'bytes-key', b'\x00\x01\xff'), (b'color', b'green')]
+files notes:
+  notes.dir: 3 lines
+    'greeting', (0, 5)
+    'bytes-key', (512, 3)
+    'color', (1024, 5)
+  notes.dat: 1029 bytes
+  notes.bak: missing
+db.close()
+files notes:
+  notes.dir: 3 lines
+    'greeting', (0, 5)
+    'bytes-key', (512, 3)
+    'color', (1024, 5)
+  notes.dat: 1029 bytes
+  notes.bak: 3 lines
+open('notes', 'c')
+db.keys() = [b'greeting', b'bytes-key', b'color']
+db['color'] = b'green'
+db.close()
+== updates: in place, then past the block
+open('cache', 'n')
+db['page'] = <100 chars: 'aaaaaaaaaaaa'...>
+db['other'] = 'bbbbbbbbbb'
+files cache:
+  cache.dir: 2 lines
+    'page', (0, 100)
+    'other', (512, 10)
+  cache.dat: 522 bytes
+  cache.bak: missing
+db['page'] = <512 chars: 'cccccccccccc'...>
+db['page'] = <512 bytes: b'cccccccccccc'...>
+files cache:
+  cache.dir: 2 lines
+    'page', (0, 100)
+    'other', (512, 10)
+  cache.dat: 522 bytes
+  cache.bak: missing
+db['page'] = <513 chars: 'dddddddddddd'...>
+db['page'] = <513 bytes: b'dddddddddddd'...>
+files cache:
+  cache.dir: 2 lines
+    'page', (0, 100)
+    'other', (512, 10)
+  cache.dat: 1537 bytes
+  cache.bak: missing
+db['page'] = 'short'
+db['page'] = b'short'
+db['page'] = <1024 chars: 'eeeeeeeeeeee'...>
+db['page'] = <1024 bytes: b'eeeeeeeeeeee'...>
+db['other'] = ''
+db['other'] = b''
+db.sync()
+files cache:
+  cache.dir: 2 lines
+    'page', (2048, 1024)
+    'other', (512, 0)
+  cache.dat: 3072 bytes
+  cache.bak: 2 lines
+db.close()
+== delete commits the index
+open('del', 'n')
+db['a'] = '1'
+db['b'] = '2'
+db['c'] = '3'
+files del:
+  del.dir: 3 lines
+    'a', (0, 1)
+    'b', (512, 1)
+    'c', (1024, 1)
+  del.dat: 1025 bytes
+  del.bak: missing
+del db['b']
+files del:
+  del.dir: 2 lines
+    'a', (0, 1)
+    'c', (1024, 1)
+  del.dat: 1025 bytes
+  del.bak: 3 lines
+del db['b'] -> KeyError: b'b'
+db['b'] = 'again'
+db.keys() = [b'a', b'c', b'b']
+files del:
+  del.dir: 3 lines
+    'a', (0, 1)
+    'c', (1024, 1)
+    'b', (1536, 5)
+  del.dat: 1541 bytes
+  del.bak: 3 lines
+db.close()
+files del:
+  del.dir: 3 lines
+    'a', (0, 1)
+    'c', (1024, 1)
+    'b', (1536, 5)
+  del.dat: 1541 bytes
+  del.bak: 3 lines
+== keys that are not ASCII
+open('intl', 'n')
+db['café'] = 'coffee'
+db['日本'] = 'japan'
+db[b'\xe9t\xe9'] = 'latin-1 bytes'
+db[b'new\nline'] = 'nl'
+db[b'\x7f\x80\xa0\xad'] = 'controls'
+db["it's"] = 'quote'
+db['say "hi"'] = 'double'
+db['both \' and "'] = 'mixed'
+db.keys() = [b'caf\xc3\xa9', b'\xe6\x97\xa5\xe6\x9c\xac', b'\xe9t\xe9', b'new\nline', b'\x7f\x80\xa0\xad', b"it's", b'say "hi"', b'both \' and "']
+db['café'] = b'coffee'
+db[b'caf\xc3\xa9'] = b'coffee'
+db.close()
+files intl:
+  intl.dir: 8 lines
+    'cafÃ©', (0, 6)
+    'æ\x97¥æ\x9c¬', (512, 5)
+    'été', (1024, 13)
+    'new\nline', (1536, 2)
+    '\x7f\x80\xa0\xad', (2048, 8)
+    "it's", (2560, 5)
+    'say "hi"', (3072, 6)
+    'both \' and "', (3584, 5)
+  intl.dat: 3589 bytes
+  intl.bak: 8 lines
+open('intl', 'r')
+db.keys() = [b'caf\xc3\xa9', b'\xe6\x97\xa5\xe6\x9c\xac', b'\xe9t\xe9', b'new\nline', b'\x7f\x80\xa0\xad', b"it's", b'say "hi"', b'both \' and "']
+db['日本'] = b'japan'
+db.close()
+== flags and errors
+open('absent', 'r') -> FileNotFoundError: [Errno 2] No such file or directory: b'data/db/absent.dat'
+open('absent', 'w') -> FileNotFoundError: [Errno 2] No such file or directory: b'data/db/absent.dat'
+open('absent', 'x') -> ValueError: Flag must be one of 'r', 'w', 'c', or 'n'
+open('ro', 'n')
+db['k'] = 'v'
+db.close()
+open('ro', 'r')
+db['k'] = b'v'
+db['k'] = 'w' -> OSError: The database is opened for reading only
+del db['k'] -> OSError: The database is opened for reading only
+db[5] = 'v' -> OSError: The database is opened for reading only
+db.close()
+open('ro', 'w')
+db['k'] = 'w'
+db['num'] = 7 -> TypeError: values must be bytes or strings
+db[5] = 'v' -> TypeError: keys must be bytes or strings
+db[5] -> KeyError: 5
+del db['nope'] -> KeyError: b'nope'
+db.close()
+db['k'] -> OSError: DBM object has already been closed
+db['k'] = 'v' -> OSError: DBM object has already been closed
+len(db) -> OSError: DBM object has already been closed
+db.keys() -> OSError: DBM object has already been closed
+'k' in db -> OSError: DBM object has already been closed
+db.close()
+open('ro', 'c')
+db.items() = [(b'k', b'w')]
+db.close()
+== hand-made index files
+open('handmade', 'r')
+db.keys() = [b'alpha', b'beta', b'gamma', b'tab\tkey', b"it's", b'caf\xc3\xa9', b'octAl', b'trailing']
+db.items() = [(b'alpha', b'hello'), (b'beta', b'beta'), (b'gamma', b'ccc'), (b'tab\tkey', b'TT'), (b"it's", b'Q'), (b'caf\xc3\xa9', b'XYZ'), (b'octAl', b'OK'), (b'trailing', b'last')]
+len(db) = 8
+db.close()
+open('euro', 'r') -> UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+open('triple', 'r') -> ValueError: too many values to unpack (expected 2)
+open('damaged', 'r')
+db['past-end'] = b'tail'
+db['misaligned'] = b'MISA'
+db['overlap-b'] = b'AAAAAAAAAA'
+db['empty'] = b''
+db.close()
+== the n flag starts over
+open('fresh', 'n')
+db['x'] = '1'
+db.close()
+open('fresh', 'c')
+db['y'] = '2'
+db.close()
+files fresh:
+  fresh.dir: 2 lines
+    'x', (0, 1)
+    'y', (512, 1)
+  fresh.dat: 513 bytes
+  fresh.bak: 2 lines
+open('fresh', 'n')
+db.keys() = []
+db.close()
+files fresh:
+  fresh.dir: 0 lines
+  fresh.dat: 0 bytes
+  fresh.bak: missing
+whichdb('which/empty') = 'dbm.dumb'
+whichdb('which/notdumb') = None
+whichdb('which/legacy') = 'dbm.ndbm'
+whichdb('which/short') = ''
+whichdb('which/text.txt') = ''
+whichdb('bin/gnu.db') = 'dbm.gnu'
+whichdb('bin/gnu2.db') = 'dbm.gnu'
+whichdb('bin/sqlite.db') = 'dbm.sqlite3'
+whichdb('bin/bdb.db') = ''
+whichdb('which/missing') = None
+whichdb('db/notes') = 'dbm.dumb'
+whichdb('db/handmade') = 'dbm.dumb'
+whichdb('db/damaged') = 'dbm.dumb'
+== program: URL shortener
+  1 <- https://docs.python.org/3/library/dbm.html#module-dbm.dumb
+  2 <- https://en.wikipedia.org/wiki/DBM_(computing)
+  3 <- https://example.com/blog/2026/10/20/why-we-moved-off-a-dumb-database
+  1 <- https://docs.python.org/3/library/dbm.html#module-dbm.dumb (already short)
+  4 <- https://example.com/search?q=key+value+store&page=2
+  5 <- https://example.org/
+  6 <- https://example.com/a/very/long/path/that/keeps/going/and/going/until/it/is/longer/than/most/people/would/ever/type/by/hand/index.html
+restarted
+  /1: 301 https://docs.python.org/3/library/dbm.html#module-dbm.dumb
+  /2: 301 https://en.wikipedia.org/wiki/DBM_(computing)
+  /4: 301 https://example.com/search?q=key+value+store&page=2
+  /zz: 404
+  /3: 301 https://example.com/blog/2026/10/20/why-we-moved-off-a-dumb-database
+  /1: 301 https://docs.python.org/3/library/dbm.html#module-dbm.dumb
+  1 2 <58 chars: 'https://docs'...>
+  2 1 <45 chars: 'https://en.w'...>
+  3 1 <68 chars: 'https://exam'...>
+  4 1 <51 chars: 'https://exam'...>
+  5 0 'https://example.org/'
+  6 0 <134 chars: 'https://exam'...>
+  17 keys, 387 live bytes in a 8193-byte .dat (7806 padding or dead)
+== program: session store
+  100 login s-7f3a alice, expires 700
+  105 login s-91bc bob, expires 705
+  110 login s-02de carol, expires 710
+  130 touch s-7f3a, expires 730
+  160 logout s-91bc
+  200 login s-55aa dave, expires 800
+  700 sweep: removed [], 3 left
+  760 touch s-02de, expires 1360
+  900 login s-c0de erin, expires 1500
+  1300 sweep: removed ['s-7f3a', 's-55aa'], 2 left
+  1305 touch s-7f3a: no such session
+  2500 sweep: removed ['s-02de', 's-c0de'], 0 left
+  left: []
+  sessions.dir: 0 lines
+  sessions.dat: 2057 bytes
+  sessions.bak: 1 lines
+  0 keys, 0 live bytes in a 2057-byte .dat (2057 padding or dead)
+== program: HTTP response cache
+  /api/prices fetch 1: 180 bytes at 0 (new)
+  /api/prices fetch 2: 190 bytes at 0 (in place)
+  /api/prices fetch 3: 175 bytes at 0 (in place)
+  /api/prices fetch 4: 600 bytes at 512 (moved)
+  /api/prices fetch 5: 590 bytes at 512 (in place)
+  /api/prices fetch 6: 1400 bytes at 1536 (moved)
+  /api/prices fetch 7: 300 bytes at 1536 (in place)
+  /api/news fetch 1: 2000 bytes at 3072 (new)
+  /api/news fetch 2: 2100 bytes at 5120 (moved)
+  /api/news fetch 3: 2050 bytes at 5120 (in place)
+  /static/logo.svg fetch 1: 4096 bytes at 7680 (new)
+  /static/logo.svg fetch 2: 4096 bytes at 7680 (in place)
+  /api/me fetch 1: 90 bytes at 11776 (new)
+  /api/me fetch 2: 95 bytes at 11776 (in place)
+  /api/me fetch 3: 600 bytes at 12288 (moved)
+  before compaction: 4 keys, 7046 live bytes in a 12888-byte .dat (5842 padding or dead)
+  after compaction: 4 keys, 7046 live bytes in a 7768-byte .dat (722 padding or dead)
+  same contents: True
+== program: a crash between updates
+  crash-snap.dir: 3 lines
+    'a', (0, 100)
+    'b', (512, 600)
+    'c', (3072, 3)
+  crash-snap.dat: 3075 bytes
+  crash-snap.bak: 2 lines
+  crash.dir: 3 lines
+    'a', (0, 400)
+    'b', (1536, 1100)
+    'c', (3072, 3)
+  crash.dat: 3075 bytes
+  crash.bak: 3 lines
+  crash-snap: a=<100 bytes: b'XXXXXXXXXXXX'...>, b=<600 bytes: b'yyyyyyyyyyyy'...>, c=b'new'
+  crash: a=<400 bytes: b'XXXXXXXXXXXX'...>, b=<1100 bytes: b'YYYYYYYYYYYY'...>, c=b'new'
+== program: index checker
+  notes: 3 entries, 13 live bytes, .dat 1029 bytes: clean
+  cache: 2 entries, 1024 live bytes, .dat 3072 bytes: clean
+  handmade: 8 entries, 24 live bytes, .dat 3588 bytes: clean
+  damaged: 6 entries, 357 live bytes, .dat 1028 bytes: 4 problems
+    'past-end' ends at 1064, past the end (1028)
+    'misaligned' starts at 100, not on a 512-byte block
+    'overlap-b' starts at 700, not on a 512-byte block
+    'overlap-b' overlaps 'overlap-a'
+  httpcache: 4 entries, 7046 live bytes, .dat 12888 bytes: clean
+  crash-snap: 3 entries, 703 live bytes, .dat 3075 bytes: clean
