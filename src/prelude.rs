@@ -734,6 +734,9 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
     ("f32", "MIN_POSITIVE", ConstValue::F32(f32::MIN_POSITIVE)),
     ("f32", "NAN", ConstValue::F32(f32::NAN)),
     ("f32", "EPSILON", ConstValue::F32(f32::EPSILON)),
+    ("f32", "PI", ConstValue::F32(std::f32::consts::PI)),
+    ("f32", "TAU", ConstValue::F32(std::f32::consts::TAU)),
+    ("f32", "E", ConstValue::F32(std::f32::consts::E)),
     ("f64", "INFINITY", ConstValue::F64(f64::INFINITY)),
     ("f64", "NEG_INFINITY", ConstValue::F64(f64::NEG_INFINITY)),
     ("f64", "MAX", ConstValue::F64(f64::MAX)),
@@ -741,6 +744,9 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
     ("f64", "MIN_POSITIVE", ConstValue::F64(f64::MIN_POSITIVE)),
     ("f64", "NAN", ConstValue::F64(f64::NAN)),
     ("f64", "EPSILON", ConstValue::F64(f64::EPSILON)),
+    ("f64", "PI", ConstValue::F64(std::f64::consts::PI)),
+    ("f64", "TAU", ConstValue::F64(std::f64::consts::TAU)),
+    ("f64", "E", ConstValue::F64(std::f64::consts::E)),
 ];
 
 /// Look up a primitive-type associated constant by `(type_name, const_name)`.

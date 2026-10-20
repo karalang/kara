@@ -94,6 +94,32 @@ impl<'a> super::TypeChecker<'a> {
                 };
             }
         }
+        // B-2026-10-20-23 — an unknown constant on a primitive type
+        // (`f64.FOO`, `u8.MAXX`) is reported here; it used to be a silent
+        // `Type::Error` that only the MIR builder noticed.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.local_scope.lookup(name).is_none()
+                && crate::prelude::PRIMITIVE_CONSTS
+                    .iter()
+                    .any(|(t, _, _)| *t == name.as_str())
+            {
+                let known: Vec<&str> = crate::prelude::PRIMITIVE_CONSTS
+                    .iter()
+                    .filter(|(t, _, _)| *t == name.as_str())
+                    .map(|(_, c, _)| *c)
+                    .collect();
+                let hint = match crate::edit_distance::suggest_similar(field, &known) {
+                    Some(c) => format!("; did you mean `{name}.{c}`?"),
+                    None => format!("; its constants are {}", known.join(", ")),
+                };
+                self.type_error(
+                    format!("no associated constant `{field}` on `{name}`{hint}"),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        }
         // A bare TYPE NAME as the field-access base, with the const intercepts
         // above having already declined it (`i64.NONEXISTENT`). Return the
         // historical silent `Type::Error` WITHOUT routing through `infer_expr`,

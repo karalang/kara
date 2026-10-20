@@ -22382,15 +22382,23 @@ fn test_primitive_const_typechecks_in_arithmetic_position() {
 }
 
 #[test]
-fn test_primitive_const_unknown_silent_fall_through() {
-    // `i64.NONEXISTENT` falls through the early-intercept; the rest of
-    // `infer_field_access` runs `infer_expr(Identifier("i64"))` which
-    // returns `Type::Error` silently, so the access yields
-    // `Type::Error` without a diagnostic. This matches the historical
-    // behaviour for any unrecognised access on a bare primitive
-    // identifier — tightening into a structured "unknown constant on
-    // primitive" diagnostic is a separate follow-up.
-    typecheck_ok("fn main() { let x = i64.NONEXISTENT; }");
+fn test_primitive_const_unknown_is_an_error() {
+    // B-2026-10-20-23: an unknown constant on a primitive is reported at
+    // the use, with a did-you-mean when one is close.
+    let errs = typecheck_errors("fn main() { let x = i64.NONEXISTENT; let y = u8.MAXX; }");
+    let msgs: Vec<&str> = errs.iter().map(|e| e.message.as_str()).collect();
+    assert!(
+        msgs.iter().any(|m| m.starts_with(
+            "no associated constant `NONEXISTENT` on `i64`; its constants are MAX, MIN"
+        )),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("no associated constant `MAXX` on `u8`; did you mean `u8.MAX`?")),
+        "{msgs:?}"
+    );
+    typecheck_ok("fn main() { let p = f64.PI; let t = f32.TAU; let e = f64.E; }");
 }
 
 // ── Const generics — declaration-site permitted-type rejection ──

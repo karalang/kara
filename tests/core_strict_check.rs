@@ -10527,3 +10527,26 @@ fn a_local_bound_to_a_for_item_cannot_hold_an_owned_value() {
         "x\nz\n",
     );
 }
+
+/// B-2026-10-20-23: an unknown constant on a primitive is a check error at
+/// the use, and floats have `PI`, `TAU` and `E`.
+#[test]
+fn a_primitive_constant_is_checked_and_floats_have_pi() {
+    rejected(
+        "primitive-const-unknown",
+        "fn main() { let x = f64.FOO; println(f\"{x}\"); }\n",
+        "no associated constant `FOO` on `f64`",
+    );
+    rejected(
+        "primitive-const-near-miss",
+        "fn main() { let x = u8.MAXX; println(f\"{x}\"); }\n",
+        "did you mean `u8.MAX`?",
+    );
+    accepted_and_runs(
+        "float-pi-tau-e",
+        "fn main() {\n\
+             println(f\"{f64.PI > 3.14} {f64.TAU == 2.0 * f64.PI} {f64.E > 2.71} {f32.PI > 3.0}\");\n\
+         }\n",
+        "true true true true\n",
+    );
+}
