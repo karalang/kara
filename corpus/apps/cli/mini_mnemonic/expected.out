@@ -1,0 +1,629 @@
+== vectors english
+00000000 abandon ... about (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f legal ... yellow (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 letter ... above (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoo ... wrong (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abandon ... agent (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f legal ... will (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 letter ... always (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoo ... when (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abandon ... art (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f legal ... title (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 letter ... bless (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoo ... vote (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 ozone ... picnic (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 gravity ... fog (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac hamster ... length (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e scheme ... borrow (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee horn ... brave (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 panda ... inside (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 cat ... train (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 light ... access (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a all ... reform (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d vessel ... picture (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d scissors ... clump (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a void ... unfold (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors chinese_simplified
+00000000 的 ... 在 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 枪 ... 卿 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 不 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 逻 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 的 ... 动 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 枪 ... 殿 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 民 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 裕 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 的 ... 性 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 枪 ... 搭 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 五 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 佳 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 蒙 ... 汤 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 父 ... 移 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac 宁 ... 熟 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e 伐 ... 件 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee 福 ... 级 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 仪 ... 延 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 济 ... 焰 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 虑 ... 中 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a 而 ... 埔 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d 昏 ... 阀 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d 瓶 ... 空 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a 柄 ... 迁 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors chinese_traditional
+00000000 的 ... 在 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 槍 ... 卿 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 不 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 邏 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 的 ... 動 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 槍 ... 殿 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 民 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 裕 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 的 ... 性 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 槍 ... 搭 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 壤 ... 五 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 歇 ... 佳 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 蒙 ... 湯 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 父 ... 移 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac 寧 ... 熟 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e 伐 ... 件 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee 福 ... 級 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 儀 ... 延 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 濟 ... 焰 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 慮 ... 中 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a 而 ... 埔 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d 昏 ... 閥 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d 瓶 ... 空 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a 柄 ... 遷 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors czech
+00000000 abdikace ... agrese (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f obrazec ... zubr (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 obvinit ... akce (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zvyk ... zticha (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abdikace ... balonek (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f obrazec ... zmije (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 obvinit ... bezinka (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zvyk ... zlehka (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abdikace ... branka (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f obrazec ... veskrze (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 obvinit ... cihla (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zvyk ... zavolat (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 pokoj ... potupa (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 masakr ... ladnost (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac migrace ... obsluha (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e sledovat ... cvik (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee most ... decibel (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 poloha ... nasadit (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 drak ... vodstvo (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 ochladit ... andulka (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a bavlna ... rozchod (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d zajet ... potvora (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d slezina ... flotila (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a zavalit ... vypadat (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors french
+00000000 abaisser ... abeille (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f implorer ... voyelle (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 indexer ... abolir (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoologie ... voter (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abaisser ... adéquat (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f implorer ... vinaigre (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 indexer ... agencer (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoologie ... viande (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abaisser ... anaphore (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f implorer ... studieux (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 indexer ... axiome (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zoologie ... valable (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 monument ... nerveux (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 fiasco ... esprit (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac flatteur ... incendie (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e prélude ... barque (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee froid ... bélier (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 mouche ... grappin (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 brochure ... talisman (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 informer ... abriter (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a adverbe ... pavillon (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d ultrason ... nettoyer (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d prétexte ... cellule (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a vaillant ... tornade (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors italian
+00000000 abaco ... abete (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f mimosa ... zircone (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 misurare ... abisso (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zuppa ... zerbino (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abaco ... agitare (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f mimosa ... virulento (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 misurare ... allievo (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zuppa ... vile (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abaco ... angelo (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f mimosa ... tarpare (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 misurare ... baco (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zuppa ... vedetta (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 pesista ... poligono (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 immolato ... galateo (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac infatti ... mirtillo (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e sarto ... basso (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee italia ... benda (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 piacere ... luce (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 calmo ... tiro (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 modulo ... accusato (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a alcolico ... riciclato (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d utopia ... pollice (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d satira ... cilindro (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a varcato ... trono (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors japanese
+00000000 あいこくしん ... あおぞら (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f そつう ... わかめ (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 そとづら ... あかちゃん (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff われる ... ろんぶん (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 あいこくしん ... あらいぐま (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f そつう ... れいぎ (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 そとづら ... いきなり (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff われる ... りんご (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 あいこくしん ... いってい (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f そつう ... まんきつ (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 そとづら ... うめる (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff われる ... らいう (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 ておくれ ... てんない (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 しはつ ... さくし (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac しやくしょ ... そっこう (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e はいち ... うんどう (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee すいえい ... えがお (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 てそう ... せたい (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 おたく ... むいか (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 そむく ... あさひ (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a あんぜん ... にんそう (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d ようきゅう ... てんぷら (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d はえる ... かぶか (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a よゆう ... めんどう (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors korean
+00000000 가격 ... 가능 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 실장 ... 흔히 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 실현 ... 가득 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 힘껏 ... 흑백 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 가격 ... 강도 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 실장 ... 환갑 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 실현 ... 거액 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 힘껏 ... 화살 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 가격 ... 계단 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f 실장 ... 통로 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 실현 ... 구속 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff 힘껏 ... 허용 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 원고 ... 의식 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 서비스 ... 비닐 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac 설렁탕 ... 실컷 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e 제주도 ... 군인 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee 소음 ... 그날 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 월급 ... 술집 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 나들이 ... 팩스 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 씨름 ... 가운데 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a 개구리 ... 장미 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d 해결 ... 의심 (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d 제한 ... 단순 (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a 향상 ... 하지만 (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors portuguese
+00000000 abacate ... abater (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f imitador ... xingar (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 inalador ... abduzir (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zumbido ... xeque (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abacate ... acumular (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f imitador ... viga (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 inalador ... afastar (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zumbido ... viaduto (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 abacate ... alinhar (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f imitador ... sucata (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 inalador ... asilado (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zumbido ... validade (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 mexicano ... multar (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 fazenda ... envolver (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac filho ... impor (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e pote ... atracar (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee frieza ... autoria (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 mimado ... global (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 bifocal ... tangente (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 indeciso ... abreviar (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a adjetivo ... palmada (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d turbo ... mundial (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d povoar ... cacique (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a vaidoso ... tonel (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== vectors spanish
+00000000 ábaco ... abierto (12 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f ligero ... zafiro (12 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 lino ... abogado (12 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zurdo ... yodo (12 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 ábaco ... afición (18 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f ligero ... violín (18 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 lino ... alacrán (18 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zurdo ... viejo (18 words): mnemonic ok, check True, entropy ok, xprv ok
+00000000 ábaco ... ancla (24 words): mnemonic ok, check True, entropy ok, xprv ok
+7f7f7f7f ligero ... teatro (24 words): mnemonic ok, check True, entropy ok, xprv ok
+80808080 lino ... aumento (24 words): mnemonic ok, check True, entropy ok, xprv ok
+ffffffff zurdo ... varón (24 words): mnemonic ok, check True, entropy ok, xprv ok
+9e885d95 obra ... optar (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6610b259 gráfico ... fingir (18 words): mnemonic ok, check True, entropy ok, xprv ok
+68a79eac guion ... lince (24 words): mnemonic ok, check True, entropy ok, xprv ok
+c0ba5a8e ración ... azufre (12 words): mnemonic ok, check True, entropy ok, xprv ok
+6d9be1ee honor ... balde (18 words): mnemonic ok, check True, entropy ok, xprv ok
+9f6a2878 océano ... jamón (24 words): mnemonic ok, check True, entropy ok, xprv ok
+23db8160 bucle ... tierra (12 words): mnemonic ok, check True, entropy ok, xprv ok
+8197a4a4 llaga ... abuso (18 words): mnemonic ok, check True, entropy ok, xprv ok
+066dca1a águila ... piña (24 words): mnemonic ok, check True, entropy ok, xprv ok
+f30f8c1d urbe ... óptica (12 words): mnemonic ok, check True, entropy ok, xprv ok
+c10ec20d rama ... casero (18 words): mnemonic ok, check True, entropy ok, xprv ok
+f585c11a vampiro ... traje (24 words): mnemonic ok, check True, entropy ok, xprv ok
+== seed abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about TREZOR
+seed c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04
+xprv xprv9s21ZrQH143K3h3fDYiay8mocZ3afhfULfb5GX8kCBdno77K4HiA15Tg23wpbeF1pLfs1c5SPmYHrEpTuuRhxMwvKDwqdKiGJS9XFKzUsAF
+tprv tprv8ZgxMBicQKsPeWHBt7a68nPnvgTnuDhUgDWC8wZCgA8GahrQ3f3uWpq7wE7Uc1dLBnCe1hhCZ886K6ND37memRDWqsA9HgSKDXtwh2Qxo6J
+== seed Příšerně žluťoučký kůň úpěl ďábelské ódy zákeřný učeň běží podél zóny úlů Neuvěřitelně bezpečné heslíčko
+seed 668504d28417fc720f751f7edccf9af7028e6cb6e8819c3ee1926a9d167ea59853b6dfab649e5585f5622779fef4ae76d0d06351cff84fb3a294119f5ed66e18
+xprv xprv9s21ZrQH143K2pnEnoUksvGwGEnNHeDDcsPJrhMge4uws9kXfiyTmsghX7Koq18fRnhZJGc12yCNdBdzVCsPPUisRu4snynN4DeToCN94FV
+tprv tprv8ZgxMBicQKsPde1mTNLG3ZtvaNCaXAFDxRJRj7n983QRekVcf6KDHd49SHVTqNWyoEELJNDmCKnB63BjcRDLCXzTxYHBTLWQyKPtEsCTPih
+== to_mnemonic english 00000000000000000000000000000000
+abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+== to_mnemonic english 7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+legal winner thank year wave sausage worth useful legal winner thank yellow
+== to_mnemonic english ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote
+== to_mnemonic english 8080808080808080808080808080808080808080
+letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor accident
+== to_mnemonic english 4c6f72656d20697073756d20646f6c6f722073697420616d657420616d65742e
+erase knee off surge alley return soccer pumpkin call casino swallow ten capital defy place lottery gesture hen fringe dolphin bitter razor spawn small
+== to_mnemonic english 000000000000000000000000000000
+error: ValueError: Data length should be one of the following: [16, 20, 24, 28, 32], but it is not 15.
+== to_mnemonic english 000000000000000000000000000000000000000000000000000000000000000000
+error: ValueError: Data length should be one of the following: [16, 20, 24, 28, 32], but it is not 33.
+== to_mnemonic english 
+error: ValueError: Data length should be one of the following: [16, 20, 24, 28, 32], but it is not 0.
+== to_mnemonic japanese 00000000000000000000000000000000
+あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あおぞら
+== to_mnemonic japanese a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4
+てんらんかい　おまいり　がいへき　けんちく　けんめい　ことり　ちいき　ちたん　てんらんかい　おまいり　がいへき　けんちく　けんめい　ことり　ちいき　ちたん　てんらんかい　おこなう
+== to_mnemonic korean 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
+고집 시댁 종종 금강산 한문 약수 명칭 테스트 고집 시댁 종종 금강산 한문 약수 명칭 테스트 고집 시댁 종종 금강산 효율적
+== to_mnemonic chinese_simplified 77c2b00716cec7213839159e404db50d
+课 军 个 群 汁 揭 涌 东 滚 他 背 统
+== to_mnemonic chinese_traditional 77c2b00716cec7213839159e404db50d
+課 軍 個 群 汁 揭 湧 東 滾 他 背 統
+== to_mnemonic czech 18ab19a9f54a9274f03e5209a2ac8a91
+clona kvalita mistr vydat proton hrozen sleva stres blikat choroba dotek drak
+== to_mnemonic russian 00000000000000000000000000000000
+абзац абзац абзац абзац абзац абзац абзац абзац абзац абзац абзац авангард
+== to_mnemonic turkish ffffffffffffffffffffffffffffffff
+zümre zümre zümre zümre zümre zümre zümre zümre zümre zümre zümre zihniyet
+== to_mnemonic spanish c0ba5a8e914111210f2bd131f3d5e08d
+ración sapo opción brinco árbol mismo cueva lamer cigarro obrero júpiter azufre
+== to_mnemonic portuguese ffffffffffffffffffffffffffffffffffffffffffffffff
+zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido zumbido viaduto
+== to_mnemonic italian 0101010101010101010101010101010101010101010101010101010101010101
+accadere alogeno dottore acrilico arazzo misurare afoso bravura accadere alogeno dottore acrilico arazzo misurare afoso bravura accadere alogeno dottore acrilico arazzo misurare afoso cognome
+== check english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+check = True
+== to_entropy english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+to_entropy = 00000000000000000000000000000000
+== to_entropy_split english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+to_entropy = 00000000000000000000000000000000
+== check english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon
+check = False
+== to_entropy english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon
+to_entropy: error: ValueError: Failed checksum.
+== to_entropy_split english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon
+to_entropy: error: ValueError: Failed checksum.
+== check english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+check = False
+== to_entropy english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (11).
+== to_entropy_split english abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (11).
+== check english legal winner thank year wave sausage worth useful legal winner thank yellow
+check = True
+== to_entropy english legal winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy = 7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+== to_entropy_split english legal winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy = 7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+== check english legal winner thank year wave sausage worth useful legal winner thank
+check = False
+== to_entropy english legal winner thank year wave sausage worth useful legal winner thank
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (11).
+== to_entropy_split english legal winner thank year wave sausage worth useful legal winner thank
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (11).
+== check english legal winner thank year wave sausage worth useful legal winner thank yell0w
+check = False
+== to_entropy english legal winner thank year wave sausage worth useful legal winner thank yell0w
+to_entropy: error: ValueError: 'yell0w' is not in list
+== to_entropy_split english legal winner thank year wave sausage worth useful legal winner thank yell0w
+to_entropy: error: ValueError: 'yell0w' is not in list
+== check english Legal winner thank year wave sausage worth useful legal winner thank yellow
+check = False
+== to_entropy english Legal winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy: error: ValueError: 'Legal' is not in list
+== to_entropy_split english Legal winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy: error: ValueError: 'Legal' is not in list
+== check english legal  winner thank year wave sausage worth useful legal winner thank yellow
+check = False
+== to_entropy english legal  winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (13).
+== to_entropy_split english legal  winner thank year wave sausage worth useful legal winner thank yellow
+to_entropy = 7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+== check english zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote
+check = True
+== to_entropy english zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote
+to_entropy = ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+== to_entropy_split english zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote
+to_entropy = ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+== check french finir freiner riposter égarer palourde ampleur armoire taquiner voile honorer léger hilarant
+check = True
+== to_entropy french finir freiner riposter égarer palourde ampleur armoire taquiner voile honorer léger hilarant
+to_entropy = 67ad8f41a7bb0a18c45f3efd8f6a32bd
+== to_entropy_split french finir freiner riposter égarer palourde ampleur armoire taquiner voile honorer léger hilarant
+to_entropy = 67ad8f41a7bb0a18c45f3efd8f6a32bd
+== check japanese ちらみ　ちめいど　いもり　ぜんりゃく　ぐんて　わかす　たとえる　ぴったり　とのさま　はおる　ねさげ　うんてん
+check = True
+== to_entropy japanese ちらみ　ちめいど　いもり　ぜんりゃく　ぐんて　わかす　たとえる　ぴったり　とのさま　はおる　ねさげ　うんてん
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (1).
+== to_entropy_split japanese ちらみ　ちめいど　いもり　ぜんりゃく　ぐんて　わかす　たとえる　ぴったり　とのさま　はおる　ねさげ　うんてん
+to_entropy = 9732c83e3e03fffde2ee65a9d826df8c
+== check japanese ちらみ ちめいど いもり ぜんりゃく ぐんて わかす たとえる ぴったり とのさま はおる ねさげ うんてん
+check = True
+== to_entropy japanese ちらみ ちめいど いもり ぜんりゃく ぐんて わかす たとえる ぴったり とのさま はおる ねさげ うんてん
+to_entropy = 9732c83e3e03fffde2ee65a9d826df8c
+== to_entropy_split japanese ちらみ ちめいど いもり ぜんりゃく ぐんて わかす たとえる ぴったり とのさま はおる ねさげ うんてん
+to_entropy = 9732c83e3e03fffde2ee65a9d826df8c
+== check korean 기둥 콘서트 천장 월세 설명 아픔 보편적 지리산 용서 소득 회복 팔월
+check = True
+== to_entropy korean 기둥 콘서트 천장 월세 설명 아픔 보편적 지리산 용서 소득 회복 팔월
+to_entropy = 1fdbc74ccfd68d0714ae539c0d93f2f3
+== to_entropy_split korean 기둥 콘서트 천장 월세 설명 아픔 보편적 지리산 용서 소득 회복 팔월
+to_entropy = 1fdbc74ccfd68d0714ae539c0d93f2f3
+== check russian сотня похожий молния рамка броня сниться лягушка взять сделать оригинал сарай попасть
+check = False
+== to_entropy russian сотня похожий молния рамка броня сниться лягушка взять сделать оригинал сарай попасть
+to_entropy: error: ValueError: 'похожий' is not in list
+== to_entropy_split russian сотня похожий молния рамка броня сниться лягушка взять сделать оригинал сарай попасть
+to_entropy: error: ValueError: 'похожий' is not in list
+== check turkish miskin cılız turşu gıcık feribot abaküs soydaş aidat fatura materyal rezalet seçkin
+check = False
+== to_entropy turkish miskin cılız turşu gıcık feribot abaküs soydaş aidat fatura materyal rezalet seçkin
+to_entropy: error: ValueError: 'turşu' is not in list
+== to_entropy_split turkish miskin cılız turşu gıcık feribot abaküs soydaş aidat fatura materyal rezalet seçkin
+to_entropy: error: ValueError: 'turşu' is not in list
+== check spanish ración　tapa　llenar　urbano　diente　musgo　diario　pulso　gaita　ozono　trote　nulo
+check = True
+== to_entropy spanish ración　tapa　llenar　urbano　diente　musgo　diario　pulso　gaita　ozono　trote　nulo
+to_entropy: error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (1).
+== to_entropy_split spanish ración　tapa　llenar　urbano　diente　musgo　diario　pulso　gaita　ozono　trote　nulo
+to_entropy = c0bc1e08f9743b2d50d5f1607503bf4e
+== expand_word english 
+expand_word('') = ''
+== expand_word english  
+expand_word(' ') = ' '
+== expand_word english access
+expand_word('access') = 'access'
+== expand_word english acce
+expand_word('acce') = 'access'
+== expand_word english acb
+expand_word('acb') = 'acb'
+== expand_word english acc
+expand_word('acc') = 'acc'
+== expand_word english act
+expand_word('act') = 'act'
+== expand_word english acti
+expand_word('acti') = 'action'
+== expand_word english ZOO
+expand_word('ZOO') = 'ZOO'
+== expand_word english zo
+expand_word('zo') = 'zo'
+== expand_word spanish abaco
+expand_word('abaco') = 'abaco'
+== expand_word spanish ába
+expand_word('ába') = 'ábaco'
+== expand_word spanish ába
+expand_word('ába') = 'ába'
+== expand_word japanese あい
+expand_word('あい') = 'あい'
+== expand_word french abeil
+expand_word('abeil') = 'abeille'
+== expand_word czech zv
+expand_word('zv') = 'zv'
+== expand english access acce acb acc act acti
+expand = 'access access acb acc act action'
+== expand english aban abil abl abo abov abs
+expand = 'abandon ability able abo above abs'
+== expand english zoo  zo
+expand = 'zoo  zo'
+== expand french aban abeil abor
+expand = 'abandon abeille aborder'
+== detect security
+detect_language = english
+== detect fruit wave dwarf
+detect_language = english
+== detect fru wago dw
+detect_language = english
+== detect fru wago dur enje
+detect_language = french
+== detect jaguar xxxxxxx
+error: ConfigurationError: Language unrecognized for 'xxxxxxx'
+== detect jaguar jaguar
+error: ConfigurationError: Language ambiguous between english, french
+== detect jaguar security
+detect_language = english
+== detect jaguar aboyer
+detect_language = french
+== detect abandon about
+detect_language = english
+== detect abandon aboutir
+detect_language = french
+== detect fav financer
+detect_language = french
+== detect fav finance
+detect_language = czech
+== detect favor finan
+error: ConfigurationError: Language ambiguous between czech, french
+== detect flanel
+detect_language = czech
+== detect flanela
+detect_language = portuguese
+== detect flane
+error: ConfigurationError: Language ambiguous between czech, portuguese
+== detect ちらみ　ちめいど　いもり　ぜんりゃく　ぐんて　わかす　たとえる　ぴったり　とのさま　はおる　ねさげ　うんてん
+detect_language = japanese
+== detect 기둥 콘서트 천장 월세 설명 아픔 보편적 지리산 용서 소득 회복 팔월
+detect_language = korean
+== detect 기둥 콘서트 천장 월세 설명 아픔 보편적 지리산 용서 소득 회복 팔월
+detect_language = korean
+== detect 毫 粉 景 界 尾 渐 月 促 运 净 病 雄
+detect_language = chinese_simplified
+== detect 毫 粉 景 界 尾 漸 月 促 運 淨 病 雄
+detect_language = chinese_traditional
+== detect ración tapa llenar urbano diente musgo diario pulso gaita ozono trote nulo
+detect_language = spanish
+== detect chela sciarpa satollo detersivo scienza neretto recupero pronome giurato oltre pennuto dottore
+detect_language = italian
+== detect tapar salvador governar rigidez salada secular mensagem capricho sereia repolho agrupar efetivar
+detect_language = portuguese
+== detect husita legie nahlas pustina nudle najmout podat pinzeta ovanout jedinec magistr holka
+detect_language = czech
+== detect выпить ссора фото штаб дикарь вексель идти вихрь скорый упаковка четверть также
+error: ConfigurationError: Language unrecognized for 'скорый'
+== detect kelebek makine kaldırım anten gurbet fayton negatif tanrı danışman damak yapay duyarga
+error: ConfigurationError: Language unrecognized for 'danışman'
+== detect 
+error: ConfigurationError: Language ambiguous between chinese_simplified, chinese_traditional, czech, english, french, italian, japanese, korean, portuguese, russian, spanish, turkish
+== detect a
+error: ConfigurationError: Language ambiguous between czech, english, french, italian, portuguese, spanish, turkish
+== detect zz
+error: ConfigurationError: Language unrecognized for 'zz'
+== master 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 main
+xprv9s21ZrQH143K477MQMSi4dxasP5XCVvthGJMSCNLMk7q311UwdpNaqhfqrZsz2Jy9rLWugNWbQfpAxBY86AXGeYa4yHWJozM1N1tyxefG6s
+== master 7cf2e5730cdea22f7c2f6e8fb926ff738464b20ec61a5b8a1c83f4facecdae306f29a2b768522d5cf0f367747f30ce39c74863278fae6c27e17ce9e30b6ccbd9 main
+xprv9s21ZrQH143K2fzNXEEK23YSAWVkYuz9bANXiRUGizjXig4CS6Vqke5ikG7n95xQu4wQJ4BkYT8vB2LqDYuKKPjZx3mdnHCs3EynJbuteTn
+== master 7cf2e5730cdea22f7c2f6e8fb926ff738464b20ec61a5b8a1c83f4facecdae306f29a2b768522d5cf0f367747f30ce39c74863278fae6c27e17ce9e30b6ccbd9 test
+tprv8ZgxMBicQKsPdVDuBo5pBhARUduxnS29viHeaqtjCyE1WGoHRTqbGPTAfSHS9TLjGWUBJ9oWhoiidstaLmFG8T1AUgywSdvuxLjCkFPot8x
+== master 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 main
+error: ValueError: Provided seed should have length of 64
+== master 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 main
+error: ValueError: Provided seed should have length of 64
+== master  main
+error: ValueError: Provided seed should have length of 64
+== b58 
+b58encode = ''
+== b58 00
+b58encode = ''
+== b58 0001
+b58encode = '2'
+== b58 000001
+b58encode = '2'
+== b58 61
+b58encode = '2g'
+== b58 626262
+b58encode = 'a3gV'
+== b58 516b6fcd0f
+b58encode = 'ABnLTmg'
+== b58 ffffffffffffffff
+b58encode = 'jpXCZedGfVQ'
+== b58 00ff00ff00ff00ff00ff00ff
+b58encode = '26Ec5sw5A1s5s16E'
+== b58 0488ade40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+b58encode = '9Xoy2u8vevhdokmLKjmi5FWjfLWKfQZaCHNTfjmpuewcPjhF3o4F3JJmeWEHBAQvsqPAqG1am8TsAQCQHj3N1izQxdKDAep4q1oaT4C3ZH'
+== generate 128
+generate(128): 12 words
+== generate 256
+generate(256): 24 words
+== generate 100
+error: ValueError: Invalid strength value. Allowed values are [128, 160, 192, 224, 256].
+== generate 512
+error: ValueError: Invalid strength value. Allowed values are [128, 160, 192, 224, 256].
+== generate 0
+error: ValueError: Invalid strength value. Allowed values are [128, 160, 192, 224, 256].
+== new english
+english: 2048 words, first 'abandon', last 'zoo', delimiter ' '
+== new klingon
+error: ConfigurationError: Language not detected
+== new ../vectors
+error: ConfigurationError: Language not detected
+== new English
+error: ConfigurationError: Language not detected
+== new 
+error: ConfigurationError: Language not detected
+== list_languages
+chinese_simplified, chinese_traditional, czech, english, french, italian, japanese, korean, portuguese, russian, spanish, turkish
+== custom custom/w.txt 00000000000000000000000000000000
+w0000 w0000 w0000 w0000 w0000 w0000 w0000 w0000 w0000 w0000 w0000 w0003
+check True, to_entropy 00000000000000000000000000000000
+== custom custom/w.txt ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w2047 w1967
+check True, to_entropy ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+== custom custom/short.txt 00000000000000000000000000000000
+error: ConfigurationError: Wordlist must contain 2048 words.
+== backup backups/abbreviated-mix.txt
+12 words, english
+  convince long opinion shoe broom describe tank medal train frog fiction slogan
+  check True
+  entropy 2f907a6de331cc77376c52e70ba55765
+== backup backups/french-nfc.txt
+12 words, french
+  légal enfance limonade pompier galaxie vampire biscuit aider atroce fable rocheux domicile
+  check True
+  entropy 8c8a7a3c5ef6f3ecc78042144c3744a4
+== backup backups/japanese-card.txt
+12 words, japanese
+  そんみん　くみたてる　さがす　れいぼう　うけたまわる　さほう　てんき　けつじょ　りそく　あっしゅく　めぐまれる　でっぱ
+  check True
+  entropy 8367cd66fdd136bba8ba23f8805bb050
+== backup backups/korean-phone-note.txt
+12 words, korean
+  바가지 장애인 설치 흐름 저울 화살 지적 행사 생산 시장 타입 엉망
+  check True
+  entropy 45569da57f4b7bf472d7a864ef478145
+== backup backups/recovery-sheet.txt
+24 words, english
+  judge knock walnut proof huge lunar bag unusual recycle human orchard rich oyster alarm pact thrive genius inspire chief young cactus twice birth analyst
+  check True
+  entropy 78af7bdb5626eb0a046772b3edda705ca9e60ba7af0960eea89f7fa201d685a8
+== backup backups/russian.txt
+12 words; error: ConfigurationError: Language unrecognized for 'скорый'
+== backup backups/spanish-no-accents.txt
+12 words; error: ConfigurationError: Language unrecognized for 'jazmin'
+== backup backups/spanish.txt
+12 words, spanish
+  bebé vivaz cola gustar ocio crisis lince barniz jazmín ver monja fatiga
+  check True
+  entropy 1d9f88d73499fc756000e175df064a2b
+== backup backups/steel-plate.txt
+18 words, english
+  reveal basic salmon jungle myself sign under desk pizza cherry peace boy fence settle move dream payment address
+  check True
+  entropy b86262f9bc892590bb31dfa5a4ee870d555188e43214a1a0
+== backup backups/too-short.txt
+11 words, english
+  whale lens tissue room floor harvest position cage army absorb urban
+  check False
+  entropy error: ValueError: Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (11).
+== recover english car soon flame raccoon situate idle silver rocket grab together electric render
+valid as typed
+== recover english car soon flame raccoon situate idle silver rocket grab together electric ?
+word 12 ('?'): 2048 candidates, 128 with a valid checksum
+  abuse, acoustic, album, alpha, analyst, any, army, attack ...
+== recover english car soon flam raccoon situate idle silver rocket grab together electric render
+word 3 ('flam'): 32 candidates, 2 with a valid checksum
+  flame, flip
+== recover english car soon flame raccoon situate idle silver rokcet grab together electric render
+word 8 ('rokcet'): 1 candidate, 1 with a valid checksum
+  rocket
+  entropy 2259e961582c9ae17235db655c751ddb
+== recover english car soon flame raccoon situate silver idle rocket grab together electric render
+every word is in the list but the checksum fails; 1 adjacent swap fixes it
+  words 6 and 7 (silver, idle)
+== recover english satoshi soon flame raccoon situate idle silver rocket grab nakamoto electric render
+word 10 ('nakamoto'): 0 candidates, 0 with a valid checksum
+  
+== recover english car soon flame RACCOON situate idle silver rocket grab together electric render
+word 4 ('RACCOON'): 0 candidates, 0 with a valid checksum
+  
+== recover english wise daring anchor mind spare champion false before clip sponsor fashion gadget biology topple pigeon drift skate nurse language end surface essay salt ?
+word 24 ('?'): 2048 candidates, 8 with a valid checksum
+  bulk, champion, found, job, meat, planet, tenant, uphold
+== recover french boxeur revivre épitaphe paisible réflexe gendarme récolter plateau féroce subvenir ? pensif
+word 11 ('?'): 2048 candidates, 138 with a valid checksum
+  abandon, absurde, abyssal, accroche, adroit, aéronef, anarchie, angoisse ...
+== recover italian bulbo siccomee fuggente recluta semaforo lentezza segnalato rodaggio imballo tazza equatore rimanere
+word 2 ('siccomee'): 1 candidate, 1 with a valid checksum
+  siccome
+  entropy 2259e961582c9ae17235db655c751ddb
