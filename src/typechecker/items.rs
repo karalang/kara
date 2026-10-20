@@ -3099,21 +3099,50 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 continue;
             }
-            if !f.is_mut || Self::is_concurrent_field_type(&f.ty) {
+            if !f.is_mut {
                 continue;
             }
             // Anchor at the `mut` keyword when the parser captured its span
             // (always present for `mut` fields), else the field type.
             let span = f.mut_keyword_span.unwrap_or(f.ty.span);
+            if Self::is_concurrent_field_type(&f.ty) {
+                // A `sync` type's fields are never `mut` (core semantics
+                // §6.3, Amendment 7; B-2026-10-20-30): an `Atomic[T]` or
+                // `Mutex[T]` field changes through methods that borrow, so
+                // the `mut` only goes, from the keyword to the name.
+                let message = format!(
+                    "field `{field}` of `sync {kind} {type_name}` is declared `mut`, but a \
+                     `sync {kind}`'s fields are never `mut`: its `{ty}` changes through \
+                     methods that borrow it. Drop `mut`",
+                    field = f.name,
+                    ty = crate::formatter::render_type_expr(&f.ty),
+                );
+                match f.mut_keyword_span {
+                    Some(m) => {
+                        let mut strip = m;
+                        strip.length = f.name_span.offset.saturating_sub(m.offset);
+                        self.type_error_with_fix_it(
+                            message,
+                            span,
+                            TypeErrorKind::ParFieldNotConcurrent,
+                            FixIt {
+                                span: strip,
+                                replacement: String::new(),
+                            },
+                        );
+                    }
+                    None => self.type_error(message, span, TypeErrorKind::ParFieldNotConcurrent),
+                }
+                continue;
+            }
             self.type_error(
                 format!(
-                    "`mut` field `{field}` of `sync {kind} {type_name}` must be \
-                     `Atomic[T]` or `Mutex[T]`: a `sync {kind}`'s concurrent-safety \
-                     guarantee is structural, so plain mutable fields are not \
-                     permitted. Wrap the field type in `Atomic[...]` for lock-free \
-                     access or `Mutex[...]` for locked compound mutation, or drop \
-                     `mut` to make the field immutable (immutable fields are freely \
-                     readable across tasks)",
+                    "`mut` field `{field}` of `sync {kind} {type_name}`: a `sync {kind}`'s \
+                     fields are never `mut`, and state that changes lives in `Atomic[T]` \
+                     or `Mutex[T]`. Drop `mut` and give the field type `Atomic[...]` for \
+                     lock-free access or `Mutex[...]` for locked compound mutation, or \
+                     just drop `mut` to make the field immutable (immutable fields are \
+                     freely readable across tasks)",
                     field = f.name,
                 ),
                 span,

@@ -32887,12 +32887,39 @@ fn par_struct_immutable_and_atomic_fields_accepted() {
 }
 
 #[test]
-fn par_struct_mut_atomic_and_mut_mutex_fields_accepted() {
-    // A `mut` field is permitted as long as it is a concurrency primitive.
+fn par_struct_mut_atomic_and_mut_mutex_fields_rejected_with_a_fix() {
+    // A `sync` type's fields are never `mut`, not even a concurrency
+    // primitive's (core semantics §6.3, Amendment 7; B-2026-10-20-30): the
+    // fix deletes `mut ` up to the field name.
+    let src = "sync struct Counter {
+             mut count: Atomic[i64],
+             mut  state: Mutex[i64],
+         }";
+    let errors = typecheck_errors(src);
+    let mine: Vec<_> = errors
+        .iter()
+        .filter(|e| e.kind == TypeErrorKind::ParFieldNotConcurrent)
+        .collect();
+    assert_eq!(mine.len(), 2, "{errors:?}");
+    for (e, field, strip) in [(mine[0], "count", "mut "), (mine[1], "state", "mut  ")] {
+        assert!(
+            e.message.contains(&format!("field `{field}`"))
+                && e.message.contains("fields are never `mut`"),
+            "{e:?}"
+        );
+        let fix = e.fix_it.as_ref().expect("a fix");
+        let at = src.find(&format!("{strip}{field}")).unwrap();
+        assert_eq!(
+            (fix.span.offset, fix.span.length),
+            (at, strip.len()),
+            "{e:?}"
+        );
+        assert_eq!(fix.replacement, "");
+    }
     typecheck_ok(
         "sync struct Counter {
-             mut count: Atomic[i64],
-             mut state: Mutex[i64],
+             count: Atomic[i64],
+             state: Mutex[i64],
          }",
     );
 }
