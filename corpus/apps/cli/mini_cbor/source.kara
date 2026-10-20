@@ -1,0 +1,4115 @@
+// mini_cbor: CBOR (RFC 8949), ported from cbor2 5.6.5's pure-Python
+// decoder, encoder and command-line tool, the CBOR library under
+// WebAuthn servers (python-fido2, webauthn), COSE and CWT stacks and
+// IoT gateways.
+// - the decoder: every major type, indefinite lengths, float16/32/64,
+//   simple values, and the semantic tags cbor2 knows (datetimes, epoch
+//   times, bignums, decimal fractions, bigfloats, string references,
+//   shared values, rationals, UUIDs, sets, IP addresses and networks,
+//   dates, self-describe), with its shared-value registry exactly as it
+//   keeps it, Python's dict rules for keys and every error it raises;
+// - the encoder, with its canonical, value_sharing, string_referencing,
+//   datetime_as_timestamp and date_as_datetime options;
+// - Python's repr of what comes out, so output compares directly;
+// - `python -m cbor2.tool`: tag hooks, -i, -s, -d, -k and -p, and the
+//   JSON it writes through Python's json module.
+//
+// The run writes data/ (CBOR files as WebAuthn, COSE, CWT, SenML and
+// device logs produce them, broken files, cbor2's own test vectors and
+// the tool's command lines); then it decodes each vector and file,
+// encodes it again with each option, reads that back, and runs the tool
+// jobs. expected.out is what oracle.py prints with the real cbor2.
+
+// ------------------------------------------------------------ integers
+
+// A Python int: a sign and base-10000 digits, least significant first,
+// with no leading zero digit (zero has no digits).
+#[derive(Clone)]
+struct Big {
+    neg: bool,
+    d: Vec[i64],
+}
+
+const BASE: i64 = 10000;
+
+fn big_zero() -> Big {
+    Big { neg: false, d: Vec.new() }
+}
+
+fn trim(d: mut ref Vec[i64]) {
+    while d.len() > 0 and d[d.len() - 1] == 0 {
+        d.pop();
+    }
+}
+
+fn big_make(neg: bool, d: own Vec[i64]) -> Big {
+    let mut v = d;
+    trim(mut v);
+    let n = neg and v.len() > 0;
+    Big { neg: n, d: v }
+}
+
+fn big_from_u64(x: u64) -> Big {
+    let mut d: Vec[i64] = Vec.new();
+    let mut v = x;
+    while v > 0 {
+        d.push((v % 10000) as i64);
+        v = v / 10000;
+    }
+    Big { neg: false, d: d }
+}
+
+fn big_from_i64(x: i64) -> Big {
+    if x >= 0 {
+        return big_from_u64(x as u64);
+    }
+    // -(x + 1) + 1 keeps i64::MIN in range
+    let m = big_from_u64((-(x + 1)) as u64);
+    let one = big_from_u64(1);
+    let mut r = big_add(m, one);
+    r.neg = true;
+    r
+}
+
+fn big_is_zero(a: ref Big) -> bool {
+    a.d.len() == 0
+}
+
+fn cmp_mag(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn big_cmp(a: ref Big, b: ref Big) -> i64 {
+    if a.neg != b.neg {
+        return if a.neg { -1 } else { 1 };
+    }
+    let c = cmp_mag(a.d, b.d);
+    if a.neg { -c } else { c }
+}
+
+fn add_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        let s = x + y + carry;
+        out.push(s % BASE);
+        carry = s / BASE;
+    }
+    if carry > 0 {
+        out.push(carry);
+    }
+    out
+}
+
+// a - b for |a| >= |b|
+fn sub_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut borrow = 0;
+    for i in 0..a.len() {
+        let y = if i < b.len() { b[i] } else { 0 };
+        let mut s = a[i] - y - borrow;
+        if s < 0 {
+            s += BASE;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out.push(s);
+    }
+    trim(mut out);
+    out
+}
+
+fn big_add(a: ref Big, b: ref Big) -> Big {
+    if a.neg == b.neg {
+        return big_make(a.neg, add_mag(a.d, b.d));
+    }
+    let c = cmp_mag(a.d, b.d);
+    if c == 0 {
+        return big_zero();
+    }
+    if c > 0 {
+        big_make(a.neg, sub_mag(a.d, b.d))
+    } else {
+        big_make(b.neg, sub_mag(b.d, a.d))
+    }
+}
+
+fn big_neg(a: ref Big) -> Big {
+    big_make(not a.neg, a.d.clone())
+}
+
+fn big_sub(a: ref Big, b: ref Big) -> Big {
+    big_add(a, big_neg(b))
+}
+
+fn big_abs(a: ref Big) -> Big {
+    big_make(false, a.d.clone())
+}
+
+fn big_mul(a: ref Big, b: ref Big) -> Big {
+    if a.d.len() == 0 or b.d.len() == 0 {
+        return big_zero();
+    }
+    let mut out: Vec[i64] = Vec.filled(a.d.len() + b.d.len() + 1, 0);
+    for i in 0..a.d.len() {
+        let mut carry = 0;
+        for j in 0..b.d.len() {
+            let t = out[i + j] + a.d[i] * b.d[j] + carry;
+            out[i + j] = t % BASE;
+            carry = t / BASE;
+        }
+        let mut k = i + b.d.len();
+        while carry > 0 {
+            let t = out[k] + carry;
+            out[k] = t % BASE;
+            carry = t / BASE;
+            k += 1;
+        }
+    }
+    big_make(a.neg != b.neg, out)
+}
+
+fn big_mul_small(a: ref Big, m: i64) -> Big {
+    big_mul(a, big_from_i64(m))
+}
+
+// |a| divided by a small positive m: the quotient's magnitude and the remainder
+fn divmod_small(a: ref Vec[i64], m: i64) -> (Vec[i64], i64) {
+    let mut q: Vec[i64] = Vec.filled(a.len(), 0);
+    let mut r = 0;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let cur = r * BASE + a[i];
+        q[i] = cur / m;
+        r = cur % m;
+        i -= 1;
+    }
+    trim(mut q);
+    (q, r)
+}
+
+// |a| divmod |b|, b not zero
+fn divmod_mag(a: ref Vec[i64], b: ref Vec[i64]) -> (Vec[i64], Vec[i64]) {
+    if cmp_mag(a, b) < 0 {
+        return (Vec.new(), a.clone());
+    }
+    let bb = Big { neg: false, d: b.clone() };
+    let mut q: Vec[i64] = Vec.filled(a.len(), 0);
+    let mut r = big_zero();
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let mut rd: Vec[i64] = vec![a[i]];
+        for x in r.d.iter() {
+            rd.push(*x);
+        }
+        r = big_make(false, rd);
+        let mut lo = 0;
+        let mut hi = BASE - 1;
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if cmp_mag(big_mul_small(bb, mid).d, r.d) <= 0 {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        q[i] = lo;
+        r = big_sub(r, big_mul_small(bb, lo));
+        i -= 1;
+    }
+    trim(mut q);
+    (q, r.d)
+}
+
+// Python's floor division and modulo
+fn big_divmod(a: ref Big, b: ref Big) -> (Big, Big) {
+    let (qm, rm) = divmod_mag(a.d, b.d);
+    let mut q = big_make(a.neg != b.neg, qm);
+    let mut r = big_make(a.neg, rm);
+    if not big_is_zero(r) and a.neg != b.neg {
+        q = big_sub(q, big_from_i64(1));
+        r = big_add(r, b);
+    }
+    (q, r)
+}
+
+fn big_gcd(a: ref Big, b: ref Big) -> Big {
+    let mut x = big_abs(a);
+    let mut y = big_abs(b);
+    while not big_is_zero(y) {
+        let (_, r) = big_divmod(x, y);
+        x = y;
+        y = r;
+    }
+    x
+}
+
+fn big_pow_small(base: i64, n: i64) -> Big {
+    let mut r = big_from_i64(1);
+    let mut b = big_from_i64(base);
+    let mut e = n;
+    while e > 0 {
+        if e % 2 == 1 {
+            r = big_mul(r, b);
+        }
+        e = e / 2;
+        if e > 0 {
+            b = big_mul(b, b);
+        }
+    }
+    r
+}
+
+fn mag_digits(d: ref Vec[i64]) -> String {
+    if d.len() == 0 {
+        return "0".to_string();
+    }
+    let mut s = f"{d[d.len() - 1]}";
+    let mut i = d.len() - 2;
+    while i >= 0 {
+        s.push_str(f"{d[i]:04}");
+        i -= 1;
+    }
+    s
+}
+
+fn big_str(a: ref Big) -> String {
+    let s = mag_digits(a.d);
+    if a.neg { f"-{s}" } else { s }
+}
+
+fn big_from_digits(s: ref String) -> Big {
+    let b = s.bytes().to_vec();
+    let mut d: Vec[i64] = Vec.new();
+    let mut end = b.len();
+    while end > 0 {
+        let start = if end >= 4 { end - 4 } else { 0 };
+        let mut v = 0;
+        for i in start..end {
+            v = v * 10 + (b[i] - b'0') as i64;
+        }
+        d.push(v);
+        end = start;
+    }
+    big_make(false, d)
+}
+
+// int.from_bytes(b, "big")
+fn big_from_bytes(b: ref Vec[u8]) -> Big {
+    let mut r = big_zero();
+    for x in b.iter() {
+        r = big_add(big_mul_small(r, 256), big_from_i64(*x as i64));
+    }
+    r
+}
+
+// a non-negative int as big-endian bytes, as short as possible
+fn big_to_bytes(a: ref Big) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut d = a.d.clone();
+    while d.len() > 0 {
+        let (q, r) = divmod_small(d, 256);
+        out.push(r as u8);
+        d = q;
+    }
+    out.reverse();
+    out
+}
+
+fn big_to_i64(a: ref Big) -> Option[i64] {
+    if a.d.len() > 4 {
+        return None;
+    }
+    let mut v: i64 = 0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * BASE + a.d[i];
+        i -= 1;
+    }
+    Some(if a.neg { -v } else { v })
+}
+
+// the value as a u64, when 0 <= a < 2**64
+fn big_to_u64(a: ref Big) -> Option[u64] {
+    if a.neg or a.d.len() > 5 {
+        return None;
+    }
+    let limit = big_from_u64(18446744073709551615);
+    if big_cmp(a, limit) > 0 {
+        return None;
+    }
+    let mut v: u64 = 0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * 10000 + a.d[i] as u64;
+        i -= 1;
+    }
+    Some(v)
+}
+
+fn big_two64() -> Big {
+    big_add(big_from_u64(18446744073709551615), big_from_i64(1))
+}
+
+// ------------------------------------------------------------ values
+
+// A decimal.Decimal: finite (special 0), NaN (1) or infinite (2).
+#[derive(Clone)]
+struct Dec {
+    special: i64,
+    neg: bool,
+    coef: Big,
+    exp: i64,
+}
+
+// An aware datetime.datetime: the local fields and the UTC offset in seconds.
+#[derive(Clone)]
+struct DateTime {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    off: i64,
+}
+
+// A Python value, as cbor2 hands it over. Lists, tuples, dicts,
+// FrozenDicts, sets, frozensets and CBORTags live on the heap, so that
+// two places can hold the same object and an object can hold itself.
+#[derive(Clone)]
+enum V {
+    None,
+    Undef,
+    Brk,
+    Bool(bool),
+    Int(Big),
+    Float(f64),
+    Bytes(Vec[u8]),
+    Str(String),
+    Simple(i64),
+    Dec(Dec),
+    Frac(Big, Big),
+    Date(i64),
+    Dt(DateTime),
+    Uuid(Vec[u8]),
+    Ip(Vec[u8]),
+    Net(Vec[u8], i64),
+    Regex(String),
+    Obj(i64),
+}
+
+const LIST: i64 = 0;
+const TUPLE: i64 = 1;
+const DICT: i64 = 2;
+const FDICT: i64 = 3;
+const SET: i64 = 4;
+const FSET: i64 = 5;
+const TAG: i64 = 6;
+
+// A heap object. A dict keeps its keys and values alternating; a
+// FrozenDict wraps the dict at `inner`; a CBORTag keeps its value as its
+// one item.
+#[derive(Clone)]
+struct Obj {
+    kind: i64,
+    items: Vec[V],
+    tag: u64,
+    inner: i64,
+}
+
+struct Heap {
+    objs: Vec[Obj],
+}
+
+fn new_heap() -> Heap {
+    Heap { objs: Vec.new() }
+}
+
+fn alloc(h: mut ref Heap, kind: i64, items: own Vec[V], tag: u64, inner: i64) -> i64 {
+    h.objs.push(Obj { kind: kind, items: items, tag: tag, inner: inner });
+    h.objs.len() - 1
+}
+
+fn kind_of(h: ref Heap, v: ref V) -> i64 {
+    match v {
+        V.Obj(i) => h.objs[*i].kind,
+        _ => -1,
+    }
+}
+
+// the items of a dict, or of the dict a FrozenDict wraps
+fn dict_items(h: ref Heap, i: i64) -> Vec[V] {
+    let o = ref h.objs[i];
+    if o.kind == FDICT {
+        h.objs[o.inner].items.clone()
+    } else {
+        o.items.clone()
+    }
+}
+
+fn type_name(h: ref Heap, v: ref V) -> String {
+    let n = match v {
+        V.None => "NoneType",
+        V.Undef => "UndefinedType",
+        V.Brk => "BreakMarkerType",
+        V.Bool(_) => "bool",
+        V.Int(_) => "int",
+        V.Float(_) => "float",
+        V.Bytes(_) => "bytes",
+        V.Str(_) => "str",
+        V.Simple(_) => "CBORSimpleValue",
+        V.Dec(_) => "Decimal",
+        V.Frac(_, _) => "Fraction",
+        V.Date(_) => "date",
+        V.Dt(_) => "datetime",
+        V.Uuid(_) => "UUID",
+        V.Ip(b) => if b.len() == 4 { "IPv4Address" } else { "IPv6Address" },
+        V.Net(b, _) => if b.len() == 4 { "IPv4Network" } else { "IPv6Network" },
+        V.Regex(_) => "Pattern",
+        V.Obj(i) => {
+            let k = h.objs[*i].kind;
+            if k == LIST {
+                "list"
+            } else if k == TUPLE {
+                "tuple"
+            } else if k == DICT {
+                "dict"
+            } else if k == FDICT {
+                "FrozenDict"
+            } else if k == SET {
+                "set"
+            } else if k == FSET {
+                "frozenset"
+            } else {
+                "CBORTag"
+            }
+        }
+    };
+    n.to_string()
+}
+
+// ------------------------------------------------------------ numbers
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn is_inf(x: f64) -> bool {
+    x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+fn big_pow2(n: i64) -> Big {
+    big_pow_small(2, n)
+}
+
+// a finite float as an exact fraction
+fn float_rat(x: f64) -> (Big, Big) {
+    let bits = x.to_bits();
+    let neg = (bits >> 63) == 1;
+    let e = ((bits >> 52) & 0x7ff) as i64;
+    let mut m = bits & 0xfffffffffffff;
+    let mut ex = e - 1075;
+    if e == 0 {
+        ex = -1074;
+    } else {
+        m = m | 0x10000000000000;
+    }
+    let mut num = big_from_u64(m);
+    let mut den = big_from_i64(1);
+    if ex >= 0 {
+        num = big_mul(num, big_pow2(ex));
+    } else {
+        den = big_pow2(-ex);
+    }
+    if neg {
+        num = big_neg(num);
+    }
+    (num, den)
+}
+
+// A number as an exact fraction, for comparing across int, bool, float,
+// Decimal and Fraction; None for NaN, an infinity or a non-number.
+fn num_rat(v: ref V) -> Option[(Big, Big)] {
+    match v {
+        V.Bool(b) => Some((big_from_i64(if *b { 1 } else { 0 }), big_from_i64(1))),
+        V.Int(n) => Some((n.clone(), big_from_i64(1))),
+        V.Float(x) => if is_nan(*x) or is_inf(*x) { None } else { Some(float_rat(*x)) },
+        V.Dec(d) => {
+            if d.special != 0 {
+                return None;
+            }
+            let mut c = d.coef.clone();
+            if d.neg {
+                c = big_neg(c);
+            }
+            if d.exp >= 0 {
+                Some((big_mul(c, big_pow_small(10, d.exp)), big_from_i64(1)))
+            } else {
+                Some((c, big_pow_small(10, -d.exp)))
+            }
+        }
+        V.Frac(n, d) => Some((n.clone(), d.clone())),
+        _ => None,
+    }
+}
+
+fn is_number(v: ref V) -> bool {
+    match v {
+        V.Bool(_) => true,
+        V.Int(_) => true,
+        V.Float(_) => true,
+        V.Dec(_) => true,
+        V.Frac(_, _) => true,
+        _ => false,
+    }
+}
+
+// +1 or -1 for an infinite float or Decimal, else 0
+fn inf_sign(v: ref V) -> i64 {
+    match v {
+        V.Float(x) => if *x == 1.0 / 0.0 { 1 } else if *x == -1.0 / 0.0 { -1 } else { 0 },
+        V.Dec(d) => if d.special == 2 { if d.neg { -1 } else { 1 } } else { 0 },
+        _ => 0,
+    }
+}
+
+fn rat_cmp(a: ref (Big, Big), b: ref (Big, Big)) -> i64 {
+    big_cmp(big_mul(a.0, b.1), big_mul(b.0, a.1))
+}
+
+fn num_eq(a: ref V, b: ref V) -> bool {
+    let ia = inf_sign(a);
+    let ib = inf_sign(b);
+    if ia != 0 or ib != 0 {
+        return ia == ib;
+    }
+    match (num_rat(a), num_rat(b)) {
+        (Some(x), Some(y)) => rat_cmp(x, y) == 0,
+        _ => false,
+    }
+}
+
+fn int_like(v: ref V) -> Option[Big] {
+    match v {
+        V.Int(n) => Some(n.clone()),
+        V.Bool(b) => Some(big_from_i64(if *b { 1 } else { 0 })),
+        _ => None,
+    }
+}
+
+// ------------------------------------------------------------ equality
+
+fn seq_eq(h: ref Heap, a: ref Vec[V], b: ref Vec[V]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if not py_eq(h, a[i], b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn dict_lookup(h: ref Heap, items: ref Vec[V], key: ref V) -> i64 {
+    let mut i = 0;
+    while i < items.len() {
+        if py_eq(h, items[i], key) {
+            return i;
+        }
+        i += 2;
+    }
+    -1
+}
+
+fn set_has(h: ref Heap, items: ref Vec[V], x: ref V) -> bool {
+    for y in items.iter() {
+        if py_eq(h, y, x) {
+            return true;
+        }
+    }
+    false
+}
+
+// Python's ==, for the types cbor2 produces
+fn py_eq(h: ref Heap, a: ref V, b: ref V) -> bool {
+    if is_number(a) and is_number(b) {
+        return num_eq(a, b);
+    }
+    match (a, b) {
+        (V.None, V.None) => true,
+        (V.Undef, V.Undef) => true,
+        (V.Brk, V.Brk) => true,
+        (V.Str(x), V.Str(y)) => x == y,
+        (V.Bytes(x), V.Bytes(y)) => x == y,
+        (V.Simple(x), V.Simple(y)) => x == y,
+        (V.Simple(x), _) => match int_like(b) {
+            Some(n) => big_cmp(n, big_from_i64(*x)) == 0,
+            None => false,
+        },
+        (_, V.Simple(y)) => match int_like(a) {
+            Some(n) => big_cmp(n, big_from_i64(*y)) == 0,
+            None => false,
+        },
+        (V.Date(x), V.Date(y)) => x == y,
+        (V.Dt(x), V.Dt(y)) => dt_utc_us(x) == dt_utc_us(y),
+        (V.Uuid(x), V.Uuid(y)) => x == y,
+        (V.Ip(x), V.Ip(y)) => x == y,
+        (V.Net(x, p), V.Net(y, q)) => x == y and p == q,
+        (V.Regex(x), V.Regex(y)) => x == y,
+        (V.Obj(i), V.Obj(j)) => {
+            if i == j {
+                return true;
+            }
+            let oa = ref h.objs[*i];
+            let ob = ref h.objs[*j];
+            let ka = oa.kind;
+            let kb = ob.kind;
+            if ka == LIST and kb == LIST or ka == TUPLE and kb == TUPLE {
+                return seq_eq(h, oa.items, ob.items);
+            }
+            if (ka == DICT or ka == FDICT) and (kb == DICT or kb == FDICT) {
+                let x = dict_items(h, *i);
+                let y = dict_items(h, *j);
+                if x.len() != y.len() {
+                    return false;
+                }
+                let mut k = 0;
+                while k < x.len() {
+                    let at = dict_lookup(h, y, x[k]);
+                    if at < 0 or not py_eq(h, x[k + 1], y[at + 1]) {
+                        return false;
+                    }
+                    k += 2;
+                }
+                return true;
+            }
+            if (ka == SET or ka == FSET) and (kb == SET or kb == FSET) {
+                if oa.items.len() != ob.items.len() {
+                    return false;
+                }
+                for x in oa.items.iter() {
+                    if not set_has(h, ob.items, x) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            if ka == TAG and kb == TAG {
+                return oa.tag == ob.tag and py_eq(h, oa.items[0], ob.items[0]);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+// The type hash() refuses, if any.
+fn unhashable(h: ref Heap, v: ref V) -> Option[String] {
+    match v {
+        V.Obj(i) => {
+            let o = ref h.objs[*i];
+            if o.kind == LIST or o.kind == DICT or o.kind == SET {
+                return Some(type_name(h, v));
+            }
+            if o.kind == FDICT {
+                let items = dict_items(h, *i);
+                // frozenset(self) first, then frozenset(self.values())
+                let mut k = 0;
+                while k < items.len() {
+                    if let Some(t) = unhashable(h, items[k]) {
+                        return Some(t);
+                    }
+                    k += 2;
+                }
+                k = 1;
+                while k < items.len() {
+                    if let Some(t) = unhashable(h, items[k]) {
+                        return Some(t);
+                    }
+                    k += 2;
+                }
+                return None;
+            }
+            for x in o.items.iter() {
+                if let Some(t) = unhashable(h, x) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+// dict[key] = value
+fn dict_set(h: mut ref Heap, d: i64, key: own V, value: own V) -> Result[(), String] {
+    if let Some(t) = unhashable(h, key) {
+        return Err(f"unhashable type: '{t}'");
+    }
+    let at = dict_lookup(h, h.objs[d].items, key);
+    if at >= 0 {
+        h.objs[d].items[at + 1] = value;
+    } else {
+        h.objs[d].items.push(key);
+        h.objs[d].items.push(value);
+    }
+    Ok(())
+}
+
+// set(items) or frozenset(items)
+fn make_set(h: mut ref Heap, kind: i64, items: ref Vec[V]) -> Result[V, String] {
+    let mut out: Vec[V] = Vec.new();
+    for x in items.iter() {
+        if let Some(t) = unhashable(h, x) {
+            return Err(f"unhashable type: '{t}'");
+        }
+        if not set_has(h, out, x) {
+            out.push(x.clone());
+        }
+    }
+    Ok(V.Obj(alloc(mut h, kind, out, 0, -1)))
+}
+
+// ------------------------------------------------------------ dates
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut n = 0;
+    for k in 1..m {
+        n += days_in_month(y, k);
+    }
+    n
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let y1 = y - 1;
+    y1 * 365 + y1 / 4 - y1 / 100 + y1 / 400
+}
+
+fn ymd_to_ord(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// date.fromordinal's year, month and day
+fn ord_to_ymd(ordinal: i64) -> (i64, i64, i64) {
+    let mut n = ordinal - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year += n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let mut month = 1;
+    while n >= days_in_month(year, month) {
+        n -= days_in_month(year, month);
+        month += 1;
+    }
+    (year, month, n + 1)
+}
+
+const MAX_ORDINAL: i64 = 3652059;
+
+fn date_iso(ordinal: i64) -> String {
+    let (y, m, d) = ord_to_ymd(ordinal);
+    f"{y:04}-{m:02}-{d:02}"
+}
+
+fn date_repr(ordinal: i64) -> String {
+    let (y, m, d) = ord_to_ymd(ordinal);
+    f"datetime.date({y}, {m}, {d})"
+}
+
+fn check_date(y: i64, m: i64, d: i64) -> Result[(), String] {
+    if y < 1 or y > 9999 {
+        return Err(f"year {y} is out of range");
+    }
+    if m < 1 or m > 12 {
+        return Err("month must be in 1..12".to_string());
+    }
+    if d < 1 or d > days_in_month(y, m) {
+        return Err("day is out of range for month".to_string());
+    }
+    Ok(())
+}
+
+fn timedelta_repr(secs: i64) -> String {
+    let days = floor_div(secs, 86400);
+    let s = secs - days * 86400;
+    if days == 0 and s == 0 {
+        return "datetime.timedelta(0)".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    if days != 0 {
+        parts.push(f"days={days}");
+    }
+    if s != 0 {
+        parts.push(f"seconds={s}");
+    }
+    f"datetime.timedelta({parts.join(", ")})"
+}
+
+fn tz_repr(off: i64) -> String {
+    if off == 0 {
+        "datetime.timezone.utc".to_string()
+    } else {
+        f"datetime.timezone({timedelta_repr(off)})"
+    }
+}
+
+fn dt_repr(t: ref DateTime) -> String {
+    let mut s = f"datetime.datetime({t.y}, {t.mo}, {t.d}, {t.h}, {t.mi}";
+    if t.us != 0 {
+        s.push_str(f", {t.s}, {t.us}");
+    } else if t.s != 0 {
+        s.push_str(f", {t.s}");
+    }
+    s.push_str(f", tzinfo={tz_repr(t.off)})");
+    s
+}
+
+fn offset_text(off: i64) -> String {
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = if off < 0 { -off } else { off };
+    let mut s = f"{sign}{a / 3600:02}:{(a % 3600) / 60:02}";
+    if a % 60 != 0 {
+        s.push_str(f":{a % 60:02}");
+    }
+    s
+}
+
+fn dt_iso(t: ref DateTime, sep: Str) -> String {
+    let mut s = f"{t.y:04}-{t.mo:02}-{t.d:02}{sep}{t.h:02}:{t.mi:02}:{t.s:02}";
+    if t.us != 0 {
+        s.push_str(f".{t.us:06}");
+    }
+    s.push_str(offset_text(t.off));
+    s
+}
+
+// seconds since the epoch, in UTC
+fn dt_utc_secs(t: ref DateTime) -> i64 {
+    (ymd_to_ord(t.y, t.mo, t.d) - 719163) * 86400 + t.h * 3600 + t.mi * 60 + t.s - t.off
+}
+
+fn dt_utc_us(t: ref DateTime) -> i64 {
+    dt_utc_secs(t) * 1000000 + t.us
+}
+
+// datetime.fromtimestamp(secs + us / 10**6, timezone.utc)
+fn dt_from_utc(secs: i64, us: i64) -> Option[DateTime] {
+    let days = floor_div(secs, 86400);
+    let rest = secs - days * 86400;
+    let ordinal = days + 719163;
+    if ordinal < 1 or ordinal > MAX_ORDINAL {
+        return None;
+    }
+    let (y, m, d) = ord_to_ymd(ordinal);
+    Some(DateTime { y: y, mo: m, d: d, h: rest / 3600, mi: (rest % 3600) / 60, s: rest % 60, us: us, off: 0 })
+}
+
+// round(), half to even, as _PyTime_Round does it
+fn round_half_even(x: f64) -> f64 {
+    let r = x.round();
+    let diff = x - r;
+    if diff == 0.5 or diff == -0.5 {
+        2.0 * (x / 2.0).round()
+    } else {
+        r
+    }
+}
+
+// the integer part and fraction of a finite float, as math.modf
+fn modf(x: f64) -> (f64, f64) {
+    let i = x.trunc();
+    (i, x - i)
+}
+
+const TS_LIMIT: f64 = 9.2e18;
+
+fn dt_from_float(x: f64) -> Option[DateTime] {
+    if is_nan(x) or is_inf(x) {
+        return None;
+    }
+    let (ip0, fp0) = modf(x);
+    let mut ip = ip0;
+    let mut fp = round_half_even(fp0 * 1000000.0);
+    if fp >= 1000000.0 {
+        fp -= 1000000.0;
+        ip += 1.0;
+    } else if fp < 0.0 {
+        fp += 1000000.0;
+        ip -= 1.0;
+    }
+    if ip > TS_LIMIT or ip < -TS_LIMIT {
+        return None;
+    }
+    dt_from_utc(ip as i64, fp as i64)
+}
+
+fn ascii_digits(b: ref Vec[u8], at: i64, n: i64) -> Option[i64] {
+    if at + n > b.len() {
+        return None;
+    }
+    let mut v = 0;
+    for i in at..at + n {
+        let c = b[i];
+        if c < b'0' or c > b'9' {
+            return None;
+        }
+        v = v * 10 + (c - b'0') as i64;
+    }
+    Some(v)
+}
+
+fn iso_week1_monday(y: i64) -> i64 {
+    let first = ymd_to_ord(y, 1, 1);
+    let wd = (first + 6) % 7;
+    let mut monday = first - wd;
+    if wd > 3 {
+        monday += 7;
+    }
+    monday
+}
+
+fn bad_iso(s: ref String) -> String {
+    f"Invalid isoformat string: {repr_str(s)}"
+}
+
+// date.fromisoformat (Python 3.13): YYYY-MM-DD, YYYYMMDD, YYYY-Www,
+// YYYYWww, YYYY-Www-D and YYYYWwwD
+fn date_fromiso(s: ref String) -> Result[i64, String] {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    if n != 7 and n != 8 and n != 10 {
+        return Err(bad_iso(s));
+    }
+    let y = match ascii_digits(b, 0, 4) {
+        Some(v) => v,
+        None => return Err(bad_iso(s)),
+    };
+    let sep = b[4] == b'-';
+    let at = if sep { 5 } else { 4 };
+    if at < n and b[at] == b'W' {
+        let week = match ascii_digits(b, at + 1, 2) {
+            Some(v) => v,
+            None => return Err(bad_iso(s)),
+        };
+        let mut day = 1;
+        let mut p = at + 3;
+        if p < n {
+            if sep {
+                if b[p] != b'-' {
+                    return Err(bad_iso(s));
+                }
+                p += 1;
+            }
+            day = match ascii_digits(b, p, 1) {
+                Some(v) => v,
+                None => return Err(bad_iso(s)),
+            };
+            p += 1;
+        }
+        if p != n {
+            return Err(bad_iso(s));
+        }
+        let mut bad_week = week <= 0 or week >= 53;
+        if week == 53 {
+            let first = (ymd_to_ord(y, 1, 1) + 6) % 7;
+            if first == 3 or (first == 2 and is_leap(y)) {
+                bad_week = false;
+            }
+        }
+        if bad_week or day <= 0 or day > 7 {
+            return Err(bad_iso(s));
+        }
+        let ordinal = iso_week1_monday(y) + (week - 1) * 7 + (day - 1);
+        if ordinal < 1 or ordinal > MAX_ORDINAL {
+            return Err(f"year is out of range");
+        }
+        return Ok(ordinal);
+    }
+    let want = if sep { 10 } else { 8 };
+    if n != want {
+        return Err(bad_iso(s));
+    }
+    if sep and b[7] != b'-' {
+        return Err(bad_iso(s));
+    }
+    let m = match ascii_digits(b, at, 2) {
+        Some(v) => v,
+        None => return Err(bad_iso(s)),
+    };
+    let d = match ascii_digits(b, if sep { 8 } else { 6 }, 2) {
+        Some(v) => v,
+        None => return Err(bad_iso(s)),
+    };
+    check_date(y, m, d)?;
+    Ok(ymd_to_ord(y, m, d))
+}
+
+// cbor2's timestamp_re, then datetime(...): the datetime, or None when
+// the pattern does not match, or the constructor's error
+fn dt_from_string(s: ref String) -> Option[Result[DateTime, String]] {
+    let mut b = s.bytes().to_vec();
+    if b.len() > 0 and b[b.len() - 1] == b'\n' {
+        b.pop();
+    }
+    if b.len() < 20 {
+        return None;
+    }
+    let y = ascii_digits(b, 0, 4)?;
+    if b[4] != b'-' or b[7] != b'-' or b[10] != b'T' or b[13] != b':' or b[16] != b':' {
+        return None;
+    }
+    let mo = ascii_digits(b, 5, 2)?;
+    let d = ascii_digits(b, 8, 2)?;
+    let hh = ascii_digits(b, 11, 2)?;
+    let mi = ascii_digits(b, 14, 2)?;
+    let ss = ascii_digits(b, 17, 2)?;
+    let mut p = 19;
+    let mut us = 0;
+    if b[p] == b'.' {
+        let start = p + 1;
+        let mut q = start;
+        while q < b.len() and b[q] >= b'0' and b[q] <= b'9' {
+            q += 1;
+        }
+        if q == start {
+            return None;
+        }
+        let take = if q - start > 6 { 6 } else { q - start };
+        us = ascii_digits(b, start, take)?;
+        for _ in take..6 {
+            us = us * 10;
+        }
+        p = q;
+    }
+    let mut off = 0;
+    if p < b.len() and b[p] == b'Z' {
+        p += 1;
+    } else if p < b.len() and (b[p] == b'+' or b[p] == b'-') {
+        let oh = ascii_digits(b, p + 1, 2)?;
+        if p + 3 >= b.len() or b[p + 3] != b':' {
+            return None;
+        }
+        let om = ascii_digits(b, p + 4, 2)?;
+        off = oh * 3600 + om * 60;
+        if b[p] == b'-' {
+            off = -off;
+        }
+        p += 6;
+    } else {
+        return None;
+    }
+    if p != b.len() {
+        return None;
+    }
+    if off <= -86400 or off >= 86400 {
+        return Some(Err(f"offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not {timedelta_repr(off)}."));
+    }
+    if let Err(e) = check_date(y, mo, d) {
+        return Some(Err(e));
+    }
+    if hh > 23 {
+        return Some(Err("hour must be in 0..23".to_string()));
+    }
+    if mi > 59 {
+        return Some(Err("minute must be in 0..59".to_string()));
+    }
+    if ss > 59 {
+        return Some(Err("second must be in 0..59".to_string()));
+    }
+    Some(Ok(DateTime { y: y, mo: mo, d: d, h: hh, mi: mi, s: ss, us: us, off: off }))
+}
+
+// ------------------------------------------------------------ text
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+fn utf8_string(b: own Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+fn code_points(b: ref Vec[u8]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as u32;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as u32 & 0x3F) << 6) | (b[i + 2] as u32 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as u32 & 0x3F) << 12)
+                | ((b[i + 2] as u32 & 0x3F) << 6) | (b[i + 3] as u32 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+fn hex2(b: u8) -> String {
+    f"{b:02x}"
+}
+// The characters str.isprintable() refuses among the ones the data uses:
+// controls, the Latin-1 no-break space and soft hyphen, format characters,
+// separators and private use.
+fn printable(c: u32) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+fn hex_digits(v: u32, width: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+fn quote_for(cps: ref Vec[u32]) -> u32 {
+    let mut single = false;
+    let mut double = false;
+    for c in cps {
+        if c == 39 {
+            single = true;
+        }
+        if c == 34 {
+            double = true;
+        }
+    }
+    if single and not double { 34 } else { 39 }
+}
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let cps = code_points(s.bytes().to_vec());
+    let q = quote_for(cps);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q as u8);
+    for c in cps {
+        if c == q or c == 92 {
+            out.push(92);
+            out.push(c as u8);
+        } else if c == 9 {
+            out.push(92);
+            out.push(b't');
+        } else if c == 10 {
+            out.push(92);
+            out.push(b'n');
+        } else if c == 13 {
+            out.push(92);
+            out.push(b'r');
+        } else if printable(c) {
+            push_utf8(mut out, c);
+        } else {
+            let esc = if c < 0x100 {
+                f"\\x{hex_digits(c, 2)}"
+            } else if c < 0x10000 {
+                f"\\u{hex_digits(c, 4)}"
+            } else {
+                f"\\U{hex_digits(c, 8)}"
+            };
+            for x in esc.bytes() {
+                out.push(*x);
+            }
+        }
+    }
+    out.push(q as u8);
+    utf8_string(out)
+}
+// repr(bytes)
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let mut cps: Vec[u32] = Vec.new();
+    for x in b {
+        cps.push(x as u32);
+    }
+    let q = quote_for(cps) as u8;
+    let mut out = String.new();
+    out.push_str("b");
+    out.push_str(if q == 34 { "\"" } else { "'" });
+    for x in b {
+        if x == q or x == 92 {
+            out.push_str(if x == 92 { "\\\\" } else if q == 34 { "\\\"" } else { "\\'" });
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x >= 0x20 and x < 0x7F {
+            out.push_str(utf8_string(vec![x]));
+        } else {
+            out.push_str(f"\\x{hex2(x)}");
+        }
+    }
+    out.push_str(if q == 34 { "\"" } else { "'" });
+    out
+}
+
+// The length of the well-formed UTF-8 sequence at b[i], or 0 when the
+// byte there does not start one (CPython's rules: no overlongs, no
+// surrogates, nothing past U+10FFFF).
+fn utf8_seq(b: ref Vec[u8], i: i64) -> i64 {
+    let c = b[i];
+    if c < 0x80 {
+        return 1;
+    }
+    let mut need = 0;
+    let mut lo: u8 = 0x80;
+    let mut hi: u8 = 0xBF;
+    if c >= 0xC2 and c <= 0xDF {
+        need = 1;
+    } else if c >= 0xE0 and c <= 0xEF {
+        need = 2;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xED {
+            hi = 0x9F;
+        }
+    } else if c >= 0xF0 and c <= 0xF4 {
+        need = 3;
+        if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+    } else {
+        return 0;
+    }
+    for k in 1..need + 1 {
+        if i + k >= b.len() {
+            return 0;
+        }
+        let d = b[i + k];
+        let (a, z) = if k == 1 { (lo, hi) } else { (0x80, 0xBF) };
+        if d < a or d > z {
+            return 0;
+        }
+    }
+    need + 1
+}
+
+// bytes.decode("utf-8"), or None
+fn decode_strict(b: ref Vec[u8]) -> Option[String] {
+    let mut i = 0;
+    while i < b.len() {
+        let n = utf8_seq(b, i);
+        if n == 0 {
+            return None;
+        }
+        i += n;
+    }
+    Some(utf8_string(b.clone()))
+}
+
+// bytes.decode("utf-8", errors="backslashreplace")
+fn decode_backslash(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let n = utf8_seq(b, i);
+        if n == 0 {
+            for x in f"\\x{hex2(b[i])}".bytes() {
+                out.push(*x);
+            }
+            i += 1;
+        } else {
+            for k in 0..n {
+                out.push(b[i + k]);
+            }
+            i += n;
+        }
+    }
+    utf8_string(out)
+}
+
+// json's py_encode_basestring (ensure_ascii=False)
+fn json_str(s: ref String) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for x in s.bytes() {
+        let c = *x;
+        if c == b'"' {
+            out.push(b'\\');
+            out.push(b'"');
+        } else if c == b'\\' {
+            out.push(b'\\');
+            out.push(b'\\');
+        } else if c == 10 {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == 13 {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == 9 {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == 8 {
+            out.push(b'\\');
+            out.push(b'b');
+        } else if c == 12 {
+            out.push(b'\\');
+            out.push(b'f');
+        } else if c < 0x20 {
+            for y in f"\\u{hex_digits(c as u32, 4)}".bytes() {
+                out.push(*y);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(b'"');
+    utf8_string(out)
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b.iter() {
+        s.push_str(hex2(*x));
+    }
+    s
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((hex_val(b[i]) * 16 + hex_val(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+// ------------------------------------------------------------ printing
+
+fn float_repr(x: f64) -> String {
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// str(Decimal): the scientific-string rules of the decimal module
+fn dec_str(d: ref Dec) -> String {
+    let sign = if d.neg { "-" } else { "" };
+    if d.special == 1 {
+        return f"{sign}NaN";
+    }
+    if d.special == 2 {
+        return f"{sign}Infinity";
+    }
+    let digits = mag_digits(d.coef.d);
+    let n = digits.len();
+    let adjusted = d.exp + n - 1;
+    if d.exp <= 0 and adjusted >= -6 {
+        if d.exp == 0 {
+            return f"{sign}{digits}";
+        }
+        let point = n + d.exp;
+        if point > 0 {
+            return f"{sign}{digits.substring(0, point)}.{digits.substring(point, n)}";
+        }
+        let mut s = f"{sign}0.";
+        for _ in 0..(-point) {
+            s.push_str("0");
+        }
+        s.push_str(digits);
+        return s;
+    }
+    let mut s = f"{sign}{digits.substring(0, 1)}";
+    if n > 1 {
+        s.push_str(f".{digits.substring(1, n)}");
+    }
+    let es = if adjusted >= 0 { "+" } else { "-" };
+    let ea = if adjusted >= 0 { adjusted } else { -adjusted };
+    s.push_str(f"E{es}{ea}");
+    s
+}
+
+fn frac_str(n: ref Big, d: ref Big) -> String {
+    if big_cmp(d, big_from_i64(1)) == 0 {
+        big_str(n)
+    } else {
+        f"{big_str(n)}/{big_str(d)}"
+    }
+}
+
+fn uuid_str(b: ref Vec[u8]) -> String {
+    let h = hex_of(b);
+    f"{h.substring(0, 8)}-{h.substring(8, 12)}-{h.substring(12, 16)}-{h.substring(16, 20)}-{h.substring(20, 32)}"
+}
+
+fn hextets_str(hx: ref Vec[i64]) -> String {
+    let mut best_start = -1;
+    let mut best_len = 0;
+    let mut start = -1;
+    let mut run = 0;
+    for i in 0..hx.len() {
+        if hx[i] == 0 {
+            run += 1;
+            if start == -1 {
+                start = i;
+            }
+            if run > best_len {
+                best_len = run;
+                best_start = start;
+            }
+        } else {
+            run = 0;
+            start = -1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < hx.len() {
+        if best_len > 1 and i == best_start {
+            if i == 0 {
+                parts.push("".to_string());
+            }
+            parts.push("".to_string());
+            i += best_len;
+            if i == hx.len() {
+                parts.push("".to_string());
+            }
+            continue;
+        }
+        parts.push(f"{hx[i]:x}");
+        i += 1;
+    }
+    parts.join(":")
+}
+
+fn ip_str(b: ref Vec[u8]) -> String {
+    if b.len() == 4 {
+        return f"{b[0]}.{b[1]}.{b[2]}.{b[3]}";
+    }
+    let mut hx: Vec[i64] = Vec.new();
+    for i in 0..8 {
+        hx.push((b[2 * i] as i64) * 256 + b[2 * i + 1] as i64);
+    }
+    let mut mapped = hx[5] == 0xffff;
+    for i in 0..5 {
+        if hx[i] != 0 {
+            mapped = false;
+        }
+    }
+    if mapped {
+        let mut high: Vec[i64] = vec![0, 0];
+        for i in 0..6 {
+            high.push(hx[i]);
+        }
+        return f"{hextets_str(high)}:{b[12]}.{b[13]}.{b[14]}.{b[15]}";
+    }
+    hextets_str(hx)
+}
+
+fn net_str(b: ref Vec[u8], p: i64) -> String {
+    f"{ip_str(b)}/{p}"
+}
+
+// repr() of a Python value; `show` sorts a set's items by how they print
+// and prints a CBORSimpleValue as the tuple it is, as oracle.py's show()
+// does. `seen` holds the objects being printed, for [...] and {...}.
+fn rep(h: ref Heap, v: ref V, show: bool, seen: ref Vec[i64]) -> String {
+    match v {
+        V.None => "None".to_string(),
+        V.Undef => "undefined".to_string(),
+        V.Brk => "break_marker".to_string(),
+        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Int(n) => big_str(n),
+        V.Float(x) => float_repr(*x),
+        V.Bytes(b) => repr_bytes(b),
+        V.Str(s) => repr_str(s),
+        V.Simple(n) => if show { f"({n},)" } else { f"CBORSimpleValue(value={n})" },
+        V.Dec(d) => f"Decimal('{dec_str(d)}')",
+        V.Frac(n, d) => f"Fraction({big_str(n)}, {big_str(d)})",
+        V.Date(o) => date_repr(*o),
+        V.Dt(t) => dt_repr(t),
+        V.Uuid(b) => f"UUID('{uuid_str(b)}')",
+        V.Ip(b) => f"{type_name(h, v)}('{ip_str(b)}')",
+        V.Net(b, p) => f"{type_name(h, v)}('{net_str(b, *p)}')",
+        V.Regex(s) => f"re.compile({repr_str(s)})",
+        V.Obj(i) => {
+            let o = ref h.objs[*i];
+            let k = o.kind;
+            for x in seen.iter() {
+                if *x == *i {
+                    if k == LIST {
+                        return "[...]".to_string();
+                    } else if k == TUPLE {
+                        return "(...)".to_string();
+                    } else if k == DICT {
+                        return "{...}".to_string();
+                    } else if k == TAG or k == FDICT {
+                        return "...".to_string();
+                    }
+                }
+            }
+            let mut inner = seen.clone();
+            inner.push(*i);
+            if k == LIST or k == TUPLE {
+                let mut parts: Vec[String] = Vec.new();
+                for x in o.items.iter() {
+                    parts.push(rep(h, x, show, inner));
+                }
+                if k == LIST {
+                    return f"[{parts.join(", ")}]";
+                }
+                if parts.len() == 1 {
+                    return f"({parts[0]},)";
+                }
+                return f"({parts.join(", ")})";
+            }
+            if k == DICT {
+                let mut parts: Vec[String] = Vec.new();
+                let mut j = 0;
+                while j < o.items.len() {
+                    parts.push(f"{rep(h, o.items[j], show, inner)}: {rep(h, o.items[j + 1], show, inner)}");
+                    j += 2;
+                }
+                return f"{{{parts.join(", ")}}}";
+            }
+            if k == FDICT {
+                return f"FrozenDict({rep(h, V.Obj(o.inner), show, seen)})";
+            }
+            if k == TAG {
+                return f"CBORTag({o.tag}, {rep(h, o.items[0], show, inner)})";
+            }
+            let mut parts: Vec[String] = Vec.new();
+            for x in o.items.iter() {
+                parts.push(rep(h, x, show, inner));
+            }
+            parts.sort();
+            let name = if k == SET { "set" } else { "frozenset" };
+            if parts.len() == 0 {
+                return f"{name}()";
+            }
+            let body = f"{{{parts.join(", ")}}}";
+            if k == SET { body } else { f"{name}({body})" }
+        }
+    }
+}
+
+fn show(h: ref Heap, v: ref V) -> String {
+    rep(h, v, true, Vec.new())
+}
+
+// str() of a Python value
+fn py_str(h: ref Heap, v: ref V) -> String {
+    match v {
+        V.Str(s) => s.clone(),
+        V.Dec(d) => dec_str(d),
+        V.Frac(n, d) => frac_str(n, d),
+        V.Date(o) => date_iso(*o),
+        V.Dt(t) => dt_iso(t, " "),
+        V.Uuid(b) => uuid_str(b),
+        V.Ip(b) => ip_str(b),
+        V.Net(b, p) => net_str(b, *p),
+        _ => rep(h, v, false, Vec.new()),
+    }
+}
+
+// ------------------------------------------------------------ errors
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn verr(msg: own String) -> Exc {
+    exc("CBORDecodeValueError", msg)
+}
+
+fn exc_text(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// what `except ValueError` catches
+fn is_value_error(e: ref Exc) -> bool {
+    e.kind == "CBORDecodeValueError" or e.kind == "ValueError" or e.kind == "CBOREncodeValueError"
+}
+
+fn is_eof(e: ref Exc) -> bool {
+    e.kind == "CBORDecodeEOF"
+}
+
+// ------------------------------------------------------------ floats
+
+fn pow2f(n: i64) -> f64 {
+    let mut x = 1.0;
+    if n >= 0 {
+        for _ in 0..n {
+            x = x * 2.0;
+        }
+    } else {
+        for _ in 0..(-n) {
+            x = x / 2.0;
+        }
+    }
+    x
+}
+
+fn unpack_half(h: u16) -> f64 {
+    let sign = (h >> 15) & 1;
+    let e = ((h >> 10) & 0x1f) as i64;
+    let f = (h & 0x3ff) as i64;
+    let mut x: f64 = 0.0;
+    if e == 0x1f {
+        if f == 0 {
+            x = 1.0 / 0.0;
+        } else {
+            x = 0.0 / 0.0;
+        }
+    } else {
+        x = f as f64 / 1024.0;
+        if e == 0 {
+            x = x * pow2f(-14);
+        } else {
+            x = (x + 1.0) * pow2f(e - 15);
+        }
+    }
+    if sign == 1 { -x } else { x }
+}
+
+// ------------------------------------------------------------ decimals
+
+const PREC: i64 = 28;
+
+// a coefficient rounded half to even to 28 digits, and its exponent
+fn round_coef(c: ref Big, exp: i64) -> (Big, i64) {
+    let digits = mag_digits(c.d);
+    let n = digits.len();
+    if big_is_zero(c) or n <= PREC {
+        return (c.clone(), exp);
+    }
+    let keep = big_from_digits(digits.substring(0, PREC));
+    let rest = digits.substring(PREC, n).bytes().to_vec();
+    let mut half = 0;
+    if rest[0] > b'5' {
+        half = 1;
+    } else if rest[0] == b'5' {
+        half = 0;
+        for i in 1..rest.len() {
+            if rest[i] != b'0' {
+                half = 1;
+            }
+        }
+        if half == 0 {
+            half = 2;
+        }
+    } else {
+        half = -1;
+    }
+    let last = (digits.bytes().to_vec()[PREC - 1] - b'0') as i64;
+    let mut k = keep;
+    if half == 1 or (half == 2 and last % 2 == 1) {
+        k = big_add(k, big_from_i64(1));
+    }
+    let mut e = exp + (n - PREC);
+    if mag_digits(k.d).len() > PREC {
+        let (q, _) = divmod_small(k.d, 10);
+        k = big_make(false, q);
+        e += 1;
+    }
+    (k, e)
+}
+
+// Decimal(sig) * (2 ** Decimal(exp)) in the default context
+fn bigfloat(sig: ref Big, exp: i64) -> Dec {
+    let (pc, pe) = if exp >= 0 {
+        round_coef(big_pow_small(2, exp), 0)
+    } else {
+        round_coef(big_pow_small(5, -exp), exp)
+    };
+    let (c, e) = round_coef(big_mul(big_abs(sig), pc), pe);
+    Dec { special: 0, neg: sig.neg, coef: c, exp: e }
+}
+
+// ------------------------------------------------------------ decoder
+
+// CBORDecoder: reads one value at a time from `buf`, keeping cbor2's
+// shared-value registry and string-reference namespace between them.
+struct Decoder {
+    h: Heap,
+    buf: Vec[u8],
+    pos: i64,
+    share_index: i64,
+    shareables: Vec[V],
+    immutable: bool,
+    has_ns: bool,
+    ns: Vec[V],
+    hook: bool,
+    ignore: Vec[u64],
+}
+
+fn new_decoder(buf: own Vec[u8]) -> Decoder {
+    Decoder {
+        h: new_heap(),
+        buf: buf,
+        pos: 0,
+        share_index: -1,
+        shareables: Vec.new(),
+        immutable: false,
+        has_ns: false,
+        ns: Vec.new(),
+        hook: false,
+        ignore: Vec.new(),
+    }
+}
+
+const MAXSIZE: i128 = 9223372036854775807;
+const INDEFINITE: i128 = -1;
+
+fn as_index(v: ref V) -> Option[i64] {
+    match v {
+        V.Int(n) => big_to_i64(n),
+        V.Bool(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+impl Decoder {
+    fn set_shareable(mut ref self, v: ref V) {
+        if self.share_index >= 0 {
+            self.shareables[self.share_index] = v.clone();
+        }
+    }
+
+    fn read(mut ref self, n: i64) -> Result[Vec[u8], Exc] {
+        let avail = self.buf.len() - self.pos;
+        if n > avail {
+            let got = if avail < 0 { 0 } else { avail };
+            self.pos = self.buf.len();
+            return Err(exc("CBORDecodeEOF", f"premature end of stream (expected to read {n} bytes, got {got} instead)"));
+        }
+        let out = self.buf[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        Ok(out)
+    }
+
+    fn read_big(mut ref self, n: i128) -> Result[Vec[u8], Exc] {
+        if n <= 65536 {
+            return self.read(n as i64);
+        }
+        let mut left = n;
+        let mut out: Vec[u8] = Vec.new();
+        while left > 0 {
+            let chunk = if left < 65536 { left } else { 65536 };
+            let part = self.read(chunk as i64)?;
+            for x in part.iter() {
+                out.push(*x);
+            }
+            left -= chunk;
+        }
+        Ok(out)
+    }
+
+    fn uint(mut ref self, n: i64) -> Result[u64, Exc] {
+        let b = self.read(n)?;
+        let mut v: u64 = 0;
+        for x in b.iter() {
+            v = v * 256 + *x as u64;
+        }
+        Ok(v)
+    }
+
+    fn length(mut ref self, subtype: i64, allow_indefinite: bool) -> Result[i128, Exc] {
+        if subtype < 24 {
+            return Ok(subtype as i128);
+        }
+        if subtype == 24 {
+            return Ok(self.uint(1)? as i128);
+        }
+        if subtype == 25 {
+            return Ok(self.uint(2)? as i128);
+        }
+        if subtype == 26 {
+            return Ok(self.uint(4)? as i128);
+        }
+        if subtype == 27 {
+            return Ok(self.uint(8)? as i128);
+        }
+        if subtype == 31 and allow_indefinite {
+            return Ok(INDEFINITE);
+        }
+        Err(verr(f"unknown unsigned integer subtype 0x{subtype:x}"))
+    }
+
+    fn ns_add(mut ref self, v: ref V, length: i128) {
+        if not self.has_ns {
+            return;
+        }
+        let next = self.ns.len() as i128;
+        let referenced = if next < 24 {
+            length >= 3
+        } else if next < 256 {
+            length >= 4
+        } else if next < 65536 {
+            length >= 5
+        } else if next < 4294967296 {
+            length >= 7
+        } else {
+            length >= 11
+        };
+        if referenced {
+            self.ns.push(v.clone());
+        }
+    }
+
+    fn decode(mut ref self) -> Result[V, Exc] {
+        self.dec(false, false)
+    }
+
+    fn dec(mut ref self, immutable: bool, unshared: bool) -> Result[V, Exc] {
+        let old_immutable = self.immutable;
+        let old_index = self.share_index;
+        if immutable {
+            self.immutable = true;
+        }
+        if unshared {
+            self.share_index = -1;
+        }
+        let r = self.dec_inner();
+        if immutable {
+            self.immutable = old_immutable;
+        }
+        if unshared {
+            self.share_index = old_index;
+        }
+        r
+    }
+
+    fn dec_inner(mut ref self) -> Result[V, Exc] {
+        let b = self.read(1)?;
+        let initial = b[0] as i64;
+        let major = initial >> 5;
+        let subtype = initial & 31;
+        if major == 0 {
+            let n = self.length(subtype, false)?;
+            let v = V.Int(big_from_u64(n as u64));
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if major == 1 {
+            let n = self.length(subtype, false)?;
+            let v = V.Int(big_neg(big_add(big_from_u64(n as u64), big_from_i64(1))));
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if major == 2 {
+            return self.bytestring(subtype);
+        }
+        if major == 3 {
+            return self.string(subtype);
+        }
+        if major == 4 {
+            return self.array(subtype);
+        }
+        if major == 5 {
+            return self.map(subtype);
+        }
+        if major == 6 {
+            return self.semantic(subtype);
+        }
+        self.special(subtype)
+    }
+
+    fn bytestring(mut ref self, subtype: i64) -> Result[V, Exc] {
+        let length = self.length(subtype, true)?;
+        let mut result: Vec[u8] = Vec.new();
+        if length == INDEFINITE {
+            loop {
+                let ib = self.read(1)?[0] as i64;
+                if ib == 0xFF {
+                    break;
+                }
+                if ib >> 5 == 2 {
+                    let n = self.length(ib & 0x1F, false)?;
+                    if n > MAXSIZE {
+                        return Err(verr(f"invalid length for indefinite bytestring chunk 0x{n:x}"));
+                    }
+                    let part = self.read(n as i64)?;
+                    for x in part.iter() {
+                        result.push(*x);
+                    }
+                } else {
+                    return Err(verr("non-bytestring found in indefinite length bytestring".to_string()));
+                }
+            }
+            let v = V.Bytes(result);
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if length > MAXSIZE {
+            return Err(verr(f"invalid length for bytestring 0x{length:x}"));
+        }
+        result = self.read_big(length)?;
+        let v = V.Bytes(result);
+        self.ns_add(v, length);
+        self.set_shareable(v);
+        Ok(v)
+    }
+
+    fn string(mut ref self, subtype: i64) -> Result[V, Exc] {
+        let length = self.length(subtype, true)?;
+        let bad = verr("error decoding unicode string".to_string());
+        if length == INDEFINITE {
+            let mut result = String.new();
+            loop {
+                let ib = self.read(1)?[0] as i64;
+                if ib == 0xFF {
+                    break;
+                }
+                if ib >> 5 == 3 {
+                    let n = self.length(ib & 0x1F, false)?;
+                    if n > MAXSIZE {
+                        return Err(verr(f"invalid length for indefinite string chunk 0x{n:x}"));
+                    }
+                    let part = self.read(n as i64)?;
+                    match decode_strict(part) {
+                        Some(s) => result.push_str(s),
+                        None => return Err(bad),
+                    }
+                } else {
+                    return Err(verr("non-string found in indefinite length string".to_string()));
+                }
+            }
+            let v = V.Str(result);
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if length > MAXSIZE {
+            return Err(verr(f"invalid length for string 0x{length:x}"));
+        }
+        let raw = self.read_big(length)?;
+        let s = match decode_strict(raw) {
+            Some(s) => s,
+            None => return Err(bad),
+        };
+        let v = V.Str(s);
+        self.ns_add(v, length);
+        self.set_shareable(v);
+        Ok(v)
+    }
+
+    fn array(mut ref self, subtype: i64) -> Result[V, Exc] {
+        let length = self.length(subtype, true)?;
+        if length != INDEFINITE and length > MAXSIZE {
+            return Err(verr(f"invalid length for array 0x{length:x}"));
+        }
+        let id = alloc(mut self.h, LIST, Vec.new(), 0, -1);
+        if not self.immutable {
+            self.set_shareable(V.Obj(id));
+        }
+        if length == INDEFINITE {
+            loop {
+                let v = self.dec(false, false)?;
+                if let V.Brk = v {
+                    break;
+                }
+                self.h.objs[id].items.push(v);
+            }
+        } else {
+            let mut i: i128 = 0;
+            while i < length {
+                let v = self.dec(false, false)?;
+                self.h.objs[id].items.push(v);
+                i += 1;
+            }
+        }
+        if self.immutable {
+            let items = self.h.objs[id].items.clone();
+            let t = V.Obj(alloc(mut self.h, TUPLE, items, 0, -1));
+            self.set_shareable(t);
+            return Ok(t);
+        }
+        Ok(V.Obj(id))
+    }
+
+    fn map(mut ref self, subtype: i64) -> Result[V, Exc] {
+        let length = self.length(subtype, true)?;
+        let id = alloc(mut self.h, DICT, Vec.new(), 0, -1);
+        self.set_shareable(V.Obj(id));
+        if length == INDEFINITE {
+            loop {
+                let key = self.dec(true, true)?;
+                if let V.Brk = key {
+                    break;
+                }
+                let value = self.dec(false, true)?;
+                if let Err(m) = dict_set(mut self.h, id, key, value) {
+                    return Err(exc("TypeError", m));
+                }
+            }
+        } else {
+            let mut i: i128 = 0;
+            while i < length {
+                let key = self.dec(true, true)?;
+                let value = self.dec(false, true)?;
+                if let Err(m) = dict_set(mut self.h, id, key, value) {
+                    return Err(exc("TypeError", m));
+                }
+                i += 1;
+            }
+        }
+        if self.immutable {
+            let f = V.Obj(alloc(mut self.h, FDICT, Vec.new(), 0, id));
+            self.set_shareable(V.Obj(id));
+            return Ok(f);
+        }
+        Ok(V.Obj(id))
+    }
+
+    fn special(mut ref self, subtype: i64) -> Result[V, Exc] {
+        if subtype < 20 {
+            return Ok(V.Simple(subtype));
+        }
+        if subtype == 20 {
+            return Ok(V.Bool(false));
+        }
+        if subtype == 21 {
+            return Ok(V.Bool(true));
+        }
+        if subtype == 22 {
+            return Ok(V.None);
+        }
+        if subtype == 23 {
+            return Ok(V.Undef);
+        }
+        if subtype == 24 {
+            let n = self.read(1)?[0] as i64;
+            if n > 23 and n < 32 {
+                return Err(exc("TypeError", "simple value out of range (0..23, 32..255)".to_string()));
+            }
+            return Ok(V.Simple(n));
+        }
+        if subtype == 25 {
+            let v = V.Float(unpack_half(self.uint(2)? as u16));
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if subtype == 26 {
+            let bits = self.uint(4)? as u32;
+            let v = V.Float(bits.bits_as_f32() as f64);
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if subtype == 27 {
+            let v = V.Float(self.uint(8)?.bits_as_f64());
+            self.set_shareable(v);
+            return Ok(v);
+        }
+        if subtype == 31 {
+            return Ok(V.Brk);
+        }
+        Err(verr(f"Undefined Reserved major type 7 subtype 0x{subtype:x}"))
+    }
+
+    fn shared(mut ref self, v: own V) -> Result[V, Exc] {
+        self.set_shareable(v);
+        Ok(v)
+    }
+
+    // the two items of a list or tuple, as `a, b = value` unpacks them
+    fn pair(ref self, v: ref V) -> Option[(V, V)] {
+        match v {
+            V.Obj(i) => {
+                let o = ref self.h.objs[*i];
+                if (o.kind == LIST or o.kind == TUPLE) and o.items.len() == 2 {
+                    Some((o.items[0].clone(), o.items[1].clone()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn semantic(mut ref self, subtype: i64) -> Result[V, Exc] {
+        let tagnum = self.length(subtype, false)? as u64;
+        if tagnum == 0 {
+            let value = self.decode()?;
+            return match value {
+                V.Str(s) => match dt_from_string(s) {
+                    Some(Ok(t)) => self.shared(V.Dt(t)),
+                    Some(Err(m)) => Err(exc("ValueError", m)),
+                    None => Err(verr(f"invalid datetime string: {repr_str(s)}")),
+                },
+                V.Bytes(_) => Err(exc("TypeError", "cannot use a string pattern on a bytes-like object".to_string())),
+                _ => Err(exc("TypeError", f"expected string or bytes-like object, got '{type_name(self.h, value)}'")),
+            };
+        }
+        if tagnum == 1 {
+            let value = self.decode()?;
+            let bad = verr("error decoding datetime from epoch".to_string());
+            let t = match value {
+                V.Float(x) => dt_from_float(x),
+                V.Int(n) => match big_to_i64(n) {
+                    Some(s) => dt_from_utc(s, 0),
+                    None => None,
+                },
+                V.Bool(b) => dt_from_utc(if b { 1 } else { 0 }, 0),
+                _ => return Err(exc("TypeError", f"'{type_name(self.h, value)}' object cannot be interpreted as an integer")),
+            };
+            return match t {
+                Some(t) => self.shared(V.Dt(t)),
+                None => Err(bad),
+            };
+        }
+        if tagnum == 2 or tagnum == 3 {
+            let value = self.decode()?;
+            let mut n = match value {
+                V.Bytes(b) => {
+                    if b.len() == 0 {
+                        return Err(exc("ValueError", "invalid literal for int() with base 16: b''".to_string()));
+                    }
+                    big_from_bytes(b)
+                }
+                _ => return Err(verr(f"invalid bignum value {py_str(self.h, value)}")),
+            };
+            self.set_shareable(V.Int(n.clone()));
+            if tagnum == 3 {
+                n = big_neg(big_add(n, big_from_i64(1)));
+            }
+            return self.shared(V.Int(n));
+        }
+        if tagnum == 4 or tagnum == 5 {
+            let value = self.decode()?;
+            let (e, s) = match self.pair(value) {
+                Some(p) => p,
+                None => return Err(verr(f"Incorrect tag {tagnum} payload")),
+            };
+            let sig = match int_like(s) {
+                Some(n) => n,
+                None => return Err(exc("TypeError", f"conversion from {type_name(self.h, s)} to Decimal is not supported")),
+            };
+            let exp = match as_index(e) {
+                Some(x) => x,
+                None => return Err(exc("ValueError", "The third value in the tuple must be an integer, or one of the strings 'F', 'n', 'N'.".to_string())),
+            };
+            if tagnum == 4 {
+                return self.shared(V.Dec(Dec { special: 0, neg: sig.neg, coef: big_abs(sig), exp: exp }));
+            }
+            return self.shared(V.Dec(bigfloat(sig, exp)));
+        }
+        if tagnum == 25 {
+            if not self.has_ns {
+                return Err(verr("string reference outside of namespace".to_string()));
+            }
+            let value = self.decode()?;
+            let index = as_index(value).unwrap_or(-1);
+            if index < 0 or index >= self.ns.len() {
+                return Err(verr(f"string reference {py_str(self.h, value)} not found"));
+            }
+            return Ok(self.ns[index].clone());
+        }
+        if tagnum == 28 {
+            let old = self.share_index;
+            self.share_index = self.shareables.len();
+            self.shareables.push(V.None);
+            let r = self.decode();
+            self.share_index = old;
+            return r;
+        }
+        if tagnum == 29 {
+            let value = self.dec(false, true)?;
+            let index = as_index(value).unwrap_or(-1);
+            if index < 0 or index >= self.shareables.len() {
+                return Err(verr(f"shared reference {py_str(self.h, value)} not found"));
+            }
+            let shared = self.shareables[index].clone();
+            if let V.None = shared {
+                return Err(verr(f"shared value {index} has not been initialized"));
+            }
+            return Ok(shared);
+        }
+        if tagnum == 30 {
+            let value = self.dec(true, true)?;
+            let items = match value {
+                V.Obj(i) => {
+                    if self.h.objs[i].kind != TUPLE {
+                        return Err(verr("error decoding rational: input value was not a tuple".to_string()));
+                    }
+                    self.h.objs[i].items.clone()
+                }
+                _ => return Err(verr("error decoding rational: input value was not a tuple".to_string())),
+            };
+            let bad = verr("error decoding rational".to_string());
+            let mut nums: Vec[Big] = Vec.new();
+            for x in items.iter() {
+                match int_like(x) {
+                    Some(n) => nums.push(n),
+                    None => return Err(bad),
+                }
+            }
+            if nums.len() > 2 {
+                return Err(bad);
+            }
+            let num = if nums.len() > 0 { nums[0].clone() } else { big_zero() };
+            let den = if nums.len() > 1 { nums[1].clone() } else { big_from_i64(1) };
+            if big_is_zero(den) {
+                return Err(bad);
+            }
+            let mut g = big_gcd(num, den);
+            if den.neg {
+                g = big_neg(g);
+            }
+            let (n, _) = big_divmod(num, g);
+            let (d, _) = big_divmod(den, g);
+            return self.shared(V.Frac(n, d));
+        }
+        if tagnum == 35 {
+            let value = self.decode()?;
+            return match value {
+                V.Str(s) => self.shared(V.Regex(s)),
+                _ => Err(exc("TypeError", "first argument must be string or compiled pattern".to_string())),
+            };
+        }
+        if tagnum == 37 {
+            let value = self.decode()?;
+            return match value {
+                V.Bytes(b) => if b.len() == 16 {
+                    self.shared(V.Uuid(b))
+                } else {
+                    Err(verr("error decoding UUID value".to_string()))
+                },
+                _ => Err(verr("error decoding UUID value".to_string())),
+            };
+        }
+        if tagnum == 100 {
+            let value = self.decode()?;
+            let days = match value {
+                V.Int(n) => big_to_i64(n).unwrap_or(-1000000000),
+                _ => return Err(exc("TypeError", f"'{type_name(self.h, value)}' object cannot be interpreted as an integer")),
+            };
+            let ordinal = days + 719163;
+            if ordinal < 1 {
+                return Err(exc("ValueError", "ordinal must be >= 1".to_string()));
+            }
+            if ordinal > MAX_ORDINAL {
+                return Err(exc("ValueError", "year 10000 is out of range".to_string()));
+            }
+            return self.shared(V.Date(ordinal));
+        }
+        if tagnum == 256 {
+            let old_has = self.has_ns;
+            let old_ns = self.ns.clone();
+            self.has_ns = true;
+            self.ns = Vec.new();
+            let r = self.decode();
+            self.has_ns = old_has;
+            self.ns = old_ns;
+            return r;
+        }
+        if tagnum == 258 {
+            let im = self.immutable;
+            let value = self.dec(true, false)?;
+            let items = match value {
+                V.Obj(i) => self.h.objs[i].items.clone(),
+                _ => return Err(exc("TypeError", f"'{type_name(self.h, value)}' object is not iterable")),
+            };
+            let s = match make_set(mut self.h, if im { FSET } else { SET }, items) {
+                Ok(s) => s,
+                Err(m) => return Err(exc("TypeError", m)),
+            };
+            return self.shared(s);
+        }
+        if tagnum == 260 {
+            let value = self.decode()?;
+            if let V.Bytes(ref b) = value {
+                if b.len() == 4 or b.len() == 16 {
+                    return self.shared(V.Ip(b.clone()));
+                }
+                if b.len() == 6 {
+                    let t = V.Obj(alloc(mut self.h, TAG, vec![V.Bytes(b.clone())], 260, -1));
+                    return self.shared(t);
+                }
+            }
+            return Err(verr(f"invalid ipaddress value {rep(self.h, value, false, Vec.new())}"));
+        }
+        if tagnum == 261 {
+            let value = self.decode()?;
+            let k = kind_of(self.h, value);
+            if k == DICT or k == FDICT {
+                if let V.Obj(i) = value {
+                    let items = dict_items(self.h, i);
+                    if items.len() == 2 {
+                        if let Some(net) = make_net(items[0], items[1]) {
+                            return self.shared(net);
+                        }
+                    }
+                }
+            }
+            return Err(verr(f"invalid ipnetwork value {rep(self.h, value, false, Vec.new())}"));
+        }
+        if tagnum == 1004 {
+            let value = self.decode()?;
+            return match value {
+                V.Str(s) => match date_fromiso(s) {
+                    Ok(o) => self.shared(V.Date(o)),
+                    Err(m) => Err(exc("ValueError", m)),
+                },
+                _ => Err(exc("TypeError", "fromisoformat: argument must be str".to_string())),
+            };
+        }
+        if tagnum == 55799 {
+            return self.decode();
+        }
+        // any other tag: a CBORTag, or what the tool's tag_hook makes of it
+        let id = alloc(mut self.h, TAG, vec![V.None], tagnum, -1);
+        self.set_shareable(V.Obj(id));
+        let value = self.dec(false, true)?;
+        self.h.objs[id].items[0] = value.clone();
+        let mut result = V.Obj(id);
+        if self.hook {
+            if self.ignore.contains(tagnum) {
+                result = value;
+            } else if tagnum == 24 {
+                result = self.from_bytes(value)?;
+            } else if self.immutable {
+                result = V.Str(f"CBORtag:{tagnum}:{py_str(self.h, value)}");
+            }
+        }
+        self.shared(result)
+    }
+
+    // decode_from_bytes: the same registry, over another buffer
+    fn from_bytes(mut ref self, v: ref V) -> Result[V, Exc] {
+        let b = match v {
+            V.Bytes(b) => b.clone(),
+            _ => return Err(exc("TypeError", f"a bytes-like object is required, not '{type_name(self.h, v)}'")),
+        };
+        let old_buf = self.buf.clone();
+        let old_pos = self.pos;
+        self.buf = b;
+        self.pos = 0;
+        let r = self.decode()?;
+        self.buf = old_buf;
+        self.pos = old_pos;
+        Ok(r)
+    }
+}
+
+// ip_network((address, prefix), strict=False), or None where it raises
+fn make_net(addr: ref V, prefix: ref V) -> Option[V] {
+    let b = match addr {
+        V.Bytes(b) => b.clone(),
+        _ => return None,
+    };
+    if b.len() != 4 and b.len() != 16 {
+        return None;
+    }
+    let p = as_index(prefix)?;
+    let bits = (b.len() * 8) as i64;
+    if p < 0 or p > bits {
+        return None;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let keep = p - (i as i64) * 8;
+        let mask: i64 = if keep >= 8 { 255 } else if keep <= 0 { 0 } else { (255 << (8 - keep)) & 255 };
+        out.push(((b[i] as i64) & mask) as u8);
+    }
+    Some(V.Net(out, p))
+}
+
+fn loads(raw: ref Vec[u8]) -> Result[(V, Heap), Exc] {
+    let mut d = new_decoder(raw.clone());
+    let v = d.decode()?;
+    Ok((v, d.h))
+}
+
+// ------------------------------------------------------------ encoder
+
+// PyFloat_Pack2: an IEEE 754 half, rounding half to even; None where
+// struct.pack(">e") raises OverflowError.
+fn pack_half(x: f64) -> Option[u16] {
+    let mut sign: u16 = 0;
+    let mut e: i64 = 0;
+    let mut bits: u16 = 0;
+    if x == 0.0 {
+        sign = if (x.to_bits() >> 63) == 1 { 1 } else { 0 };
+    } else if is_inf(x) {
+        sign = if x < 0.0 { 1 } else { 0 };
+        e = 0x1f;
+    } else if is_nan(x) {
+        e = 0x1f;
+        bits = 512;
+    } else {
+        let mut y = x;
+        if y < 0.0 {
+            sign = 1;
+            y = -y;
+        }
+        let mut f0 = y;
+        let mut e0: i64 = 0;
+        while f0 >= 1.0 {
+            f0 = f0 / 2.0;
+            e0 += 1;
+        }
+        while f0 < 0.5 {
+            f0 = f0 * 2.0;
+            e0 -= 1;
+        }
+        let mut f = f0 * 2.0;
+        e = e0 - 1;
+        if e >= 16 {
+            return None;
+        } else if e < -25 {
+            f = 0.0;
+            e = 0;
+        } else if e < -14 {
+            f = f * pow2f(14 + e);
+            e = 0;
+        } else {
+            e += 15;
+            f -= 1.0;
+        }
+        f = f * 1024.0;
+        bits = f as u16;
+        let rest = f - bits as f64;
+        if rest > 0.5 or (rest == 0.5 and bits % 2 == 1) {
+            bits += 1;
+            if bits == 1024 {
+                bits = 0;
+                e += 1;
+                if e == 31 {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(bits | ((e as u16) << 10) | (sign << 15))
+}
+
+#[derive(Clone)]
+struct Opts {
+    canonical: bool,
+    value_sharing: bool,
+    string_referencing: bool,
+    timestamps: bool,
+    date_as_datetime: bool,
+}
+
+fn plain_opts() -> Opts {
+    Opts { canonical: false, value_sharing: false, string_referencing: false, timestamps: false, date_as_datetime: false }
+}
+
+fn eerr(msg: own String) -> Exc {
+    exc("CBOREncodeValueError", msg)
+}
+
+// CBOREncoder. `shared` and `shared_index` are _shared_containers (by
+// object id, with None as -1); `refs` and `ref_index` are
+// _string_references.
+struct Encoder {
+    out: Vec[u8],
+    o: Opts,
+    value_sharing: bool,
+    string_referencing: bool,
+    string_namespacing: bool,
+    shared: Vec[i64],
+    shared_index: Vec[i64],
+    refs: Vec[V],
+    ref_index: Vec[i64],
+}
+
+fn new_encoder(o: ref Opts) -> Encoder {
+    Encoder {
+        out: Vec.new(),
+        o: o.clone(),
+        value_sharing: o.value_sharing,
+        string_referencing: o.string_referencing,
+        string_namespacing: o.string_referencing,
+        shared: Vec.new(),
+        shared_index: Vec.new(),
+        refs: Vec.new(),
+        ref_index: Vec.new(),
+    }
+}
+
+fn str_len(v: ref V) -> i64 {
+    match v {
+        V.Str(s) => s.chars().count(),
+        V.Bytes(b) => b.len(),
+        _ => 0,
+    }
+}
+
+fn same_string(a: ref V, b: ref V) -> bool {
+    match (a, b) {
+        (V.Str(x), V.Str(y)) => x == y,
+        (V.Bytes(x), V.Bytes(y)) => x == y,
+        _ => false,
+    }
+}
+
+impl Encoder {
+    fn write(mut ref self, b: ref Vec[u8]) {
+        for x in b.iter() {
+            self.out.push(*x);
+        }
+    }
+
+    fn length(mut ref self, major: i64, n: u64) {
+        let m = (major << 5) as u8;
+        if n < 24 {
+            self.out.push(m | n as u8);
+        } else if n < 256 {
+            self.out.push(m | 24);
+            self.out.push(n as u8);
+        } else if n < 65536 {
+            self.out.push(m | 25);
+            for k in [8, 0] {
+                self.out.push(((n >> k) & 255) as u8);
+            }
+        } else if n < 4294967296 {
+            self.out.push(m | 26);
+            for k in [24, 16, 8, 0] {
+                self.out.push(((n >> k) & 255) as u8);
+            }
+        } else {
+            self.out.push(m | 27);
+            for k in [56, 48, 40, 32, 24, 16, 8, 0] {
+                self.out.push(((n >> k) & 255) as u8);
+            }
+        }
+    }
+
+    fn int(mut ref self, h: mut ref Heap, n: ref Big) -> Result[(), Exc] {
+        let two64 = big_two64();
+        if big_cmp(n, two64) >= 0 or big_cmp(n, big_neg(two64)) < 0 {
+            let mut tag: u64 = 2;
+            let mut m = n.clone();
+            if n.neg {
+                tag = 3;
+                m = big_sub(big_neg(n), big_from_i64(1));
+            }
+            return self.semantic(mut h, tag, V.Bytes(big_to_bytes(m)));
+        }
+        if n.neg {
+            let m = big_sub(big_neg(n), big_from_i64(1));
+            self.length(1, big_to_u64(m).unwrap_or(0));
+        } else {
+            self.length(0, big_to_u64(n).unwrap_or(0));
+        }
+        Ok(())
+    }
+
+    // _stringref: true when a reference was written
+    fn stringref(mut ref self, h: mut ref Heap, v: ref V) -> Result[bool, Exc] {
+        for i in 0..self.refs.len() {
+            if same_string(self.refs[i], v) {
+                let index = self.ref_index[i];
+                self.semantic(mut h, 25, V.Int(big_from_i64(index)))?;
+                return Ok(true);
+            }
+        }
+        let length = str_len(v);
+        let next = self.refs.len();
+        let referenced = if next < 24 {
+            length >= 3
+        } else if next < 256 {
+            length >= 4
+        } else if next < 65536 {
+            length >= 5
+        } else if next < 4294967296 {
+            length >= 7
+        } else {
+            length >= 11
+        };
+        if referenced {
+            self.refs.push(v.clone());
+            self.ref_index.push(next);
+        }
+        Ok(false)
+    }
+
+    fn semantic(mut ref self, h: mut ref Heap, tag: u64, value: ref V) -> Result[(), Exc] {
+        let old_sr = self.string_referencing;
+        let old_refs = self.refs.clone();
+        let old_index = self.ref_index.clone();
+        if tag == 256 {
+            self.string_referencing = true;
+            self.refs = Vec.new();
+            self.ref_index = Vec.new();
+        }
+        self.length(6, tag);
+        let r = self.enc(mut h, value);
+        self.string_referencing = old_sr;
+        if tag == 256 {
+            self.refs = old_refs;
+            self.ref_index = old_index;
+        }
+        r
+    }
+
+    // a fresh list (cbor2 builds one, so it has an id of its own)
+    fn fresh(mut ref self, h: mut ref Heap, kind: i64, items: own Vec[V]) -> V {
+        V.Obj(alloc(mut h, kind, items, 0, -1))
+    }
+
+    fn unshared_semantic(mut ref self, h: mut ref Heap, tag: u64, value: ref V) -> Result[(), Exc] {
+        let old = self.value_sharing;
+        self.value_sharing = false;
+        let r = self.semantic(mut h, tag, value);
+        self.value_sharing = old;
+        r
+    }
+
+    fn container(mut ref self, h: mut ref Heap, id: i64) -> Result[(), Exc] {
+        if self.string_namespacing {
+            self.length(6, 256);
+        }
+        let old = self.string_namespacing;
+        self.string_namespacing = false;
+        let r = self.shared_body(mut h, id);
+        self.string_namespacing = old;
+        r
+    }
+
+    fn shared_body(mut ref self, h: mut ref Heap, id: i64) -> Result[(), Exc] {
+        for i in 0..self.shared.len() {
+            if self.shared[i] == id {
+                if self.value_sharing {
+                    let index = self.shared_index[i];
+                    self.length(6, 0x1D);
+                    return self.int(mut h, big_from_i64(index));
+                }
+                return Err(eerr("cyclic data structure detected but value sharing is disabled".to_string()));
+            }
+        }
+        if self.value_sharing {
+            self.shared_index.push(self.shared.len());
+            self.shared.push(id);
+            self.length(6, 0x1C);
+            return self.body(mut h, id);
+        }
+        self.shared.push(id);
+        self.shared_index.push(-1);
+        let r = self.body(mut h, id);
+        let at = self.shared.len() - 1;
+        let mut i = 0;
+        while i < self.shared.len() {
+            if self.shared[i] == id {
+                self.shared.remove(i);
+                self.shared_index.remove(i);
+                break;
+            }
+            i += 1;
+        }
+        let _ = at;
+        r
+    }
+
+    fn sort_key(mut ref self, h: mut ref Heap, v: ref V) -> Result[Vec[u8], Exc] {
+        let old_sr = self.string_referencing;
+        self.string_referencing = false;
+        let saved = self.out.clone();
+        self.out = Vec.new();
+        let r = self.enc(mut h, v);
+        let bytes = self.out.clone();
+        self.out = saved;
+        self.string_referencing = old_sr;
+        r?;
+        Ok(bytes)
+    }
+
+    fn body(mut ref self, h: mut ref Heap, id: i64) -> Result[(), Exc] {
+        let kind = h.objs[id].kind;
+        if kind == LIST or kind == TUPLE {
+            let items = h.objs[id].items.clone();
+            self.length(4, items.len() as u64);
+            for x in items.iter() {
+                self.enc(mut h, x)?;
+            }
+            return Ok(());
+        }
+        let items = dict_items(h, id);
+        self.length(5, (items.len() / 2) as u64);
+        if not self.o.canonical {
+            let mut i = 0;
+            while i < items.len() {
+                self.enc(mut h, items[i])?;
+                self.enc(mut h, items[i + 1])?;
+                i += 2;
+            }
+            return Ok(());
+        }
+        let mut keyed: Vec[(Vec[u8], i64)] = Vec.new();
+        let mut i = 0;
+        while i < items.len() {
+            keyed.push((self.sort_key(mut h, items[i])?, i));
+            i += 2;
+        }
+        sort_keyed(mut keyed);
+        for k in keyed.iter() {
+            if self.string_referencing {
+                self.enc(mut h, items[k.1])?;
+            } else {
+                self.write(k.0);
+            }
+            self.enc(mut h, items[k.1 + 1])?;
+        }
+        Ok(())
+    }
+
+    fn float(mut ref self, x: f64) {
+        if is_nan(x) {
+            self.write(vec![0xf9, 0x7e, 0x00]);
+            return;
+        }
+        if is_inf(x) {
+            self.write(if x > 0.0 { vec![0xf9, 0x7c, 0x00] } else { vec![0xf9, 0xfc, 0x00] });
+            return;
+        }
+        let b64 = x.to_bits();
+        let mut enc: Vec[u8] = vec![0xfb];
+        for k in [56, 48, 40, 32, 24, 16, 8, 0] {
+            enc.push(((b64 >> k) & 255) as u8);
+        }
+        if self.o.canonical {
+            let b32 = x.to_bits32();
+            let back = b32.bits_as_f32() as f64;
+            if not is_inf(back) and back == x {
+                enc = vec![0xfa];
+                for k in [24, 16, 8, 0] {
+                    enc.push(((b32 >> k) & 255) as u8);
+                }
+                if let Some(b16) = pack_half(x) {
+                    if unpack_half(b16) == x {
+                        enc = vec![0xf9, ((b16 >> 8) & 255) as u8, (b16 & 255) as u8];
+                    }
+                }
+            }
+        }
+        self.write(enc);
+    }
+
+    fn datetime(mut ref self, h: mut ref Heap, t: ref DateTime) -> Result[(), Exc] {
+        if self.o.timestamps {
+            let secs = dt_utc_secs(t);
+            let ts = if t.us == 0 {
+                V.Int(big_from_i64(secs))
+            } else {
+                V.Float(secs as f64 + t.us as f64 / 1000000.0)
+            };
+            return self.semantic(mut h, 1, ts);
+        }
+        let s = dt_iso(t, "T").replace("+00:00", "Z");
+        self.semantic(mut h, 0, V.Str(s))
+    }
+
+    fn enc(mut ref self, h: mut ref Heap, v: ref V) -> Result[(), Exc] {
+        match v {
+            V.Bytes(b) => {
+                if self.string_referencing and self.stringref(mut h, v)? {
+                    return Ok(());
+                }
+                self.length(2, b.len() as u64);
+                self.write(b);
+                Ok(())
+            }
+            V.Str(s) => {
+                if self.string_referencing and self.stringref(mut h, v)? {
+                    return Ok(());
+                }
+                let b = s.bytes().to_vec();
+                self.length(3, b.len() as u64);
+                self.write(b);
+                Ok(())
+            }
+            V.Int(n) => self.int(mut h, n),
+            V.Float(x) => {
+                self.float(*x);
+                Ok(())
+            }
+            V.Dec(d) => {
+                if d.special == 1 {
+                    self.write(vec![0xf9, 0x7e, 0x00]);
+                    return Ok(());
+                }
+                if d.special == 2 {
+                    self.write(if d.neg { vec![0xf9, 0xfc, 0x00] } else { vec![0xf9, 0x7c, 0x00] });
+                    return Ok(());
+                }
+                let mut sig = d.coef.clone();
+                if d.neg {
+                    sig = big_neg(sig);
+                }
+                let pair = self.fresh(mut h, LIST, vec![V.Int(big_from_i64(d.exp)), V.Int(sig)]);
+                self.unshared_semantic(mut h, 4, pair)
+            }
+            V.Bool(b) => {
+                self.out.push(if *b { 0xf5 } else { 0xf4 });
+                Ok(())
+            }
+            V.None => {
+                self.out.push(0xf6);
+                Ok(())
+            }
+            V.Undef => {
+                self.out.push(0xf7);
+                Ok(())
+            }
+            V.Brk => Err(exc("CBOREncodeTypeError", "cannot serialize type BreakMarkerType".to_string())),
+            V.Dt(t) => self.datetime(mut h, t),
+            V.Date(o) => {
+                if self.o.date_as_datetime {
+                    let (y, m, d) = ord_to_ymd(*o);
+                    return self.datetime(mut h, DateTime { y: y, mo: m, d: d, h: 0, mi: 0, s: 0, us: 0, off: 0 });
+                }
+                if self.o.timestamps {
+                    return self.semantic(mut h, 100, V.Int(big_from_i64(*o - 719163)));
+                }
+                self.semantic(mut h, 1004, V.Str(date_iso(*o)))
+            }
+            V.Regex(s) => self.semantic(mut h, 35, V.Str(s.clone())),
+            V.Frac(n, d) => {
+                let pair = self.fresh(mut h, LIST, vec![V.Int(n.clone()), V.Int(d.clone())]);
+                self.unshared_semantic(mut h, 30, pair)
+            }
+            V.Uuid(b) => self.semantic(mut h, 37, V.Bytes(b.clone())),
+            V.Ip(b) => self.semantic(mut h, 260, V.Bytes(b.clone())),
+            V.Net(b, p) => {
+                let m = self.fresh(mut h, DICT, vec![V.Bytes(b.clone()), V.Int(big_from_i64(*p))]);
+                self.semantic(mut h, 261, m)
+            }
+            V.Simple(n) => {
+                if *n < 24 {
+                    self.out.push((0xE0 | *n) as u8);
+                } else {
+                    self.out.push(0xF8);
+                    self.out.push(*n as u8);
+                }
+                Ok(())
+            }
+            V.Obj(i) => {
+                let kind = h.objs[*i].kind;
+                if kind == TAG {
+                    let tag = h.objs[*i].tag;
+                    let value = h.objs[*i].items[0].clone();
+                    return self.semantic(mut h, tag, value);
+                }
+                if kind == SET or kind == FSET {
+                    let items = h.objs[*i].items.clone();
+                    if not self.o.canonical {
+                        let t = self.fresh(mut h, TUPLE, items);
+                        return self.semantic(mut h, 258, t);
+                    }
+                    let mut keyed: Vec[(Vec[u8], i64)] = Vec.new();
+                    for k in 0..items.len() {
+                        keyed.push((self.sort_key(mut h, items[k])?, k));
+                    }
+                    sort_keyed(mut keyed);
+                    let mut sorted: Vec[V] = Vec.new();
+                    for k in keyed.iter() {
+                        sorted.push(items[k.1].clone());
+                    }
+                    let l = self.fresh(mut h, LIST, sorted);
+                    return self.semantic(mut h, 258, l);
+                }
+                self.container(mut h, *i)
+            }
+        }
+    }
+}
+
+fn key_less(a: ref (Vec[u8], i64), b: ref (Vec[u8], i64)) -> bool {
+    if a.0.len() != b.0.len() {
+        return a.0.len() < b.0.len();
+    }
+    for i in 0..a.0.len() {
+        if a.0[i] != b.0[i] {
+            return a.0[i] < b.0[i];
+        }
+    }
+    false
+}
+
+// sorted() by (length, bytes), stable
+fn sort_keyed(v: mut ref Vec[(Vec[u8], i64)]) {
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and key_less(v[j], v[j - 1]) {
+            let t = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = t;
+            j -= 1;
+        }
+    }
+}
+
+fn dumps(h: mut ref Heap, v: ref V, o: ref Opts) -> Result[Vec[u8], Exc] {
+    let mut e = new_encoder(o);
+    e.enc(mut h, v)?;
+    Ok(e.out)
+}
+
+// ------------------------------------------------------------ the tool
+
+// What key_to_str hands json.dump: new lists and dicts, with the values
+// it leaves alone as Raw.
+#[derive(Clone)]
+enum J {
+    Raw(V),
+    List(Vec[J]),
+    Dict(Vec[(V, J)]),
+}
+
+fn obj_id(v: ref V) -> i64 {
+    match v {
+        V.Obj(i) => *i,
+        _ => -1,
+    }
+}
+
+fn path_has(path: ref Vec[i64], id: i64) -> bool {
+    for x in path.iter() {
+        if *x == id {
+            return true;
+        }
+    }
+    false
+}
+
+fn self_ref() -> Exc {
+    exc("ValueError", "Cannot convert self-referential data to JSON".to_string())
+}
+
+// isinstance(v, (tuple, list, set)): the items, if so
+fn seq_items(h: ref Heap, v: ref V) -> Option[Vec[V]] {
+    match v {
+        V.Simple(n) => Some(vec![V.Int(big_from_i64(*n))]),
+        V.Obj(i) => {
+            let k = h.objs[*i].kind;
+            if k == LIST or k == TUPLE or k == SET {
+                Some(h.objs[*i].items.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// cbor2.tool.key_to_str
+fn key_to_str(h: ref Heap, d: ref V, ids: ref Vec[i64]) -> Result[J, Exc] {
+    let mut path = ids.clone();
+    if kind_of(h, d) != DICT {
+        if let V.Simple(n) = d {
+            return Ok(J.Raw(V.Str(f"cbor_simple:{n}")));
+        }
+        if let Some(items) = seq_items(h, d) {
+            let id = obj_id(d);
+            if path_has(path, id) {
+                return Err(self_ref());
+            }
+            path.push(id);
+            let mut out: Vec[J] = Vec.new();
+            for x in items.iter() {
+                out.push(key_to_str(h, x, path)?);
+            }
+            return Ok(J.List(out));
+        }
+        return Ok(J.Raw(d.clone()));
+    }
+    let id = obj_id(d);
+    if path_has(path, id) {
+        return Err(self_ref());
+    }
+    path.push(id);
+    let items = h.objs[id].items.clone();
+    let mut out: Vec[(V, J)] = Vec.new();
+    let mut i = 0;
+    while i < items.len() {
+        let k = ref items[i];
+        let v = ref items[i + 1];
+        let key = match k {
+            V.Bytes(b) => V.Str(decode_backslash(b)),
+            V.Simple(n) => V.Str(f"cbor_simple:{n}"),
+            V.Obj(_) => {
+                let kk = kind_of(h, k);
+                if kk == FDICT or kk == FSET or kk == TUPLE {
+                    V.Str(py_str(h, k))
+                } else {
+                    k.clone()
+                }
+            }
+            _ => k.clone(),
+        };
+        let value = if kind_of(h, v) == DICT {
+            key_to_str(h, v, path)?
+        } else {
+            match seq_items(h, v) {
+                Some(xs) => {
+                    let mut l: Vec[J] = Vec.new();
+                    for x in xs.iter() {
+                        l.push(key_to_str(h, x, path)?);
+                    }
+                    J.List(l)
+                }
+                None => J.Raw(v.clone()),
+            }
+        };
+        // rval[k] = v: a later equal key replaces the value in place
+        let mut found = false;
+        for p in out.iter_mut() {
+            if py_eq(h, p.0, key) {
+                p.1 = value.clone();
+                found = true;
+            }
+        }
+        if not found {
+            out.push((key, value));
+        }
+        i += 2;
+    }
+    Ok(J.Dict(out))
+}
+
+struct JsonOut {
+    out: String,
+    indent: bool,
+    sort: bool,
+    markers: Vec[i64],
+}
+
+fn float_str(x: f64) -> String {
+    if is_nan(x) {
+        "NaN".to_string()
+    } else if x == 1.0 / 0.0 {
+        "Infinity".to_string()
+    } else if x == -1.0 / 0.0 {
+        "-Infinity".to_string()
+    } else {
+        f"{x}"
+    }
+}
+
+fn type_err(msg: own String) -> Exc {
+    exc("TypeError", msg)
+}
+
+// the `<` sorted() uses on dict items (keys only: keys are never equal)
+fn key_lt(h: ref Heap, a: ref V, b: ref V) -> Result[bool, Exc] {
+    match (a, b) {
+        (V.Str(x), V.Str(y)) => return Ok(x < y),
+        _ => {}
+    }
+    let num_a = match a {
+        V.Int(_) => true,
+        V.Float(_) => true,
+        V.Bool(_) => true,
+        _ => false,
+    };
+    let num_b = match b {
+        V.Int(_) => true,
+        V.Float(_) => true,
+        V.Bool(_) => true,
+        _ => false,
+    };
+    if num_a and num_b {
+        let ia = inf_sign(a);
+        let ib = inf_sign(b);
+        if ia != 0 or ib != 0 {
+            return Ok(ia < ib or (ia == 0 and ib == 1) or (ia == -1 and ib == 0));
+        }
+        return match (num_rat(a), num_rat(b)) {
+            (Some(x), Some(y)) => Ok(rat_cmp(x, y) < 0),
+            _ => Ok(false),
+        };
+    }
+    Err(type_err(f"'<' not supported between instances of '{type_name(h, a)}' and '{type_name(h, b)}'"))
+}
+
+// list.sort's binary insertion sort, which makes the same first
+// comparison CPython does
+fn sort_items(h: ref Heap, items: mut ref Vec[(V, J)]) -> Result[(), Exc] {
+    for i in 1..items.len() {
+        let pivot = items[i].clone();
+        let mut l = 0;
+        let mut r = i;
+        while l < r {
+            let p = l + (r - l) / 2;
+            if key_lt(h, pivot.0, items[p].0)? {
+                r = p;
+            } else {
+                l = p + 1;
+            }
+        }
+        let mut j = i;
+        while j > l {
+            items[j] = items[j - 1].clone();
+            j -= 1;
+        }
+        items[l] = pivot;
+    }
+    Ok(())
+}
+
+fn pad(level: i64) -> String {
+    let mut s = "\n".to_string();
+    for _ in 0..level {
+        s.push_str("    ");
+    }
+    s
+}
+
+impl JsonOut {
+    fn mark(mut ref self, id: i64) -> Result[(), Exc] {
+        if id < 0 {
+            return Ok(());
+        }
+        if path_has(self.markers, id) {
+            return Err(exc("ValueError", "Circular reference detected".to_string()));
+        }
+        self.markers.push(id);
+        Ok(())
+    }
+
+    fn unmark(mut ref self, id: i64) {
+        if id >= 0 {
+            self.markers.pop();
+        }
+    }
+
+    fn list(mut ref self, h: ref Heap, items: ref Vec[J], id: i64, level: i64) -> Result[(), Exc] {
+        if items.len() == 0 {
+            self.out.push_str("[]");
+            return Ok(());
+        }
+        self.mark(id)?;
+        self.out.push_str("[");
+        let mut lv = level;
+        let mut sep = ", ".to_string();
+        if self.indent {
+            lv += 1;
+            sep = f",{pad(lv)}";
+            self.out.push_str(pad(lv));
+        }
+        let mut first = true;
+        for x in items.iter() {
+            if not first {
+                self.out.push_str(sep);
+            }
+            first = false;
+            self.any(h, x, lv)?;
+        }
+        if self.indent {
+            self.out.push_str(pad(lv - 1));
+        }
+        self.out.push_str("]");
+        self.unmark(id);
+        Ok(())
+    }
+
+    fn dict(mut ref self, h: ref Heap, pairs: ref Vec[(V, J)], id: i64, level: i64) -> Result[(), Exc] {
+        if pairs.len() == 0 {
+            self.out.push_str("{}");
+            return Ok(());
+        }
+        self.mark(id)?;
+        self.out.push_str("{");
+        let mut lv = level;
+        let mut sep = ", ".to_string();
+        if self.indent {
+            lv += 1;
+            sep = f",{pad(lv)}";
+        }
+        let mut items = pairs.clone();
+        if self.sort {
+            sort_items(h, mut items)?;
+        }
+        let mut first = true;
+        for p in items.iter() {
+            let key = match p.0 {
+                V.Str(s) => s.clone(),
+                V.Float(x) => float_str(x),
+                V.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+                V.None => "null".to_string(),
+                V.Int(n) => big_str(n),
+                _ => return Err(type_err(f"keys must be str, int, float, bool or None, not {type_name(h, p.0)}")),
+            };
+            if first {
+                first = false;
+                if self.indent {
+                    self.out.push_str(pad(lv));
+                }
+            } else {
+                self.out.push_str(sep);
+            }
+            self.out.push_str(json_str(key));
+            self.out.push_str(": ");
+            self.any(h, p.1, lv)?;
+        }
+        if not first and self.indent {
+            self.out.push_str(pad(lv - 1));
+        }
+        self.out.push_str("}");
+        self.unmark(id);
+        Ok(())
+    }
+
+    fn any(mut ref self, h: ref Heap, j: ref J, level: i64) -> Result[(), Exc] {
+        match j {
+            J.List(items) => self.list(h, items, -1, level),
+            J.Dict(pairs) => self.dict(h, pairs, -1, level),
+            J.Raw(v) => self.raw(h, v, level),
+        }
+    }
+
+    fn raw(mut ref self, h: ref Heap, v: ref V, level: i64) -> Result[(), Exc] {
+        match v {
+            V.Str(s) => {
+                self.out.push_str(json_str(s));
+                return Ok(());
+            }
+            V.None => {
+                self.out.push_str("null");
+                return Ok(());
+            }
+            V.Bool(b) => {
+                self.out.push_str(if *b { "true" } else { "false" });
+                return Ok(());
+            }
+            V.Int(n) => {
+                self.out.push_str(big_str(n));
+                return Ok(());
+            }
+            V.Float(x) => {
+                self.out.push_str(float_str(*x));
+                return Ok(());
+            }
+            _ => {}
+        }
+        let k = kind_of(h, v);
+        if k == LIST or k == TUPLE {
+            let items: Vec[J] = h.objs[obj_id(v)].items.iter().map(|x| J.Raw(x.clone())).collect();
+            return self.list(h, items, obj_id(v), level);
+        }
+        if let V.Simple(n) = v {
+            return self.list(h, vec![J.Raw(V.Int(big_from_i64(*n)))], -1, level);
+        }
+        if k == DICT {
+            let items = h.objs[obj_id(v)].items.clone();
+            let mut pairs: Vec[(V, J)] = Vec.new();
+            let mut i = 0;
+            while i < items.len() {
+                pairs.push((items[i].clone(), J.Raw(items[i + 1].clone())));
+                i += 2;
+            }
+            return self.dict(h, pairs, obj_id(v), level);
+        }
+        // DefaultEncoder.default
+        let id = obj_id(v);
+        self.mark(id)?;
+        let conv: J = match v {
+            V.Bytes(b) => J.Raw(V.Str(decode_backslash(b))),
+            V.Dec(d) => J.Raw(V.Str(dec_str(d))),
+            V.Undef => J.Raw(V.Str("cbor:undef".to_string())),
+            V.Dt(t) => J.Raw(V.Str(dt_iso(t, "T"))),
+            V.Frac(n, d) => J.Raw(V.Str(frac_str(n, d))),
+            V.Uuid(b) => J.Raw(V.Str(f"urn:uuid:{uuid_str(b)}")),
+            V.Regex(s) => J.Raw(V.Str(s.clone())),
+            V.Ip(b) => J.Raw(V.Str(ip_str(b))),
+            V.Net(b, p) => J.Raw(V.Str(net_str(b, *p))),
+            V.Obj(i) => {
+                let o = ref h.objs[*i];
+                if o.kind == FDICT {
+                    J.Raw(V.Str(rep(h, V.Obj(o.inner), false, Vec.new())))
+                } else if o.kind == TAG {
+                    J.Dict(vec![(V.Str(f"CBORTag:{o.tag}"), J.Raw(o.items[0].clone()))])
+                } else if o.kind == SET {
+                    J.List(o.items.iter().map(|x| J.Raw(x.clone())).collect())
+                } else {
+                    return Err(type_err(f"Object of type {type_name(h, v)} is not JSON serializable"));
+                }
+            }
+            _ => return Err(type_err(f"Object of type {type_name(h, v)} is not JSON serializable")),
+        };
+        self.any(h, conv, level)?;
+        self.unmark(id);
+        Ok(())
+    }
+}
+
+const BASE64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// base64.b64decode, which skips characters outside the alphabet
+fn b64decode(s: ref Vec[u8]) -> Vec[u8] {
+    let alpha = BASE64_ALPHABET.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc: i64 = 0;
+    let mut bits = 0;
+    for c in s.iter() {
+        if *c == b'=' {
+            break;
+        }
+        let mut v = -1;
+        for k in 0..alpha.len() {
+            if alpha[k] == *c {
+                v = k;
+            }
+        }
+        if v < 0 {
+            continue;
+        }
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 255) as u8);
+        }
+    }
+    out
+}
+
+// python -m cbor2.tool <args>, run in data/files: what it writes to
+// stdout, then how it ended when it did not end well
+fn run_tool(args: ref Vec[String]) -> String {
+    let mut sort = false;
+    let mut pretty = false;
+    let mut sequence = false;
+    let mut decode = false;
+    let mut ignore: Vec[u64] = Vec.new();
+    let mut files: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "-k" {
+            sort = true;
+        } else if a == "-p" {
+            pretty = true;
+        } else if a == "-s" {
+            sequence = true;
+        } else if a == "-d" {
+            decode = true;
+        } else if a == "-i" {
+            i += 1;
+            for part in args[i].split(",") {
+                let pb = part.bytes().to_vec();
+                if pb.len() > 0 and pb[0] >= b'0' and pb[0] <= b'9' {
+                    let n = ascii_digits(pb, 0, pb.len()).unwrap_or(0) as u64;
+                    if not ignore.contains(n) {
+                        ignore.push(n);
+                    }
+                }
+            }
+        } else {
+            files.push(a);
+        }
+        i += 1;
+    }
+    let mut w = JsonOut { out: String.new(), indent: pretty, sort: sort, markers: Vec.new() };
+    for name in files.iter() {
+        let mut raw = match fs.read_bytes(f"data/files/{name}") {
+            Ok(b) => b,
+            Err(e) => return f"cannot read {name}: {e}\n",
+        };
+        if decode {
+            raw = b64decode(raw);
+        }
+        let mut d = new_decoder(raw);
+        d.hook = true;
+        d.ignore = ignore.clone();
+        loop {
+            let obj = match d.decode() {
+                Ok(v) => v,
+                Err(e) => {
+                    if sequence and is_eof(e) {
+                        break;
+                    }
+                    return finish(w.out, e);
+                }
+            };
+            let tree = match key_to_str(d.h, obj, Vec.new()) {
+                Ok(t) => t,
+                Err(e) => return finish(w.out, e),
+            };
+            w.markers = Vec.new();
+            if let Err(e) = w.any(d.h, tree, 0) {
+                return finish(w.out, e);
+            }
+            w.out.push_str("\n");
+            if not sequence {
+                break;
+            }
+        }
+    }
+    w.out
+}
+
+fn finish(out: own String, e: ref Exc) -> String {
+    let mut s = out;
+    if is_value_error(e) or is_eof(e) {
+        s.push_str(f"exit 1: {e.msg}\n");
+    } else {
+        s.push_str(f"{exc_text(e)}\n");
+    }
+    s
+}
+
+// ------------------------------------------------------------ the run
+
+fn has_set(h: ref Heap, v: ref V, seen: ref Vec[i64]) -> bool {
+    let id = match v {
+        V.Obj(i) => *i,
+        _ => return false,
+    };
+    if path_has(seen, id) {
+        return false;
+    }
+    let mut inner = seen.clone();
+    inner.push(id);
+    let o = ref h.objs[id];
+    if o.kind == SET or o.kind == FSET {
+        return true;
+    }
+    let items = if o.kind == FDICT { h.objs[o.inner].items.clone() } else { o.items.clone() };
+    for x in items.iter() {
+        if has_set(h, x, inner) {
+            return true;
+        }
+    }
+    false
+}
+
+fn encode_text(h: mut ref Heap, v: ref V, o: ref Opts) -> String {
+    match dumps(mut h, v, o) {
+        Ok(b) => hex_of(b),
+        Err(e) => exc_text(e),
+    }
+}
+
+fn options() -> Vec[(String, Opts)] {
+    let mut out: Vec[(String, Opts)] = Vec.new();
+    let mut o = plain_opts();
+    o.canonical = true;
+    out.push(("canonical".to_string(), o));
+    o = plain_opts();
+    o.value_sharing = true;
+    out.push(("value_sharing".to_string(), o));
+    o = plain_opts();
+    o.string_referencing = true;
+    out.push(("string_referencing".to_string(), o));
+    o = plain_opts();
+    o.timestamps = true;
+    out.push(("timestamps".to_string(), o));
+    o = plain_opts();
+    o.date_as_datetime = true;
+    out.push(("dates_as_datetimes".to_string(), o));
+    out
+}
+
+// oracle.py's report(): the value, how each option encodes it, and
+// whether that reads back the same
+fn report(raw: ref Vec[u8]) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    let (v, heap) = match loads(raw) {
+        Ok(p) => p,
+        Err(e) => {
+            lines.push(exc_text(e));
+            return lines;
+        }
+    };
+    let mut h = heap;
+    let shown = show(h, v);
+    lines.push(f"value: {shown}");
+    let set_inside = has_set(h, v, Vec.new());
+    let mut base = String.new();
+    if set_inside {
+        lines.push("dumps: (not shown: the value holds a set)".to_string());
+    } else {
+        base = encode_text(mut h, v, plain_opts());
+        lines.push(f"dumps: {base}");
+    }
+    for (name, o) in options() {
+        if name != "canonical" and set_inside {
+            continue;
+        }
+        let got = encode_text(mut h, v, o);
+        lines.push(if not set_inside and got == base { f"{name}: same" } else { f"{name}: {got}" });
+    }
+    let again = if set_inside {
+        let mut o = plain_opts();
+        o.canonical = true;
+        encode_text(mut h, v, o)
+    } else {
+        base.clone()
+    };
+    if again.starts_with("error:") {
+        return lines;
+    }
+    match loads(unhex(again)) {
+        Ok((w, h2)) => {
+            let s = show(h2, w);
+            lines.push(if s == shown { "read back: same".to_string() } else { f"read back: differs: {s}" });
+        }
+        Err(e) => lines.push(f"read back: {exc_text(e)}"),
+    }
+    lines
+}
+
+fn read_lines(path: Str) -> Vec[String] {
+    let text = fs.read_to_string(path.to_string()).unwrap_or(String.new());
+    let mut out: Vec[String] = Vec.new();
+    for l in text.split("\n") {
+        if not l.is_empty() {
+            out.push(l.to_string());
+        }
+    }
+    out
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/files/broken".to_string()) {
+        return Err(f"cannot create data/files/broken: {e}");
+    }
+    for file in data_files() {
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut n = 0;
+    for hx in read_lines("data/vectors.txt") {
+        n += 1;
+        let cut = if hx.len() <= 64 { hx.clone() } else { f"{hx.substring(0, 64)}..." };
+        println(f"== vectors.txt:{n} {cut}");
+        println(report(unhex(hx)).join("\n"));
+    }
+    for rel in read_lines("data/files.txt") {
+        let raw = fs.read_bytes(f"data/files/{rel}").unwrap_or(Vec.new());
+        println(f"== {rel} ({raw.len()} bytes)");
+        println(report(raw).join("\n"));
+    }
+    n = 0;
+    for cmd in read_lines("data/jobs.txt") {
+        n += 1;
+        println(f"== jobs.txt:{n} {cmd}");
+        let mut args: Vec[String] = Vec.new();
+        for a in cmd.split(" ") {
+            args.push(a.to_string());
+        }
+        args.remove(0);
+        let out = run_tool(args);
+        if out.len() > 0 {
+            println(out.substring(0, out.len() - 1));
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("broken/bad_bignum.cbor\n");
+    t.push_str("broken/bad_date.cbor\n");
+    t.push_str("broken/bad_utf8.cbor\n");
+    t.push_str("broken/bad_uuid.cbor\n");
+    t.push_str("broken/empty.cbor\n");
+    t.push_str("broken/empty_bignum.cbor\n");
+    t.push_str("broken/leap_second.cbor\n");
+    t.push_str("broken/reserved.cbor\n");
+    t.push_str("broken/simple24.cbor\n");
+    t.push_str("broken/stringref_outside.cbor\n");
+    t.push_str("broken/truncated.cbor\n");
+    t.push_str("broken/unhashable.cbor\n");
+    t.push_str("cose_key.cbor\n");
+    t.push_str("cose_keyset.cbor\n");
+    t.push_str("cwt.cbor\n");
+    t.push_str("cycle.cbor\n");
+    t.push_str("embedded.cbor\n");
+    t.push_str("inventory.cbor\n");
+    t.push_str("inventory_timestamps.cbor\n");
+    t.push_str("keys.cbor\n");
+    t.push_str("numbers.cbor\n");
+    t.push_str("senml.cbor\n");
+    t.push_str("shared.cbor\n");
+    t.push_str("stringref.cbor\n");
+    t.push_str("telemetry.cborseq\n");
+    t.push_str("webauthn_assertion_authdata.cbor\n");
+    t.push_str("webauthn_none.cbor\n");
+    t.push_str("webauthn_packed.cbor\n");
+    v.push(DataFile { path: "files.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("c263313233");
+    v.push(DataFile { path: "files/broken/bad_bignum.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d903ec6a323032362d30322d3330");
+    v.push(DataFile { path: "files/broken/bad_date.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a1636b657963e228a1");
+    v.push(DataFile { path: "files/broken/bad_utf8.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d8254573686f7274");
+    v.push(DataFile { path: "files/broken/bad_uuid.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "files/broken/empty.cbor".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("c240");
+    v.push(DataFile { path: "files/broken/empty_bignum.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("c074323032362d31302d30395432333a35393a36305a");
+    v.push(DataFile { path: "files/broken/leap_second.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("82011c");
+    v.push(DataFile { path: "files/broken/reserved.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("f818");
+    v.push(DataFile { path: "files/broken/simple24.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("83d81900d81901d81902");
+    v.push(DataFile { path: "files/broken/stringref_outside.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a363666d74646e6f6e656761747453746d74a068617574684461746158a40c6ca0839c3a5683557833f618a2556665df");
+    t.push_str("2a088964787d53850b4ad4d3bedc450000000000000000000000000000000000000000002085d86bac9896f7a619122d");
+    t.push_str("df400bf5");
+    v.push(DataFile { path: "files/broken/truncated.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d81c81a1d81d0001");
+    v.push(DataFile { path: "files/broken/unhashable.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a5010203262001215820c2e6276f7f6937a667657cdf8ed633bcb4c4f2025361981868e5f53d012a388c2258208989a5");
+    t.push_str("7520456d8461815412eed4b530450bb7e399d48eb06e2f77e9f79571ba");
+    v.push(DataFile { path: "files/cose_key.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("83a5010203262001215820814010b0cb044c512b81ecdf52c548496185a3cb12dd3a0ca8c510f69753775922582048e3");
+    t.push_str("8eb66de0822f259dc412b3c3cabdf2cc67ac585031a4ae0f93a38dbdb187a40101200621582048e38eb66de0822f259d");
+    t.push_str("c412b3c3cabdf2cc67ac585031a4ae0f93a38dbdb18702423131a3010420500e860cbd0ebdb70d1fba9c4513c14c3202");
+    t.push_str("4a6f75722d736563726574");
+    v.push(DataFile { path: "files/cose_keyset.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d83dd28443a10126a104524173796d6d657472696345434453413235365850a70175636f61703a2f2f61732e6578616d");
+    t.push_str("706c652e636f6d02656572696b77037818636f61703a2f2f6c696768742e6578616d706c652e636f6d041a5612aeb005");
+    t.push_str("1a5610d9f0061a5610d9f007420b715840409afaf118a062fbf09c5cdf17b35cd60d475394d159dc00e8a52bb02d7bb6");
+    t.push_str("265c5fa1cc5c60eab1503959015c2925463792666175543f4692e7c77bbe3abc4e");
+    v.push(DataFile { path: "files/cwt.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d81c82d81d00d81ca16473656c66d81d00");
+    v.push(DataFile { path: "files/cycle.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d9d9f7a2677061796c6f6164d81852a262696407617682fb3ff8000000000000f6646e6f7465d903e8646b657074");
+    v.push(DataFile { path: "files/embedded.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("s2VieXRlc4NARAECAwRCwsJoZGVjaW1hbHOFxIIiGTcrxIIiOTcq+X4A+XwA+fwAaGRpY3Rfa2V5\n");
+    t.push_str("gaGhAgFgZmZsb2F0c4b7P/GZmZmZmZr7fjfkPIgAdZz7wBBmZmZmZmb5fAD5fgD5/ABoZnJhY3Rp\n");
+    t.push_str("b26B2B6CAgVoaW50ZWdlcnORAAEKFxgYGGQZA+gaAA9CQBsAAADo1KUQABv//////////8JJAQAA\n");
+    t.push_str("AAAAAAAAO///////////w0kBAAAAAAAAAAAgKThjOQPnZmlwYWRkcoLZAQREwAoKAdkBBFAgAQ24\n");
+    t.push_str("haMAAAAAii4DcHM0ZWlwbmV0gtkBBaFEwKgAABgY2QEFoVAgAQ24haMAAAAAii4AAAAAGGBlcmVn\n");
+    t.push_str("ZXiB2CNtaGVsbG8gKHdvcmxkKWdzaW1wbGVzhODi8/ggaHNwZWNpYWxzhPT19vdnc3RyaW5nc4Zg\n");
+    t.push_str("YWFkSUVURmIiXGLDvGPmsLRmdGFnZ2VkgdkXcGVIZWxsb2p0aW1lc3RhbXBzh8B0MjAxMy0wMy0y\n");
+    t.push_str("MVQyMDowNDowMFrAeBsyMDEzLTAzLTIxVDIwOjA0OjAwLjM4MDg0MVrAeBkyMDEzLTAzLTIxVDIy\n");
+    t.push_str("OjA0OjAwKzAyOjAwwHQyMDEzLTAzLTIxVDIwOjA0OjAwWsB0MjAxMy0wMy0yMVQyMDowNDowMFrA\n");
+    t.push_str("eBsyMDEzLTAzLTIxVDIwOjA0OjAwLjEyMzQ1NlrAdDIwMTMtMDMtMjFUMjA6MDQ6MDBaaXR1cGxl\n");
+    t.push_str("X2tleYGhggIBYGR1dWlkgdglUF6v+si1HkgFgSd/3MeEL69qc2ltcGxlX2tleYGh+GP2anRhZ19h\n");
+    t.push_str("c19rZXmBodkXd2xub3RpbXBvcnRhbnT2aGVtYmVkZGVkgdgYSYRhYWFiYWNhZA==\n");
+    v.push(DataFile { path: "files/examples.cbor.b64".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("b166646576696365d825506ba7b8109dad11d180b400c04fd430c86461646472d9010444c0000211656164647236d901");
+    t.push_str("045020010db8000000000001000000000001666d6170706564d901045000000000000000000000ffffc6336407636d61");
+    t.push_str("63d90104460023dfa1b2c3667375626e6574d90105a144c00002001818677375626e657436d90105a15020010db81200");
+    t.push_str("000000000000000000001828647365656ec07820323032362d31302d30335430383a31353a33302e3235303030302b30");
+    t.push_str("353a333069696e7374616c6c6564d903ec6a323032342d30322d3239657072696365c482211a0001fbcb65726174696f");
+    t.push_str("d81e8203086673657269616cc2494000000000000030396464656274c34901ffffffffffffffff65706f727473d90102");
+    t.push_str("8318501901bb16676e6f7468696e67f665756e736574f764666c6167f863");
+    v.push(DataFile { path: "files/inventory.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a3647365656ec1fb41dab01b1290000069696e7374616c6c6564d864194d4664626f6f74c11a6abda280");
+    v.push(DataFile { path: "files/inventory_timestamps.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a501616101fb3ff0000000000000616bf561638201026174a101026166");
+    v.push(DataFile { path: "files/keys.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("90c5822003c5822207c5820403c5823827193039c582186401c48221196ab3c4820324c482381dc24b01000000000000");
+    t.push_str("00000000d81e820a23d81e822509c1fb41da39de00200000c1fbbff4000000000000d86420d903ec6a323032362d5734");
+    t.push_str("312d35d903ec683230323631303039c07821323032362d31302d30395431323a30303a30302e313233343536372d3037");
+    t.push_str("3a3030");
+    v.push(DataFile { path: "files/numbers.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("87a70067766f6c7461676501615602f9000020fb405e06666666666621781c75726e3a6465763a6f773a313065323037");
+    t.push_str("336130313038303036333a22fb41d303a15b001062236141a3006763757272656e7402fb3ff33333333333330624a300");
+    t.push_str("6763757272656e7402fb3ff4cccccccccccd0623a3006763757272656e7402fb3ff66666666666660622a30067637572");
+    t.push_str("72656e7402f93e000621a20064646f6f7204f5a200656c6162656c036b4c6976696e6720726f6f6d");
+    v.push(DataFile { path: "files/senml.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d81c83d81ca2646e616d656670756d702d376474616773d81c8564626c756565677265656e64626c756565677265656e");
+    t.push_str("65677265656ed81d01d81ca2646e616d656670756d702d386474616773d81d02");
+    v.push(DataFile { path: "files/shared.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d9010083a2646e616d656670756d702d37667374617475736772756e6e696e67a2d819006670756d702d38d81902d819");
+    t.push_str("03a2d819006776616c76652d32d819026773746f70706564");
+    v.push(DataFile { path: "files/stringref.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a4637365710061741a68e778006474656d70fb4035800000000000626f6bf5a4637365710161741a68e7783c6474656d");
+    t.push_str("70fb4035c00000000000626f6bf5a4637365710261741a68e778786474656d70fb4036000000000000626f6bf4a46373");
+    t.push_str("65710361741a68e778b46474656d70fb4036400000000000626f6bf5bf637365710461741a68e778f06474656d709ff9");
+    t.push_str("3c00f94000ff626f6bf5ff");
+    v.push(DataFile { path: "files/telemetry.cborseq".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("5825bfabc37432958b063360d3ad6461c9c4735ae7f8edd46592a5e0f01452b2e4b50500000008");
+    v.push(DataFile { path: "files/webauthn_assertion_authdata.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a363666d74646e6f6e656761747453746d74a068617574684461746158a40c6ca0839c3a5683557833f618a2556665df");
+    t.push_str("2a088964787d53850b4ad4d3bedc450000000000000000000000000000000000000000002085d86bac9896f7a619122d");
+    t.push_str("df400bf515ae80e1a715eeb13ba746a21240b07b26a5010203262001215820f14adbda019d6db7efd91546e3ff8444a7");
+    t.push_str("6e43ce01117066d44936c7f5990d68225820b8ed59e0a279a295e9f5ed7944fd06b938b508ae488466ffda93b873eb04");
+    t.push_str("4797");
+    v.push(DataFile { path: "files/webauthn_none.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a363666d74667061636b65646761747453746d74a363616c67266373696758473045022100443254ede5320d51dd2e9d");
+    t.push_str("df05f90aa25b429270d46a532fe726becbd6d9baf302200ad5d2f4860e422ed74a751265f88c16ec8856511bdc4ac8ee");
+    t.push_str("6f4177cb43f321637835638158343082013a3081e1a003020102d17750fa28eb770cd2664d46c6f60e8b7dcf1b32614f");
+    t.push_str("4160f4b9c323c0ae2d4f036ad81916c43c7568617574684461746158a4bfabc37432958b063360d3ad6461c9c4735ae7");
+    t.push_str("f8edd46592a5e0f01452b2e4b54500000007000000000000000000000000000000000020038c3e2e32cd22fba2490ddf");
+    t.push_str("c9e81e2f0703423994e5f6232706d9846b01f9bfa50102032620012158206fffae5b9bd4970c7810f4456cdbad5e00f1");
+    t.push_str("a45f8009b44e54096c3921eb8b0222582036a12b623cb0cdea722ccc79cdda2fd391376940c67cabe75b52efe51755c5");
+    t.push_str("30");
+    v.push(DataFile { path: "files/webauthn_packed.cbor".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("tool webauthn_none.cbor\n");
+    t.push_str("tool -p webauthn_packed.cbor\n");
+    t.push_str("tool cose_key.cbor cose_keyset.cbor\n");
+    t.push_str("tool -k cose_key.cbor\n");
+    t.push_str("tool cwt.cbor\n");
+    t.push_str("tool -i 61,18 cwt.cbor\n");
+    t.push_str("tool -p senml.cbor\n");
+    t.push_str("tool -k senml.cbor\n");
+    t.push_str("tool -s telemetry.cborseq\n");
+    t.push_str("tool telemetry.cborseq\n");
+    t.push_str("tool -p -k inventory_timestamps.cbor\n");
+    t.push_str("tool embedded.cbor\n");
+    t.push_str("tool -i 55799 -p embedded.cbor\n");
+    t.push_str("tool shared.cbor\n");
+    t.push_str("tool stringref.cbor\n");
+    t.push_str("tool cycle.cbor\n");
+    t.push_str("tool keys.cbor\n");
+    t.push_str("tool -k keys.cbor\n");
+    t.push_str("tool -d examples.cbor.b64\n");
+    t.push_str("tool -d -k -p examples.cbor.b64\n");
+    t.push_str("tool broken/truncated.cbor\n");
+    t.push_str("tool -s broken/truncated.cbor\n");
+    t.push_str("tool broken/bad_utf8.cbor\n");
+    t.push_str("tool broken/empty.cbor\n");
+    t.push_str("tool -s broken/empty.cbor\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("d917706548656c6c6f\n");
+    t.push_str("00\n");
+    t.push_str("01\n");
+    t.push_str("0a\n");
+    t.push_str("17\n");
+    t.push_str("1818\n");
+    t.push_str("1819\n");
+    t.push_str("1864\n");
+    t.push_str("1903e8\n");
+    t.push_str("1a000f4240\n");
+    t.push_str("1b000000e8d4a51000\n");
+    t.push_str("1bffffffffffffffff\n");
+    t.push_str("c249010000000000000000\n");
+    t.push_str("3bffffffffffffffff\n");
+    t.push_str("c349010000000000000000\n");
+    t.push_str("20\n");
+    t.push_str("29\n");
+    t.push_str("3863\n");
+    t.push_str("3903e7\n");
+    t.push_str("f90000\n");
+    t.push_str("f98000\n");
+    t.push_str("f93c00\n");
+    t.push_str("fb3ff199999999999a\n");
+    t.push_str("f93e00\n");
+    t.push_str("f97bff\n");
+    t.push_str("fa47c35000\n");
+    t.push_str("fa7f7fffff\n");
+    t.push_str("fb7e37e43c8800759c\n");
+    t.push_str("f90001\n");
+    t.push_str("f90400\n");
+    t.push_str("f9c400\n");
+    t.push_str("fbc010666666666666\n");
+    t.push_str("f97c00\n");
+    t.push_str("f9fc00\n");
+    t.push_str("fa7f800000\n");
+    t.push_str("faff800000\n");
+    t.push_str("fb7ff0000000000000\n");
+    t.push_str("fbfff0000000000000\n");
+    t.push_str("f97e00\n");
+    t.push_str("fa7fc00000\n");
+    t.push_str("fb7ff8000000000000\n");
+    t.push_str("f4\n");
+    t.push_str("f5\n");
+    t.push_str("f6\n");
+    t.push_str("f7\n");
+    t.push_str("40\n");
+    t.push_str("4401020304\n");
+    t.push_str("60\n");
+    t.push_str("6161\n");
+    t.push_str("6449455446\n");
+    t.push_str("62225c\n");
+    t.push_str("62c3bc\n");
+    t.push_str("63e6b0b4\n");
+    t.push_str("6198\n");
+    t.push_str("7f6198ff\n");
+    t.push_str("aeaeaeaeaeaeaeaeae0108c29843d90100d8249f0000aeaeffc26ca799\n");
+    t.push_str("80\n");
+    t.push_str("83010203\n");
+    t.push_str("8301820203820405\n");
+    t.push_str("98190102030405060708090a0b0c0d0e0f101112131415161718181819\n");
+    t.push_str("a0\n");
+    t.push_str("a201020304\n");
+    t.push_str("a26161016162820203\n");
+    t.push_str("826161a161626163\n");
+    t.push_str("a56161614161626142616361436164614461656145\n");
+    t.push_str("5f42010243030405ff\n");
+    t.push_str("7f657374726561646d696e67ff\n");
+    t.push_str("9fff\n");
+    t.push_str("9f018202039f0405ffff\n");
+    t.push_str("9f01820203820405ff\n");
+    t.push_str("83018202039f0405ff\n");
+    t.push_str("83019f0203ff820405\n");
+    t.push_str("9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff\n");
+    t.push_str("bf61610161629f0203ffff\n");
+    t.push_str("826161bf61626163ff\n");
+    t.push_str("bf6346756ef563416d7421ff\n");
+    t.push_str("d901029f010203ff\n");
+    t.push_str("5f42010200\n");
+    t.push_str("7f63737472a0\n");
+    t.push_str("e0\n");
+    t.push_str("e2\n");
+    t.push_str("f3\n");
+    t.push_str("f820\n");
+    t.push_str("a1f86301\n");
+    t.push_str("d903ec6a323031332d30332d3231\n");
+    t.push_str("d8641945e8\n");
+    t.push_str("c074323031332d30332d32315432303a30343a30305a\n");
+    t.push_str("c0781b323031332d30332d32315432303a30343a30302e3338303834315a\n");
+    t.push_str("c07819323031332d30332d32315432323a30343a30302b30323a3030\n");
+    t.push_str("c11a514b67b0\n");
+    t.push_str("c06b303030302d3132332d3031\n");
+    t.push_str("c11b9b9b9b0000000000\n");
+    t.push_str("c11b1616161616161616161616161616\n");
+    t.push_str("a6c11b00002401001b000000000000ff00\n");
+    t.push_str("c48221196ab3\n");
+    t.push_str("c482384dc252011f1fe37d0c70ff50456ba8b891997b07d6\n");
+    t.push_str("c5822003\n");
+    t.push_str("d81e820205\n");
+    t.push_str("d81e01\n");
+    t.push_str("d81e820100\n");
+    t.push_str("2d383835392d3135220a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d5472616e7366\n");
+    t.push_str("65722d456e636f64696e673a2071756f7465642d7072696e7461626c650a0a48656c6c6f203d41347572\n");
+    t.push_str("6f\n");
+    t.push_str("d825505eaffac8b51e480581277fdcc7842faf\n");
+    t.push_str("5eaffac8b51e480581277fdcc7842faf\n");
+    t.push_str("d8254f5eaffac8b51e480581277fdcc7842f\n");
+    t.push_str("d82501\n");
+    t.push_str("d9010444c00a0a01\n");
+    t.push_str("d901045020010db885a3000000008a2e03707334\n");
+    t.push_str("d9010446010203040506\n");
+    t.push_str("d9010443c00a0a\n");
+    t.push_str("d9010401\n");
+    t.push_str("d90105a144c0a800641818\n");
+    t.push_str("d90105a15020010db885a3000000008a2e000000001860\n");
+    t.push_str("d90105a244c0a80064181844c0a800001818\n");
+    t.push_str("d90105a144c0a80064420102\n");
+    t.push_str("d81d05\n");
+    t.push_str("d81ca1d81d014161\n");
+    t.push_str("d90102d81c82d81c82d81c83010203d81d02d81d02\n");
+    t.push_str("d81c81d81d00\n");
+    t.push_str("d81ca100d81d00\n");
+    t.push_str("d9010085656669727374d81900667365636f6e64d81900d81901\n");
+    t.push_str("85656669727374d81900667365636f6e64d81900d81901\n");
+    t.push_str("d9010086656669727374d81900667365636f6e64d81900d81901d81903\n");
+    t.push_str("d9d9f71903e8\n");
+    t.push_str("d9d9f7c249010000000000000000\n");
+    t.push_str("437879\n");
+    t.push_str("d81cd90bb849d81cd90bb843d81d00\n");
+    t.push_str("a2616103616205\n");
+    t.push_str("a1d9177082010201\n");
+    t.push_str("d9010283616361626161\n");
+    t.push_str("a1a1616161626163\n");
+    t.push_str("a1a1a10101a1666e6573746564f5a1666e6573746564f4\n");
+    t.push_str("a182010203\n");
+    t.push_str("a1d901028301020304\n");
+    t.push_str("a17f657374726561646d696e67ff01\n");
+    t.push_str("d9010282d90102820102d90102820304\n");
+    t.push_str("9b\n");
+    t.push_str("7b\n");
+    t.push_str("70717273\n");
+    t.push_str("5b\n");
+    t.push_str("7f7b\n");
+    t.push_str("5f5b\n");
+    t.push_str("70717273ff\n");
+    t.push_str("7f61777f6177ffff\n");
+    t.push_str("5f41775f4177ffff\n");
+    t.push_str("7f01ff\n");
+    t.push_str("5f01ff\n");
+    t.push_str("7f7bff0000000000000471717272ff\n");
+    t.push_str("5f5bff0000000000000471717272ff\n");
+    t.push_str("c788370016b8965bdb2074bff82e5a20e09bec21f8406e86442b87ec3ff245b70a47624dc9cdc682\n");
+    t.push_str("4b2a4c52e95ec9d6b0534b71c2b49e4bf9031500cee6869979c297bb5a8b381e98db714108415e5c\n");
+    t.push_str("50db78974c271579b01633a3ef6271be5c225eb2\n");
+    t.push_str("fc\n");
+    t.push_str("1c\n");
+    t.push_str("fd\n");
+    t.push_str("1d\n");
+    t.push_str("fe\n");
+    t.push_str("1e\n");
+    t.push_str("c400\n");
+    t.push_str("c500\n");
+    t.push_str("41\n");
+    t.push_str("61\n");
+    t.push_str("c1fb41d452d9ec07e6b4\n");
+    t.push_str("c074323031332d30332d32315430303a30303a30305a\n");
+    t.push_str("c4822219372b\n");
+    t.push_str("c4822239372a\n");
+    t.push_str("d90105a144c0a800001818\n");
+    t.push_str("d81c81d81c81d81d00\n");
+    t.push_str("828080\n");
+    t.push_str("d81c82d81c80d81d01\n");
+    t.push_str("820305\n");
+    t.push_str("a2416140416240\n");
+    t.push_str("a2616160616260\n");
+    t.push_str("a2433030326045303030303160\n");
+    t.push_str("a2020018ff00\n");
+    t.push_str("f94300\n");
+    t.push_str("fb400e666666666666\n");
+    t.push_str("fa33a00000\n");
+    t.push_str("fa207fc000\n");
+    t.push_str("a182020160\n");
+    t.push_str("a1a1020160\n");
+    t.push_str("d9010283\n");
+    t.push_str("aa\n");
+    t.push_str("d9010284616161786179626161\n");
+    t.push_str("bb\n");
+    t.push_str("dddd\n");
+    t.push_str("ff\n");
+    t.push_str("aaaa\n");
+    t.push_str("bbbb\n");
+    t.push_str("cccc\n");
+    t.push_str("d90100\n");
+    t.push_str("a4\n");
+    t.push_str("6461616161\n");
+    t.push_str("646d6d6d6d\n");
+    t.push_str("6462626262\n");
+    t.push_str("d81902\n");
+    t.push_str("6463636363\n");
+    t.push_str("d81900\n");
+    t.push_str("d81901\n");
+    t.push_str("dbffffffffffffffff6176\n");
+    t.push_str("21\n");
+    t.push_str("d81ca16162d81ca16161d81d00\n");
+    t.push_str("d81c81d81c830102d81d00\n");
+    t.push_str("d81c83d81ca26162d81ca16161016163d81d02d81d01d81d01\n");
+    t.push_str("02\n");
+    t.push_str("0203\n");
+    t.push_str("42c2c2\n");
+    t.push_str("6000\n");
+    v.push(DataFile { path: "vectors.txt".to_string(), hex: false, body: t });
+}
