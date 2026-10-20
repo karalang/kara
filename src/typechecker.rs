@@ -3098,6 +3098,11 @@ pub struct TypeChecker<'a> {
     /// a local bound to a borrow can be told from a binding over a borrowed
     /// scrutinee, which the checker types by value too.
     pub(super) owned_let_bindings: FxHashSet<SpanKey>,
+    /// B-2026-10-20-15: the `let` bindings whose initializer is a view of a
+    /// non-`Copy` item (`let mut t = s;` with `s` the item of `for s in v`),
+    /// keyed like `owned_let_bindings`. Such a local is a `ref` (§5.9),
+    /// though the checker types it by value.
+    pub(super) view_let_bindings: FxHashSet<SpanKey>,
     /// Parallel to `pattern_binding_inner_types`, storing the raw `Type`
     /// (which may contain unresolved `Type::TypeVar`) captured at the
     /// recording site. After body inference completes, `finalize_pattern_
@@ -3509,6 +3514,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_inner_types: FxHashMap::default(),
             pattern_binding_borrow_modes: FxHashMap::default(),
             owned_let_bindings: FxHashSet::default(),
+            view_let_bindings: FxHashSet::default(),
             pattern_binding_inner_unresolved: FxHashMap::default(),
             pending_typevar_pattern_bindings: Vec::new(),
             freshened_scrutinee_vars: std::collections::HashSet::new(),
@@ -6351,6 +6357,39 @@ impl<'a> TypeChecker<'a> {
                 );
                 if resolved != *found {
                     return self.check_assignable(expected, &resolved, span);
+                }
+            }
+        }
+        // B-2026-10-20-18 — the converse: a slot whose type still carries an
+        // unsolved variable (`fold(Vec.new(), ..)` makes fold's accumulator
+        // `Vec[?T]`) is pinned by the concrete value that flows into it, the
+        // closure's `acc` annotation or its returned `acc`.
+        let found_now = inference::resolve_type_vars(
+            found,
+            &self.env.substitutions,
+            &std::collections::HashMap::new(),
+            &self.env.const_substitutions,
+            &std::collections::HashMap::new(),
+        );
+        if exprs::contains_type_var(expected)
+            && !exprs::contains_type_var(&found_now)
+            && !types::contains_type_param(&found_now)
+        {
+            let found = &found_now;
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+                let resolved = inference::resolve_type_vars(
+                    expected,
+                    &self.env.substitutions,
+                    &std::collections::HashMap::new(),
+                    &self.env.const_substitutions,
+                    &std::collections::HashMap::new(),
+                );
+                if resolved != *expected {
+                    return self.check_assignable(&resolved, found, span);
                 }
             }
         }

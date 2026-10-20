@@ -8384,6 +8384,15 @@ impl<'a> super::TypeChecker<'a> {
                     self.owned_let_bindings
                         .insert(SpanKey::from_span(&pattern.span));
                 }
+                if self.cli_lint_overrides.strict_core
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                    && matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
+                    && !matches!(expected_ty, Type::Ref(_) | Type::MutRef(_))
+                    && !self.is_copy_type_during_check(&expected_ty)
+                {
+                    self.view_let_bindings
+                        .insert(SpanKey::from_span(&pattern.span));
+                }
                 if borrowed_destructure {
                     for name in pattern.binding_names() {
                         self.local_scope.mark_view(&name);
@@ -8800,8 +8809,24 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::Identifier(name) = &target.kind else {
             return;
         };
-        let Some(Type::Ref(inner)) = self.local_scope.lookup(name.as_str()).cloned() else {
-            return;
+        let mut of_item = false;
+        let inner = match self.local_scope.lookup(name.as_str()).cloned() {
+            Some(Type::Ref(inner)) => inner,
+            // B-2026-10-20-15 — a local bound to a view of a `for` item.
+            Some(t)
+                if self
+                    .resolve_result
+                    .resolutions
+                    .get(&SpanKey::from_span(&target.span))
+                    .map(|id| self.resolve_result.symbol_table.get_symbol(*id).span)
+                    .is_some_and(|decl| {
+                        self.view_let_bindings.contains(&SpanKey::from_span(&decl))
+                    }) =>
+            {
+                of_item = true;
+                Box::new(t)
+            }
+            _ => return,
         };
         if matches!(
             rhs_ty,
@@ -8847,10 +8872,14 @@ impl<'a> super::TypeChecker<'a> {
             format!(
                 "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot hold this \
                  owned `{}`, which would be dropped at the end of the statement; bind an \
-                 owned copy where `{name}` is declared (`.clone()`), or take the parameter \
-                 it borrows as `own`",
+                 owned copy where `{name}` is declared (`.clone()`){}",
                 type_display(&inner),
-                type_display(rhs_ty)
+                type_display(rhs_ty),
+                if of_item {
+                    ""
+                } else {
+                    ", or take the parameter it borrows as `own`"
+                }
             ),
             value.span,
             TypeErrorKind::TypeMismatch,

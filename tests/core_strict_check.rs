@@ -10469,3 +10469,61 @@ fn a_resource_is_called_through_its_bounds() {
         "until the services track (M4a) only the library declares one",
     );
 }
+
+/// B-2026-10-20-18: a `Vec.new()` passed as `fold`'s init takes its element
+/// type from the closure's annotated accumulator, or from what it returns.
+#[test]
+fn a_fold_init_takes_its_element_from_the_closure() {
+    accepted_and_runs(
+        "fold-vec-new-annotated-acc",
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let out = v.iter().fold(Vec.new(), |acc: Vec[i64], x| { let mut acc = acc; acc.push(*x * 2); acc });\n\
+             println(f\"{out.len()} {out[2]}\");\n\
+             let pairs = v.iter().map(|x| *x).fold(Vec.new(), |acc: Vec[(i64, i64)], x: i64| { let mut acc = acc; acc.push((x, x + 1)); acc });\n\
+             println(f\"{pairs.len()} {pairs[0].1}\");\n\
+             let typed: Vec[i64] = v.iter().fold(Vec.new(), |acc, x| { let mut acc = acc; acc.push(*x); acc });\n\
+             println(f\"{typed.len()}\");\n\
+         }\n",
+        "3 6\n3 2\n3\n",
+    );
+    rejected(
+        "fold-vec-new-wrong-return",
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let out = v.iter().fold(Vec.new(), |acc: Vec[i64], x| { let s: Vec[String] = Vec.new(); s });\n\
+             println(f\"{out.len()}\");\n\
+         }\n",
+        "Vec[String]",
+    );
+}
+
+/// B-2026-10-20-15: a local bound to a `for` item is a `ref` (§4.6, §5.9),
+/// so it cannot take an owned value, as for a borrowed parameter.
+#[test]
+fn a_local_bound_to_a_for_item_cannot_hold_an_owned_value() {
+    rejected(
+        "for-item-copy-owned-assign",
+        "fn main() {\n\
+             let v: Vec[String] = \"x y\".split(\" \").map(|s| s.to_string()).collect();\n\
+             for s in v {\n\
+                 let mut t = s;\n\
+                 if t == \"y\" { t = \"z\".to_string(); }\n\
+                 println(t);\n\
+             }\n\
+         }\n",
+        "`t` is a `ref String` (it was bound to a borrow), so it cannot hold this owned `String`",
+    );
+    accepted_and_runs(
+        "for-item-clone-owned-assign",
+        "fn main() {\n\
+             let v: Vec[String] = \"x y\".split(\" \").map(|s| s.to_string()).collect();\n\
+             for s in v {\n\
+                 let mut t = s.clone();\n\
+                 if t == \"y\" { t = \"z\".to_string(); }\n\
+                 println(t);\n\
+             }\n\
+         }\n",
+        "x\nz\n",
+    );
+}
