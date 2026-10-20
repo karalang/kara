@@ -9867,3 +9867,42 @@ fn get_mut_takes_the_keys_view() {
         "expected 'ref String', found 'i64'",
     );
 }
+
+/// B-2026-10-19-39, B-2026-10-19-47: `karac check` refuses the `par`
+/// conflicts the MIR effect pass refuses a run for (core semantics §11.2):
+/// two printing branches, two sends on one channel, and two iterations of a
+/// `par for` pushing to one `Vec` from outside. Branches that only read one
+/// value, or that each push to a `Vec` of their own, pass and run.
+#[test]
+fn check_refuses_the_par_conflicts_the_mir_effect_pass_refuses() {
+    rejected(
+        "par-two-printing-branches",
+        "fn main() {\n    let (a, b) = par { println(\"a\"), println(\"b\") };\n}\n",
+        "branches 1 and 2 of the `par` conflict: `writes(Stdout)` and `writes(Stdout)`",
+    );
+    rejected(
+        "par-two-sends",
+        "fn send_one(tx: Sender[i64], v: i64) -> i64 {\n    tx.send(v);\n    v\n}\n\n\
+         fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n    \
+         let tx2 = tx.clone();\n    \
+         let (a, b) = par { send_one(tx, 1), send_one(tx2, 2) };\n    \
+         println(f\"{a + b}\");\n}\n",
+        "`sends(Channel",
+    );
+    rejected(
+        "par-for-iterations-push",
+        "fn main() {\n    let xs: Vec[i64] = [1, 2];\n    let mut out: Vec[i64] = Vec.new();\n    \
+         let v = par for x in xs {\n        out.push(x);\n        0\n    };\n    \
+         println(f\"{out.len()} {v.len()}\");\n}\n",
+        "two iterations of the `par for` conflict: `mutable borrow of out`",
+    );
+    accepted_and_runs(
+        "par-reads-and-own-vecs",
+        "fn main() {\n    let xs: Vec[i64] = [1, 2, 3];\n    \
+         let (a, b) = par {\n        { let mut v: Vec[i64] = Vec.new(); v.push(xs.len()); v.len() },\n        \
+         { let mut v: Vec[i64] = Vec.new(); v.push(xs[0]); v.push(xs[1]); v.len() },\n    };\n    \
+         let w = par for x in xs { x * 2 };\n    \
+         println(f\"{a} {b} {w.len()}\");\n}\n",
+        "1 2 3\n",
+    );
+}

@@ -732,6 +732,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // holds the two in lockstep.
     ("E0417", eff("DropBodyMayPanic", None)),
     (
+        "E0418",
+        eff("ParBranchConflict", Some(DiagnosticClass::EffectConflict)),
+    ),
+    (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
     ),
@@ -2272,6 +2276,7 @@ mod tests {
             ("E0413", E::ExternCUnwindRequiresPanics),
             ("E0416", E::NoEffectViolated),
             ("E0417", E::DropBodyMayPanic),
+            ("E0418", E::ParBranchConflict),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

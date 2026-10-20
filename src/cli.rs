@@ -1905,6 +1905,38 @@ impl Pipeline {
                 got: None,
             });
         }
+        if !typed.errors.is_empty() {
+            return;
+        }
+        // B-2026-10-19-39: the `par` conflicts the MIR effect pass refuses
+        // a run for, as effect errors.
+        // One the effect checker already refuses is not reported twice.
+        let Some(effects) = self.effects.as_mut() else {
+            return;
+        };
+        if effects
+            .errors
+            .iter()
+            .any(|e| crate::effectchecker::kind_blocks_production(&e.kind))
+        {
+            return;
+        }
+        for (at, text) in crate::mir::lower::source_par_conflicts(&src) {
+            let Some(span) = source_span_at(&src, Some(at)) else {
+                continue;
+            };
+            effects.errors.push(crate::effectchecker::EffectError {
+                message: format!(
+                    "{text} (core semantics §11.2: branches may run at once, so none \
+                     may write, move, mutably borrow or drop a place another uses, or \
+                     write a resource another uses)"
+                ),
+                span,
+                kind: crate::effectchecker::EffectErrorKind::ParBranchConflict,
+                subtype_trace: None,
+                replacement: None,
+            });
+        }
     }
 
     fn concurrencycheck(&mut self) {

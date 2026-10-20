@@ -389,6 +389,12 @@ pub enum EffectErrorKind {
     /// set includes one of them. Emitted by `check_no_effect` after inference
     /// settles — the per-function twin of `ProfileIncompatibleEffect`.
     NoEffectViolated,
+    /// Two branches of a `par` block, or two iterations of a `par for`, use
+    /// one place or resource in a way whose order matters (core semantics
+    /// §11.2): found by the MIR effect pass (`mir::effects`), which `check`
+    /// runs on a program its own rules pass, so that check refuses what the
+    /// MIR backends refuse (B-2026-10-19-39, B-2026-10-19-47).
+    ParBranchConflict,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -503,7 +509,9 @@ pub(crate) fn class_for_effect_error_kind(
         // "Effect-set conflict between concurrent / interleaved
         // computations": a `writes` to module state from inside `par {}` is
         // the canonical instance.
-        EffectErrorKind::ModuleBindingWriteInPar => Some(DC::EffectConflict),
+        EffectErrorKind::ModuleBindingWriteInPar | EffectErrorKind::ParBranchConflict => {
+            Some(DC::EffectConflict)
+        }
 
         // `TargetIncompatible`'s doc names "cross-target effect violations"
         // among its members, and the GPU gate is the other half of the same

@@ -328,25 +328,326 @@ fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConfl
             // Two iterations run the same body.
             ParKind::For { .. } => (0..sides.len()).map(|i| (i, i)).collect(),
         };
+        // Each branch's accesses to the places it shares with the others.
+        let touched: Vec<Vec<PlaceAccess>> = r
+            .branches
+            .iter()
+            .map(|br| place_accesses(body, r, br, origins))
+            .collect();
         for (i, j) in pairs {
-            'pair: for (k, (bx, x)) in sides[i].iter().enumerate() {
-                let from = if i == j { k } else { 0 };
-                for (by, y) in &sides[j][from..] {
-                    if let Some((ex, ey)) = conflict_witness(x, y, &alias) {
-                        out.push(ParConflict {
-                            region: ri,
-                            line: r.span.line,
-                            branches: (i, j),
-                            first: (*bx, ex),
-                            second: (*by, ey),
-                        });
-                        break 'pair;
-                    }
-                }
+            let found = effect_conflict(&sides, i, j, &alias)
+                .or_else(|| place_conflict(body, &touched, i, j, origins));
+            if let Some((first, second)) = found {
+                out.push(ParConflict {
+                    region: ri,
+                    line: r.span.line,
+                    branches: (i, j),
+                    first,
+                    second,
+                });
             }
         }
     }
     out
+}
+
+type Witness = (BasicBlock, String);
+
+/// The first pair of effects of branches `i` and `j` (two iterations when
+/// they are equal) that must keep their order.
+fn effect_conflict(
+    sides: &[Vec<(BasicBlock, EffectSet)>],
+    i: usize,
+    j: usize,
+    alias: &dyn Fn(&Key, &Key) -> bool,
+) -> Option<(Witness, Witness)> {
+    for (k, (bx, x)) in sides[i].iter().enumerate() {
+        let from = if i == j { k } else { 0 };
+        for (by, y) in &sides[j][from..] {
+            if let Some((ex, ey)) = conflict_witness(x, y, alias) {
+                return Some(((*bx, ex), (*by, ey)));
+            }
+        }
+    }
+    None
+}
+
+/// How a `par` branch uses a place of the body (core §11.2): it conflicts
+/// with another branch that reads or writes the place when it writes,
+/// moves, mutably borrows or drops it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Use {
+    Read,
+    Write,
+    Move,
+    MutBorrow,
+    Drop,
+}
+
+impl Use {
+    fn noun(self) -> &'static str {
+        match self {
+            Use::Read => "read",
+            Use::Write => "write",
+            Use::Move => "move",
+            Use::MutBorrow => "mutable borrow",
+            Use::Drop => "drop",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PlaceAccess {
+    block: BasicBlock,
+    how: Use,
+    place: Place,
+}
+
+/// The places branch `blocks` of region `r` uses, other than those of the
+/// locals the branch has to itself: a local it declares (`StorageLive`) or
+/// assigns only there, and for a `par for` the iteration's own binding,
+/// which the loop declares just before the body. Drop flags are left out:
+/// a flag changes only with a move or a drop of its place, which is itself
+/// a use. So is the return place: a branch writes it only on its way out
+/// of the function (a `?` in it), and which branch's error the function
+/// returns is the `par`'s own rule, the source-earliest (core §11.7).
+fn place_accesses(
+    body: &Body,
+    r: &ParRegion,
+    blocks: &[BasicBlock],
+    origins: &Origins,
+) -> Vec<PlaceAccess> {
+    let set: BTreeSet<BasicBlock> = blocks.iter().copied().collect();
+    let mut own: BTreeSet<u32> = BTreeSet::new();
+    let declared_in = |bb: &BasicBlockData, own: &mut BTreeSet<u32>| {
+        for st in &bb.statements {
+            if let StatementKind::StorageLive(l) = st.kind {
+                own.insert(l.0);
+            }
+        }
+    };
+    for b in &set {
+        declared_in(&body.blocks[b.index()], &mut own);
+    }
+    if let (ParKind::For { .. }, Some(entry)) = (&r.kind, blocks.first()) {
+        for (bi, bb) in body.blocks.iter().enumerate() {
+            let b = BasicBlock(bi as u32);
+            if !set.contains(&b) && bb.terminator.kind.successors().contains(entry) {
+                declared_in(bb, &mut own);
+            }
+        }
+    }
+    for (l, a) in origins.assigned.iter().enumerate() {
+        if !a.is_empty() && a.is_subset(&set) {
+            own.insert(l as u32);
+        }
+    }
+    let shared = |p: &Place| {
+        p.local.0 != 0
+            && !own.contains(&p.local.0)
+            && !matches!(
+                body.locals.get(p.local.index()).map(|d| &d.kind),
+                Some(LocalKind::DropFlag)
+            )
+    };
+    let mut out = Vec::new();
+    let mut add = |block: BasicBlock, how: Use, p: &Place| {
+        if shared(p) {
+            out.push(PlaceAccess {
+                block,
+                how,
+                place: p.clone(),
+            });
+        }
+        // A runtime index reads its local.
+        for e in &p.projection {
+            if let ProjElem::Index(l) = e {
+                let ip = Place::local(*l);
+                if shared(&ip) {
+                    out.push(PlaceAccess {
+                        block,
+                        how: Use::Read,
+                        place: ip,
+                    });
+                }
+            }
+        }
+    };
+    // The blocks on a branch's way out of the function (a `?` in it): they
+    // return and never come back to the code after the branch. What they do,
+    // the drops of everything live and the write of the result, belongs to
+    // leaving, and the `par` decides which branch's exit counts (core
+    // §11.7). A block that can neither continue nor return (a loop with no
+    // way out) is kept.
+    let leaves: BTreeSet<BasicBlock> = {
+        let succ = |b: BasicBlock| body.blocks[b.index()].terminator.kind.successors();
+        let mut on: BTreeSet<BasicBlock> = set
+            .iter()
+            .copied()
+            .filter(|&b| succ(b).iter().any(|s| !set.contains(s)))
+            .collect();
+        let mut returns: BTreeSet<BasicBlock> = set
+            .iter()
+            .copied()
+            .filter(|b| {
+                matches!(
+                    body.blocks[b.index()].terminator.kind,
+                    TerminatorKind::Return
+                )
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for &b in &set {
+                let s = succ(b);
+                if !on.contains(&b) && s.iter().any(|x| on.contains(x)) {
+                    on.insert(b);
+                    changed = true;
+                }
+                if !returns.contains(&b) && s.iter().any(|x| returns.contains(x)) {
+                    returns.insert(b);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        returns.difference(&on).copied().collect()
+    };
+    let operand = |o: &Operand| match o {
+        Operand::Copy(p) => Some((Use::Read, p.clone())),
+        Operand::Move(p) => Some((Use::Move, p.clone())),
+        Operand::Const(_) => None,
+    };
+    for &b in set.difference(&leaves) {
+        let bb = &body.blocks[b.index()];
+        // Each statement's and the terminator's uses, in order.
+        let mut uses: Vec<(Use, Place)> = Vec::new();
+        for st in &bb.statements {
+            match &st.kind {
+                StatementKind::Assign(dst, rv) => {
+                    match rv {
+                        Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => {
+                            uses.extend(operand(o))
+                        }
+                        Rvalue::BinaryOp(_, x, y) | Rvalue::CheckedBinaryOp(_, x, y) => {
+                            uses.extend(operand(x));
+                            uses.extend(operand(y));
+                        }
+                        Rvalue::Aggregate(_, ops) => uses.extend(ops.iter().filter_map(operand)),
+                        Rvalue::Ref(BorrowKind::Mut, p) => uses.push((Use::MutBorrow, p.clone())),
+                        Rvalue::Ref(BorrowKind::Shared, p)
+                        | Rvalue::Retain(p)
+                        | Rvalue::Discriminant(p)
+                        | Rvalue::Len(p) => uses.push((Use::Read, p.clone())),
+                        Rvalue::NullaryOp(..) => {}
+                    }
+                    uses.push((Use::Write, dst.clone()));
+                }
+                StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) => {
+                    uses.push((Use::Write, p.clone()))
+                }
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::BorrowFlag(_)
+                | StatementKind::Nop => {}
+            }
+        }
+        match &bb.terminator.kind {
+            TerminatorKind::SwitchInt { discr, .. } => uses.extend(operand(discr)),
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                uses.extend(operand(func));
+                uses.extend(args.iter().filter_map(operand));
+                uses.push((Use::Write, destination.clone()));
+            }
+            TerminatorKind::Drop { place, .. } => uses.push((Use::Drop, place.clone())),
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Abort { .. }
+            | TerminatorKind::Unreachable => {}
+        }
+        for (how, p) in &uses {
+            add(b, *how, p);
+        }
+    }
+    out
+}
+
+/// Can two places of one body be the same memory, or overlap? On one local,
+/// unless their paths part at two different fields, variants or constant
+/// indices; on two locals, when both go through a reference or handle that
+/// may hold one value.
+fn places_overlap(a: &Place, b: &Place, origins: &Origins) -> bool {
+    if a.local != b.local {
+        let deref = |p: &Place| p.projection.contains(&ProjElem::Deref);
+        return deref(a)
+            && deref(b)
+            && origins.may_alias(
+                &Key::Local(a.local.0, Vec::new()),
+                &Key::Local(b.local.0, Vec::new()),
+            );
+    }
+    for (x, y) in a.projection.iter().zip(&b.projection) {
+        match (x, y) {
+            (ProjElem::Field(f, _), ProjElem::Field(g, _)) if f != g => return false,
+            (ProjElem::Downcast(v), ProjElem::Downcast(w)) if v != w => return false,
+            (ProjElem::ConstIndex(m), ProjElem::ConstIndex(n)) if m != n => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The place, as the source names it: the binding, or `_N` for a
+/// temporary, then any field path.
+fn place_name(body: &Body, p: &Place) -> String {
+    let mut s = match body.locals.get(p.local.index()).map(|d| &d.kind) {
+        Some(LocalKind::User { name, .. } | LocalKind::Arg { name, .. }) => name.clone(),
+        _ => format!("_{}", p.local.0),
+    };
+    for e in &p.projection {
+        match e {
+            ProjElem::Field(f, _) => s.push_str(&format!(".{}", f.0)),
+            ProjElem::ConstIndex(n) => s.push_str(&format!("[{n}]")),
+            ProjElem::Index(_) => s.push_str("[_]"),
+            ProjElem::Deref | ProjElem::Downcast(_) => {}
+        }
+    }
+    s
+}
+
+/// The first pair of uses of one place by branches `i` and `j` (two
+/// iterations when they are equal) of which at least one is not a read.
+fn place_conflict(
+    body: &Body,
+    touched: &[Vec<PlaceAccess>],
+    i: usize,
+    j: usize,
+    origins: &Origins,
+) -> Option<(Witness, Witness)> {
+    for (k, x) in touched[i].iter().enumerate() {
+        let from = if i == j { k } else { 0 };
+        for y in &touched[j][from..] {
+            if (x.how != Use::Read || y.how != Use::Read)
+                && places_overlap(&x.place, &y.place, origins)
+            {
+                let w = |a: &PlaceAccess| {
+                    (
+                        a.block,
+                        format!("{} of {}", a.how.noun(), place_name(body, &a.place)),
+                    )
+                };
+                return Some((w(x), w(y)));
+            }
+        }
+    }
+    None
 }
 
 impl EffectReport {
@@ -2220,6 +2521,109 @@ fn store(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
         assert_eq!(
             par_conflicts_of(&r, "store"),
             [(0, 1, "writes(File @ p1)".into(), "writes(File @ p2)".into())]
+        );
+    }
+
+    /// Core §11.2, the place half (B-2026-10-19-47): branches that both
+    /// push to one `Vec` conflict, and so do two iterations of a `par for`
+    /// that push to one from outside. Reading one place in both, writing
+    /// two fields of one struct, a branch's own `let` and the iteration's
+    /// own binding do not.
+    #[test]
+    fn effects_par_branches_conflict_on_shared_places() {
+        let r = from_source(
+            "struct Pair {
+    a: Vec[i64],
+    b: Vec[i64],
+}
+
+fn both_push() {
+    let mut v: Vec[i64] = Vec.new();
+    par {
+        { v.push(1); },
+        { v.push(2); },
+    };
+}
+
+fn push_and_read() {
+    let mut v: Vec[i64] = Vec.new();
+    let (x, y) = par { { v.push(1); 0 }, v.len() };
+}
+
+fn iterations_push() {
+    let xs: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    let v = par for x in xs {
+        out.push(x);
+        0
+    };
+}
+
+fn both_read() {
+    let v: Vec[i64] = Vec.new();
+    let (x, y) = par { v.len(), v.len() };
+}
+
+fn two_fields() {
+    let mut p = Pair { a: Vec.new(), b: Vec.new() };
+    par {
+        { p.a.push(1); },
+        { p.b.push(2); },
+    };
+}
+
+fn own_lets() {
+    let n = 3;
+    let (x, y) = par {
+        { let mut v: Vec[i64] = Vec.new(); v.push(n); v.len() },
+        { let mut v: Vec[i64] = Vec.new(); v.push(n); v.len() },
+    };
+}
+
+fn own_binding() {
+    let xs: Vec[i64] = Vec.new();
+    let v = par for x in xs {
+        let mut acc: Vec[i64] = Vec.new();
+        acc.push(x);
+        acc.len()
+    };
+}
+
+fn main() {
+    both_push();
+    push_and_read();
+    iterations_push();
+    both_read();
+    two_fields();
+    own_lets();
+    own_binding();
+}
+",
+        );
+        for name in ["both_read", "two_fields", "own_lets", "own_binding"] {
+            assert_eq!(par_conflicts_of(&r, name), [], "{name}");
+        }
+        assert_eq!(
+            par_conflicts_of(&r, "both_push"),
+            [(
+                0,
+                1,
+                "mutable borrow of v".into(),
+                "mutable borrow of v".into()
+            )]
+        );
+        assert_eq!(
+            par_conflicts_of(&r, "push_and_read"),
+            [(0, 1, "mutable borrow of v".into(), "read of v".into())]
+        );
+        assert_eq!(
+            par_conflicts_of(&r, "iterations_push"),
+            [(
+                0,
+                0,
+                "mutable borrow of out".into(),
+                "mutable borrow of out".into()
+            )]
         );
     }
 

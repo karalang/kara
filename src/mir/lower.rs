@@ -15446,22 +15446,75 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
             .iter()
             .find_map(|(n, v)| v.first().map(|c| (n, c)))
         {
-            let which = if c.branches.0 == c.branches.1 {
-                "two iterations of the `par for`".to_string()
-            } else {
-                format!(
-                    "branches {} and {} of the `par`",
-                    c.branches.0 + 1,
-                    c.branches.1 + 1
-                )
-            };
             return Err(format!(
-                "effects: in `{name}` at line {}, {which} conflict: `{}` and `{}`",
-                c.line, c.first.1, c.second.1
+                "effects: in `{name}` at line {}, {}",
+                c.line,
+                par_conflict_text(c)
             ));
         }
     }
     Ok(())
+}
+
+/// What conflicts in `c`, for a message: "branches 1 and 2 of the `par`
+/// conflict: `x` and `y`".
+fn par_conflict_text(c: &crate::mir::effects::ParConflict) -> String {
+    let which = if c.branches.0 == c.branches.1 {
+        "two iterations of the `par for`".to_string()
+    } else {
+        format!(
+            "branches {} and {} of the `par`",
+            c.branches.0 + 1,
+            c.branches.1 + 1
+        )
+    };
+    format!("{which} conflict: `{}` and `{}`", c.first.1, c.second.1)
+}
+
+/// `karac check`'s run of [`par_check`] (B-2026-10-19-39): the conflicting
+/// `par` regions of the program's own text, as the build finds them, each
+/// with the region's line and column and the message. A program with no `par` in its
+/// text, or one the builder stops on, gives none. `KARAC_MIR_EFFECTS=0`
+/// skips it, as it does for a run.
+pub fn source_par_conflicts(src: &str) -> Vec<((usize, usize), String)> {
+    if std::env::var("KARAC_MIR_EFFECTS").as_deref() == Ok("0") || !mentions_par(src) {
+        return Vec::new();
+    }
+    let Ok(lowered) = build_source(src) else {
+        return Vec::new();
+    };
+    let user_lines = src.lines().count();
+    let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+    let mut out: Vec<((usize, usize), String)> = Vec::new();
+    for (name, found) in &report.par_conflicts {
+        let body = &lowered.program.bodies[name];
+        for c in found {
+            let span = body.par_regions[c.region].span;
+            let at = (span.line, span.column);
+            if span.line == 0 || span.line > user_lines || out.iter().any(|(a, _)| *a == at) {
+                continue;
+            }
+            out.push((at, par_conflict_text(c)));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Does `src` have the word `par` followed by `{` or `for`? A cheap test
+/// that keeps a program with no `par` from being built twice by check.
+fn mentions_par(src: &str) -> bool {
+    let b = src.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    src.match_indices("par").any(|(i, _)| {
+        if i > 0 && ident(b[i - 1]) {
+            return false;
+        }
+        let rest = src[i + 3..].trim_start();
+        rest.starts_with('{')
+            || (rest.starts_with("for")
+                && !rest[3..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    })
 }
 
 /// [`run_source`], writing the program's output to the process's stdout
