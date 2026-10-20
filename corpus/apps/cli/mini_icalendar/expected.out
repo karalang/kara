@@ -1,0 +1,866 @@
+== broken/bad_offset.ics
+error: ValueError: Offset must be less than 24 hours, was +2500
+== broken/bad_param.ics
+error: ValueError: Content line could not be parsed into parts: 'X-FOO;BAD PARAM=1:x': 'BAD PARAM=1' is not a valid parameter string: BAD PARAM
+== broken/bad_todo_due.ics
+error: ValueError: Expected datetime, date, or time. Got: '2026-11-01'
+== broken/control_char.ics
+error: ValueError: Content line could not be parsed into parts: 'X-A;X-B=ab:c': 'X-B=a\x07b' is not a valid parameter string: ab
+== broken/empty.ics
+calendars: 0
+== broken/orphan_property.ics
+error: ValueError: Property "SUMMARY" does not have a parent component.
+== broken/param_without_value.ics
+error: ValueError: Content line could not be parsed into parts: 'SUMMARY;LANGUAGE:x': 'LANGUAGE' is not a valid parameter string: not enough values to unpack (expected 2, got 1)
+== broken/stray_end.ics
+error: ValueError: END encountered without an accompanying BEGIN!
+== broken/unterminated.ics
+calendars: 0
+== broken/x_comment_only.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| END:VCALENDAR
+read back: same
+== field_journal.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example//Field Notes 1.4//EN'
+  VJOURNAL
+    UID vText 'journal-2026-10-03@example.org'
+    DTSTAMP vDDDTypes 2026-10-03 20:15:00 UTC
+    DTSTART {'VALUE': 'DATE'} vDDDTypes 2026-10-03
+    SUMMARY vText 'Site visit: Montmartre'
+    DESCRIPTION vText 'Walked the route twice.\nNotes:\n1) Stairs at Rue Foyatier are steep; avoid with equipment.\n2) Café on the corner opens at 07:30.\n3) Backup route via the funicular.'
+    DESCRIPTION {'LANGUAGE': 'fr'} vText 'Itinéraire parcouru deux fois.'
+    GEO vGeo (48.886705, 2.343104)
+    RESOURCES vText 'Camera,Tripod'
+    COMMENT vText '日本語のメモ: 坂道が多いので、機材は少なめにすること。雨の日は滑りやすい。🙂 Bring a spare battery and the long lens.'
+    COMMENT vText 'Second comment, a long one that keeps going so that it must be folded at least once when it is written back out to a file.'
+    ATTACH vUri 'https://files.example.org/visits/montmartre/route.gpx'
+    ATTACH {'FMTTYPE': 'image/jpeg'} vUri 'https://files.example.org/visits/montmartre/IMG_0412.jpg'
+    RELATED-TO {'RELTYPE': 'PARENT'} vText 'project-paris-2026@example.org'
+    REQUEST-STATUS vText '2.0;Success'
+    URL {'VALUE': 'URI'} vUri 'https://notes.example.org/j/2026-10-03'
+    X-SCORE {'VALUE': 'FLOAT'} vFloat 4.25
+    X-RATING {'VALUE': 'INTEGER'} vInt 7
+    X-WEATHER {'X-SOURCE': 'https://weather.example.org/api?q=paris', 'UNITS': 'metric'} vUnknown '12C\\, light rain'
+    X-ESCAPED-PARAM {'X-NOTE': 'a,b;c'} vUnknown 'value'
+    X-CARET {'X-TITLE': 'Line one\nLine "two" ^ok'} vUnknown 'caret escapes'
+    CLASS vText 'PRIVATE'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example//Field Notes 1.4//EN
+| BEGIN:VJOURNAL
+| ATTACH:https://files.example.org/visits/montmartre/route.gpx
+| ATTACH;FMTTYPE=image/jpeg:https://files.example.org/visits/montmartre/IMG_
+|  0412.jpg
+| CLASS:PRIVATE
+| COMMENT:日本語のメモ: 坂道が多いので、機材は少なめに
+|  すること。雨の日は滑りやすい。🙂 Bring a spare battery an
+|  d the long lens.
+| COMMENT:Second comment\, a long one that keeps going so that it must be fo
+|  lded at least once when it is written back out to a file.
+| DESCRIPTION:Walked the route twice.\nNotes:\n1) Stairs at Rue Foyatier are
+|   steep\; avoid with equipment.\n2) Café on the corner opens at 07:30.\n3)
+|   Backup route via the funicular.
+| DESCRIPTION;LANGUAGE=fr:Itinéraire parcouru deux fois.
+| DTSTAMP:20261003T201500Z
+| DTSTART;VALUE=DATE:20261003
+| GEO:48.886705;2.343104
+| RELATED-TO;RELTYPE=PARENT:project-paris-2026@example.org
+| REQUEST-STATUS:2.0\;Success
+| RESOURCES:Camera\,Tripod
+| SUMMARY:Site visit: Montmartre
+| UID:journal-2026-10-03@example.org
+| URL;VALUE=URI:https://notes.example.org/j/2026-10-03
+| X-CARET;X-TITLE="Line one^nLine ^'two^' ^^ok":caret escapes
+| X-ESCAPED-PARAM;X-NOTE="a,b;c":value
+| X-RATING;VALUE=INTEGER:7
+| X-SCORE;VALUE=FLOAT:4.25
+| X-WEATHER;UNITS=metric;X-SOURCE="https://weather.example.org/api?q=paris":
+|  12C\, light rain
+| END:VJOURNAL
+| END:VCALENDAR
+read back: same
+== freebusy_reply.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example Corp//CalDAV Server 4.2//EN'
+  METHOD vText 'REPLY'
+  VFREEBUSY
+    UID vText 'fb-2026-11-02-dana'
+    ORGANIZER {'CN': 'Scheduling Assistant'} vCalAddress 'mailto:scheduler@example.com'
+    ATTENDEE {'CN': 'Dana Kim'} vCalAddress 'mailto:dana@example.com'
+    DTSTAMP vDDDTypes 2026-10-30 12:00:00 UTC
+    DTSTART vDDDTypes 2026-11-02 08:00:00 UTC
+    DTEND vDDDTypes 2026-11-02 18:00:00 UTC
+    FREEBUSY {'FBTYPE': 'BUSY'} vPeriod (2026-11-02 09:00:00 UTC, 1:00:00)
+    FREEBUSY {'FBTYPE': 'BUSY'} vPeriod (2026-11-02 13:00:00 UTC, 2026-11-02 14:30:00 UTC)
+    FREEBUSY {'FBTYPE': 'BUSY-TENTATIVE'} vPeriod (2026-11-02 16:00:00 UTC, 0:45:00)
+    FREEBUSY {'FBTYPE': 'BUSY-UNAVAILABLE'} vPeriod (2026-11-02 12:00:00 UTC, 1:00:00)
+    URL vUri 'https://cal.example.com/freebusy/dana.ifb'
+  VAVAILABILITY
+    UID vText 'avail-dana-2026'
+    DTSTAMP vDDDTypes 2026-10-30 12:00:00 UTC
+    SUMMARY vText 'Office hours'
+    ORGANIZER vCalAddress 'mailto:dana@example.com'
+    DTSTART vDDDTypes 2026-11-01 00:00:00 UTC
+    AVAILABLE
+      UID vText 'avail-dana-weekdays'
+      SUMMARY vText 'Weekdays'
+      DTSTART {'TZID': 'America/New_York'} vDDDTypes 2026-11-02 09:00:00 America/New_York
+      DTEND {'TZID': 'America/New_York'} vDDDTypes 2026-11-02 17:00:00 America/New_York
+      RRULE vRecur FREQ=['WEEKLY']; BYDAY=['MO', 'TU', 'WE', 'TH', 'FR']
+      DTSTAMP vDDDTypes 2026-10-30 12:00:00 UTC
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example Corp//CalDAV Server 4.2//EN
+| METHOD:REPLY
+| BEGIN:VFREEBUSY
+| ATTENDEE;CN="Dana Kim":mailto:dana@example.com
+| DTEND:20261102T180000Z
+| DTSTAMP:20261030T120000Z
+| DTSTART:20261102T080000Z
+| FREEBUSY;FBTYPE=BUSY:20261102T090000Z/PT1H
+| FREEBUSY;FBTYPE=BUSY:20261102T130000Z/20261102T143000Z
+| FREEBUSY;FBTYPE=BUSY-TENTATIVE:20261102T160000Z/PT45M
+| FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20261102T120000Z/PT1H
+| ORGANIZER;CN="Scheduling Assistant":mailto:scheduler@example.com
+| UID:fb-2026-11-02-dana
+| URL:https://cal.example.com/freebusy/dana.ifb
+| END:VFREEBUSY
+| BEGIN:VAVAILABILITY
+| DTSTART:20261101T000000Z
+| DTSTAMP:20261030T120000Z
+| UID:avail-dana-2026
+| SUMMARY:Office hours
+| ORGANIZER:mailto:dana@example.com
+| BEGIN:AVAILABLE
+| DTEND;TZID=America/New_York:20261102T170000
+| DTSTAMP:20261030T120000Z
+| DTSTART;TZID=America/New_York:20261102T090000
+| RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR
+| SUMMARY:Weekdays
+| UID:avail-dana-weekdays
+| END:AVAILABLE
+| END:VAVAILABILITY
+| END:VCALENDAR
+read back: same
+== google_team.ics
+calendars: 1
+VCALENDAR
+  PRODID vText '-//Google Inc//Google Calendar 70.9054//EN'
+  VERSION vText '2.0'
+  CALSCALE vText 'GREGORIAN'
+  METHOD vText 'PUBLISH'
+  X-WR-CALNAME vUnknown 'Platform team'
+  X-WR-TIMEZONE vUnknown 'America/New_York'
+  X-WR-CALDESC vUnknown 'Standups\\, reviews and on-call handovers'
+  VTIMEZONE
+    TZID vText 'America/New_York'
+    X-LIC-LOCATION vUnknown 'America/New_York'
+    DAYLIGHT
+      TZOFFSETFROM vUTCOffset -1 day, 19:00:00
+      TZOFFSETTO vUTCOffset -1 day, 20:00:00
+      TZNAME vText 'EDT'
+      DTSTART vDDDTypes 1970-03-08 02:00:00
+      RRULE vRecur FREQ=['YEARLY']; BYMONTH=[3]; BYDAY=['2SU']
+    STANDARD
+      TZOFFSETFROM vUTCOffset -1 day, 20:00:00
+      TZOFFSETTO vUTCOffset -1 day, 19:00:00
+      TZNAME vText 'EST'
+      DTSTART vDDDTypes 1970-11-01 02:00:00
+      RRULE vRecur FREQ=['YEARLY']; BYMONTH=[11]; BYDAY=['1SU']
+  VEVENT
+    DTSTART {'TZID': 'America/New_York'} vDDDTypes 2026-03-02 09:30:00 America/New_York
+    DTEND {'TZID': 'America/New_York'} vDDDTypes 2026-03-02 09:45:00 America/New_York
+    RRULE vRecur FREQ=['WEEKLY']; WKST=['MO']; UNTIL=[2026-12-31 04:59:59 UTC]; BYDAY=['MO', 'TU', 'WE', 'TH', 'FR']
+    EXDATE {'TZID': 'America/New_York'} vDDDLists [2026-05-25 09:30:00 America/New_York, 2026-07-03 09:30:00 America/New_York]
+    DTSTAMP vDDDTypes 2026-10-15 12:00:00 UTC
+    ORGANIZER {'CN': 'Priya Raman'} vCalAddress 'mailto:priya@example.com'
+    UID vText '4f1c0a7e2b@google.com'
+    ATTENDEE {'CUTYPE': 'INDIVIDUAL', 'ROLE': 'REQ-PARTICIPANT', 'PARTSTAT': 'ACCEPTED', 'CN': 'Priya Raman', 'X-NUM-GUESTS': '0'} vCalAddress 'mailto:priya@example.com'
+    ATTENDEE {'CUTYPE': 'INDIVIDUAL', 'ROLE': 'REQ-PARTICIPANT', 'PARTSTAT': 'NEEDS-ACTION', 'RSVP': 'TRUE', 'CN': 'dev-oncall@example.com', 'X-NUM-GUESTS': '0'} vCalAddress 'mailto:dev-oncall@example.com'
+    ATTENDEE {'CUTYPE': 'RESOURCE', 'ROLE': 'NON-PARTICIPANT', 'PARTSTAT': 'ACCEPTED', 'CN': 'Room 4.12 (Kepler)', 'X-NUM-GUESTS': '0'} vCalAddress 'mailto:c_1889k2@resource.calendar.example.com'
+    CREATED vDDDTypes 2026-02-20 18:30:00 UTC
+    DESCRIPTION vText 'Daily standup. Join: https://meet.example.com/abc-defg-hij\n\nAgenda:\n- yesterday\n- today\n- blockers\n\nDial-in: +1 555-0100, PIN 4417#'
+    LAST-MODIFIED vDDDTypes 2026-10-15 11:59:00 UTC
+    LOCATION vText 'Room 4.12 (Kepler); or online'
+    SEQUENCE vInt 3
+    STATUS vText 'CONFIRMED'
+    SUMMARY vText 'Platform standup'
+    TRANSP vText 'OPAQUE'
+    VALARM
+      ACTION vText 'DISPLAY'
+      DESCRIPTION vText 'This is an event reminder'
+      TRIGGER vDDDTypes -1 day, 23:50:00
+  VEVENT
+    DTSTART {'TZID': 'America/New_York'} vDDDTypes 2026-07-09 10:00:00 America/New_York
+    DTEND {'TZID': 'America/New_York'} vDDDTypes 2026-07-09 10:45:00 America/New_York
+    DTSTAMP vDDDTypes 2026-10-15 12:00:00 UTC
+    UID vText '4f1c0a7e2b@google.com'
+    RECURRENCE-ID {'TZID': 'America/New_York'} vDDDTypes 2026-07-09 09:30:00 America/New_York
+    CREATED vDDDTypes 2026-02-20 18:30:00 UTC
+    DESCRIPTION vText 'Moved for the all-hands.'
+    LAST-MODIFIED vDDDTypes 2026-07-01 09:00:00 UTC
+    SEQUENCE vInt 4
+    STATUS vText 'CONFIRMED'
+    SUMMARY vText 'Platform standup (moved)'
+    TRANSP vText 'OPAQUE'
+  VEVENT
+    DTSTART {'VALUE': 'DATE'} vDDDTypes 2026-11-26
+    DTEND {'VALUE': 'DATE'} vDDDTypes 2026-11-28
+    DTSTAMP vDDDTypes 2026-10-15 12:00:00 UTC
+    UID vText 'thanksgiving-2026@google.com'
+    CATEGORIES vCategory ['Holiday', 'Office closed']
+    CLASS vText 'PUBLIC'
+    SUMMARY vText 'Thanksgiving (office closed)'
+    TRANSP vText 'TRANSPARENT'
+  VEVENT
+    DTSTART vDDDTypes 2026-11-03 14:00:00 UTC
+    DURATION vDDDTypes 1:30:00
+    DTSTAMP vDDDTypes 2026-10-15 12:00:00 UTC
+    UID vText 'oncall-handover-44@google.com'
+    RRULE vRecur FREQ=['MONTHLY']; BYDAY=['1TU']; COUNT=[6]
+    SUMMARY vText 'On-call handover'
+    DESCRIPTION vText 'Rotation: alice → bob → chen → dana. Runbook: https://wiki.example.com/oncall?tab=handover&view=full'
+    URL vUri 'https://wiki.example.com/oncall'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Google Inc//Google Calendar 70.9054//EN
+| CALSCALE:GREGORIAN
+| METHOD:PUBLISH
+| X-WR-CALDESC:Standups\, reviews and on-call handovers
+| X-WR-CALNAME:Platform team
+| X-WR-TIMEZONE:America/New_York
+| BEGIN:VTIMEZONE
+| TZID:America/New_York
+| X-LIC-LOCATION:America/New_York
+| BEGIN:DAYLIGHT
+| DTSTART:19700308T020000
+| RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3
+| TZNAME:EDT
+| TZOFFSETFROM:-0500
+| TZOFFSETTO:-0400
+| END:DAYLIGHT
+| BEGIN:STANDARD
+| DTSTART:19701101T020000
+| RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=11
+| TZNAME:EST
+| TZOFFSETFROM:-0400
+| TZOFFSETTO:-0500
+| END:STANDARD
+| END:VTIMEZONE
+| BEGIN:VEVENT
+| SUMMARY:Platform standup
+| DTSTART;TZID=America/New_York:20260302T093000
+| DTEND;TZID=America/New_York:20260302T094500
+| DTSTAMP:20261015T120000Z
+| UID:4f1c0a7e2b@google.com
+| SEQUENCE:3
+| RRULE:FREQ=WEEKLY;UNTIL=20261231T045959Z;BYDAY=MO,TU,WE,TH,FR;WKST=MO
+| EXDATE;TZID=America/New_York:20260525T093000,20260703T093000
+| ATTENDEE;CN="Priya Raman";CUTYPE=INDIVIDUAL;PARTSTAT=ACCEPTED;ROLE=REQ-PAR
+|  TICIPANT;X-NUM-GUESTS=0:mailto:priya@example.com
+| ATTENDEE;CN=dev-oncall@example.com;CUTYPE=INDIVIDUAL;PARTSTAT=NEEDS-ACTION
+|  ;ROLE=REQ-PARTICIPANT;RSVP=TRUE;X-NUM-GUESTS=0:mailto:dev-oncall@example.c
+|  om
+| ATTENDEE;CN="Room 4.12 (Kepler)";CUTYPE=RESOURCE;PARTSTAT=ACCEPTED;ROLE=NO
+|  N-PARTICIPANT;X-NUM-GUESTS=0:mailto:c_1889k2@resource.calendar.example.com
+| CREATED:20260220T183000Z
+| DESCRIPTION:Daily standup. Join: https://meet.example.com/abc-defg-hij\n\n
+|  Agenda:\n- yesterday\n- today\n- blockers\n\nDial-in: +1 555-0100\, PIN 44
+|  17#
+| LAST-MODIFIED:20261015T115900Z
+| LOCATION:Room 4.12 (Kepler)\; or online
+| ORGANIZER;CN="Priya Raman":mailto:priya@example.com
+| STATUS:CONFIRMED
+| TRANSP:OPAQUE
+| BEGIN:VALARM
+| ACTION:DISPLAY
+| DESCRIPTION:This is an event reminder
+| TRIGGER:-PT10M
+| END:VALARM
+| END:VEVENT
+| BEGIN:VEVENT
+| SUMMARY:Platform standup (moved)
+| DTSTART;TZID=America/New_York:20260709T100000
+| DTEND;TZID=America/New_York:20260709T104500
+| DTSTAMP:20261015T120000Z
+| UID:4f1c0a7e2b@google.com
+| RECURRENCE-ID;TZID=America/New_York:20260709T093000
+| SEQUENCE:4
+| CREATED:20260220T183000Z
+| DESCRIPTION:Moved for the all-hands.
+| LAST-MODIFIED:20260701T090000Z
+| STATUS:CONFIRMED
+| TRANSP:OPAQUE
+| END:VEVENT
+| BEGIN:VEVENT
+| SUMMARY:Thanksgiving (office closed)
+| DTSTART;VALUE=DATE:20261126
+| DTEND;VALUE=DATE:20261128
+| DTSTAMP:20261015T120000Z
+| UID:thanksgiving-2026@google.com
+| CATEGORIES:Holiday,Office closed
+| CLASS:PUBLIC
+| TRANSP:TRANSPARENT
+| END:VEVENT
+| BEGIN:VEVENT
+| SUMMARY:On-call handover
+| DTSTART:20261103T140000Z
+| DURATION:PT1H30M
+| DTSTAMP:20261015T120000Z
+| UID:oncall-handover-44@google.com
+| RRULE:FREQ=MONTHLY;COUNT=6;BYDAY=1TU
+| DESCRIPTION:Rotation: alice → bob → chen → dana. Runbook: https://wi
+|  ki.example.com/oncall?tab=handover&view=full
+| URL:https://wiki.example.com/oncall
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== importer_errors.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example//Importer test//EN'
+  X-PUBLISHED-TTL vUnknown 'P1W'
+  X-COUNT {'VALUE': 'INTEGER'} vBroken (expected vInt) 'many'
+  errors: [('X-COUNT', 'Expected int, got: many')]
+  VEVENT
+    UID vText 'broken-values'
+    DTSTAMP vDDDTypes 2026-10-01 00:00:00 UTC
+    DTSTART vBroken (expected vDDDTypes) '2026-12-01T10:00:00'
+    DTEND vBroken (expected vDDDTypes) '20261301T100000'
+    DURATION vBroken (expected vDDDTypes) 'PT1.5H'
+    GEO vBroken (expected vGeo) '51.5;north'
+    PRIORITY vBroken (expected vInt) 'high'
+    SEQUENCE vBroken (expected vInt) '9999999999'
+    RRULE vBroken (expected vRecur) 'FREQ=FORTNIGHTLY;COUNT=3'
+    EXDATE vBroken (expected vDDDLists) '20261224T250000'
+    TRIGGER vBroken (expected vDDDTypes) 'soon'
+    X-SIZE {'VALUE': 'FLOAT'} vBroken (expected vFloat) 'inf'
+    X-WHEN {'VALUE': 'DATE'} vBroken (expected vDDDTypes) '20260230'
+    SUMMARY vText 'Still imported'
+    errors: [('DTSTART', "Expected datetime, date, or time. Got: '2026-12-01T10:00:00'"), ('DTEND', 'Wrong datetime format: 20261301T100000'), ('DURATION', 'Invalid iCalendar duration: PT1.5H'), ('GEO', "Expected 'float;float' , got: 51.5;north"), ('PRIORITY', 'Expected int, got: high'), ('SEQUENCE', 'Integer 9999999999 is outside the RFC 5545 range [-2147483648, 2147483647]'), ('RRULE', 'Expected frequency, got: FORTNIGHTLY'), ('EXDATE', 'Wrong datetime format: 20261224T250000'), ('TRIGGER', "Expected datetime, date, or time. Got: 'soon'"), (None, "Content line could not be parsed into parts: 'a line that is not a property': Invalid content line"), (None, "Content line could not be parsed into parts: 'DESCRIPTION;:empty parameter section': Invalid content line"), (None, "Content line could not be parsed into parts: ';X=1:no name': ;X=1:noname"), ('X-SIZE', 'Expected finite float value, got: inf'), ('X-WHEN', 'Wrong date format 20260230')]
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example//Importer test//EN
+| X-COUNT;VALUE=INTEGER:many
+| X-PUBLISHED-TTL:P1W
+| BEGIN:VEVENT
+| SUMMARY:Still imported
+| DTSTART:2026-12-01T10:00:00
+| DTEND:20261301T100000
+| DURATION:PT1.5H
+| DTSTAMP:20261001T000000Z
+| UID:broken-values
+| SEQUENCE:9999999999
+| RRULE:FREQ=FORTNIGHTLY\;COUNT=3
+| EXDATE:20261224T250000
+| GEO:51.5\;north
+| PRIORITY:high
+| TRIGGER:soon
+| X-SIZE;VALUE=FLOAT:inf
+| X-WHEN;VALUE=DATE:20260230
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== lenient.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Hand written//EN'
+  VEVENT
+    UID vText 'lenient-1'
+    DTSTAMP vDDDTypes 2026-10-01 00:00:00 UTC
+    DTSTART {'TZID': 'Europe/Paris'} vBroken (expected vDDDTypes) ' 20261201T100000'
+    SUMMARY vText 'Folded with a tab and a space'
+    SUMMARY vText 'a second summary'
+    DESCRIPTION vText 'first\nsecond\nthird\\fourth:fifth'
+    errors: [('DTSTART', 'Wrong datetime format:  20261201T100000')]
+  X-ACME-WIDGET
+    X-ACME-COLOR vUnknown 'teal'
+    X-ACME-SIZE {'VALUE': 'INTEGER'} vInt 3
+  VEVENT
+    UID vText 'mismatched-end'
+    SUMMARY vText 'Closed by END:VTODO'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Hand written//EN
+| BEGIN:VEVENT
+| SUMMARY:Folded with a tab and a space
+| SUMMARY:a second summary
+| DTSTART;TZID=Europe/Paris: 20261201T100000
+| DTSTAMP:20261001T000000Z
+| UID:lenient-1
+| DESCRIPTION:first\nsecond\nthird\\fourth:fifth
+| END:VEVENT
+| BEGIN:X-ACME-WIDGET
+| X-ACME-COLOR:teal
+| X-ACME-SIZE;VALUE=INTEGER:3
+| END:X-ACME-WIDGET
+| BEGIN:VEVENT
+| SUMMARY:Closed by END:VTODO
+| UID:mismatched-end
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== outlook_invite.ics
+calendars: 1
+VCALENDAR
+  METHOD vText 'REQUEST'
+  PRODID vText 'Microsoft Exchange Server 2010'
+  VERSION vText '2.0'
+  VTIMEZONE
+    TZID vText 'W. Europe Standard Time'
+    STANDARD
+      DTSTART vDDDTypes 1601-01-01 03:00:00
+      TZOFFSETFROM vUTCOffset 2:00:00
+      TZOFFSETTO vUTCOffset 1:00:00
+      RRULE vRecur FREQ=['YEARLY']; INTERVAL=[1]; BYDAY=['-1SU']; BYMONTH=[10]
+    DAYLIGHT
+      DTSTART vDDDTypes 1601-01-01 02:00:00
+      TZOFFSETFROM vUTCOffset 1:00:00
+      TZOFFSETTO vUTCOffset 2:00:00
+      RRULE vRecur FREQ=['YEARLY']; INTERVAL=[1]; BYDAY=['-1SU']; BYMONTH=[3]
+  VEVENT
+    ORGANIZER {'CN': 'Weber, Thomas'} vCalAddress 'mailto:thomas.weber@example.de'
+    ATTENDEE {'ROLE': 'REQ-PARTICIPANT', 'PARTSTAT': 'NEEDS-ACTION', 'RSVP': 'TRUE', 'CN': 'Müller, Jana'} vCalAddress 'mailto:jana.mueller@example.de'
+    ATTENDEE {'ROLE': 'OPT-PARTICIPANT', 'PARTSTAT': 'NEEDS-ACTION', 'RSVP': 'TRUE', 'CN': "Sean O'Brien"} vCalAddress 'mailto:sean.obrien@example.ie'
+    ATTENDEE {'ROLE': 'REQ-PARTICIPANT', 'PARTSTAT': 'TENTATIVE', 'DELEGATED-FROM': 'mailto:cfo@example.de', 'CN': 'Finance Team'} vCalAddress 'mailto:finance@example.de'
+    DESCRIPTION {'LANGUAGE': 'de-DE'} vText 'Hallo zusammen,\n\nbitte die Zahlen für Q3 mitbringen.\nAgenda: Budget; Forecast; Sonstiges\n\n'
+    UID vText '040000008200E00074C5B7101A82E00800000000A0B1C2D3E4F5A6B7C8D9E0F1A2B3C4D5E6F7A8B9'
+    SUMMARY {'LANGUAGE': 'de-DE'} vText 'Q3 Budgetrunde'
+    DTSTART {'TZID': 'W. Europe Standard Time'} vDDDTypes 2026-09-15 14:00:00 W. Europe Standard Time
+    DTEND {'TZID': 'W. Europe Standard Time'} vDDDTypes 2026-09-15 15:30:00 W. Europe Standard Time
+    CLASS vText 'PUBLIC'
+    PRIORITY vInt 5
+    DTSTAMP vDDDTypes 2026-09-01 08:15:00 UTC
+    TRANSP vText 'OPAQUE'
+    STATUS vText 'CONFIRMED'
+    SEQUENCE vInt 0
+    LOCATION {'LANGUAGE': 'de-DE'} vText 'Besprechungsraum Rhein (3. OG)'
+    ATTACH {'FMTTYPE': 'text/plain', 'ENCODING': 'BASE64', 'VALUE': 'BINARY', 'X-FILENAME': 'agenda.txt'} vBinary 49 bytes b'Agenda:\n1. Budget Q3\n2. '
+    X-MICROSOFT-CDO-APPT-SEQUENCE vUnknown '0'
+    X-MICROSOFT-CDO-OWNERAPPTID vUnknown '2117283546'
+    X-MICROSOFT-CDO-BUSYSTATUS vUnknown 'TENTATIVE'
+    X-MICROSOFT-CDO-INTENDEDSTATUS vUnknown 'BUSY'
+    X-MICROSOFT-CDO-ALLDAYEVENT vUnknown 'FALSE'
+    X-MICROSOFT-CDO-IMPORTANCE vUnknown '1'
+    X-MICROSOFT-CDO-INSTTYPE vUnknown '0'
+    X-MICROSOFT-DONOTFORWARDMEETING vUnknown 'FALSE'
+    X-MICROSOFT-DISALLOW-COUNTER vUnknown 'FALSE'
+    X-ALT-DESC {'FMTTYPE': 'text/html'} vUnknown '<html><body><p>Hallo zusammen\\,</p><p>bitte die Zahlen für Q3 mitbringen.</p></body></html>'
+    VALARM
+      DESCRIPTION vText 'REMINDER'
+      TRIGGER {'RELATED': 'START'} vDDDTypes -1 day, 23:45:00
+      ACTION vText 'DISPLAY'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:Microsoft Exchange Server 2010
+| METHOD:REQUEST
+| BEGIN:VTIMEZONE
+| TZID:W. Europe Standard Time
+| BEGIN:STANDARD
+| DTSTART:16010101T030000
+| RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10
+| TZOFFSETFROM:+0200
+| TZOFFSETTO:+0100
+| END:STANDARD
+| BEGIN:DAYLIGHT
+| DTSTART:16010101T020000
+| RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3
+| TZOFFSETFROM:+0100
+| TZOFFSETTO:+0200
+| END:DAYLIGHT
+| END:VTIMEZONE
+| BEGIN:VEVENT
+| SUMMARY;LANGUAGE=de-DE:Q3 Budgetrunde
+| DTSTART;TZID=W. Europe Standard Time:20260915T140000
+| DTEND;TZID=W. Europe Standard Time:20260915T153000
+| DTSTAMP:20260901T081500Z
+| UID:040000008200E00074C5B7101A82E00800000000A0B1C2D3E4F5A6B7C8D9E0F1A2B3C4
+|  D5E6F7A8B9
+| SEQUENCE:0
+| ATTACH;ENCODING=BASE64;FMTTYPE=text/plain;VALUE=BINARY;X-FILENAME=agenda.t
+|  xt:QWdlbmRhOgoxLiBCdWRnZXQgUTMKMi4gRm9yZWNhc3QgUTQKMy4gU29uc3RpZ2VzCg==
+| ATTENDEE;CN="Müller, Jana";PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSV
+|  P=TRUE:mailto:jana.mueller@example.de
+| ATTENDEE;CN="Sean O'Brien";PARTSTAT=NEEDS-ACTION;ROLE=OPT-PARTICIPANT;RSVP
+|  =TRUE:mailto:sean.obrien@example.ie
+| ATTENDEE;CN="Finance Team";DELEGATED-FROM="mailto:cfo@example.de";PARTSTAT
+|  =TENTATIVE;ROLE=REQ-PARTICIPANT:mailto:finance@example.de
+| CLASS:PUBLIC
+| DESCRIPTION;LANGUAGE=de-DE:Hallo zusammen\,\n\nbitte die Zahlen für Q3 mi
+|  tbringen.\nAgenda: Budget\; Forecast\; Sonstiges\n\n
+| LOCATION;LANGUAGE=de-DE:Besprechungsraum Rhein (3. OG)
+| ORGANIZER;CN="Weber, Thomas":mailto:thomas.weber@example.de
+| PRIORITY:5
+| STATUS:CONFIRMED
+| TRANSP:OPAQUE
+| X-ALT-DESC;FMTTYPE=text/html:<html><body><p>Hallo zusammen\,</p><p>bitte d
+|  ie Zahlen für Q3 mitbringen.</p></body></html>
+| X-MICROSOFT-CDO-ALLDAYEVENT:FALSE
+| X-MICROSOFT-CDO-APPT-SEQUENCE:0
+| X-MICROSOFT-CDO-BUSYSTATUS:TENTATIVE
+| X-MICROSOFT-CDO-IMPORTANCE:1
+| X-MICROSOFT-CDO-INSTTYPE:0
+| X-MICROSOFT-CDO-INTENDEDSTATUS:BUSY
+| X-MICROSOFT-CDO-OWNERAPPTID:2117283546
+| X-MICROSOFT-DISALLOW-COUNTER:FALSE
+| X-MICROSOFT-DONOTFORWARDMEETING:FALSE
+| BEGIN:VALARM
+| ACTION:DISPLAY
+| DESCRIPTION:REMINDER
+| TRIGGER;RELATED=START:-PT15M
+| END:VALARM
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== teams_publish.ics
+calendars: 1
+VCALENDAR
+  PRODID vText '-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN'
+  VERSION vText '2.0'
+  METHOD vText 'PUBLISH'
+  X-MS-OLK-FORCEINSPECTOROPEN vUnknown 'TRUE'
+  VEVENT
+    CLASS vText 'PUBLIC'
+    CREATED vDDDTypes 2026-08-10 17:12:00 UTC
+    DESCRIPTION vText 'Microsoft Teams meeting\nJoin on your computer or mobile app\nhttps://teams.example.com/l/meetup-join/19%3ameeting_ZmE4%40thread.v2/0?context=%7b%22Tid%22%3a%2201%22%7d\n'
+    DTEND {'TZID': 'Pacific Standard Time'} vDDDTypes 2026-08-18 10:00:00 America/Los_Angeles
+    DTSTAMP vDDDTypes 2026-08-10 17:12:00 UTC
+    DTSTART {'TZID': 'Pacific Standard Time'} vDDDTypes 2026-08-18 09:30:00 America/Los_Angeles
+    LAST-MODIFIED vDDDTypes 2026-08-10 17:12:00 UTC
+    LOCATION vText 'Microsoft Teams Meeting'
+    PRIORITY vInt 5
+    SEQUENCE vInt 0
+    SUMMARY {'LANGUAGE': 'en-us'} vText 'Vendor sync – contract renewal'
+    TRANSP vText 'OPAQUE'
+    UID vText '040000008200E00074C5B7101A82E0080000000050F4A1C9D2C7DA01'
+    X-MICROSOFT-CDO-BUSYSTATUS vUnknown 'BUSY'
+    X-MICROSOFT-CDO-IMPORTANCE vUnknown '1'
+    X-MICROSOFT-DISALLOW-COUNTER vUnknown 'FALSE'
+    X-MS-OLK-AUTOFILLLOCATION vUnknown 'FALSE'
+    X-MS-OLK-CONFTYPE vUnknown '0'
+  VEVENT
+    DTSTART {'TZID': 'Tokyo Standard Time'} vDDDTypes 2026-08-20 09:00:00 Asia/Tokyo
+    DTEND {'TZID': 'Tokyo Standard Time'} vDDDTypes 2026-08-20 09:30:00 Asia/Tokyo
+    DTSTAMP vDDDTypes 2026-08-10 17:12:00 UTC
+    UID vText 'tokyo-ops-review'
+    SUMMARY vText 'Ops review (Tokyo)'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN
+| METHOD:PUBLISH
+| X-MS-OLK-FORCEINSPECTOROPEN:TRUE
+| BEGIN:VEVENT
+| SUMMARY;LANGUAGE=en-us:Vendor sync – contract renewal
+| DTSTART;TZID=Pacific Standard Time:20260818T093000
+| DTEND;TZID=Pacific Standard Time:20260818T100000
+| DTSTAMP:20260810T171200Z
+| UID:040000008200E00074C5B7101A82E0080000000050F4A1C9D2C7DA01
+| SEQUENCE:0
+| CLASS:PUBLIC
+| CREATED:20260810T171200Z
+| DESCRIPTION:Microsoft Teams meeting\nJoin on your computer or mobile app\n
+|  https://teams.example.com/l/meetup-join/19%3ameeting_ZmE4%40thread.v2/0?co
+|  ntext=%7b%22Tid%22%3a%2201%22%7d\n
+| LAST-MODIFIED:20260810T171200Z
+| LOCATION:Microsoft Teams Meeting
+| PRIORITY:5
+| TRANSP:OPAQUE
+| X-MICROSOFT-CDO-BUSYSTATUS:BUSY
+| X-MICROSOFT-CDO-IMPORTANCE:1
+| X-MICROSOFT-DISALLOW-COUNTER:FALSE
+| X-MS-OLK-AUTOFILLLOCATION:FALSE
+| X-MS-OLK-CONFTYPE:0
+| END:VEVENT
+| BEGIN:VEVENT
+| SUMMARY:Ops review (Tokyo)
+| DTSTART;TZID=Tokyo Standard Time:20260820T090000
+| DTEND;TZID=Tokyo Standard Time:20260820T093000
+| DTSTAMP:20260810T171200Z
+| UID:tokyo-ops-review
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== thunderbird_tasks.ics
+calendars: 1
+VCALENDAR
+  PRODID vText '-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN'
+  VERSION vText '2.0'
+  VTIMEZONE
+    TZID vText 'Europe/Berlin'
+    X-LIC-LOCATION vUnknown 'Europe/Berlin'
+    DAYLIGHT
+      TZOFFSETFROM vUTCOffset 1:00:00
+      TZOFFSETTO vUTCOffset 2:00:00
+      TZNAME vText 'CEST'
+      DTSTART vDDDTypes 1970-03-29 02:00:00
+      RRULE vRecur FREQ=['YEARLY']; BYDAY=['-1SU']; BYMONTH=[3]
+    STANDARD
+      TZOFFSETFROM vUTCOffset 2:00:00
+      TZOFFSETTO vUTCOffset 1:00:00
+      TZNAME vText 'CET'
+      DTSTART vDDDTypes 1970-10-25 03:00:00
+      RRULE vRecur FREQ=['YEARLY']; BYDAY=['-1SU']; BYMONTH=[10]
+  VTODO
+    CREATED vDDDTypes 2026-10-01 07:20:11 UTC
+    LAST-MODIFIED vDDDTypes 2026-10-12 18:34:02 UTC
+    DTSTAMP vDDDTypes 2026-10-12 18:34:02 UTC
+    UID vText '1c9e7f2a-0b4d-4e8a-9f61-3d2c5b7a8e90'
+    SUMMARY vText 'Renew passport'
+    STATUS vText 'IN-PROCESS'
+    PRIORITY vInt 1
+    PERCENT-COMPLETE vInt 40
+    CATEGORIES vCategory ['Errands', 'Personal']
+    DTSTART {'TZID': 'Europe/Berlin'} vDDDTypes 2026-10-14 09:00:00 Europe/Berlin
+    DUE {'TZID': 'Europe/Berlin'} vDDDTypes 2026-10-30 17:00:00 Europe/Berlin
+    X-MOZ-GENERATION vUnknown '3'
+    VALARM
+      ACTION vText 'DISPLAY'
+      TRIGGER {'VALUE': 'DATE-TIME'} vDDDTypes 2026-10-28 08:00:00 UTC
+      DESCRIPTION vText 'Default Mozilla Description'
+  VTODO
+    CREATED vDDDTypes 2026-09-01 10:00:00 UTC
+    DTSTAMP vDDDTypes 2026-09-05 16:30:00 UTC
+    UID vText '7d3b2e1f-4a5c-4b6d-8e9f-0a1b2c3d4e5f'
+    SUMMARY vText 'File expense report'
+    STATUS vText 'COMPLETED'
+    COMPLETED vDDDTypes 2026-09-05 16:30:00 UTC
+    PERCENT-COMPLETE vInt 100
+    DUE {'VALUE': 'DATE'} vDDDTypes 2026-09-06
+  VEVENT
+    CREATED vDDDTypes 2026-10-02 10:15:00 UTC
+    DTSTAMP vDDDTypes 2026-10-02 10:15:00 UTC
+    UID vText 'b8a4c2d0-6e1f-4a3b-9c5d-7e8f9a0b1c2d'
+    SUMMARY vText 'Call with the London office'
+    DTSTART {'TZID': '/mozilla.org/20050126_1/Europe/London'} vDDDTypes 2026-11-05 16:00:00 Europe/London
+    DTEND {'TZID': '/mozilla.org/20050126_1/Europe/London'} vDDDTypes 2026-11-05 16:30:00 Europe/London
+    RDATE {'VALUE': 'PERIOD'} vDDDLists [(2026-11-12 16:00:00 UTC, 0:30:00), (2026-11-19 16:00:00 UTC, 2026-11-19 17:00:00 UTC)]
+    X-MOZ-LASTACK vUnknown '20261101T090000Z'
+    X-MOZ-SNOOZE-TIME vUnknown '20261105T155000Z'
+    VALARM
+      ACTION vText 'EMAIL'
+      ATTENDEE vCalAddress 'mailto:me@example.net'
+      SUMMARY vText 'Reminder'
+      DESCRIPTION vText 'The London call starts in 10 minutes'
+      TRIGGER {'RELATED': 'START'} vDDDTypes -1 day, 23:50:00
+      REPEAT vInt 2
+      DURATION vDDDTypes 0:05:00
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+| BEGIN:VTIMEZONE
+| TZID:Europe/Berlin
+| X-LIC-LOCATION:Europe/Berlin
+| BEGIN:DAYLIGHT
+| DTSTART:19700329T020000
+| RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+| TZNAME:CEST
+| TZOFFSETFROM:+0100
+| TZOFFSETTO:+0200
+| END:DAYLIGHT
+| BEGIN:STANDARD
+| DTSTART:19701025T030000
+| RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+| TZNAME:CET
+| TZOFFSETFROM:+0200
+| TZOFFSETTO:+0100
+| END:STANDARD
+| END:VTIMEZONE
+| BEGIN:VTODO
+| CATEGORIES:Errands,Personal
+| CREATED:20261001T072011Z
+| DTSTAMP:20261012T183402Z
+| DTSTART;TZID=Europe/Berlin:20261014T090000
+| DUE;TZID=Europe/Berlin:20261030T170000
+| LAST-MODIFIED:20261012T183402Z
+| PERCENT-COMPLETE:40
+| PRIORITY:1
+| STATUS:IN-PROCESS
+| SUMMARY:Renew passport
+| UID:1c9e7f2a-0b4d-4e8a-9f61-3d2c5b7a8e90
+| X-MOZ-GENERATION:3
+| BEGIN:VALARM
+| ACTION:DISPLAY
+| DESCRIPTION:Default Mozilla Description
+| TRIGGER;VALUE=DATE-TIME:20261028T080000Z
+| END:VALARM
+| END:VTODO
+| BEGIN:VTODO
+| COMPLETED:20260905T163000Z
+| CREATED:20260901T100000Z
+| DTSTAMP:20260905T163000Z
+| DUE;VALUE=DATE:20260906
+| PERCENT-COMPLETE:100
+| STATUS:COMPLETED
+| SUMMARY:File expense report
+| UID:7d3b2e1f-4a5c-4b6d-8e9f-0a1b2c3d4e5f
+| END:VTODO
+| BEGIN:VEVENT
+| SUMMARY:Call with the London office
+| DTSTART;TZID=/mozilla.org/20050126_1/Europe/London:20261105T160000
+| DTEND;TZID=/mozilla.org/20050126_1/Europe/London:20261105T163000
+| DTSTAMP:20261002T101500Z
+| UID:b8a4c2d0-6e1f-4a3b-9c5d-7e8f9a0b1c2d
+| RDATE;VALUE=PERIOD:20261112T160000Z/PT30M,20261119T160000Z/20261119T170000
+|  Z
+| CREATED:20261002T101500Z
+| X-MOZ-LASTACK:20261101T090000Z
+| X-MOZ-SNOOZE-TIME:20261105T155000Z
+| BEGIN:VALARM
+| ACTION:EMAIL
+| ATTENDEE:mailto:me@example.net
+| DESCRIPTION:The London call starts in 10 minutes
+| DURATION:PT5M
+| REPEAT:2
+| SUMMARY:Reminder
+| TRIGGER;RELATED=START:-PT10M
+| END:VALARM
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== two_calendars.ics
+calendars: 2
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example//Exporter A//EN'
+  VEVENT
+    UID vText 'late-zone'
+    DTSTAMP vDDDTypes 2026-10-01 00:00:00 UTC
+    DTSTART {'TZID': 'Harbour Office'} vDDDTypes 2026-11-10 08:30:00 Harbour Office
+    SUMMARY vText 'Uses a zone defined below'
+  VTIMEZONE
+    TZID vText 'Harbour Office'
+    STANDARD
+      DTSTART vDDDTypes 1970-01-01 00:00:00
+      TZOFFSETFROM vUTCOffset 10:00:00
+      TZOFFSETTO vUTCOffset 10:00:00
+      TZNAME vText 'HBR'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example//Exporter A//EN
+| BEGIN:VEVENT
+| SUMMARY:Uses a zone defined below
+| DTSTART;TZID=Harbour Office:20261110T083000
+| DTSTAMP:20261001T000000Z
+| UID:late-zone
+| END:VEVENT
+| BEGIN:VTIMEZONE
+| TZID:Harbour Office
+| BEGIN:STANDARD
+| DTSTART:19700101T000000
+| TZNAME:HBR
+| TZOFFSETFROM:+1000
+| TZOFFSETTO:+1000
+| END:STANDARD
+| END:VTIMEZONE
+| END:VCALENDAR
+read back: same
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example//Exporter B//EN'
+  VEVENT
+    UID vText 'second-calendar'
+    DTSTAMP vDDDTypes 2026-10-01 00:00:00 UTC
+    DTSTART {'TZID': 'Harbour Office'} vDDDTypes 2026-11-11 08:30:00 Harbour Office
+    DTSTART {'TZID': 'W. Europe Standard Time'} vDDDTypes 2026-11-11 08:30:00 W. Europe Standard Time
+    SUMMARY vText 'Two DTSTARTs'
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example//Exporter B//EN
+| BEGIN:VEVENT
+| SUMMARY:Two DTSTARTs
+| DTSTART;TZID=Harbour Office:20261111T083000
+| DTSTART;TZID=W. Europe Standard Time:20261111T083000
+| DTSTAMP:20261001T000000Z
+| UID:second-calendar
+| END:VEVENT
+| END:VCALENDAR
+read back: same
+== value_types.ics
+calendars: 1
+VCALENDAR
+  VERSION vText '2.0'
+  PRODID vText '-//Example//Value types//EN'
+  VEVENT
+    UID vText 'types-1'
+    DTSTAMP vDDDTypes 2026-10-01 00:00:00 UTC
+    DTSTART {'TZID': 'Etc/UTC'} vDDDTypes 2026-12-01 10:00:00 Etc/UTC
+    DTEND {'TZID': 'UTC'} vDDDTypes 2026-12-01 11:00:00 UTC
+    RECURRENCE-ID {'TZID': 'Europe/Berlin', 'VALUE': 'DATE'} vDDDTypes 2026-12-01 00:00:00 Europe/Berlin
+    RDATE {'TZID': 'Nowhere/Special'} vDDDLists [2026-12-08 10:00:00, 2026-12-15 10:00:00]
+    EXDATE {'VALUE': 'DATE'} vDDDLists [2026-12-22, 2026-12-29]
+    RRULE vRecur FREQ=['YEARLY']; BYMONTH=[2, 5L]; BYMONTHDAY=[-1]; BYSETPOS=[1, -1]; BYHOUR=[9, 17]; INTERVAL=[10]; UNTIL=[2030-12-31]
+    EXRULE vRecur FREQ=['DAILY']; BYDAY=['SA', 'SU']; WKST=['SU']
+    X-START {'VALUE': 'TIME'} vTime 08:30:00
+    X-END {'VALUE': 'TIME'} vTime 17:00:00 UTC
+    X-OFFSET {'VALUE': 'UTC-OFFSET'} vUTCOffset -1 day, 20:30:00
+    X-FLAG {'VALUE': 'BOOLEAN'} vBoolean True
+    X-LINK {'VALUE': 'URI'} vUri 'https://example.com/a?b=c,d;e'
+    X-BLOCK {'VALUE': 'PERIOD'} vPeriod (2026-12-01 09:00:00, 2026-12-01 09:00:00)
+    X-LONG {'VALUE': 'DURATION'} vDDDTypes -18 days, 19:54:54
+    X-WEEKS {'VALUE': 'DURATION'} vDDDTypes 7 days, 0:00:00
+    X-DAY {'VALUE': 'DURATION'} vDDDTypes 1 day, 0:00:00
+    X-SPAN {'VALUE': 'DATE'} vDDDTypes 2026-12-01
+    X-NUM {'VALUE': 'INTEGER'} vInt -42
+    X-RATIO {'VALUE': 'FLOAT'} vFloat -0.0005
+    X-ADDRESS {'VALUE': 'CAL-ADDRESS'} vCalAddress 'mailto:ops@example.com'
+    CATEGORIES {'LANGUAGE': 'en'} vCategory ['one,two', 'three']
+    CATEGORIES vCategory ['four']
+    GEO vGeo (-33.8688, 151.2093)
+    PERCENT-COMPLETE vInt 5
+written:
+| BEGIN:VCALENDAR
+| VERSION:2.0
+| PRODID:-//Example//Value types//EN
+| BEGIN:VEVENT
+| DTSTART;TZID=Etc/UTC:20261201T100000Z
+| DTEND:20261201T110000Z
+| DTSTAMP:20261001T000000Z
+| UID:types-1
+| RECURRENCE-ID;TZID=Europe/Berlin;VALUE=DATE:20261201T000000
+| RRULE:FREQ=YEARLY;UNTIL=20301231;INTERVAL=10;BYHOUR=9,17;BYMONTHDAY=-1;BYM
+|  ONTH=2,5L;BYSETPOS=1,-1
+| RDATE;TZID=Nowhere/Special:20261208T100000,20261215T100000
+| EXDATE;VALUE=DATE:20261222,20261229
+| CATEGORIES;LANGUAGE=en:one\,two,three
+| CATEGORIES:four
+| EXRULE:FREQ=DAILY;BYDAY=SA,SU;WKST=SU
+| GEO:-33.8688;151.2093
+| PERCENT-COMPLETE:5
+| X-ADDRESS;VALUE=CAL-ADDRESS:mailto:ops@example.com
+| X-BLOCK;VALUE=PERIOD:20261201T090000/20261201T090000
+| X-DAY;VALUE=DURATION:P1D
+| X-END;VALUE=TIME:170000Z
+| X-FLAG;VALUE=BOOLEAN:TRUE
+| X-LINK;VALUE=URI:https://example.com/a?b=c,d;e
+| X-LONG;VALUE=DURATION:-P17DT4H5M6S
+| X-NUM;VALUE=INTEGER:-42
+| X-OFFSET;VALUE=UTC-OFFSET:-0330
+| X-RATIO;VALUE=FLOAT:-0.0005
+| X-SPAN;VALUE=DATE:20261201
+| X-START;VALUE=TIME:083000
+| X-WEEKS;VALUE=DURATION:P7D
+| END:VEVENT
+| END:VCALENDAR
+read back: same

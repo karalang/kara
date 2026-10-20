@@ -1,0 +1,3459 @@
+// mini_icalendar: a port of icalendar 7.3.0 (BSD, see
+// LICENSE-icalendar.rst), the Python library most tools use to read and
+// write .ics files: calendar exports, meeting invitations, task lists,
+// free/busy replies and CalDAV data.
+//
+// - content lines: unfolding (with icalendar's handling of blank lines
+//   inside a fold), splitting into name, parameters and value with
+//   quoting and backslash escapes, the lenient whitespace rules, RFC 6868
+//   caret escapes in parameters, and every error message;
+// - components: the parser's stack, which components forgive bad lines
+//   and bad values (VEVENT, and X- properties anywhere), the broken
+//   properties it keeps, and the second pass when a VTIMEZONE comes
+//   after an event that uses it;
+// - value types: text, URIs, calendar addresses, dates, date-times,
+//   times, durations, periods, date lists, recurrence rules, UTC offsets,
+//   integers, floats, booleans, GEO, categories and base64 binaries,
+//   chosen by property name and VALUE parameter as icalendar chooses;
+// - time zones: TZIDs looked up in the tz database (data/tz/zones.txt),
+//   through Windows zone names, by stripping a vendor prefix, or from a
+//   VTIMEZONE in an earlier calendar;
+// - writing: icalendar's property order, parameter quoting, escaping
+//   and folding at 75 octets.
+//
+// The run writes data/ (calendar files from mk.py), then reads each one,
+// prints its components with each value and its type, the errors
+// icalendar keeps, the file written back out, and whether reading that
+// again gives the same text. expected.out is the output of oracle.py,
+// which does the same through icalendar itself.
+
+// ---------------------------------------------------------------- errors
+
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn value_error(msg: own String) -> PyErr {
+    PyErr { kind: "ValueError".to_string(), msg: msg }
+}
+
+// ---------------------------------------------------------------- text
+
+// Texts are kept as characters, as Python indexes them.
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in v.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn lit(s: Str) -> Vec[char] {
+    s.chars().collect()
+}
+
+// v[lo:hi], clamped the way Python clamps a slice
+fn sl(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let n = v.len();
+    let a = if lo < 0 { 0 } else if lo > n { n } else { lo };
+    let b = if hi < 0 { 0 } else if hi > n { n } else { hi };
+    let mut out: Vec[char] = Vec.new();
+    let mut i = a;
+    while i < b {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn from_(v: ref Vec[char], lo: i64) -> Vec[char] {
+    sl(v, lo, v.len())
+}
+
+fn upto(v: ref Vec[char], hi: i64) -> Vec[char] {
+    sl(v, 0, hi)
+}
+
+// v[-n:] (all of v when n is 0, as in Python)
+fn last_n(v: ref Vec[char], n: i64) -> Vec[char] {
+    if n == 0 { v.clone() } else { sl(v, v.len() - n, v.len()) }
+}
+
+fn cat(a: ref Vec[char], b: ref Vec[char]) -> Vec[char] {
+    let mut out = a.clone();
+    for c in b.iter() {
+        out.push(*c);
+    }
+    out
+}
+
+fn cat3(a: ref Vec[char], b: ref Vec[char], c: ref Vec[char]) -> Vec[char] {
+    let mut out = cat(a, b);
+    for x in c.iter() {
+        out.push(*x);
+    }
+    out
+}
+
+fn same(a: ref Vec[char], b: ref Vec[char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn match_at(v: ref Vec[char], i: i64, pat: ref Vec[char]) -> bool {
+    if i < 0 or i + pat.len() > v.len() {
+        return false;
+    }
+    for j in 0..pat.len() {
+        if v[i + j] != pat[j] {
+            return false;
+        }
+    }
+    true
+}
+
+// str.find(sub, start)
+fn find_from(v: ref Vec[char], pat: ref Vec[char], start: i64) -> i64 {
+    let s = if start < 0 { 0 } else { start };
+    if s > v.len() {
+        return -1;
+    }
+    let mut i = s;
+    while i + pat.len() <= v.len() {
+        if match_at(v, i, pat) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find(v: ref Vec[char], pat: ref Vec[char]) -> i64 {
+    find_from(v, pat, 0)
+}
+
+// str.rfind(sub, start)
+fn rfind_from(v: ref Vec[char], pat: ref Vec[char], start: i64) -> i64 {
+    let s = if start < 0 { 0 } else { start };
+    if s > v.len() {
+        return -1;
+    }
+    let mut i = v.len() - pat.len();
+    while i >= s {
+        if match_at(v, i, pat) {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn starts_with_v(v: ref Vec[char], p: ref Vec[char]) -> bool {
+    match_at(v, 0, p)
+}
+
+fn ends_with_v(v: ref Vec[char], p: ref Vec[char]) -> bool {
+    match_at(v, v.len() - p.len(), p)
+}
+
+fn hex2(n: i64) -> String {
+    let digits: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+fn hex_upper(n: i64) -> String {
+    let digits: Vec[char] = "0123456789ABCDEF".chars().collect();
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+// repr() of a str
+fn py_repr(v: ref Vec[char]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for c in v.iter() {
+        if *c == '\'' {
+            has_sq = true;
+        }
+        if *c == '"' {
+            has_dq = true;
+        }
+    }
+    let q = if has_sq and not has_dq { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c0 in v.iter() {
+        let c = *c0;
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o < 32 or (o >= 127 and o <= 0xA0) or o == 0xAD {
+            out.push_str("\\x");
+            out.push_str(hex2(o));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn bool_list(v: ref Vec[bool]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_bool(v[i]));
+    }
+    out.push(']');
+    out
+}
+
+// ---------------------------------------------------------------- str methods
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x20) or o == 0x85 or o == 0xA0 or o == 0x1680
+        or (o >= 0x2000 and o <= 0x200A) or o == 0x2028 or o == 0x2029 or o == 0x202F or o == 0x205F or o == 0x3000
+}
+
+// str.isalnum() on one character: ASCII letters and digits, and the
+// letters and digits beyond ASCII, which here means everything but
+// spaces, Latin-1 and general punctuation, currency signs, arrows,
+// symbols and emoji.
+fn is_py_alnum(c: char) -> bool {
+    let o = c as i64;
+    if o < 128 {
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+    }
+    if is_py_space(c) {
+        return false;
+    }
+    if o < 0xC0 {
+        return o == 0xAA or o == 0xB2 or o == 0xB3 or o == 0xB5 or o == 0xB9 or o == 0xBA or (o >= 0xBC and o <= 0xBE);
+    }
+    if o == 0xD7 or o == 0xF7 {
+        return false;
+    }
+    if (o >= 0x2000 and o <= 0x2BFF) or (o >= 0x3000 and o <= 0x303F) or (o >= 0x1F000 and o <= 0x1FAFF) or (o >= 0xFE00 and o <= 0xFE0F) {
+        return false;
+    }
+    true
+}
+
+
+// str.strip() with no argument
+fn py_strip(v: ref Vec[char]) -> Vec[char] {
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and is_py_space(v[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(v[b - 1]) {
+        b -= 1;
+    }
+    sl(v, a, b)
+}
+
+fn upper_v(v: ref Vec[char]) -> Vec[char] {
+    chars(text(v).to_uppercase())
+}
+
+fn upper_s(s: ref String) -> String {
+    s.to_uppercase()
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn all_digits(v: ref Vec[char]) -> bool {
+    if v.len() == 0 {
+        return false;
+    }
+    for c in v.iter() {
+        if not is_digit(*c) {
+            return false;
+        }
+    }
+    true
+}
+
+// The digits of an int() literal: surrounding whitespace, a sign, and
+// digits with single underscores between them. Big values keep their
+// digits, for messages that print them.
+struct PyInt {
+    value: i64,
+    digits: String,
+    big: bool,
+}
+
+fn py_int_v(s0: ref Vec[char]) -> Option[PyInt] {
+    let s = py_strip(s0);
+    let mut i = 0;
+    let mut neg = false;
+    if i < s.len() and (s[i] == '+' or s[i] == '-') {
+        neg = s[i] == '-';
+        i += 1;
+    }
+    if i >= s.len() or not is_digit(s[i]) {
+        return None;
+    }
+    let mut ds: Vec[char] = Vec.new();
+    while i < s.len() {
+        if is_digit(s[i]) {
+            ds.push(s[i]);
+        } else if s[i] == '_' and i + 1 < s.len() and is_digit(s[i + 1]) and is_digit(s[i - 1]) {
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    let mut k = 0;
+    while k + 1 < ds.len() and ds[k] == '0' {
+        k += 1;
+    }
+    let ds2 = from_(ds, k);
+    let big = ds2.len() > 18;
+    let mut v = 0;
+    if not big {
+        for c in ds2.iter() {
+            v = v * 10 + ((*c as i64) - 48);
+        }
+    }
+    let zero = ds2.len() == 1 and ds2[0] == '0';
+    let sign = if neg and not zero { "-" } else { "" };
+    Some(PyInt { value: if neg { 0 - v } else { v }, digits: f"{sign}{text(ds2)}", big: big })
+}
+
+fn py_int_s(s: ref String) -> Option[PyInt] {
+    py_int_v(chars(s))
+}
+
+// float(): whitespace, a sign, digits with underscores, a point and an
+// exponent, or inf, infinity and nan in any case
+fn py_float_v(s0: ref Vec[char]) -> Option[f64] {
+    let s = py_strip(s0);
+    let mut i = 0;
+    let mut neg = false;
+    if i < s.len() and (s[i] == '+' or s[i] == '-') {
+        neg = s[i] == '-';
+        i += 1;
+    }
+    let rest = text(from_(s, i)).to_lowercase();
+    if rest == "inf" or rest == "infinity" {
+        return Some(if neg { -1.0 / 0.0 } else { 1.0 / 0.0 });
+    }
+    if rest == "nan" {
+        return Some(0.0 / 0.0);
+    }
+    let mut int_part = String.new();
+    let mut frac = String.new();
+    let mut exp = String.new();
+    let mut seen_digit = false;
+    // digits with single underscores between them
+    let mut prev_digit = false;
+    while i < s.len() and (is_digit(s[i]) or s[i] == '_') {
+        if s[i] == '_' {
+            if not prev_digit or i + 1 >= s.len() or not is_digit(s[i + 1]) {
+                return None;
+            }
+        } else {
+            int_part.push(s[i]);
+            seen_digit = true;
+        }
+        prev_digit = s[i] != '_';
+        i += 1;
+    }
+    if i < s.len() and s[i] == '.' {
+        i += 1;
+        prev_digit = false;
+        while i < s.len() and (is_digit(s[i]) or s[i] == '_') {
+            if s[i] == '_' {
+                if not prev_digit or i + 1 >= s.len() or not is_digit(s[i + 1]) {
+                    return None;
+                }
+            } else {
+                frac.push(s[i]);
+                seen_digit = true;
+            }
+            prev_digit = s[i] != '_';
+            i += 1;
+        }
+    }
+    if not seen_digit {
+        return None;
+    }
+    if i < s.len() and (s[i] == 'e' or s[i] == 'E') {
+        i += 1;
+        if i < s.len() and (s[i] == '+' or s[i] == '-') {
+            exp.push(s[i]);
+            i += 1;
+        }
+        let mut n = 0;
+        while i < s.len() and is_digit(s[i]) {
+            exp.push(s[i]);
+            n += 1;
+            i += 1;
+        }
+        if n == 0 {
+            return None;
+        }
+    }
+    if i != s.len() {
+        return None;
+    }
+    let ip = if int_part.len() == 0 { "0".to_string() } else { int_part };
+    let fp = if frac.len() == 0 { "0".to_string() } else { frac };
+    let lit = if exp.len() > 0 { f"{ip}.{fp}e{exp}" } else { f"{ip}.{fp}" };
+    match f64.parse(lit) {
+        Ok(v) => Some(if neg { -v } else { v }),
+        Err(_) => None,
+    }
+}
+
+fn is_finite(x: f64) -> bool {
+    x == x and x != 1.0 / 0.0 and x != -1.0 / 0.0
+}
+
+// repr() of a float
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+// repr() of bytes
+fn bytes_repr(b: ref Vec[i64]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for x in b.iter() {
+        if *x == 39 {
+            has_sq = true;
+        }
+        if *x == 34 {
+            has_dq = true;
+        }
+    }
+    let q = if has_sq and not has_dq { 34 } else { 39 };
+    let mut out = String.new();
+    out.push('b');
+    out.push(char.try_from(q as u32).unwrap());
+    for x0 in b.iter() {
+        let x = *x0;
+        if x == 92 {
+            out.push_str("\\\\");
+        } else if x == q {
+            out.push('\\');
+            out.push(char.try_from(q as u32).unwrap());
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x < 32 or x >= 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(x));
+        } else {
+            out.push(char.try_from(x as u32).unwrap());
+        }
+    }
+    out.push(char.try_from(q as u32).unwrap());
+    out
+}
+
+fn utf8_bytes(v: ref Vec[char]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v.iter() {
+        let o = *c as i64;
+        if o < 0x80 {
+            out.push(o);
+        } else if o < 0x800 {
+            out.push(0xC0 + o / 64);
+            out.push(0x80 + o % 64);
+        } else if o < 0x10000 {
+            out.push(0xE0 + o / 4096);
+            out.push(0x80 + (o / 64) % 64);
+            out.push(0x80 + o % 64);
+        } else {
+            out.push(0xF0 + o / 262144);
+            out.push(0x80 + (o / 4096) % 64);
+            out.push(0x80 + (o / 64) % 64);
+            out.push(0x80 + o % 64);
+        }
+    }
+    out
+}
+
+fn utf8_len(c: char) -> i64 {
+    let o = c as i64;
+    if o < 0x80 { 1 } else if o < 0x800 { 2 } else if o < 0x10000 { 3 } else { 4 }
+}
+
+// ---------------------------------------------------------------- base64
+
+const BASE64_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_index(c: char) -> i64 {
+    if c >= 'A' and c <= 'Z' {
+        (c as i64) - 65
+    } else if c >= 'a' and c <= 'z' {
+        (c as i64) - 71
+    } else if c >= '0' and c <= '9' {
+        (c as i64) + 4
+    } else if c == '+' {
+        62
+    } else if c == '/' {
+        63
+    } else {
+        -1
+    }
+}
+
+fn b64_encode(b: ref Vec[i64]) -> String {
+    let tab: Vec[char] = BASE64_ALPHABET.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let n = if b.len() - i >= 3 { 3 } else { b.len() - i };
+        let b0 = b[i];
+        let b1 = if n > 1 { b[i + 1] } else { 0 };
+        let b2 = if n > 2 { b[i + 2] } else { 0 };
+        let v = b0 * 65536 + b1 * 256 + b2;
+        out.push(tab[v / 262144]);
+        out.push(tab[(v / 4096) % 64]);
+        if n > 1 {
+            out.push(tab[(v / 64) % 64]);
+        } else {
+            out.push('=');
+        }
+        if n > 2 {
+            out.push(tab[v % 64]);
+        } else {
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
+// base64.b64decode(s, validate=True): only the alphabet, with the
+// padding at the end and a length that is a multiple of four
+fn b64_decode_strict(v: ref Vec[char]) -> Option[Vec[i64]] {
+    let mut n = v.len();
+    let mut pad = 0;
+    while n > 0 and v[n - 1] == '=' and pad < 2 {
+        n -= 1;
+        pad += 1;
+    }
+    if v.len() % 4 != 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let k = b64_index(v[i]);
+        if k < 0 {
+            return None;
+        }
+        vals.push(k);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i + 4 <= vals.len() {
+        let x = vals[i] * 262144 + vals[i + 1] * 4096 + vals[i + 2] * 64 + vals[i + 3];
+        out.push(x / 65536);
+        out.push((x / 256) % 256);
+        out.push(x % 256);
+        i += 4;
+    }
+    let left = vals.len() - i;
+    if left == 2 {
+        let x = vals[i] * 64 + vals[i + 1];
+        out.push(x / 16);
+    } else if left == 3 {
+        let x = vals[i] * 4096 + vals[i + 1] * 64 + vals[i + 2];
+        out.push(x / 1024);
+        out.push((x / 4) % 256);
+    } else if left == 1 {
+        return None;
+    }
+    Some(out)
+}
+// icalendar's WINDOWS_TO_OLSON: the zone names Outlook and Exchange
+// write, and the tz database zone each one means
+fn windows_zones() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("AUS Central Standard Time", "Australia/Darwin"));
+    v.push(("AUS Eastern Standard Time", "Australia/Sydney"));
+    v.push(("Afghanistan Standard Time", "Asia/Kabul"));
+    v.push(("Alaskan Standard Time", "America/Anchorage"));
+    v.push(("Aleutian Standard Time", "America/Adak"));
+    v.push(("Altai Standard Time", "Asia/Barnaul"));
+    v.push(("Arab Standard Time", "Asia/Riyadh"));
+    v.push(("Arabian Standard Time", "Asia/Dubai"));
+    v.push(("Arabic Standard Time", "Asia/Baghdad"));
+    v.push(("Argentina Standard Time", "America/Buenos_Aires"));
+    v.push(("Astrakhan Standard Time", "Europe/Astrakhan"));
+    v.push(("Atlantic Standard Time", "America/Halifax"));
+    v.push(("Aus Central W. Standard Time", "Australia/Eucla"));
+    v.push(("Azerbaijan Standard Time", "Asia/Baku"));
+    v.push(("Azores Standard Time", "Atlantic/Azores"));
+    v.push(("Bahia Standard Time", "America/Bahia"));
+    v.push(("Bangladesh Standard Time", "Asia/Dhaka"));
+    v.push(("Belarus Standard Time", "Europe/Minsk"));
+    v.push(("Bougainville Standard Time", "Pacific/Bougainville"));
+    v.push(("Canada Central Standard Time", "America/Regina"));
+    v.push(("Cape Verde Standard Time", "Atlantic/Cape_Verde"));
+    v.push(("Caucasus Standard Time", "Asia/Yerevan"));
+    v.push(("Cen. Australia Standard Time", "Australia/Adelaide"));
+    v.push(("Central America Standard Time", "America/Guatemala"));
+    v.push(("Central Asia Standard Time", "Asia/Bishkek"));
+    v.push(("Central Brazilian Standard Time", "America/Cuiaba"));
+    v.push(("Central Europe Standard Time", "Europe/Budapest"));
+    v.push(("Central European Standard Time", "Europe/Warsaw"));
+    v.push(("Central Pacific Standard Time", "Pacific/Guadalcanal"));
+    v.push(("Central Standard Time", "America/Chicago"));
+    v.push(("Central Standard Time (Mexico)", "America/Mexico_City"));
+    v.push(("Chatham Islands Standard Time", "Pacific/Chatham"));
+    v.push(("China Standard Time", "Asia/Shanghai"));
+    v.push(("Cuba Standard Time", "America/Havana"));
+    v.push(("Dateline Standard Time", "Etc/GMT+12"));
+    v.push(("E. Africa Standard Time", "Africa/Nairobi"));
+    v.push(("E. Australia Standard Time", "Australia/Brisbane"));
+    v.push(("E. Europe Standard Time", "Europe/Chisinau"));
+    v.push(("E. South America Standard Time", "America/Sao_Paulo"));
+    v.push(("Easter Island Standard Time", "Pacific/Easter"));
+    v.push(("Eastern Standard Time", "America/New_York"));
+    v.push(("Eastern Standard Time (Mexico)", "America/Cancun"));
+    v.push(("Egypt Standard Time", "Africa/Cairo"));
+    v.push(("Ekaterinburg Standard Time", "Asia/Yekaterinburg"));
+    v.push(("FLE Standard Time", "Europe/Kiev"));
+    v.push(("Fiji Standard Time", "Pacific/Fiji"));
+    v.push(("GMT Standard Time", "Europe/London"));
+    v.push(("GTB Standard Time", "Europe/Bucharest"));
+    v.push(("Georgian Standard Time", "Asia/Tbilisi"));
+    v.push(("Greenland Standard Time", "America/Godthab"));
+    v.push(("Greenwich Standard Time", "Atlantic/Reykjavik"));
+    v.push(("Haiti Standard Time", "America/Port-au-Prince"));
+    v.push(("Hawaiian Standard Time", "Pacific/Honolulu"));
+    v.push(("India Standard Time", "Asia/Calcutta"));
+    v.push(("Iran Standard Time", "Asia/Tehran"));
+    v.push(("Israel Standard Time", "Asia/Jerusalem"));
+    v.push(("Jordan Standard Time", "Asia/Amman"));
+    v.push(("Kaliningrad Standard Time", "Europe/Kaliningrad"));
+    v.push(("Korea Standard Time", "Asia/Seoul"));
+    v.push(("Libya Standard Time", "Africa/Tripoli"));
+    v.push(("Line Islands Standard Time", "Pacific/Kiritimati"));
+    v.push(("Lord Howe Standard Time", "Australia/Lord_Howe"));
+    v.push(("Magadan Standard Time", "Asia/Magadan"));
+    v.push(("Magallanes Standard Time", "America/Punta_Arenas"));
+    v.push(("Marquesas Standard Time", "Pacific/Marquesas"));
+    v.push(("Mauritius Standard Time", "Indian/Mauritius"));
+    v.push(("Middle East Standard Time", "Asia/Beirut"));
+    v.push(("Montevideo Standard Time", "America/Montevideo"));
+    v.push(("Morocco Standard Time", "Africa/Casablanca"));
+    v.push(("Mountain Standard Time", "America/Denver"));
+    v.push(("Mountain Standard Time (Mexico)", "America/Mazatlan"));
+    v.push(("Myanmar Standard Time", "Asia/Rangoon"));
+    v.push(("N. Central Asia Standard Time", "Asia/Novosibirsk"));
+    v.push(("Namibia Standard Time", "Africa/Windhoek"));
+    v.push(("Nepal Standard Time", "Asia/Katmandu"));
+    v.push(("New Zealand Standard Time", "Pacific/Auckland"));
+    v.push(("Newfoundland Standard Time", "America/St_Johns"));
+    v.push(("Norfolk Standard Time", "Pacific/Norfolk"));
+    v.push(("North Asia East Standard Time", "Asia/Irkutsk"));
+    v.push(("North Asia Standard Time", "Asia/Krasnoyarsk"));
+    v.push(("North Korea Standard Time", "Asia/Pyongyang"));
+    v.push(("Omsk Standard Time", "Asia/Omsk"));
+    v.push(("Pacific SA Standard Time", "America/Santiago"));
+    v.push(("Pacific Standard Time", "America/Los_Angeles"));
+    v.push(("Pacific Standard Time (Mexico)", "America/Tijuana"));
+    v.push(("Pakistan Standard Time", "Asia/Karachi"));
+    v.push(("Paraguay Standard Time", "America/Asuncion"));
+    v.push(("Qyzylorda Standard Time", "Asia/Qyzylorda"));
+    v.push(("Romance Standard Time", "Europe/Paris"));
+    v.push(("Russia Time Zone 10", "Asia/Srednekolymsk"));
+    v.push(("Russia Time Zone 11", "Asia/Kamchatka"));
+    v.push(("Russia Time Zone 3", "Europe/Samara"));
+    v.push(("Russian Standard Time", "Europe/Moscow"));
+    v.push(("SA Eastern Standard Time", "America/Cayenne"));
+    v.push(("SA Pacific Standard Time", "America/Bogota"));
+    v.push(("SA Western Standard Time", "America/La_Paz"));
+    v.push(("SE Asia Standard Time", "Asia/Bangkok"));
+    v.push(("Saint Pierre Standard Time", "America/Miquelon"));
+    v.push(("Sakhalin Standard Time", "Asia/Sakhalin"));
+    v.push(("Samoa Standard Time", "Pacific/Apia"));
+    v.push(("Sao Tome Standard Time", "Africa/Sao_Tome"));
+    v.push(("Saratov Standard Time", "Europe/Saratov"));
+    v.push(("Singapore Standard Time", "Asia/Singapore"));
+    v.push(("South Africa Standard Time", "Africa/Johannesburg"));
+    v.push(("South Sudan Standard Time", "Africa/Juba"));
+    v.push(("Sri Lanka Standard Time", "Asia/Colombo"));
+    v.push(("Sudan Standard Time", "Africa/Khartoum"));
+    v.push(("Syria Standard Time", "Asia/Damascus"));
+    v.push(("Taipei Standard Time", "Asia/Taipei"));
+    v.push(("Tasmania Standard Time", "Australia/Hobart"));
+    v.push(("Tocantins Standard Time", "America/Araguaina"));
+    v.push(("Tokyo Standard Time", "Asia/Tokyo"));
+    v.push(("Tomsk Standard Time", "Asia/Tomsk"));
+    v.push(("Tonga Standard Time", "Pacific/Tongatapu"));
+    v.push(("Transbaikal Standard Time", "Asia/Chita"));
+    v.push(("Turkey Standard Time", "Europe/Istanbul"));
+    v.push(("Turks And Caicos Standard Time", "America/Grand_Turk"));
+    v.push(("US Eastern Standard Time", "America/Indianapolis"));
+    v.push(("US Mountain Standard Time", "America/Phoenix"));
+    v.push(("UTC", "Etc/UTC"));
+    v.push(("UTC+12", "Etc/GMT-12"));
+    v.push(("UTC+13", "Etc/GMT-13"));
+    v.push(("UTC-02", "Etc/GMT+2"));
+    v.push(("UTC-08", "Etc/GMT+8"));
+    v.push(("UTC-09", "Etc/GMT+9"));
+    v.push(("UTC-11", "Etc/GMT+11"));
+    v.push(("Ulaanbaatar Standard Time", "Asia/Ulaanbaatar"));
+    v.push(("Venezuela Standard Time", "America/Caracas"));
+    v.push(("Vladivostok Standard Time", "Asia/Vladivostok"));
+    v.push(("Volgograd Standard Time", "Europe/Volgograd"));
+    v.push(("W. Australia Standard Time", "Australia/Perth"));
+    v.push(("W. Central Africa Standard Time", "Africa/Lagos"));
+    v.push(("W. Europe Standard Time", "Europe/Berlin"));
+    v.push(("W. Mongolia Standard Time", "Asia/Hovd"));
+    v.push(("West Asia Standard Time", "Asia/Tashkent"));
+    v.push(("West Bank Standard Time", "Asia/Hebron"));
+    v.push(("West Pacific Standard Time", "Pacific/Port_Moresby"));
+    v.push(("Yakutsk Standard Time", "Asia/Yakutsk"));
+    v.push(("Yukon Standard Time", "America/Whitehorse"));
+    v
+}
+
+// ---------------------------------------------------------------- parameters
+
+#[derive(Clone)]
+enum PVal {
+    One(String),
+    Many(Vec[String]),
+}
+
+// A Parameters dict: keys upper-cased, in the order first set.
+#[derive(Clone)]
+struct Params {
+    keys: Vec[String],
+    vals: Vec[PVal],
+}
+
+fn new_params() -> Params {
+    Params { keys: Vec.new(), vals: Vec.new() }
+}
+
+fn params_set(p: mut ref Params, key: ref String, v: own PVal) {
+    let k = upper_s(key);
+    for i in 0..p.keys.len() {
+        if p.keys[i] == k {
+            p.vals[i] = v;
+            return;
+        }
+    }
+    p.keys.push(k);
+    p.vals.push(v);
+}
+
+fn params_get(p: ref Params, key: Str) -> Option[PVal] {
+    for i in 0..p.keys.len() {
+        if p.keys[i] == key {
+            return Some(p.vals[i].clone());
+        }
+    }
+    None
+}
+
+fn params_str(p: ref Params, key: Str) -> Option[String] {
+    match params_get(p, key) {
+        Some(PVal.One(s)) => Some(s),
+        _ => None,
+    }
+}
+
+// params.value: the VALUE parameter, upper-cased
+fn params_value(p: ref Params) -> Option[String] {
+    match params_str(p, "VALUE") {
+        Some(s) => Some(upper_s(s)),
+        None => None,
+    }
+}
+
+fn params_is_utc(p: ref Params) -> bool {
+    match params_str(p, "TZID") {
+        Some(s) => s == "UTC",
+        None => false,
+    }
+}
+
+// repr(dict(params))
+fn params_repr(p: ref Params) -> String {
+    let mut out = String.new();
+    out.push('{');
+    for i in 0..p.keys.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(chars(p.keys[i])));
+        out.push_str(": ");
+        match p.vals[i] {
+            PVal.One(s) => out.push_str(py_repr(chars(s))),
+            PVal.Many(vs) => {
+                out.push('[');
+                for j in 0..vs.len() {
+                    if j > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(py_repr(chars(vs[j])));
+                }
+                out.push(']');
+            }
+        }
+    }
+    out.push('}');
+    out
+}
+
+fn is_word(c: char) -> bool {
+    c == '_' or is_py_alnum(c)
+}
+
+// validate_token: the whole name must be one match of [\w.-]+
+fn validate_token(name: ref Vec[char]) -> Result[(), PyErr] {
+    if name.len() == 0 {
+        return Err(value_error(text(name)));
+    }
+    for c in name.iter() {
+        if not (is_word(*c) or *c == '.' or *c == '-') {
+            return Err(value_error(text(name)));
+        }
+    }
+    Ok(())
+}
+
+// q_split: split on sep outside double quotes
+fn q_split(st: ref Vec[char], sep: char, maxsplit: i64) -> Vec[Vec[char]] {
+    let mut result: Vec[Vec[char]] = Vec.new();
+    if maxsplit == 0 {
+        result.push(st.clone());
+        return result;
+    }
+    let mut cursor = 0;
+    let length = st.len();
+    let mut inquote = false;
+    let mut splits = 0;
+    for i in 0..length {
+        let ch = st[i];
+        if ch == '"' {
+            inquote = not inquote;
+        }
+        if not inquote and ch == sep {
+            result.push(sl(st, cursor, i));
+            cursor = i + 1;
+            splits += 1;
+        }
+        if i + 1 == length or splits == maxsplit {
+            result.push(from_(st, cursor));
+            break;
+        }
+    }
+    result
+}
+
+fn replace_v(v: ref Vec[char], a: Str, b: Str) -> Vec[char] {
+    let pa = lit(a);
+    let pb = lit(b);
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if pa.len() > 0 and match_at(v, i, pa) {
+            for c in pb.iter() {
+                out.push(*c);
+            }
+            i += pa.len();
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// _escape_string: backslash escapes become percent codes while the
+// parameters are split
+fn escape_string(v: ref Vec[char]) -> Vec[char] {
+    let a = replace_v(v, "%", "%25");
+    let b = replace_v(a, "\\,", "%2C");
+    let c = replace_v(b, "\\:", "%3A");
+    let d = replace_v(c, "\\;", "%3B");
+    replace_v(d, "\\\\", "%5C")
+}
+
+fn unescape_string(v: ref Vec[char]) -> Vec[char] {
+    let a = replace_v(v, "%2C", ",");
+    let b = replace_v(a, "%3A", ":");
+    let c = replace_v(b, "%3B", ";");
+    let d = replace_v(c, "%5C", "\\");
+    replace_v(d, "%25", "%")
+}
+
+// RFC 6868: ^^, ^n and ^' in parameter values
+fn rfc6868_unescape(v: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '^' and i + 1 < v.len() and (v[i + 1] == '^' or v[i + 1] == 'n' or v[i + 1] == '\'') {
+            let n = v[i + 1];
+            if n == '^' {
+                out.push('^');
+            } else if n == 'n' {
+                out.push('\n');
+            } else {
+                out.push('"');
+            }
+            i += 2;
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn rfc6868_escape(v: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if c == '^' {
+            out.push('^');
+            out.push('^');
+        } else if c == '\r' and i + 1 < v.len() and v[i + 1] == '\n' {
+            out.push('^');
+            out.push('n');
+            i += 1;
+        } else if c == '\n' or c == '\r' {
+            out.push('^');
+            out.push('n');
+        } else if c == '"' {
+            out.push('^');
+            out.push('\'');
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn is_ctl(c: char) -> bool {
+    let o = c as i64;
+    o <= 8 or (o >= 10 and o <= 31) or o == 127
+}
+
+fn validate_param_value(v: ref Vec[char], quoted: bool) -> Result[(), PyErr] {
+    for c in v.iter() {
+        if is_ctl(*c) or *c == '"' or (not quoted and (*c == ',' or *c == ':' or *c == ';')) {
+            return Err(value_error(text(v)));
+        }
+    }
+    Ok(())
+}
+
+fn strip_quotes(v: ref Vec[char]) -> Vec[char] {
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and v[a] == '"' {
+        a += 1;
+    }
+    while b > a and v[b - 1] == '"' {
+        b -= 1;
+    }
+    sl(v, a, b)
+}
+
+fn param_from_ical(param: ref Vec[char]) -> Result[(String, PVal), PyErr] {
+    let kv = q_split(param, '=', 1);
+    if kv.len() != 2 {
+        return Err(value_error(f"not enough values to unpack (expected 2, got {kv.len()})"));
+    }
+    validate_token(kv[0])?;
+    let mut vals: Vec[String] = Vec.new();
+    for v in q_split(kv[1], ',', -1).iter() {
+        if v.len() > 0 and v[0] == '"' and v[v.len() - 1] == '"' {
+            let v2 = strip_quotes(v);
+            validate_param_value(v2, true)?;
+            vals.push(text(rfc6868_unescape(v2)));
+        } else {
+            validate_param_value(v, false)?;
+            vals.push(text(rfc6868_unescape(v)));
+        }
+    }
+    let pv = if vals.len() == 0 {
+        PVal.One(text(kv[1]))
+    } else if vals.len() == 1 {
+        PVal.One(vals[0].clone())
+    } else {
+        PVal.Many(vals)
+    };
+    Ok((text(kv[0]), pv))
+}
+
+// Parameters.from_ical, then the keys and values unescaped as raw_parts
+// does it
+fn params_from_ical(st: ref Vec[char]) -> Result[Params, PyErr] {
+    let mut result = new_params();
+    for param in q_split(st, ';', -1).iter() {
+        match param_from_ical(param) {
+            Ok((k, v)) => params_set(mut result, k, v),
+            Err(e) => return Err(value_error(f"{py_repr(param)} is not a valid parameter string: {e.msg}")),
+        }
+    }
+    let mut out = new_params();
+    for i in 0..result.keys.len() {
+        let k = text(unescape_string(chars(result.keys[i])));
+        let v = match result.vals[i] {
+            PVal.One(s) => PVal.One(text(unescape_string(chars(s)))),
+            PVal.Many(vs) => {
+                let mut u: Vec[String] = Vec.new();
+                for s in vs.iter() {
+                    u.push(text(unescape_string(chars(s))));
+                }
+                PVal.Many(u)
+            }
+        };
+        params_set(mut out, k, v);
+    }
+    Ok(out)
+}
+
+fn has_quotable(v: ref Vec[char]) -> bool {
+    for c in v.iter() {
+        if *c == ',' or *c == ';' or *c == ':' or *c == '\u{2019}' {
+            return true;
+        }
+    }
+    false
+}
+
+fn dquote(v0: ref Vec[char], always: bool) -> String {
+    let v = replace_v(v0, "\"", "'");
+    if has_quotable(v) or always {
+        f"\"{text(v)}\""
+    } else {
+        text(v)
+    }
+}
+
+const ALWAYS_QUOTED: Str = "ALTREP DELEGATED-FROM DELEGATED-TO DIR MEMBER SENT-BY X-ADDRESS X-TITLE LINKREL";
+
+fn always_quoted(key: ref String) -> bool {
+    for w in ALWAYS_QUOTED.split(" ") {
+        if w == key {
+            return true;
+        }
+    }
+    false
+}
+
+// Parameters.to_ical: sorted by key, TZID=UTC left out
+fn params_to_ical(p: ref Params) -> String {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..p.keys.len() {
+        let mut at = order.len();
+        while at > 0 and p.keys[i] < p.keys[order[at - 1]] {
+            at -= 1;
+        }
+        order.insert(at, i);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for i in order.iter() {
+        let key = p.keys[*i].clone();
+        let one = match p.vals[*i] {
+            PVal.One(s) => Some(s.clone()),
+            PVal.Many(_) => None,
+        };
+        if key == "TZID" and one == Some("UTC".to_string()) {
+            continue;
+        }
+        let mut always = always_quoted(key);
+        let qv = match p.vals[*i] {
+            PVal.One(s) => {
+                let cs = chars(s);
+                if key == "CN" and (cs.contains(' ') or cs.contains('\'')) {
+                    always = true;
+                }
+                dquote(rfc6868_escape(cs), always)
+            }
+            PVal.Many(vs) => {
+                let mut q = String.new();
+                for j in 0..vs.len() {
+                    if j > 0 {
+                        q.push(',');
+                    }
+                    q.push_str(dquote(rfc6868_escape(chars(vs[j])), always));
+                }
+                q
+            }
+        };
+        parts.push(f"{key}={qv}");
+    }
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push(';');
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// ---------------------------------------------------------------- content lines
+
+fn is_ows(c: char) -> bool {
+    c == ' ' or c == '\t'
+}
+
+// The lenient parser drops spaces and tabs around ; and = in the
+// parameter section, outside quotes and not after a backslash.
+fn strip_ows(st: ref Vec[char]) -> Vec[char] {
+    if st.len() == 0 {
+        return st.clone();
+    }
+    let mut any_ws = false;
+    let mut any_q = false;
+    for c in st.iter() {
+        if is_ows(*c) {
+            any_ws = true;
+        }
+        if *c == '"' or *c == '\\' {
+            any_q = true;
+        }
+    }
+    if not any_ws {
+        return st.clone();
+    }
+    if not any_q {
+        // the two regex passes: whitespace before a delimiter, then after
+        let mut a: Vec[char] = Vec.new();
+        let mut i = 0;
+        while i < st.len() {
+            if is_ows(st[i]) {
+                let mut j = i;
+                while j < st.len() and is_ows(st[j]) {
+                    j += 1;
+                }
+                if j < st.len() and (st[j] == ';' or st[j] == '=') {
+                    i = j;
+                    continue;
+                }
+                while i < j {
+                    a.push(st[i]);
+                    i += 1;
+                }
+                continue;
+            }
+            a.push(st[i]);
+            i += 1;
+        }
+        let mut b: Vec[char] = Vec.new();
+        let mut k = 0;
+        while k < a.len() {
+            b.push(a[k]);
+            if a[k] == ';' or a[k] == '=' {
+                k += 1;
+                while k < a.len() and is_ows(a[k]) {
+                    k += 1;
+                }
+                continue;
+            }
+            k += 1;
+        }
+        return py_strip(b);
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut pending: Vec[char] = Vec.new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut last_delim = false;
+    for ch in st.iter() {
+        let c = *ch;
+        if escaped {
+            if not last_delim {
+                for p in pending.iter() {
+                    out.push(*p);
+                }
+            }
+            pending = Vec.new();
+            out.push(c);
+            escaped = false;
+            last_delim = false;
+            continue;
+        }
+        if c == '\\' and not in_quotes {
+            if not last_delim {
+                for p in pending.iter() {
+                    out.push(*p);
+                }
+            }
+            pending = Vec.new();
+            out.push(c);
+            escaped = true;
+            last_delim = false;
+            continue;
+        }
+        if c == '"' {
+            in_quotes = not in_quotes;
+            if not last_delim {
+                for p in pending.iter() {
+                    out.push(*p);
+                }
+            }
+            pending = Vec.new();
+            out.push(c);
+            last_delim = false;
+            continue;
+        }
+        if not in_quotes and is_ows(c) {
+            pending.push(c);
+            continue;
+        }
+        if not in_quotes and (c == ';' or c == '=') {
+            pending = Vec.new();
+            while out.len() > 0 and is_ows(out[out.len() - 1]) {
+                out.pop();
+            }
+            out.push(c);
+            last_delim = true;
+            continue;
+        }
+        if not last_delim {
+            for p in pending.iter() {
+                out.push(*p);
+            }
+        }
+        pending = Vec.new();
+        out.push(c);
+        last_delim = false;
+    }
+    if pending.len() > 0 and not last_delim {
+        for p in pending.iter() {
+            out.push(*p);
+        }
+    }
+    py_strip(out)
+}
+
+struct Parts {
+    name: String,
+    params: Params,
+    value: Vec[char],
+}
+
+// Contentline.raw_parts
+fn raw_parts(line: ref Vec[char]) -> Result[Parts, PyErr] {
+    match raw_parts_inner(line) {
+        Ok(p) => Ok(p),
+        Err(e) => Err(PyErr { kind: e.kind, msg: f"Content line could not be parsed into parts: '{text(line)}': {e.msg}" }),
+    }
+}
+
+fn raw_parts_inner(line: ref Vec[char]) -> Result[Parts, PyErr] {
+    let mut name_split = -1;
+    let mut value_split = -1;
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for i in 0..line.len() {
+        let ch = line[i];
+        if ch == '"' and not escaped {
+            in_quotes = not in_quotes;
+        } else if ch == '\\' and not in_quotes {
+            escaped = true;
+            continue;
+        } else if not in_quotes and not escaped {
+            if (ch == ':' or ch == ';') and name_split < 0 {
+                name_split = i;
+            }
+            if ch == ':' and value_split < 0 {
+                value_split = i;
+            }
+        }
+        escaped = false;
+    }
+    if value_split <= 0 {
+        value_split = line.len();
+    }
+    let name0 = if name_split > 0 { upto(line, name_split) } else { line.clone() };
+    let mut name: Vec[char] = Vec.new();
+    for c in py_strip(name0).iter() {
+        if not is_ows(*c) {
+            name.push(*c);
+        }
+    }
+    validate_token(name)?;
+    if name_split <= 0 or name_split + 1 == value_split {
+        return Err(value_error("Invalid content line".to_string()));
+    }
+    let raw_param = strip_ows(sl(line, name_split + 1, value_split));
+    let params = params_from_ical(escape_string(raw_param))?;
+    Ok(Parts { name: text(name), params: params, value: from_(line, value_split + 1) })
+}
+
+// \\, \, \; \: \n and \N in a value
+fn unescape_backslash(v: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\\' and i + 1 < v.len() {
+            let n = v[i + 1];
+            if n == 'n' or n == 'N' {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+            if n == '\\' or n == ',' or n == ';' or n == ':' {
+                out.push(n);
+                i += 2;
+                continue;
+            }
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn split_on_unescaped_comma(t: ref Vec[char]) -> Vec[String] {
+    let mut result: Vec[String] = Vec.new();
+    if t.len() == 0 {
+        result.push(String.new());
+        return result;
+    }
+    let mut cur: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < t.len() {
+        if t[i] == '\\' and i + 1 < t.len() {
+            cur.push(t[i]);
+            cur.push(t[i + 1]);
+            i += 2;
+        } else if t[i] == ',' {
+            result.push(text(unescape_backslash(cur)));
+            cur = Vec.new();
+            i += 1;
+        } else {
+            cur.push(t[i]);
+            i += 1;
+        }
+    }
+    result.push(text(unescape_backslash(cur)));
+    result
+}
+
+// the first colon outside a quoted parameter value
+fn value_separator_index(line: ref Vec[char]) -> i64 {
+    let mut in_quotes = false;
+    for i in 0..line.len() {
+        if line[i] == '"' {
+            in_quotes = not in_quotes;
+        } else if line[i] == ':' and not in_quotes {
+            return i;
+        }
+    }
+    -1
+}
+
+fn break_len(t: ref Vec[char], i: i64) -> i64 {
+    if i < t.len() and t[i] == '\r' and i + 1 < t.len() and t[i + 1] == '\n' {
+        2
+    } else if i < t.len() and t[i] == '\n' {
+        1
+    } else {
+        0
+    }
+}
+
+// UFOLD.sub("", text): a line break, any more line breaks, then a space
+// or tab, is a fold
+fn unfold(t: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < t.len() {
+        let n = break_len(t, i);
+        let first = if n == 2 {
+            i == 0 or t[i - 1] != '\n'
+        } else if n == 1 {
+            i == 0 or (t[i - 1] != '\r' and t[i - 1] != '\n')
+        } else {
+            false
+        };
+        if first {
+            let mut j = i + n;
+            loop {
+                let m = break_len(t, j);
+                if m == 0 {
+                    break;
+                }
+                j += m;
+            }
+            if j < t.len() and is_ows(t[j]) {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(t[i]);
+        i += 1;
+    }
+    out
+}
+
+// NEWLINE.split, without the empty lines
+fn content_lines(t: ref Vec[char]) -> Vec[Vec[char]] {
+    let u = unfold(t);
+    let mut out: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < u.len() {
+        let n = break_len(u, i);
+        if n > 0 {
+            if cur.len() > 0 {
+                out.push(cur);
+            }
+            cur = Vec.new();
+            i += n;
+        } else {
+            cur.push(u[i]);
+            i += 1;
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// _escape_char: TEXT escaping
+fn escape_text(v: ref Vec[char]) -> Vec[char] {
+    let a = replace_v(v, "\\N", "\n");
+    let b = replace_v(a, "\\", "\\\\");
+    let c = replace_v(b, ";", "\\;");
+    let d = replace_v(c, ",", "\\,");
+    let e = replace_v(d, "\r\n", "\\n");
+    let f = replace_v(e, "\n", "\\n");
+    replace_v(f, "\r", "\\n")
+}
+
+// _foldline: 75 octets a line, not splitting a backslash or caret
+// escape across lines
+fn foldline(line: ref Vec[char]) -> String {
+    let limit = 75;
+    let mut folded: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    let mut count = 0;
+    for ch in line.iter() {
+        let c = *ch;
+        let n = utf8_len(c);
+        if cur.len() > 0 and count + n >= limit {
+            let last = cur[cur.len() - 1];
+            if cur.len() > 1 and (last == '\\' or last == '^') {
+                cur.pop();
+                folded.push(cur);
+                cur = Vec.new();
+                cur.push(last);
+                count = utf8_len(last);
+            } else {
+                folded.push(cur);
+                cur = Vec.new();
+                count = 0;
+            }
+        }
+        cur.push(c);
+        count += n;
+    }
+    if cur.len() > 0 {
+        folded.push(cur);
+    }
+    let mut out = String.new();
+    for i in 0..folded.len() {
+        if i > 0 {
+            out.push_str("\r\n ");
+        }
+        out.push_str(text(folded[i]));
+    }
+    out
+}
+// ---------------------------------------------------------------- time zones
+
+// A zone a TZID resolved to: its name, and whether it is UTC (one of the
+// ids icalendar treats as equivalent to UTC).
+#[derive(Clone)]
+struct TzRef {
+    label: String,
+    utc: bool,
+}
+
+// tzp, with the zoneinfo provider: the tz database zones
+// (data/tz/zones.txt, from zoneinfo.available_timezones()), the Windows
+// zone names, and the cache, which lives as long as the program does
+struct Tzp {
+    zones: Map[String, bool],
+    windows: Map[String, String],
+    cache: Map[String, TzRef],
+}
+
+fn new_tzp(zones_txt: ref String) -> Tzp {
+    let mut zones: Map[String, bool] = Map.new();
+    for line in zones_txt.split("\n") {
+        if line.len() == 0 {
+            continue;
+        }
+        let cs = chars(line.to_string());
+        let sp = find(cs, lit(" "));
+        if sp >= 0 {
+            zones.insert(text(upto(cs, sp)), true);
+        } else {
+            zones.insert(line.to_string(), false);
+        }
+    }
+    let mut windows: Map[String, String] = Map.new();
+    for (w, olson) in windows_zones().into_iter() {
+        windows.insert(w, olson);
+    }
+    Tzp { zones: zones, windows: windows, cache: Map.new() }
+}
+
+fn knows_zone(tzp: ref Tzp, id: ref String) -> bool {
+    tzp.zones.contains_key(id)
+}
+
+// ZONEINFO.timezone: ZoneInfo(name), or None
+fn provider_zone(tzp: ref Tzp, id: ref String) -> Option[TzRef] {
+    match tzp.zones.get(id) {
+        Some(u) => Some(TzRef { label: id.clone(), utc: *u }),
+        None => None,
+    }
+}
+
+fn clean_tzid(id: ref String) -> String {
+    let cs = chars(id);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and cs[a] == '/' {
+        a += 1;
+    }
+    while b > a and cs[b - 1] == '/' {
+        b -= 1;
+    }
+    text(sl(cs, a, b))
+}
+
+// TZP._lookup_ids: the cleaned id, its Windows mapping, the id without
+// each vendor prefix when it starts with '/', and the id as written
+fn lookup_ids(tz_id: ref String, tzp: ref Tzp) -> Vec[String] {
+    let cleaned = clean_tzid(tz_id);
+    let mut out: Vec[String] = Vec.new();
+    out.push(cleaned.clone());
+    if let Some(o) = tzp.windows.get(cleaned) {
+        out.push(o.clone());
+    }
+    if tz_id.starts_with("/") {
+        let parts: Vec[String] = cleaned.split("/").map(|p| p.to_string()).collect();
+        for start in 1..parts.len() {
+            let mut joined = String.new();
+            for k in start..parts.len() {
+                if k > start {
+                    joined.push('/');
+                }
+                joined.push_str(parts[k]);
+            }
+            out.push(joined);
+        }
+    }
+    out.push(tz_id.clone());
+    out
+}
+
+// TZP.timezone: the first lookup id the cache or the provider knows;
+// the zone found is cached under the first id
+fn tz_lookup(tzp: mut ref Tzp, tz_id: ref String) -> Option[TzRef] {
+    let ids = lookup_ids(tz_id, tzp);
+    let primary = ids[0].clone();
+    for id in ids.iter() {
+        let found = match tzp.cache.get(id) {
+            Some(z) => Some(z.clone()),
+            None => provider_zone(tzp, id),
+        };
+        if let Some(z) = found {
+            tzp.cache.insert(primary.clone(), z.clone());
+            return Some(z);
+        }
+    }
+    None
+}
+
+// TZP.cache_timezone_component: a VTIMEZONE whose TZID the tz database
+// does not know becomes a zone of its own
+fn cache_vtimezone(tzp: mut ref Tzp, unclean: ref String) {
+    let id = clean_tzid(unclean);
+    if not knows_zone(tzp, id) and not knows_zone(tzp, unclean) and not tzp.cache.contains_key(id) {
+        tzp.cache.insert(id, TzRef { label: unclean.clone(), utc: false });
+    }
+}
+// ---------------------------------------------------------------- times
+
+const TK_DATE: i64 = 0;
+const TK_DATETIME: i64 = 1;
+const TK_TIME: i64 = 2;
+const TK_DURATION: i64 = 3;
+
+// A date, datetime, time or timedelta. An aware datetime or time keeps
+// its zone's name (the ZoneInfo key, or the TZID of the VTIMEZONE it came
+// from) and whether that zone is UTC; a timedelta is days and seconds as
+// Python normalizes them (seconds in 0..86399).
+#[derive(Clone)]
+struct Tm {
+    kind: i64,
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    tz: String,
+    utc: bool,
+    days: i64,
+    secs: i64,
+}
+
+fn tm_date(y: i64, mo: i64, d: i64) -> Tm {
+    Tm { kind: TK_DATE, y: y, mo: mo, d: d, h: 0, mi: 0, s: 0, tz: String.new(), utc: false, days: 0, secs: 0 }
+}
+
+fn tm_datetime(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> Tm {
+    Tm { kind: TK_DATETIME, y: y, mo: mo, d: d, h: h, mi: mi, s: s, tz: String.new(), utc: false, days: 0, secs: 0 }
+}
+
+fn tm_time(h: i64, mi: i64, s: i64) -> Tm {
+    Tm { kind: TK_TIME, y: 0, mo: 0, d: 0, h: h, mi: mi, s: s, tz: String.new(), utc: false, days: 0, secs: 0 }
+}
+
+// timedelta(seconds=total)
+fn tm_duration(total: i64) -> Tm {
+    let mut days = total / 86400;
+    let mut secs = total % 86400;
+    if secs < 0 {
+        secs += 86400;
+        days -= 1;
+    }
+    Tm { kind: TK_DURATION, y: 0, mo: 0, d: 0, h: 0, mi: 0, s: 0, tz: String.new(), utc: false, days: days, secs: secs }
+}
+
+fn tm_total(t: ref Tm) -> i64 {
+    t.days * 86400 + t.secs
+}
+
+fn localized(t: own Tm, z: ref TzRef) -> Tm {
+    let mut out = t;
+    out.tz = z.label.clone();
+    out.utc = z.utc;
+    out
+}
+
+fn utc_zone() -> TzRef {
+    TzRef { label: "UTC".to_string(), utc: true }
+}
+
+fn is_aware(t: ref Tm) -> bool {
+    t.tz.len() > 0
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn date_ok(y: i64, mo: i64, d: i64) -> bool {
+    y >= 1 and y <= 9999 and mo >= 1 and mo <= 12 and d >= 1 and d <= days_in_month(y, mo)
+}
+
+fn time_ok(h: i64, mi: i64, s: i64) -> bool {
+    h >= 0 and h <= 23 and mi >= 0 and mi <= 59 and s >= 0 and s <= 59
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 and n >= 0 { f"0{n}" } else { f"{n}" }
+}
+
+fn pad4(n: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    let mut k = s.len();
+    while k < 4 {
+        out.push('0');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+// str(timedelta)
+fn td_str(t: ref Tm) -> String {
+    let h = t.secs / 3600;
+    let m = t.secs % 3600 / 60;
+    let s = t.secs % 60;
+    let clock = f"{h}:{pad2(m)}:{pad2(s)}";
+    if t.days == 0 {
+        return clock;
+    }
+    let unit = if t.days == 1 or t.days == -1 { "day" } else { "days" };
+    f"{t.days} {unit}, {clock}"
+}
+
+// how the oracle prints a date, datetime, time or timedelta
+fn tm_str(t: ref Tm) -> String {
+    if t.kind == TK_DURATION {
+        return td_str(t);
+    }
+    let mut s = if t.kind == TK_DATE {
+        f"{pad4(t.y)}-{pad2(t.mo)}-{pad2(t.d)}"
+    } else if t.kind == TK_TIME {
+        f"{pad2(t.h)}:{pad2(t.mi)}:{pad2(t.s)}"
+    } else {
+        f"{pad4(t.y)}-{pad2(t.mo)}-{pad2(t.d)} {pad2(t.h)}:{pad2(t.mi)}:{pad2(t.s)}"
+    };
+    if t.kind != TK_DATE and is_aware(t) {
+        s.push(' ');
+        s.push_str(t.tz);
+    }
+    s
+}
+
+// A vDDDTypes value: one date/datetime/time/timedelta, or a period (a
+// start and an end or a duration).
+#[derive(Clone)]
+struct DtV {
+    a: Tm,
+    pair: bool,
+    b: Tm,
+}
+
+fn one(t: own Tm) -> DtV {
+    DtV { a: t, pair: false, b: tm_duration(0) }
+}
+
+fn dtv_str(v: ref DtV) -> String {
+    if v.pair {
+        f"({tm_str(v.a)}, {tm_str(v.b)})"
+    } else {
+        tm_str(v.a)
+    }
+}
+
+// vDatetime.to_ical
+fn datetime_ical(t: ref Tm, params_utc: bool) -> String {
+    let mut s = f"{pad4(t.y)}{pad2(t.mo)}{pad2(t.d)}T{pad2(t.h)}{pad2(t.mi)}{pad2(t.s)}";
+    if params_utc or t.utc {
+        s.push('Z');
+    }
+    s
+}
+
+// vDuration.to_ical
+fn duration_ical(t: ref Tm) -> String {
+    let mut sign = "";
+    let mut td = t.clone();
+    if td.days < 0 {
+        sign = "-";
+        td = tm_duration(0 - tm_total(t));
+    }
+    let mut timepart = String.new();
+    if td.secs != 0 {
+        timepart.push('T');
+        let hours = td.secs / 3600;
+        let minutes = td.secs % 3600 / 60;
+        let seconds = td.secs % 60;
+        if hours != 0 {
+            timepart.push_str(f"{hours}H");
+        }
+        if minutes != 0 or (hours != 0 and seconds != 0) {
+            timepart.push_str(f"{minutes}M");
+        }
+        if seconds != 0 {
+            timepart.push_str(f"{seconds}S");
+        }
+    }
+    if td.days == 0 and timepart.len() > 0 {
+        return f"{sign}P{timepart}";
+    }
+    let days = if td.days < 0 { 0 - td.days } else { td.days };
+    f"{sign}P{days}D{timepart}"
+}
+
+// one value as vDDDTypes writes it; params_utc is the TZID=UTC parameter
+// of the property (a fresh vDDDTypes inside a list has none)
+fn tm_ical(t: ref Tm, params_utc: bool) -> String {
+    if t.kind == TK_DATETIME {
+        datetime_ical(t, params_utc)
+    } else if t.kind == TK_DATE {
+        f"{pad4(t.y)}{pad2(t.mo)}{pad2(t.d)}"
+    } else if t.kind == TK_DURATION {
+        duration_ical(t)
+    } else {
+        let mut s = f"{pad2(t.h)}{pad2(t.mi)}{pad2(t.s)}";
+        if params_utc or t.utc {
+            s.push('Z');
+        }
+        s
+    }
+}
+
+// vPeriod.to_ical: the start and end are fresh vDatetimes
+fn period_ical(v: ref DtV) -> String {
+    let start = datetime_ical(v.a, false);
+    if v.b.kind == TK_DURATION {
+        f"{start}/{duration_ical(v.b)}"
+    } else {
+        f"{start}/{datetime_ical(v.b, false)}"
+    }
+}
+
+fn dtv_ical(v: ref DtV, params_utc: bool) -> String {
+    if v.pair { period_ical(v) } else { tm_ical(v.a, params_utc) }
+}
+
+// ---------------------------------------------------------------- parsing times
+
+fn int_at(v: ref Vec[char], lo: i64, hi: i64) -> Option[i64] {
+    match py_int_v(sl(v, lo, hi)) {
+        Some(p) => if p.big { None } else { Some(p.value) },
+        None => None,
+    }
+}
+
+fn rpartition_colon(v: ref Vec[char]) -> Vec[char] {
+    let mut i = v.len();
+    while i > 0 {
+        if v[i - 1] == ':' {
+            return from_(v, i);
+        }
+        i -= 1;
+    }
+    v.clone()
+}
+
+fn is_ascii_digits(v: ref Vec[char]) -> bool {
+    all_digits(v)
+}
+
+fn zone_for(tzp: mut ref Tzp, tzid: ref Option[String]) -> Option[TzRef] {
+    match tzid {
+        Some(id) => tz_lookup(mut tzp, id),
+        None => None,
+    }
+}
+
+// vDatetime.from_ical
+fn datetime_from_ical(ical: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[Tm, PyErr] {
+    let zone = zone_for(mut tzp, tzid);
+    let v = rpartition_colon(ical);
+    let wrong = value_error(f"Wrong datetime format: {text(ical)}");
+    if v.len() < 15 or v[8] != 'T' {
+        return Err(wrong);
+    }
+    let y = int_at(v, 0, 4);
+    let mo = int_at(v, 4, 6);
+    let d = int_at(v, 6, 8);
+    let h = int_at(v, 9, 11);
+    let mi = int_at(v, 11, 13);
+    let s = int_at(v, 13, 15);
+    if y.is_none() or mo.is_none() or d.is_none() or h.is_none() or mi.is_none() or s.is_none() {
+        return Err(wrong);
+    }
+    let (yy, mm, dd) = (y.unwrap(), mo.unwrap(), d.unwrap());
+    let (hh, nn, ss) = (h.unwrap(), mi.unwrap(), s.unwrap());
+    if not date_ok(yy, mm, dd) or not time_ok(hh, nn, ss) {
+        return Err(wrong);
+    }
+    let t = tm_datetime(yy, mm, dd, hh, nn, ss);
+    if let Some(z) = zone {
+        return Ok(localized(t, z));
+    }
+    let rest = from_(v, 15);
+    if rest.len() == 0 {
+        return Ok(t);
+    }
+    if rest.len() == 1 and rest[0] == 'Z' {
+        return Ok(localized(t, utc_zone()));
+    }
+    Err(wrong)
+}
+
+// vDate.from_ical
+fn date_from_ical(ical: ref Vec[char]) -> Result[Tm, PyErr] {
+    let wrong = value_error(f"Wrong date format {text(ical)}");
+    if ical.len() != 8 or not is_ascii_digits(ical) {
+        return Err(wrong);
+    }
+    let y = int_at(ical, 0, 4).unwrap();
+    let mo = int_at(ical, 4, 6).unwrap();
+    let d = int_at(ical, 6, 8).unwrap();
+    if not date_ok(y, mo, d) {
+        return Err(wrong);
+    }
+    Ok(tm_date(y, mo, d))
+}
+
+// vTime.from_ical
+fn time_from_ical(ical0: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[Tm, PyErr] {
+    let zone = zone_for(mut tzp, tzid);
+    let mut ical = rpartition_colon(ical0);
+    let utc = ical.len() > 0 and ical[ical.len() - 1] == 'Z';
+    if utc {
+        ical.pop();
+    }
+    let wrong = value_error(f"Expected time, got: {text(ical)}");
+    if ical.len() != 6 or not is_ascii_digits(ical) {
+        return Err(wrong);
+    }
+    let h = int_at(ical, 0, 2).unwrap();
+    let mi = int_at(ical, 2, 4).unwrap();
+    let s = int_at(ical, 4, 6).unwrap();
+    if not time_ok(h, mi, s) {
+        return Err(wrong);
+    }
+    let t = tm_time(h, mi, s);
+    if let Some(z) = zone {
+        return Ok(localized(t, z));
+    }
+    if utc {
+        return Ok(localized(t, utc_zone()));
+    }
+    Ok(t)
+}
+
+// the digits of one DURATION_REGEX group, read up to the letter after
+// them; None when the letter is not the one asked for
+fn dur_group(v: ref Vec[char], at: i64, letter: char) -> Option[Vec[char]] {
+    let mut j = at;
+    while j < v.len() and is_digit(v[j]) {
+        j += 1;
+    }
+    if j > at and j < v.len() and v[j] == letter {
+        Some(sl(v, at, j))
+    } else {
+        None
+    }
+}
+
+// a group's value; None when it is too big for timedelta() in any case
+fn dur_num(ds: ref Option[Vec[char]], limit: i64) -> Option[i64] {
+    match ds {
+        None => Some(0),
+        Some(v) => {
+            let mut k = 0;
+            while k + 1 < v.len() and v[k] == '0' {
+                k += 1;
+            }
+            if v.len() - k > 15 {
+                return None;
+            }
+            let n = int_at(v, k, v.len()).unwrap();
+            if n > limit { None } else { Some(n) }
+        }
+    }
+}
+
+// vDuration.from_ical: ([-+]?)P(\d+W)?(\d+D)?(T(\d+H)?(\d+M)?(\d+S)?)?
+fn duration_from_ical(v: ref Vec[char]) -> Result[Tm, PyErr] {
+    let invalid = PyErr { kind: "InvalidCalendar".to_string(), msg: f"Invalid iCalendar duration: {text(v)}" };
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '-' or v[i] == '+') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    if i >= v.len() or v[i] != 'P' {
+        return Err(invalid);
+    }
+    i += 1;
+    let w = dur_group(v, i, 'W');
+    if let Some(ref g) = w {
+        i += g.len() + 1;
+    }
+    let d = dur_group(v, i, 'D');
+    if let Some(ref g) = d {
+        i += g.len() + 1;
+    }
+    let mut h: Option[Vec[char]] = None;
+    let mut m: Option[Vec[char]] = None;
+    let mut s: Option[Vec[char]] = None;
+    if i < v.len() and v[i] == 'T' {
+        i += 1;
+        h = dur_group(v, i, 'H');
+        if let Some(ref g) = h {
+            i += g.len() + 1;
+        }
+        m = dur_group(v, i, 'M');
+        if let Some(ref g) = m {
+            i += g.len() + 1;
+        }
+        s = dur_group(v, i, 'S');
+        if let Some(ref g) = s {
+            i += g.len() + 1;
+        }
+    }
+    if i != v.len() {
+        return Err(invalid);
+    }
+    let impractical = PyErr { kind: "InvalidCalendar".to_string(), msg: f"Impractical iCalendar duration: {text(v)}" };
+    let nw = dur_num(w, 1000000000);
+    let nd = dur_num(d, 10000000000);
+    let nh = dur_num(h, 1000000000000000);
+    let nm = dur_num(m, 1000000000000000);
+    let ns = dur_num(s, 1000000000000000);
+    if nw.is_none() or nd.is_none() or nh.is_none() or nm.is_none() or ns.is_none() {
+        return Err(impractical);
+    }
+    let total = nw.unwrap() * 604800 + nd.unwrap() * 86400 + nh.unwrap() * 3600 + nm.unwrap() * 60 + ns.unwrap();
+    if total / 86400 > 999999999 {
+        return Err(impractical);
+    }
+    Ok(tm_duration(if neg { 0 - total } else { total }))
+}
+
+// _to_midnight / _to_period_datetimes
+fn to_midnight(t: ref Tm, zone_of: ref Tm) -> Tm {
+    let mut out = tm_datetime(t.y, t.mo, t.d, 0, 0, 0);
+    if zone_of.kind == TK_DATETIME or zone_of.kind == TK_TIME {
+        out.tz = zone_of.tz.clone();
+        out.utc = zone_of.utc;
+    }
+    out
+}
+
+fn period_datetimes(start0: own Tm, end0: own Tm) -> DtV {
+    let mut start = start0;
+    let mut end = end0;
+    if start.kind == TK_DATE {
+        start = to_midnight(start, end);
+    }
+    if end.kind == TK_DATE {
+        end = to_midnight(end, start);
+    }
+    DtV { a: start, pair: true, b: end }
+}
+
+// vPeriod.from_ical
+fn period_from_ical(ical: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[DtV, PyErr] {
+    let bad = value_error(f"Expected period format, got: {text(ical)}");
+    let mut parts: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in ical.iter() {
+        if *c == '/' {
+            parts.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    parts.push(cur);
+    if parts.len() != 2 {
+        return Err(bad);
+    }
+    let start = match ddd_from_ical(parts[0], mut tzp, tzid) {
+        Ok(v) => v,
+        Err(_) => return Err(bad),
+    };
+    let end = match ddd_from_ical(parts[1], mut tzp, tzid) {
+        Ok(v) => v,
+        Err(_) => return Err(bad),
+    };
+    if start.pair or end.pair {
+        return Err(bad);
+    }
+    Ok(period_datetimes(start.a, end.a))
+}
+
+fn starts_with_s(v: ref Vec[char], p: Str) -> bool {
+    starts_with_v(v, lit(p))
+}
+
+// vDDDTypes.from_ical
+fn ddd_from_ical(ical: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[DtV, PyErr] {
+    let u = upper_v(ical);
+    if starts_with_s(u, "P") or starts_with_s(u, "-P") or starts_with_s(u, "+P") {
+        return Ok(one(duration_from_ical(ical)?));
+    }
+    if u.contains('/') {
+        return period_from_ical(ical, mut tzp, tzid);
+    }
+    let n = ical.len();
+    if n == 15 or n == 16 {
+        return Ok(one(datetime_from_ical(ical, mut tzp, tzid)?));
+    }
+    if n == 8 {
+        if let Some(z) = zone_for(mut tzp, tzid) {
+            let d = date_from_ical(ical)?;
+            return Ok(one(localized(tm_datetime(d.y, d.mo, d.d, 0, 0, 0), z)));
+        }
+        return Ok(one(date_from_ical(ical)?));
+    }
+    if n == 6 or n == 7 {
+        return Ok(one(time_from_ical(ical, mut tzp, tzid)?));
+    }
+    Err(value_error(f"Expected datetime, date, or time. Got: '{text(ical)}'"))
+}
+
+// vDDDLists.from_ical
+fn ddd_list_from_ical(ical: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[Vec[DtV], PyErr] {
+    let mut out: Vec[DtV] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    let mut pieces: Vec[Vec[char]] = Vec.new();
+    for c in ical.iter() {
+        if *c == ',' {
+            pieces.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    pieces.push(cur);
+    for p in pieces.iter() {
+        out.push(ddd_from_ical(p, mut tzp, tzid)?);
+    }
+    Ok(out)
+}
+
+// vUTCOffset.from_ical, in seconds
+fn offset_from_ical(ical: ref Vec[char]) -> Result[i64, PyErr] {
+    let bad = value_error(f"Expected UTC offset, got: {text(ical)}");
+    let sign = if ical.len() > 0 { ical[0] } else { ' ' };
+    let h = int_at(ical, 1, 3);
+    let m = int_at(ical, 3, 5);
+    let rest = sl(ical, 5, 7);
+    let s = if rest.len() == 0 { Some(0) } else { int_at(ical, 5, 7) };
+    if h.is_none() or m.is_none() or s.is_none() {
+        return Err(bad);
+    }
+    let offset = h.unwrap() * 3600 + m.unwrap() * 60 + s.unwrap();
+    if offset >= 86400 {
+        return Err(value_error(f"Offset must be less than 24 hours, was {text(ical)}"));
+    }
+    Ok(if sign == '-' { 0 - offset } else { offset })
+}
+
+// vUTCOffset.to_ical
+fn offset_ical(total: i64) -> String {
+    let neg = total < 0;
+    let t = if neg { 0 - total } else { total };
+    let hours = t / 3600;
+    let minutes = t % 3600 / 60;
+    let seconds = t % 60;
+    let body = if seconds != 0 { f"{pad2(hours)}{pad2(minutes)}{pad2(seconds)}" } else { f"{pad2(hours)}{pad2(minutes)}" };
+    if neg { f"-{body}" } else { f"+{body}" }
+}
+
+// ---------------------------------------------------------------- recurrence rules
+
+#[derive(Clone)]
+enum RVal {
+    // a string value: how the oracle shows it, and how it is written
+    S(String, String),
+    I(i64),
+    M(i64, bool),
+    T(DtV),
+}
+
+#[derive(Clone)]
+struct RPart {
+    key: String,
+    vals: Vec[RVal],
+}
+
+const RECUR_ORDER: Str = "RSCALE FREQ UNTIL COUNT INTERVAL BYSECOND BYMINUTE BYHOUR BYDAY BYWEEKDAY BYMONTHDAY BYYEARDAY BYWEEKNO BYMONTH BYSETPOS WKST SKIP";
+
+const FREQUENCIES: Str = "SECONDLY MINUTELY HOURLY DAILY WEEKLY MONTHLY YEARLY";
+
+fn recur_type(key: ref String) -> String {
+    let k = upper_s(key);
+    if k == "COUNT" or k == "INTERVAL" or k == "BYSECOND" or k == "BYMINUTE" or k == "BYHOUR" or k == "BYWEEKNO" or k == "BYMONTHDAY" or k == "BYYEARDAY" or k == "BYSETPOS" {
+        "int".to_string()
+    } else if k == "BYMONTH" {
+        "month".to_string()
+    } else if k == "UNTIL" {
+        "ddd".to_string()
+    } else if k == "WKST" or k == "BYDAY" or k == "BYWEEKDAY" {
+        "weekday".to_string()
+    } else if k == "FREQ" {
+        "freq".to_string()
+    } else if k == "SKIP" {
+        "skip".to_string()
+    } else {
+        "text".to_string()
+    }
+}
+
+fn words(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in s.split(" ") {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// vInt.from_ical
+fn int_from_ical(v: ref Vec[char]) -> Result[i64, PyErr] {
+    match py_int_v(v) {
+        None => Err(value_error(f"Expected int, got: {text(v)}")),
+        Some(p) => {
+            if p.big or p.value < -2147483648 or p.value > 2147483647 {
+                return Err(value_error(f"Integer {p.digits} is outside the RFC 5545 range [-2147483648, 2147483647]"));
+            }
+            Ok(p.value)
+        }
+    }
+}
+
+fn is_word_char(c: char) -> bool {
+    is_py_alnum(c) or c == '_'
+}
+
+// vWeekday: [+-]?[0-9]{0,2}\w{2}, the weekday one of SU..SA
+fn weekday_ok(u: ref Vec[char]) -> bool {
+    let n = u.len();
+    if n < 2 {
+        return false;
+    }
+    if not is_word_char(u[n - 2]) or not is_word_char(u[n - 1]) {
+        return false;
+    }
+    let wd = text(from_(u, n - 2));
+    if not words("SU MO TU WE TH FR SA").contains(wd) {
+        return false;
+    }
+    let mut i = 0;
+    if i < n - 2 and (u[i] == '+' or u[i] == '-') {
+        i += 1;
+    }
+    let digits = n - 2 - i;
+    if digits > 2 {
+        return false;
+    }
+    for k in i..n - 2 {
+        if not is_digit(u[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn recur_value(typ: ref String, v: ref Vec[char], tzp: mut ref Tzp) -> Result[RVal, PyErr] {
+    if typ == "int" {
+        return Ok(RVal.I(int_from_ical(v)?));
+    }
+    if typ == "month" {
+        if all_digits(v) {
+            return Ok(RVal.M(int_at(v, 0, v.len()).unwrap_or(0), false));
+        }
+        let digits = if v.len() > 0 { upto(v, v.len() - 1) } else { Vec.new() };
+        if v.len() == 0 or v[v.len() - 1] != 'L' or not all_digits(digits) {
+            return Err(value_error(f"Invalid month: {py_repr(v)}"));
+        }
+        return Ok(RVal.M(int_at(digits, 0, digits.len()).unwrap_or(0), true));
+    }
+    if typ == "ddd" {
+        let none: Option[String] = None;
+        return Ok(RVal.T(ddd_from_ical(v, mut tzp, none)?));
+    }
+    if typ == "weekday" {
+        let u = upper_v(v);
+        if not weekday_ok(u) {
+            return Err(value_error(f"Expected weekday abbreviation, got: {text(v)}"));
+        }
+        return Ok(RVal.S(text(u), text(u)));
+    }
+    if typ == "freq" {
+        let u = text(upper_v(v));
+        if not words(FREQUENCIES).contains(u) {
+            return Err(value_error(f"Expected frequency, got: {text(v)}"));
+        }
+        return Ok(RVal.S(u.clone(), u));
+    }
+    if typ == "skip" {
+        let s = text(v);
+        if s != "OMIT" and s != "FORWARD" and s != "BACKWARD" {
+            return Err(value_error(f"{py_repr(v)} is not a valid vSkip"));
+        }
+        return Ok(RVal.S(f"vSkip.{s}", s));
+    }
+    Ok(RVal.S(text(v), text(escape_text(v))))
+}
+
+fn split_chars(v: ref Vec[char], sep: char) -> Vec[Vec[char]] {
+    let mut out: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in v.iter() {
+        if *c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// vRecur.from_ical: keys upper-cased in first-seen order, a pair without
+// exactly one = skipped
+fn recur_from_ical(ical: ref Vec[char], tzp: mut ref Tzp) -> Result[Vec[RPart], PyErr] {
+    let mut out: Vec[RPart] = Vec.new();
+    for pair in split_chars(ical, ';').iter() {
+        let kv = split_chars(pair, '=');
+        if kv.len() != 2 {
+            continue;
+        }
+        let key = text(kv[0]);
+        let typ = recur_type(key);
+        let mut vals: Vec[RVal] = Vec.new();
+        for v in split_chars(kv[1], ',').iter() {
+            vals.push(recur_value(typ, v, mut tzp)?);
+        }
+        let uk = upper_s(key);
+        let mut found = false;
+        for i in 0..out.len() {
+            if out[i].key == uk {
+                out[i].vals = vals.clone();
+                found = true;
+            }
+        }
+        if not found {
+            out.push(RPart { key: uk, vals: vals });
+        }
+    }
+    Ok(out)
+}
+
+fn rval_str(v: ref RVal) -> String {
+    match v {
+        RVal.S(show, _) => py_repr(chars(show)),
+        RVal.I(n) => f"{n}",
+        RVal.M(n, leap) => if *leap { f"{n}L" } else { f"{n}" },
+        RVal.T(t) => if not t.pair and t.a.kind == TK_DURATION { py_repr(chars(td_str(t.a))) } else { dtv_str(t) },
+    }
+}
+
+fn rval_ical(v: ref RVal) -> String {
+    match v {
+        RVal.S(_, ical) => ical.clone(),
+        RVal.I(n) => f"{n}",
+        RVal.M(n, leap) => if *leap { f"{n}L" } else { f"{n}" },
+        RVal.T(t) => dtv_ical(t, false),
+    }
+}
+
+fn recur_show(parts: ref Vec[RPart]) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str("; ");
+        }
+        out.push_str(parts[i].key);
+        out.push_str("=[");
+        for j in 0..parts[i].vals.len() {
+            if j > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(rval_str(parts[i].vals[j]));
+        }
+        out.push(']');
+    }
+    out
+}
+
+// canonsort_keys: the canonical keys first, in that order, then the
+// rest sorted
+fn canon_order(keys: ref Vec[String], canonical: ref Vec[String]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for c in canonical.iter() {
+        for i in 0..keys.len() {
+            if keys[i] == *c {
+                order.push(i);
+            }
+        }
+    }
+    let mut rest: Vec[i64] = Vec.new();
+    for i in 0..keys.len() {
+        if not canonical.contains(keys[i]) {
+            let mut at = rest.len();
+            while at > 0 and keys[i] < keys[rest[at - 1]] {
+                at -= 1;
+            }
+            rest.insert(at, i);
+        }
+    }
+    for r in rest.iter() {
+        order.push(*r);
+    }
+    order
+}
+
+fn recur_ical(parts: ref Vec[RPart]) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    for p in parts.iter() {
+        keys.push(p.key.clone());
+    }
+    let mut out = String.new();
+    let order = canon_order(keys, words(RECUR_ORDER));
+    for n in 0..order.len() {
+        let p = ref parts[order[n]];
+        if n > 0 {
+            out.push(';');
+        }
+        out.push_str(p.key);
+        out.push('=');
+        for j in 0..p.vals.len() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str(rval_ical(p.vals[j]));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------- values
+
+#[derive(Clone)]
+enum Val {
+    // vText, vUri, vCalAddress or vUnknown: the class name and the text
+    Txt(String, String),
+    // vBroken: the type that failed to parse it, and the raw value
+    Broken(String, String),
+    Ddd(DtV),
+    Period(DtV),
+    Time(Tm),
+    List(Vec[DtV]),
+    Offset(i64),
+    Recur(Vec[RPart]),
+    Cat(Vec[String]),
+    Geo(f64, f64),
+    Binary(Vec[i64]),
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+}
+
+#[derive(Clone)]
+struct Prop {
+    val: Val,
+    params: Params,
+}
+
+// TypesFactory.types_map: the default value type of each property
+fn default_type(name: ref String) -> String {
+    let n = name.to_lowercase();
+    let pairs = words("calscale:text method:text prodid:text version:text attach:uri categories:categories class:text adr:adr n:n org:org comment:text description:text geo:geo location:text percent-complete:integer priority:integer resources:text status:text summary:text link:uri concept:uri refid:text completed:date-time dtend:date-time due:date-time dtstart:date-time duration:duration freebusy:period transp:text refresh-interval:duration tzid:text tzname:text tzoffsetfrom:utc-offset tzoffsetto:utc-offset tzurl:uri attendee:cal-address contact:text organizer:cal-address recurrence-id:date-time related-to:text url:uri conference:uri image:unknown source:uri uid:text exdate:date-time-list exrule:recur rdate:date-time-list rrule:recur action:text repeat:integer trigger:duration acknowledged:date-time proximity:text created:date-time dtstamp:date-time last-modified:date-time sequence:integer request-status:text altrep:uri cn:text cutype:text delegated-from:cal-address delegated-to:cal-address dir:uri encoding:text fmttype:text fbtype:text language:text member:cal-address partstat:text range:text related:text reltype:text role:text rsvp:boolean sent-by:cal-address value:text label:text linkrel:text gap:duration");
+    for p in pairs.iter() {
+        let cs = chars(p);
+        let at = find(cs, lit(":"));
+        if text(upto(cs, at)) == n {
+            return text(from_(cs, at + 1));
+        }
+    }
+    "unknown".to_string()
+}
+
+// the value types this port has; the vCard and RFC 9253 ones (adr, n,
+// org, inline, uid, xml-reference) are not ported
+const VALUE_TYPES: Str = "binary boolean cal-address date date-time duration float integer period recur text time uri utc-offset geo date-time-list categories unknown";
+
+// TypesFactory.for_property
+fn for_property(name: ref String, value_param: ref Option[String]) -> String {
+    let u = upper_s(name);
+    if u == "RDATE" or u == "EXDATE" {
+        return "date-time-list".to_string();
+    }
+    if let Some(v) = value_param {
+        let lv = v.to_lowercase();
+        if words(VALUE_TYPES).contains(lv) {
+            return lv;
+        }
+    }
+    let d = default_type(name);
+    if words(VALUE_TYPES).contains(d) { d } else { "unknown".to_string() }
+}
+
+// the class a value type key names
+fn class_name(typ: ref String) -> String {
+    let pairs = words("binary:vBinary boolean:vBoolean cal-address:vCalAddress date:vDDDTypes date-time:vDDDTypes duration:vDDDTypes float:vFloat integer:vInt period:vPeriod recur:vRecur text:vText time:vTime uri:vUri utc-offset:vUTCOffset geo:vGeo date-time-list:vDDDLists categories:vCategory unknown:vUnknown");
+    for p in pairs.iter() {
+        let cs = chars(p);
+        let at = find(cs, lit(":"));
+        if text(upto(cs, at)) == *typ {
+            return text(from_(cs, at + 1));
+        }
+    }
+    "vUnknown".to_string()
+}
+
+fn takes_tzid(typ: ref String) -> bool {
+    typ == "date" or typ == "date-time" or typ == "duration" or typ == "period" or typ == "time" or typ == "date-time-list"
+}
+
+// the TypeError Python raises when a from_ical without a timezone
+// argument gets one
+fn tzid_type_error(typ: ref String) -> PyErr {
+    let cls = class_name(typ);
+    let msg = if typ == "geo" or typ == "binary" or typ == "categories" {
+        f"{cls}.from_ical() takes 1 positional argument but 2 were given"
+    } else {
+        f"{cls}.from_ical() takes 2 positional arguments but 3 were given"
+    };
+    PyErr { kind: "TypeError".to_string(), msg: msg }
+}
+
+fn has_crlf(v: ref Vec[char]) -> bool {
+    v.contains('\r') or v.contains('\n')
+}
+
+// factory.from_ical(val[, tzid]) for one value type
+fn value_from_ical(typ: ref String, v: ref Vec[char], tzp: mut ref Tzp, tzid: ref Option[String]) -> Result[Val, PyErr] {
+    if tzid.is_some() and not takes_tzid(typ) {
+        return Err(tzid_type_error(typ));
+    }
+    if typ == "text" or typ == "unknown" {
+        return Ok(Val.Txt(class_name(typ), text(v)));
+    }
+    if typ == "cal-address" {
+        if has_crlf(v) {
+            return Err(value_error(f"A CAL-ADDRESS value may not contain CR or LF characters: {py_repr(v)}"));
+        }
+        return Ok(Val.Txt("vCalAddress".to_string(), text(v)));
+    }
+    if typ == "uri" {
+        if has_crlf(v) {
+            return Err(value_error(f"Expected , got: {text(v)}"));
+        }
+        return Ok(Val.Txt("vUri".to_string(), text(v)));
+    }
+    if typ == "date" or typ == "date-time" or typ == "duration" {
+        return Ok(Val.Ddd(ddd_from_ical(v, mut tzp, tzid)?));
+    }
+    if typ == "period" {
+        return Ok(Val.Period(period_from_ical(v, mut tzp, tzid)?));
+    }
+    if typ == "time" {
+        return Ok(Val.Time(time_from_ical(v, mut tzp, tzid)?));
+    }
+    if typ == "date-time-list" {
+        return Ok(Val.List(ddd_list_from_ical(v, mut tzp, tzid)?));
+    }
+    if typ == "utc-offset" {
+        return Ok(Val.Offset(offset_from_ical(v)?));
+    }
+    if typ == "recur" {
+        return Ok(Val.Recur(recur_from_ical(v, mut tzp)?));
+    }
+    if typ == "categories" {
+        let mut cats: Vec[String] = Vec.new();
+        for c in split_chars(v, ',').iter() {
+            cats.push(text(c));
+        }
+        return Ok(Val.Cat(cats));
+    }
+    if typ == "geo" {
+        let bad = value_error(f"Expected 'float;float' , got: {text(v)}");
+        let parts = split_chars(v, ';');
+        if parts.len() != 2 {
+            return Err(bad);
+        }
+        let lat = py_float_v(parts[0]);
+        let lon = py_float_v(parts[1]);
+        if lat.is_none() or lon.is_none() {
+            return Err(bad);
+        }
+        let (a, b) = (lat.unwrap(), lon.unwrap());
+        if not is_finite(a) or not is_finite(b) {
+            return Err(value_error(f"Expected finite 'float;float', got: {text(v)}"));
+        }
+        return Ok(Val.Geo(a, b));
+    }
+    if typ == "binary" {
+        return match b64_decode_strict(v) {
+            Some(b) => Ok(Val.Binary(b)),
+            None => Err(value_error("Not valid base 64 encoding.".to_string())),
+        };
+    }
+    if typ == "boolean" {
+        let u = text(upper_v(v));
+        if u == "TRUE" {
+            return Ok(Val.Bool(true));
+        }
+        if u == "FALSE" {
+            return Ok(Val.Bool(false));
+        }
+        return Err(value_error(f"Expected 'TRUE' or 'FALSE'. Got {text(v)}"));
+    }
+    if typ == "integer" {
+        return Ok(Val.Int(int_from_ical(v)?));
+    }
+    if typ == "float" {
+        return match py_float_v(v) {
+            None => Err(value_error(f"Expected float value, got: {text(v)}")),
+            Some(x) => {
+                if not is_finite(x) {
+                    return Err(value_error(f"Expected finite float value, got: {text(v)}"));
+                }
+                Ok(Val.Float(x))
+            }
+        };
+    }
+    Ok(Val.Txt("vUnknown".to_string(), text(v)))
+}
+
+// the checks vPeriod's constructor makes when the parser builds the
+// property from the parsed value; these escape the parser's error
+// handling, as in icalendar
+fn check_period(v: ref DtV) -> Result[(), PyErr] {
+    if v.a.kind != TK_DATETIME {
+        return Err(PyErr { kind: "TypeError".to_string(), msg: "Start value MUST be a datetime or date instance".to_string() });
+    }
+    if v.b.kind == TK_TIME {
+        return Err(PyErr { kind: "TypeError".to_string(), msg: "end_or_duration MUST be a datetime, date or timedelta instance".to_string() });
+    }
+    if v.b.kind == TK_DURATION {
+        if tm_total(v.b) < 0 {
+            return Err(value_error("Start time is greater than end time".to_string()));
+        }
+        return Ok(());
+    }
+    if is_aware(v.a) != is_aware(v.b) {
+        return Err(PyErr { kind: "TypeError".to_string(), msg: "can't compare offset-naive and offset-aware datetimes".to_string() });
+    }
+    if v.a.tz == v.b.tz {
+        let ka = [v.a.y, v.a.mo, v.a.d, v.a.h, v.a.mi, v.a.s];
+        let kb = [v.b.y, v.b.mo, v.b.d, v.b.h, v.b.mi, v.b.s];
+        for i in 0..6 {
+            if ka[i] != kb[i] {
+                if ka[i] > kb[i] {
+                    return Err(value_error("Start time is greater than end time".to_string()));
+                }
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn floats_repr(a: f64, b: f64) -> String {
+    f"({float_repr(a)}, {float_repr(b)})"
+}
+
+// show_value in oracle.py
+fn show_value(v: ref Val) -> String {
+    match v {
+        Val.Txt(cls, s) => f"{cls} {py_repr(chars(s))}",
+        Val.Broken(expected, raw) => f"vBroken (expected {expected}) {py_repr(chars(raw))}",
+        Val.Ddd(t) => f"vDDDTypes {dtv_str(t)}",
+        Val.Period(t) => f"vPeriod {dtv_str(t)}",
+        Val.Time(t) => f"vTime {tm_str(t)}",
+        Val.List(ts) => {
+            let mut out = "vDDDLists [".to_string();
+            for i in 0..ts.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(dtv_str(ts[i]));
+            }
+            out.push(']');
+            out
+        }
+        Val.Offset(secs) => f"vUTCOffset {td_str(tm_duration(*secs))}",
+        Val.Recur(parts) => f"vRecur {recur_show(parts)}",
+        Val.Cat(cats) => {
+            let mut out = "vCategory [".to_string();
+            for i in 0..cats.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(py_repr(chars(cats[i])));
+            }
+            out.push(']');
+            out
+        }
+        Val.Geo(a, b) => f"vGeo {floats_repr(*a, *b)}",
+        Val.Binary(b) => {
+            let n = if b.len() < 24 { b.len() } else { 24 };
+            let head: Vec[i64] = b[0..n].to_vec();
+            f"vBinary {b.len()} bytes {bytes_repr(head)}"
+        }
+        Val.Bool(b) => f"vBoolean {py_bool(*b)}",
+        Val.Int(n) => f"vInt {n}",
+        Val.Float(x) => f"vFloat {float_repr(*x)}",
+    }
+}
+
+// the value as the property writes it
+fn value_ical(v: ref Val, params: ref Params) -> String {
+    let putc = params_is_utc(params);
+    match v {
+        Val.Txt(cls, s) => if cls == "vText" { text(escape_text(chars(s))) } else { s.clone() },
+        Val.Broken(_, raw) => text(escape_text(chars(raw))),
+        Val.Ddd(t) => dtv_ical(t, putc),
+        Val.Period(t) => period_ical(t),
+        Val.Time(t) => tm_ical(t, putc),
+        Val.List(ts) => {
+            let mut out = String.new();
+            for i in 0..ts.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(dtv_ical(ts[i], false));
+            }
+            out
+        }
+        Val.Offset(secs) => offset_ical(*secs),
+        Val.Recur(parts) => recur_ical(parts),
+        Val.Cat(cats) => {
+            let mut out = String.new();
+            for i in 0..cats.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(text(escape_text(chars(cats[i]))));
+            }
+            out
+        }
+        Val.Geo(a, b) => f"{float_repr(*a)};{float_repr(*b)}",
+        Val.Binary(b) => b64_encode(b),
+        Val.Bool(b) => if *b { "TRUE".to_string() } else { "FALSE".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => float_repr(*x),
+    }
+}
+// ---------------------------------------------------------------- components
+
+// A component: its properties by name (upper-cased, in the order first
+// added, each name keeping all its values), the errors the parser kept,
+// and its subcomponents.
+#[derive(Clone)]
+struct Comp {
+    name: String,
+    keys: Vec[String],
+    props: Vec[Vec[Prop]],
+    subs: Vec[Comp],
+    errors: Vec[(Option[String], String)],
+}
+
+fn new_comp(name: own String) -> Comp {
+    Comp { name: name, keys: Vec.new(), props: Vec.new(), subs: Vec.new(), errors: Vec.new() }
+}
+
+fn comp_add(c: mut ref Comp, name: ref String, p: own Prop) {
+    for i in 0..c.keys.len() {
+        if c.keys[i] == *name {
+            c.props[i].push(p);
+            return;
+        }
+    }
+    c.keys.push(name.clone());
+    let mut v: Vec[Prop] = Vec.new();
+    v.push(p);
+    c.props.push(v);
+}
+
+fn comp_has(c: ref Comp, name: Str) -> bool {
+    for k in c.keys.iter() {
+        if k == name {
+            return true;
+        }
+    }
+    false
+}
+
+// only VEVENT keeps going after a bad line or a bad value
+fn ignores_exceptions(c: ref Comp) -> bool {
+    c.name == "VEVENT"
+}
+
+fn canonical_order(name: ref String) -> Vec[String] {
+    if name == "VCALENDAR" {
+        words("VERSION PRODID CALSCALE METHOD DESCRIPTION X-WR-CALDESC NAME X-WR-CALNAME")
+    } else if name == "VEVENT" {
+        words("SUMMARY DTSTART DTEND DURATION DTSTAMP UID RECURRENCE-ID SEQUENCE RRULE RDATE EXDATE")
+    } else if name == "VTIMEZONE" {
+        words("TZID")
+    } else if name == "VAVAILABILITY" {
+        words("DTSTART DTEND DURATION DTSTAMP UID SEQUENCE SUMMARY DESCRIPTION ORGANIZER")
+    } else {
+        Vec.new()
+    }
+}
+
+// ---------------------------------------------------------------- parser
+
+const DATETIME_NAMES: Str = "DTSTART DTEND RECURRENCE-ID DUE RDATE EXDATE";
+
+// ComponentIcalParser's state
+struct IcalParser {
+    stack: Vec[Comp],
+    components: Vec[Comp],
+}
+
+fn top_ignores(ps: ref IcalParser) -> bool {
+    ps.stack.len() > 0 and ignores_exceptions(ps.stack[ps.stack.len() - 1])
+}
+
+fn top_add(ps: mut ref IcalParser, name: ref String, p: own Prop) {
+    let n = ps.stack.len();
+    comp_add(mut ps.stack[n - 1], name, p);
+}
+
+fn top_error(ps: mut ref IcalParser, name: own Option[String], msg: own String) {
+    let n = ps.stack.len();
+    ps.stack[n - 1].errors.push((name, msg));
+}
+
+// handle_property_parse_error
+fn property_error(ps: mut ref IcalParser, e: own PyErr, name: ref String, params: ref Params, val: ref Vec[char], typ: ref String) -> Result[(), PyErr] {
+    let x = upper_s(name).starts_with("X-");
+    if not top_ignores(ps) and not x {
+        return Err(e);
+    }
+    top_error(mut ps, Some(name.clone()), e.msg);
+    top_add(mut ps, name, Prop { val: Val.Broken(class_name(typ), text(val)), params: params.clone() });
+    Ok(())
+}
+
+// parse_and_add_property
+fn parse_and_add(ps: mut ref IcalParser, tzp: mut ref Tzp, name: ref String, params: ref Params, val: ref Vec[char], tzid: ref Option[String]) -> Result[(), PyErr] {
+    let typ = for_property(name, params_value(params));
+    match value_from_ical(typ, val, mut tzp, tzid) {
+        Err(e) => property_error(mut ps, e, name, params, val, typ),
+        Ok(v) => {
+            if let Val.Period(ref p) = v {
+                check_period(p)?;
+            }
+            top_add(mut ps, name, Prop { val: v, params: params.clone() });
+            Ok(())
+        }
+    }
+}
+
+// handle_property
+fn handle_property(ps: mut ref IcalParser, tzp: mut ref Tzp, name: ref String, params: ref Params, vals: ref Vec[char], line: ref Vec[char]) -> Result[(), PyErr] {
+    if ps.stack.len() == 0 {
+        if name == "X-COMMENT" {
+            return Ok(());
+        }
+        return Err(value_error(f"Property \"{name}\" does not have a parent component."));
+    }
+    let tzid: Option[String] = if params.keys.len() > 0 and words(DATETIME_NAMES).contains(name) {
+        params_str(params, "TZID")
+    } else {
+        None
+    };
+    let tz: Option[String] = match tzid {
+        Some(t) => if t.len() > 0 { Some(t) } else { None },
+        None => None,
+    };
+    let mut vals_list: Vec[Vec[char]] = Vec.new();
+    if name == "CATEGORIES" {
+        let colon = value_separator_index(line);
+        if colon > 0 {
+            let raw = from_(line, colon + 1);
+            let cats = split_on_unescaped_comma(raw);
+            top_add(mut ps, name, Prop { val: Val.Cat(cats), params: params.clone() });
+            return Ok(());
+        }
+        vals_list.push(vals.clone());
+    } else if name == "FREEBUSY" {
+        vals_list = split_chars(vals, ',');
+    } else if name == "RDATE" and vals.len() == 0 {
+    } else {
+        let typ = for_property(name, params_value(params));
+        if typ == "unknown" {
+            vals_list.push(raw_parts(line)?.value);
+        } else {
+            vals_list.push(vals.clone());
+        }
+    }
+    for v in vals_list.iter() {
+        parse_and_add(mut ps, mut tzp, name, params, v, tz)?;
+    }
+    Ok(())
+}
+
+fn first_text(c: ref Comp, key: Str) -> Option[String] {
+    for i in 0..c.keys.len() {
+        if c.keys[i] == key {
+            return match c.props[i][0].val {
+                Val.Txt(_, s) => Some(s.clone()),
+                Val.Broken(_, s) => Some(s.clone()),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+// parse_content_lines
+fn parse_lines(lines: ref Vec[Vec[char]], tzp: mut ref Tzp) -> Result[Vec[Comp], PyErr] {
+    let mut ps = IcalParser { stack: Vec.new(), components: Vec.new() };
+    for line in lines.iter() {
+        let parts = match raw_parts(line) {
+            Ok(p) => p,
+            Err(e) => {
+                if not top_ignores(ps) {
+                    return Err(e);
+                }
+                top_error(mut ps, None, e.msg);
+                continue;
+            }
+        };
+        let vals = unescape_backslash(parts.value);
+        let uname = upper_s(parts.name);
+        if uname == "BEGIN" {
+            ps.stack.push(new_comp(text(upper_v(vals))));
+        } else if uname == "END" {
+            if ps.stack.len() == 0 {
+                return Err(value_error("END encountered without an accompanying BEGIN!".to_string()));
+            }
+            let c = ps.stack.pop().unwrap();
+            let is_tz = text(upper_v(vals)) == "VTIMEZONE" and comp_has(c, "TZID");
+            if is_tz {
+                if let Some(id) = first_text(c, "TZID") {
+                    cache_vtimezone(mut tzp, id);
+                }
+            }
+            let n = ps.stack.len();
+            if n == 0 {
+                ps.components.push(c);
+            } else {
+                ps.stack[n - 1].subs.push(c);
+            }
+        } else {
+            handle_property(mut ps, mut tzp, uname, parts.params, vals, line)?;
+        }
+    }
+    Ok(ps.components)
+}
+
+// Calendar.from_ical(raw, multiple=True): parse, then parse again when a
+// VTIMEZONE follows anything else, since by then the cache has it
+fn parse_calendars(raw: ref String, tzp: mut ref Tzp) -> Result[Vec[Comp], PyErr] {
+    let mut cs = chars(raw);
+    if cs.len() > 0 and cs[0] == '\u{feff}' {
+        cs.remove(0);
+    }
+    let lines = content_lines(cs);
+    let comps = parse_lines(lines, mut tzp)?;
+    let mut all_tz_so_far = true;
+    for c in comps.iter() {
+        for sub in c.subs.iter() {
+            if sub.name == "VTIMEZONE" {
+                if not all_tz_so_far {
+                    return parse_lines(lines, mut tzp);
+                }
+            } else {
+                all_tz_so_far = false;
+            }
+        }
+    }
+    Ok(comps)
+}
+
+// ---------------------------------------------------------------- writer
+
+fn content_line(name: ref String, p: ref Prop) -> String {
+    let value = value_ical(p.val, p.params);
+    let ps = if p.params.keys.len() > 0 { params_to_ical(p.params) } else { String.new() };
+    let line = if ps.len() > 0 { f"{name};{ps}:{value}" } else { f"{name}:{value}" };
+    foldline(chars(line))
+}
+
+fn write_comp(c: ref Comp, out: mut ref String) {
+    let n = text(escape_text(chars(c.name)));
+    out.push_str(foldline(chars(f"BEGIN:{n}")));
+    out.push_str("\r\n");
+    for i in canon_order(c.keys, canonical_order(c.name)).iter() {
+        for p in c.props[*i].iter() {
+            out.push_str(content_line(c.keys[*i], p));
+            out.push_str("\r\n");
+        }
+    }
+    for sub in c.subs.iter() {
+        write_comp(sub, mut out);
+    }
+    out.push_str(foldline(chars(f"END:{n}")));
+    out.push_str("\r\n");
+}
+
+// Component.to_ical
+fn to_ical(c: ref Comp) -> String {
+    let mut out = String.new();
+    write_comp(c, mut out);
+    out
+}
+
+// ---------------------------------------------------------------- printing
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(chars(s)),
+        None => "None".to_string(),
+    }
+}
+
+fn show(c: ref Comp, depth: i64) {
+    let mut pad = String.new();
+    for _ in 0..depth {
+        pad.push_str("  ");
+    }
+    println(f"{pad}{c.name}");
+    for i in 0..c.keys.len() {
+        for p in c.props[i].iter() {
+            let ps = if p.params.keys.len() > 0 { f" {params_repr(p.params)}" } else { String.new() };
+            println(f"{pad}  {c.keys[i]}{ps} {show_value(p.val)}");
+        }
+    }
+    if c.errors.len() > 0 {
+        let mut es = String.new();
+        for i in 0..c.errors.len() {
+            if i > 0 {
+                es.push_str(", ");
+            }
+            let (n, m) = ref c.errors[i];
+            es.push_str(f"({opt_repr(n)}, {py_repr(chars(m))})");
+        }
+        println(f"{pad}  errors: [{es}]");
+    }
+    for sub in c.subs.iter() {
+        show(sub, depth + 1);
+    }
+}
+// ---------------------------------------------------------------- main
+
+fn parent_dir(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '/' {
+        i -= 1;
+    }
+    if i == 0 { String.new() } else { text(upto(cs, i - 1)) }
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, body) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), body) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_data(rel: own String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read data/{rel}: {e}"),
+    }
+}
+
+fn run_file(rel: ref String, tzp: mut ref Tzp) -> Result[(), String] {
+    println(f"== {rel}");
+    let raw = read_data(f"calendars/{rel}")?;
+    let cals = match parse_calendars(raw, mut tzp) {
+        Ok(c) => c,
+        Err(e) => {
+            println(f"error: {e.kind}: {e.msg}");
+            return Ok(());
+        }
+    };
+    println(f"calendars: {cals.len()}");
+    for cal in cals.iter() {
+        show(cal, 0);
+        let written = to_ical(cal);
+        println("written:");
+        let lines: Vec[String] = written.split("\r\n").map(|l| l.to_string()).collect();
+        for i in 0..lines.len() - 1 {
+            println(f"| {lines[i]}");
+        }
+        match parse_calendars(written, mut tzp) {
+            Ok(again) => {
+                let same = again.len() == 1 and to_ical(again[0]) == written;
+                println(f"read back: {if same { "same" } else { "differs" }}");
+            }
+            Err(e) => println(f"read back: error: {e.kind}: {e.msg}"),
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut tzp = new_tzp(read_data("tz/zones.txt".to_string())?);
+    let names = read_data("calendars.txt".to_string())?;
+    for rel in names.split("\n") {
+        if rel.len() > 0 {
+            run_file(rel.to_string(), mut tzp)?;
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("broken/bad_offset.ics\u{a}broken/bad_param.ics\u{a}broken/bad_todo_due.ics\u{a}broken/control_char.ics\u{a}broken/empty.ics\u{a}broken/orphan_property.ics\u{a}broken/param_without_value.ics\u{a}broken/stray_end.ics\u{a}broken/unterminated.ics\u{a}broken/x_comment_only.ics\u{a}field_journal.ics\u{a}freebusy_reply.ics\u{a}google_team.ics\u{a}importer_errors.ics\u{a}lenient.ics\u{a}outlook_invite.ics\u{a}teams_publish.ics\u{a}thunderbird_tasks.ics\u{a}two_calendars.ics\u{a}v");
+    out.push_str("alue_types.ics\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}BEGIN:VTIMEZONE\u{d}\u{a}TZID:Bad\u{d}\u{a}BEGIN:STANDARD\u{d}\u{a}TZOFFSETTO:+2500\u{d}\u{a}END:STANDARD\u{d}\u{a}END:VTIMEZONE\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+fn file_2_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}X-FOO;BAD PARAM=1:x\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_2() -> String {
+    let mut out = String.new();
+    file_2_0(mut out);
+    out
+}
+
+fn file_3_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}BEGIN:VTODO\u{d}\u{a}UID:t1\u{d}\u{a}DUE:2026-11-01\u{d}\u{a}END:VTODO\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_3() -> String {
+    let mut out = String.new();
+    file_3_0(mut out);
+    out
+}
+
+fn file_4_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}BEGIN:VTODO\u{d}\u{a}X-A;X-B=a\u{7}b:c\u{d}\u{a}END:VTODO\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_4() -> String {
+    let mut out = String.new();
+    file_4_0(mut out);
+    out
+}
+
+fn file_5_0(out: mut ref String) {
+    out.push_str("");
+}
+
+fn file_5() -> String {
+    let mut out = String.new();
+    file_5_0(mut out);
+    out
+}
+
+fn file_6_0(out: mut ref String) {
+    out.push_str("SUMMARY:No calendar around me\u{d}\u{a}BEGIN:VCALENDAR\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_6() -> String {
+    let mut out = String.new();
+    file_6_0(mut out);
+    out
+}
+
+fn file_7_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}BEGIN:VTODO\u{d}\u{a}SUMMARY;LANGUAGE:x\u{d}\u{a}END:VTODO\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_7() -> String {
+    let mut out = String.new();
+    file_7_0(mut out);
+    out
+}
+
+fn file_8_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_8() -> String {
+    let mut out = String.new();
+    file_8_0(mut out);
+    out
+}
+
+fn file_9_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}UID:x\u{d}\u{a}END:VEVENT\u{d}\u{a}");
+}
+
+fn file_9() -> String {
+    let mut out = String.new();
+    file_9_0(mut out);
+    out
+}
+
+fn file_10_0(out: mut ref String) {
+    out.push_str("X-COMMENT:exported by a script\u{d}\u{a}BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_10() -> String {
+    let mut out = String.new();
+    file_10_0(mut out);
+    out
+}
+
+fn file_11_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example//Field Notes 1.4//EN\u{d}\u{a}BEGIN:VJOURNAL\u{d}\u{a}UID:journal-2026-10-03@example.org\u{d}\u{a}DTSTAMP:20261003T201500Z\u{d}\u{a}DTSTART;VALUE=DATE:20261003\u{d}\u{a}SUMMARY:Site visit: Montmartre\u{d}\u{a}DESCRIPTION:Walked the route twice.\\nNotes:\\n1) Stairs at Rue Foyatier are \u{d}\u{a} steep\\; avoid with equipment.\\n2) Café on the corner opens at 07:30.\\n3) \u{d}\u{a} Backup route via the funicular.\u{d}\u{a}DESC");
+    out.push_str("RIPTION;LANGUAGE=fr:Itinéraire parcouru deux fois.\u{d}\u{a}GEO:48.886705;2.343104\u{d}\u{a}RESOURCES:Camera,Tripod\u{d}\u{a}COMMENT:日本語のメモ: 坂道が多いので、機材は少なめに\u{d}\u{a} すること。雨の日は滑りやすい。🙂 Bring a spare battery an\u{d}\u{a} d the long lens.\u{d}\u{a}COMMENT:Second comment, a long one that keeps going so that it must be fold\u{d}\u{a} ed at least once when it is written back out to a file.\u{d}\u{a}ATTACH:https://files.example.org/visits/montmartre/route.gpx\u{d}\u{a}ATTACH");
+    out.push_str(";FMTTYPE=image/jpeg:https://files.example.org/visits/montmartre/IMG_0\u{d}\u{a} 412.jpg\u{d}\u{a}RELATED-TO;RELTYPE=PARENT:project-paris-2026@example.org\u{d}\u{a}REQUEST-STATUS:2.0;Success\u{d}\u{a}URL;VALUE=URI:https://notes.example.org/j/2026-10-03\u{d}\u{a}X-SCORE;VALUE=FLOAT:4.25\u{d}\u{a}X-RATING;VALUE=INTEGER:+7\u{d}\u{a}X-WEATHER;X-SOURCE=\"https://weather.example.org/api?q=paris\";UNITS=metric:1\u{d}\u{a} 2C\\, light rain\u{d}\u{a}X-ESCAPED-PARAM;X-NOTE=a\\,b\\;c:");
+    out.push_str("value\u{d}\u{a}X-CARET;X-TITLE=Line one^nLine ^'two^' ^^ok:caret escapes\u{d}\u{a}CLASS:PRIVATE\u{d}\u{a}END:VJOURNAL\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_11() -> String {
+    let mut out = String.new();
+    file_11_0(mut out);
+    out
+}
+
+fn file_12_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example Corp//CalDAV Server 4.2//EN\u{d}\u{a}METHOD:REPLY\u{d}\u{a}BEGIN:VFREEBUSY\u{d}\u{a}UID:fb-2026-11-02-dana\u{d}\u{a}ORGANIZER;CN=Scheduling Assistant:mailto:scheduler@example.com\u{d}\u{a}ATTENDEE;CN=Dana Kim:mailto:dana@example.com\u{d}\u{a}DTSTAMP:20261030T120000Z\u{d}\u{a}DTSTART:20261102T080000Z\u{d}\u{a}DTEND:20261102T180000Z\u{d}\u{a}FREEBUSY;FBTYPE=BUSY:20261102T090000Z/PT1H,20261102T130000Z/20261102T143000\u{d}\u{a} Z\u{d}\u{a}F");
+    out.push_str("REEBUSY;FBTYPE=BUSY-TENTATIVE:20261102T160000Z/PT45M\u{d}\u{a}FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20261102T120000Z/PT1H\u{d}\u{a}URL:https://cal.example.com/freebusy/dana.ifb\u{d}\u{a}END:VFREEBUSY\u{d}\u{a}BEGIN:VAVAILABILITY\u{d}\u{a}UID:avail-dana-2026\u{d}\u{a}DTSTAMP:20261030T120000Z\u{d}\u{a}SUMMARY:Office hours\u{d}\u{a}ORGANIZER:mailto:dana@example.com\u{d}\u{a}DTSTART:20261101T000000Z\u{d}\u{a}BEGIN:AVAILABLE\u{d}\u{a}UID:avail-dana-weekdays\u{d}\u{a}SUMMARY:Weekdays\u{d}\u{a}DTSTART;TZID=Amer");
+    out.push_str("ica/New_York:20261102T090000\u{d}\u{a}DTEND;TZID=America/New_York:20261102T170000\u{d}\u{a}RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\u{d}\u{a}DTSTAMP:20261030T120000Z\u{d}\u{a}END:AVAILABLE\u{d}\u{a}END:VAVAILABILITY\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_12() -> String {
+    let mut out = String.new();
+    file_12_0(mut out);
+    out
+}
+
+fn file_13_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}PRODID:-//Google Inc//Google Calendar 70.9054//EN\u{d}\u{a}VERSION:2.0\u{d}\u{a}CALSCALE:GREGORIAN\u{d}\u{a}METHOD:PUBLISH\u{d}\u{a}X-WR-CALNAME:Platform team\u{d}\u{a}X-WR-TIMEZONE:America/New_York\u{d}\u{a}X-WR-CALDESC:Standups\\, reviews and on-call handovers\u{d}\u{a}BEGIN:VTIMEZONE\u{d}\u{a}TZID:America/New_York\u{d}\u{a}X-LIC-LOCATION:America/New_York\u{d}\u{a}BEGIN:DAYLIGHT\u{d}\u{a}TZOFFSETFROM:-0500\u{d}\u{a}TZOFFSETTO:-0400\u{d}\u{a}TZNAME:EDT\u{d}\u{a}DTSTART:19700308T020000\u{d}\u{a}RRUL");
+    out.push_str("E:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU\u{d}\u{a}END:DAYLIGHT\u{d}\u{a}BEGIN:STANDARD\u{d}\u{a}TZOFFSETFROM:-0400\u{d}\u{a}TZOFFSETTO:-0500\u{d}\u{a}TZNAME:EST\u{d}\u{a}DTSTART:19701101T020000\u{d}\u{a}RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\u{d}\u{a}END:STANDARD\u{d}\u{a}END:VTIMEZONE\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}DTSTART;TZID=America/New_York:20260302T093000\u{d}\u{a}DTEND;TZID=America/New_York:20260302T094500\u{d}\u{a}RRULE:FREQ=WEEKLY;WKST=MO;UNTIL=20261231T045959Z;BYDAY=MO,TU,WE,TH,FR\u{d}\u{a}EXDATE;TZID=Am");
+    out.push_str("erica/New_York:20260525T093000,20260703T093000\u{d}\u{a}DTSTAMP:20261015T120000Z\u{d}\u{a}ORGANIZER;CN=Priya Raman:mailto:priya@example.com\u{d}\u{a}UID:4f1c0a7e2b@google.com\u{d}\u{a}ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Priya \u{d}\u{a} Raman;X-NUM-GUESTS=0:mailto:priya@example.com\u{d}\u{a}ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=\u{d}\u{a} TRUE;CN=dev-oncall@example.com;X-NUM-GUESTS=0");
+    out.push_str(":mailto:dev-oncall@example.co\u{d}\u{a} m\u{d}\u{a}ATTENDEE;CUTYPE=RESOURCE;ROLE=NON-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Room 4.1\u{d}\u{a} 2 (Kepler);X-NUM-GUESTS=0:mailto:c_1889k2@resource.calendar.example.com\u{d}\u{a}CREATED:20260220T183000Z\u{d}\u{a}DESCRIPTION:Daily standup. Join: https://meet.example.com/abc-defg-hij\\n\\nA\u{d}\u{a} genda:\\n- yesterday\\n- today\\n- blockers\\n\\nDial-in: +1 555-0100\\, PIN 441\u{d}\u{a} 7#\u{d}\u{a}LAST-MODIFIED:20261015T115900");
+    out.push_str("Z\u{d}\u{a}LOCATION:Room 4.12 (Kepler)\\; or online\u{d}\u{a}SEQUENCE:3\u{d}\u{a}STATUS:CONFIRMED\u{d}\u{a}SUMMARY:Platform standup\u{d}\u{a}TRANSP:OPAQUE\u{d}\u{a}BEGIN:VALARM\u{d}\u{a}ACTION:DISPLAY\u{d}\u{a}DESCRIPTION:This is an event reminder\u{d}\u{a}TRIGGER:-P0DT0H10M0S\u{d}\u{a}END:VALARM\u{d}\u{a}END:VEVENT\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}DTSTART;TZID=America/New_York:20260709T100000\u{d}\u{a}DTEND;TZID=America/New_York:20260709T104500\u{d}\u{a}DTSTAMP:20261015T120000Z\u{d}\u{a}UID:4f1c0a7e2b@google.com\u{d}\u{a}RECURRENCE-");
+    out.push_str("ID;TZID=America/New_York:20260709T093000\u{d}\u{a}CREATED:20260220T183000Z\u{d}\u{a}DESCRIPTION:Moved for the all-hands.\u{d}\u{a}LAST-MODIFIED:20260701T090000Z\u{d}\u{a}SEQUENCE:4\u{d}\u{a}STATUS:CONFIRMED\u{d}\u{a}SUMMARY:Platform standup (moved)\u{d}\u{a}TRANSP:OPAQUE\u{d}\u{a}END:VEVENT\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}DTSTART;VALUE=DATE:20261126\u{d}\u{a}DTEND;VALUE=DATE:20261128\u{d}\u{a}DTSTAMP:20261015T120000Z\u{d}\u{a}UID:thanksgiving-2026@google.com\u{d}\u{a}CATEGORIES:Holiday,Office closed\u{d}\u{a}CLASS:P");
+    out.push_str("UBLIC\u{d}\u{a}SUMMARY:Thanksgiving (office closed)\u{d}\u{a}TRANSP:TRANSPARENT\u{d}\u{a}END:VEVENT\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}DTSTART:20261103T140000Z\u{d}\u{a}DURATION:PT1H30M\u{d}\u{a}DTSTAMP:20261015T120000Z\u{d}\u{a}UID:oncall-handover-44@google.com\u{d}\u{a}RRULE:FREQ=MONTHLY;BYDAY=1TU;COUNT=6\u{d}\u{a}SUMMARY:On-call handover\u{d}\u{a}DESCRIPTION:Rotation: alice → bob → chen → dana. Runbook: https://wik\u{d}\u{a} i.example.com/oncall?tab=handover&view=full\u{d}\u{a}URL:https://wiki.exampl");
+    out.push_str("e.com/oncall\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_13() -> String {
+    let mut out = String.new();
+    file_13_0(mut out);
+    out
+}
+
+fn file_14_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example//Importer test//EN\u{d}\u{a}X-PUBLISHED-TTL:P1W\u{d}\u{a}X-COUNT;VALUE=INTEGER:many\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}UID:broken-values\u{d}\u{a}DTSTAMP:20261001T000000Z\u{d}\u{a}DTSTART:2026-12-01T10:00:00\u{d}\u{a}DTEND:20261301T100000\u{d}\u{a}DURATION:PT1.5H\u{d}\u{a}GEO:51.5;north\u{d}\u{a}PRIORITY:high\u{d}\u{a}SEQUENCE:9999999999\u{d}\u{a}RRULE:FREQ=FORTNIGHTLY;COUNT=3\u{d}\u{a}EXDATE:20261224T250000\u{d}\u{a}TRIGGER:soon\u{d}\u{a}a line that is not a property\u{d}\u{a}DE");
+    out.push_str("SCRIPTION;:empty parameter section\u{d}\u{a};X=1:no name\u{d}\u{a}X-SIZE;VALUE=FLOAT:inf\u{d}\u{a}X-WHEN;VALUE=DATE:20260230\u{d}\u{a}SUMMARY:Still imported\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_14() -> String {
+    let mut out = String.new();
+    file_14_0(mut out);
+    out
+}
+
+fn file_15_0(out: mut ref String) {
+    out.push_str("\u{feff}begin:vcalendar\u{a}version:2.0\u{a}prodid:-//Hand written//EN\u{a}\u{a}begin:vevent\u{a}uid:lenient-1\u{a}dtstamp:20261001T000000Z\u{a}dtstart ; tzid = Europe/Paris : 20261201T100000\u{a}summary:Folded with a tab and\u{a}\u{9} a space\u{a}description:first\\nsecond\\Nthird\\\\fourth\\:fifth\u{a}Summary:a second summary\u{a}end:vevent\u{a}BEGIN:X-ACME-WIDGET\u{a}X-ACME-COLOR:teal\u{a}X-ACME-SIZE;VALUE=INTEGER:3\u{a}END:X-ACME-WIDGET\u{a}BEGIN:VEVENT\u{a}UID:mismatched-end\u{a}SUM");
+    out.push_str("MARY:Closed by END:VTODO\u{a}END:VTODO\u{a}end:vcalendar\u{a}");
+}
+
+fn file_15() -> String {
+    let mut out = String.new();
+    file_15_0(mut out);
+    out
+}
+
+fn file_16_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}METHOD:REQUEST\u{d}\u{a}PRODID:Microsoft Exchange Server 2010\u{d}\u{a}VERSION:2.0\u{d}\u{a}BEGIN:VTIMEZONE\u{d}\u{a}TZID:W. Europe Standard Time\u{d}\u{a}BEGIN:STANDARD\u{d}\u{a}DTSTART:16010101T030000\u{d}\u{a}TZOFFSETFROM:+0200\u{d}\u{a}TZOFFSETTO:+0100\u{d}\u{a}RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\u{d}\u{a}END:STANDARD\u{d}\u{a}BEGIN:DAYLIGHT\u{d}\u{a}DTSTART:16010101T020000\u{d}\u{a}TZOFFSETFROM:+0100\u{d}\u{a}TZOFFSETTO:+0200\u{d}\u{a}RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMO");
+    out.push_str("NTH=3\u{d}\u{a}END:DAYLIGHT\u{d}\u{a}END:VTIMEZONE\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}ORGANIZER;CN=\"Weber, Thomas\":mailto:thomas.weber@example.de\u{d}\u{a}ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=\"Müller, \u{d}\u{a} Jana\":mailto:jana.mueller@example.de\u{d}\u{a}ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Sean O'Bri\u{d}\u{a} en:mailto:sean.obrien@example.ie\u{d}\u{a}ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE;DELEGATED-FRO");
+    out.push_str("M=\"mailto:cfo\u{d}\u{a} @example.de\";CN=Finance Team:mailto:finance@example.de\u{d}\u{a}DESCRIPTION;LANGUAGE=de-DE:Hallo zusammen\\,\\n\\nbitte die Zahlen für Q3 mit\u{d}\u{a} bringen.\\nAgenda: Budget\\; Forecast\\; Sonstiges\\n\\n\u{d}\u{a}UID:040000008200E00074C5B7101A82E00800000000A0B1C2D3E4F5A6B7C8D9E0F1A2B3C4D\u{d}\u{a} 5E6F7A8B9\u{d}\u{a}SUMMARY;LANGUAGE=de-DE:Q3 Budgetrunde\u{d}\u{a}DTSTART;TZID=W. Europe Standard Time:20260915T140000\u{d}\u{a}DTEND;TZID=W. Eu");
+    out.push_str("rope Standard Time:20260915T153000\u{d}\u{a}CLASS:PUBLIC\u{d}\u{a}PRIORITY:5\u{d}\u{a}DTSTAMP:20260901T081500Z\u{d}\u{a}TRANSP:OPAQUE\u{d}\u{a}STATUS:CONFIRMED\u{d}\u{a}SEQUENCE:0\u{d}\u{a}LOCATION;LANGUAGE=de-DE:Besprechungsraum Rhein (3. OG)\u{d}\u{a}ATTACH;FMTTYPE=text/plain;ENCODING=BASE64;VALUE=BINARY;X-FILENAME=agenda.tx\u{d}\u{a} t:QWdlbmRhOgoxLiBCdWRnZXQgUTMKMi4gRm9yZWNhc3QgUTQKMy4gU29uc3RpZ2VzCg==\u{d}\u{a}X-MICROSOFT-CDO-APPT-SEQUENCE:0\u{d}\u{a}X-MICROSOFT-CDO-OWNERAPPTID:");
+    out.push_str("2117283546\u{d}\u{a}X-MICROSOFT-CDO-BUSYSTATUS:TENTATIVE\u{d}\u{a}X-MICROSOFT-CDO-INTENDEDSTATUS:BUSY\u{d}\u{a}X-MICROSOFT-CDO-ALLDAYEVENT:FALSE\u{d}\u{a}X-MICROSOFT-CDO-IMPORTANCE:1\u{d}\u{a}X-MICROSOFT-CDO-INSTTYPE:0\u{d}\u{a}X-MICROSOFT-DONOTFORWARDMEETING:FALSE\u{d}\u{a}X-MICROSOFT-DISALLOW-COUNTER:FALSE\u{d}\u{a}X-ALT-DESC;FMTTYPE=text/html:<html><body><p>Hallo zusammen\\,</p><p>bitte di\u{d}\u{a} e Zahlen für Q3 mitbringen.</p></body></html>\u{d}\u{a}BEGIN:VALARM\u{d}\u{a}DESCRI");
+    out.push_str("PTION:REMINDER\u{d}\u{a}TRIGGER;RELATED=START:-PT15M\u{d}\u{a}ACTION:DISPLAY\u{d}\u{a}END:VALARM\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_16() -> String {
+    let mut out = String.new();
+    file_16_0(mut out);
+    out
+}
+
+fn file_17_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN\u{d}\u{a}VERSION:2.0\u{d}\u{a}METHOD:PUBLISH\u{d}\u{a}X-MS-OLK-FORCEINSPECTOROPEN:TRUE\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}CLASS:PUBLIC\u{d}\u{a}CREATED:20260810T171200Z\u{d}\u{a}DESCRIPTION:Microsoft Teams meeting\\nJoin on your computer or mobile app\\n\u{d}\u{a} https://teams.example.com/l/meetup-join/19%3ameeting_ZmE4%40thread.v2/0?c\u{d}\u{a} ontext=%7b%22Tid%22%3a%2201%22%7d\\n\u{d}\u{a}DTEND;TZID=\"Pacif");
+    out.push_str("ic Standard Time\":20260818T100000\u{d}\u{a}DTSTAMP:20260810T171200Z\u{d}\u{a}DTSTART;TZID=\"Pacific Standard Time\":20260818T093000\u{d}\u{a}LAST-MODIFIED:20260810T171200Z\u{d}\u{a}LOCATION:Microsoft Teams Meeting\u{d}\u{a}PRIORITY:5\u{d}\u{a}SEQUENCE:0\u{d}\u{a}SUMMARY;LANGUAGE=en-us:Vendor sync – contract renewal\u{d}\u{a}TRANSP:OPAQUE\u{d}\u{a}UID:040000008200E00074C5B7101A82E0080000000050F4A1C9D2C7DA01\u{d}\u{a}X-MICROSOFT-CDO-BUSYSTATUS:BUSY\u{d}\u{a}X-MICROSOFT-CDO-IMPORTANCE:1\u{d}\u{a}");
+    out.push_str("X-MICROSOFT-DISALLOW-COUNTER:FALSE\u{d}\u{a}X-MS-OLK-AUTOFILLLOCATION:FALSE\u{d}\u{a}X-MS-OLK-CONFTYPE:0\u{d}\u{a}END:VEVENT\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}DTSTART;TZID=Tokyo Standard Time:20260820T090000\u{d}\u{a}DTEND;TZID=Tokyo Standard Time:20260820T093000\u{d}\u{a}DTSTAMP:20260810T171200Z\u{d}\u{a}UID:tokyo-ops-review\u{d}\u{a}SUMMARY:Ops review (Tokyo)\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_17() -> String {
+    let mut out = String.new();
+    file_17_0(mut out);
+    out
+}
+
+fn file_18_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN\u{d}\u{a}VERSION:2.0\u{d}\u{a}BEGIN:VTIMEZONE\u{d}\u{a}TZID:Europe/Berlin\u{d}\u{a}X-LIC-LOCATION:Europe/Berlin\u{d}\u{a}BEGIN:DAYLIGHT\u{d}\u{a}TZOFFSETFROM:+0100\u{d}\u{a}TZOFFSETTO:+0200\u{d}\u{a}TZNAME:CEST\u{d}\u{a}DTSTART:19700329T020000\u{d}\u{a}RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\u{d}\u{a}END:DAYLIGHT\u{d}\u{a}BEGIN:STANDARD\u{d}\u{a}TZOFFSETFROM:+0200\u{d}\u{a}TZOFFSETTO:+0100\u{d}\u{a}TZNAME:CET\u{d}\u{a}DTSTART:19701025T030000\u{d}\u{a}RRULE:FRE");
+    out.push_str("Q=YEARLY;BYDAY=-1SU;BYMONTH=10\u{d}\u{a}END:STANDARD\u{d}\u{a}END:VTIMEZONE\u{d}\u{a}BEGIN:VTODO\u{d}\u{a}CREATED:20261001T072011Z\u{d}\u{a}LAST-MODIFIED:20261012T183402Z\u{d}\u{a}DTSTAMP:20261012T183402Z\u{d}\u{a}UID:1c9e7f2a-0b4d-4e8a-9f61-3d2c5b7a8e90\u{d}\u{a}SUMMARY:Renew passport\u{d}\u{a}STATUS:IN-PROCESS\u{d}\u{a}PRIORITY:1\u{d}\u{a}PERCENT-COMPLETE:40\u{d}\u{a}CATEGORIES:Errands,Personal\u{d}\u{a}DTSTART;TZID=Europe/Berlin:20261014T090000\u{d}\u{a}DUE;TZID=Europe/Berlin:20261030T170000\u{d}\u{a}X-MOZ-GENER");
+    out.push_str("ATION:3\u{d}\u{a}BEGIN:VALARM\u{d}\u{a}ACTION:DISPLAY\u{d}\u{a}TRIGGER;VALUE=DATE-TIME:20261028T080000Z\u{d}\u{a}DESCRIPTION:Default Mozilla Description\u{d}\u{a}END:VALARM\u{d}\u{a}END:VTODO\u{d}\u{a}BEGIN:VTODO\u{d}\u{a}CREATED:20260901T100000Z\u{d}\u{a}DTSTAMP:20260905T163000Z\u{d}\u{a}UID:7d3b2e1f-4a5c-4b6d-8e9f-0a1b2c3d4e5f\u{d}\u{a}SUMMARY:File expense report\u{d}\u{a}STATUS:COMPLETED\u{d}\u{a}COMPLETED:20260905T163000Z\u{d}\u{a}PERCENT-COMPLETE:100\u{d}\u{a}DUE;VALUE=DATE:20260906\u{d}\u{a}END:VTODO\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}C");
+    out.push_str("REATED:20261002T101500Z\u{d}\u{a}DTSTAMP:20261002T101500Z\u{d}\u{a}UID:b8a4c2d0-6e1f-4a3b-9c5d-7e8f9a0b1c2d\u{d}\u{a}SUMMARY:Call with the London office\u{d}\u{a}DTSTART;TZID=/mozilla.org/20050126_1/Europe/London:20261105T160000\u{d}\u{a}DTEND;TZID=/mozilla.org/20050126_1/Europe/London:20261105T163000\u{d}\u{a}RDATE;VALUE=PERIOD:20261112T160000Z/PT30M,20261119T160000Z/20261119T170000Z\u{d}\u{a}X-MOZ-LASTACK:20261101T090000Z\u{d}\u{a}X-MOZ-SNOOZE-TIME:20261105T");
+    out.push_str("155000Z\u{d}\u{a}BEGIN:VALARM\u{d}\u{a}ACTION:EMAIL\u{d}\u{a}ATTENDEE:mailto:me@example.net\u{d}\u{a}SUMMARY:Reminder\u{d}\u{a}DESCRIPTION:The London call starts in 10 minutes\u{d}\u{a}TRIGGER;RELATED=START:-PT10M\u{d}\u{a}REPEAT:2\u{d}\u{a}DURATION:PT5M\u{d}\u{a}END:VALARM\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_18() -> String {
+    let mut out = String.new();
+    file_18_0(mut out);
+    out
+}
+
+fn file_19_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example//Exporter A//EN\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}UID:late-zone\u{d}\u{a}DTSTAMP:20261001T000000Z\u{d}\u{a}DTSTART;TZID=Harbour Office:20261110T083000\u{d}\u{a}SUMMARY:Uses a zone defined below\u{d}\u{a}END:VEVENT\u{d}\u{a}BEGIN:VTIMEZONE\u{d}\u{a}TZID:Harbour Office\u{d}\u{a}BEGIN:STANDARD\u{d}\u{a}DTSTART:19700101T000000\u{d}\u{a}TZOFFSETFROM:+1000\u{d}\u{a}TZOFFSETTO:+1000\u{d}\u{a}TZNAME:HBR\u{d}\u{a}END:STANDARD\u{d}\u{a}END:VTIMEZONE\u{d}\u{a}END:VCALENDAR\u{d}\u{a}BEGIN:VCALENDAR");
+    out.push_str("\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example//Exporter B//EN\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}UID:second-calendar\u{d}\u{a}DTSTAMP:20261001T000000Z\u{d}\u{a}DTSTART;TZID=Harbour Office:20261111T083000\u{d}\u{a}DTSTART;TZID=W. Europe Standard Time:20261111T083000\u{d}\u{a}SUMMARY:Two DTSTARTs\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_19() -> String {
+    let mut out = String.new();
+    file_19_0(mut out);
+    out
+}
+
+fn file_20_0(out: mut ref String) {
+    out.push_str("BEGIN:VCALENDAR\u{d}\u{a}VERSION:2.0\u{d}\u{a}PRODID:-//Example//Value types//EN\u{d}\u{a}BEGIN:VEVENT\u{d}\u{a}UID:types-1\u{d}\u{a}DTSTAMP:20261001T000000Z\u{d}\u{a}DTSTART;TZID=Etc/UTC:20261201T100000\u{d}\u{a}DTEND;TZID=UTC:20261201T110000\u{d}\u{a}RECURRENCE-ID;TZID=Europe/Berlin;VALUE=DATE:20261201\u{d}\u{a}RDATE;TZID=Nowhere/Special:20261208T100000,20261215T100000\u{d}\u{a}RDATE:\u{d}\u{a}EXDATE;VALUE=DATE:20261222,20261229\u{d}\u{a}RRULE:FREQ=YEARLY;BYMONTH=2,5L;BYMONTHDAY=-1;BYSETPO");
+    out.push_str("S=1,-1;BYHOUR=9,17;INTE\u{d}\u{a} RVAL=1_0;UNTIL=20301231\u{d}\u{a}EXRULE:FREQ=daily;byday=sa,su;wkst=su;bogus\u{d}\u{a}X-START;VALUE=TIME:083000\u{d}\u{a}X-END;VALUE=TIME:170000Z\u{d}\u{a}X-OFFSET;VALUE=UTC-OFFSET:-0330\u{d}\u{a}X-FLAG;VALUE=BOOLEAN:true\u{d}\u{a}X-LINK;VALUE=URI:https://example.com/a?b=c,d;e\u{d}\u{a}X-BLOCK;VALUE=PERIOD:20261201T090000/20261201T090000\u{d}\u{a}X-LONG;VALUE=DURATION:-P2W3DT4H5M6S\u{d}\u{a}X-WEEKS;VALUE=DURATION:P1W\u{d}\u{a}X-DAY;VALUE=DURATION:PT8");
+    out.push_str("6400S\u{d}\u{a}X-SPAN;VALUE=DATE:20261201\u{d}\u{a}X-NUM;VALUE=INTEGER:-42\u{d}\u{a}X-RATIO;VALUE=FLOAT:-0.5e-3\u{d}\u{a}X-ADDRESS;VALUE=CAL-ADDRESS:mailto:ops@example.com\u{d}\u{a}CATEGORIES;LANGUAGE=en:one\\,two,three\u{d}\u{a}CATEGORIES:four\u{d}\u{a}GEO:-33.8688;151.2093\u{d}\u{a}PERCENT-COMPLETE:+05\u{d}\u{a}END:VEVENT\u{d}\u{a}END:VCALENDAR\u{d}\u{a}");
+}
+
+fn file_20() -> String {
+    let mut out = String.new();
+    file_20_0(mut out);
+    out
+}
+
+fn file_21_0(out: mut ref String) {
+    out.push_str("Africa/Abidjan utc\u{a}Africa/Accra utc\u{a}Africa/Addis_Ababa\u{a}Africa/Algiers\u{a}Africa/Asmara\u{a}Africa/Bamako utc\u{a}Africa/Bangui\u{a}Africa/Banjul utc\u{a}Africa/Bissau\u{a}Africa/Blantyre\u{a}Africa/Brazzaville\u{a}Africa/Bujumbura\u{a}Africa/Cairo\u{a}Africa/Casablanca\u{a}Africa/Ceuta\u{a}Africa/Conakry utc\u{a}Africa/Dakar utc\u{a}Africa/Dar_es_Salaam\u{a}Africa/Djibouti\u{a}Africa/Douala\u{a}Africa/El_Aaiun\u{a}Africa/Freetown utc\u{a}Africa/Gaborone\u{a}Africa/Harare\u{a}Afr");
+    out.push_str("ica/Johannesburg\u{a}Africa/Juba\u{a}Africa/Kampala\u{a}Africa/Khartoum\u{a}Africa/Kigali\u{a}Africa/Kinshasa\u{a}Africa/Lagos\u{a}Africa/Libreville\u{a}Africa/Lome utc\u{a}Africa/Luanda\u{a}Africa/Lubumbashi\u{a}Africa/Lusaka\u{a}Africa/Malabo\u{a}Africa/Maputo\u{a}Africa/Maseru\u{a}Africa/Mbabane\u{a}Africa/Mogadishu\u{a}Africa/Monrovia\u{a}Africa/Nairobi\u{a}Africa/Ndjamena\u{a}Africa/Niamey\u{a}Africa/Nouakchott utc\u{a}Africa/Ouagadougou utc\u{a}Africa/Porto-Novo\u{a}Africa/Sao_Tome\u{a}Afr");
+    out.push_str("ica/Timbuktu utc\u{a}Africa/Tripoli\u{a}Africa/Tunis\u{a}Africa/Windhoek\u{a}America/Adak\u{a}America/Anchorage\u{a}America/Anguilla\u{a}America/Antigua\u{a}America/Araguaina\u{a}America/Argentina/Buenos_Aires\u{a}America/Argentina/Catamarca\u{a}America/Argentina/Cordoba\u{a}America/Argentina/Jujuy\u{a}America/Argentina/La_Rioja\u{a}America/Argentina/Mendoza\u{a}America/Argentina/Rio_Gallegos\u{a}America/Argentina/Salta\u{a}America/Argentina/San_Juan\u{a}America/Argen");
+    out.push_str("tina/San_Luis\u{a}America/Argentina/Tucuman\u{a}America/Argentina/Ushuaia\u{a}America/Aruba\u{a}America/Asuncion\u{a}America/Atikokan\u{a}America/Atka\u{a}America/Bahia\u{a}America/Bahia_Banderas\u{a}America/Barbados\u{a}America/Belem\u{a}America/Belize\u{a}America/Blanc-Sablon\u{a}America/Boa_Vista\u{a}America/Bogota\u{a}America/Boise\u{a}America/Cambridge_Bay\u{a}America/Campo_Grande\u{a}America/Cancun\u{a}America/Caracas\u{a}America/Cayenne\u{a}America/Cayman\u{a}America/Chicago\u{a}A");
+    out.push_str("merica/Chihuahua\u{a}America/Ciudad_Juarez\u{a}America/Coral_Harbour\u{a}America/Costa_Rica\u{a}America/Coyhaique\u{a}America/Creston\u{a}America/Cuiaba\u{a}America/Curacao\u{a}America/Danmarkshavn\u{a}America/Dawson\u{a}America/Dawson_Creek\u{a}America/Denver\u{a}America/Detroit\u{a}America/Dominica\u{a}America/Edmonton\u{a}America/Eirunepe\u{a}America/El_Salvador\u{a}America/Ensenada\u{a}America/Fort_Nelson\u{a}America/Fortaleza\u{a}America/Glace_Bay\u{a}America/Goose_Bay\u{a}Ameri");
+    out.push_str("ca/Grand_Turk\u{a}America/Grenada\u{a}America/Guadeloupe\u{a}America/Guatemala\u{a}America/Guayaquil\u{a}America/Guyana\u{a}America/Halifax\u{a}America/Havana\u{a}America/Hermosillo\u{a}America/Indiana/Indianapolis\u{a}America/Indiana/Knox\u{a}America/Indiana/Marengo\u{a}America/Indiana/Petersburg\u{a}America/Indiana/Tell_City\u{a}America/Indiana/Vevay\u{a}America/Indiana/Vincennes\u{a}America/Indiana/Winamac\u{a}America/Inuvik\u{a}America/Iqaluit\u{a}America/Jamaica\u{a}Amer");
+    out.push_str("ica/Juneau\u{a}America/Kentucky/Louisville\u{a}America/Kentucky/Monticello\u{a}America/Kralendijk\u{a}America/La_Paz\u{a}America/Lima\u{a}America/Los_Angeles\u{a}America/Lower_Princes\u{a}America/Maceio\u{a}America/Managua\u{a}America/Manaus\u{a}America/Marigot\u{a}America/Martinique\u{a}America/Matamoros\u{a}America/Mazatlan\u{a}America/Menominee\u{a}America/Merida\u{a}America/Metlakatla\u{a}America/Mexico_City\u{a}America/Miquelon\u{a}America/Moncton\u{a}America/Monterrey\u{a}Ameri");
+    out.push_str("ca/Montevideo\u{a}America/Montreal\u{a}America/Montserrat\u{a}America/Nassau\u{a}America/New_York\u{a}America/Nipigon\u{a}America/Nome\u{a}America/Noronha\u{a}America/North_Dakota/Beulah\u{a}America/North_Dakota/Center\u{a}America/North_Dakota/New_Salem\u{a}America/Nuuk\u{a}America/Ojinaga\u{a}America/Panama\u{a}America/Pangnirtung\u{a}America/Paramaribo\u{a}America/Phoenix\u{a}America/Port-au-Prince\u{a}America/Port_of_Spain\u{a}America/Porto_Acre\u{a}America/Porto_Velho\u{a}Ame");
+    out.push_str("rica/Puerto_Rico\u{a}America/Punta_Arenas\u{a}America/Rainy_River\u{a}America/Rankin_Inlet\u{a}America/Recife\u{a}America/Regina\u{a}America/Resolute\u{a}America/Rio_Branco\u{a}America/Santa_Isabel\u{a}America/Santarem\u{a}America/Santiago\u{a}America/Santo_Domingo\u{a}America/Sao_Paulo\u{a}America/Scoresbysund\u{a}America/Shiprock\u{a}America/Sitka\u{a}America/St_Barthelemy\u{a}America/St_Johns\u{a}America/St_Kitts\u{a}America/St_Lucia\u{a}America/St_Thomas\u{a}America/St_Vincen");
+    out.push_str("t\u{a}America/Swift_Current\u{a}America/Tegucigalpa\u{a}America/Thule\u{a}America/Thunder_Bay\u{a}America/Tijuana\u{a}America/Toronto\u{a}America/Tortola\u{a}America/Vancouver\u{a}America/Virgin\u{a}America/Whitehorse\u{a}America/Winnipeg\u{a}America/Yakutat\u{a}America/Yellowknife\u{a}Antarctica/Casey\u{a}Antarctica/Davis\u{a}Antarctica/DumontDUrville\u{a}Antarctica/Macquarie\u{a}Antarctica/Mawson\u{a}Antarctica/McMurdo\u{a}Antarctica/Palmer\u{a}Antarctica/Rothera\u{a}Antarctica/Syo");
+    out.push_str("wa\u{a}Antarctica/Troll\u{a}Antarctica/Vostok\u{a}Arctic/Longyearbyen\u{a}Asia/Aden\u{a}Asia/Almaty\u{a}Asia/Amman\u{a}Asia/Anadyr\u{a}Asia/Aqtau\u{a}Asia/Aqtobe\u{a}Asia/Ashgabat\u{a}Asia/Atyrau\u{a}Asia/Baghdad\u{a}Asia/Bahrain\u{a}Asia/Baku\u{a}Asia/Bangkok\u{a}Asia/Barnaul\u{a}Asia/Beirut\u{a}Asia/Bishkek\u{a}Asia/Brunei\u{a}Asia/Chita\u{a}Asia/Choibalsan\u{a}Asia/Chongqing\u{a}Asia/Colombo\u{a}Asia/Damascus\u{a}Asia/Dhaka\u{a}Asia/Dili\u{a}Asia/Dubai\u{a}Asia/Dushanbe\u{a}Asia/Famagusta\u{a}Asia/Gaza\u{a}Asia/Harb");
+    out.push_str("in\u{a}Asia/Hebron\u{a}Asia/Ho_Chi_Minh\u{a}Asia/Hong_Kong\u{a}Asia/Hovd\u{a}Asia/Irkutsk\u{a}Asia/Istanbul\u{a}Asia/Jakarta\u{a}Asia/Jayapura\u{a}Asia/Jerusalem\u{a}Asia/Kabul\u{a}Asia/Kamchatka\u{a}Asia/Karachi\u{a}Asia/Kashgar\u{a}Asia/Kathmandu\u{a}Asia/Khandyga\u{a}Asia/Kolkata\u{a}Asia/Krasnoyarsk\u{a}Asia/Kuala_Lumpur\u{a}Asia/Kuching\u{a}Asia/Kuwait\u{a}Asia/Macau\u{a}Asia/Magadan\u{a}Asia/Makassar\u{a}Asia/Manila\u{a}Asia/Muscat\u{a}Asia/Nicosia\u{a}Asia/Novokuznetsk\u{a}Asia/Novosibirsk\u{a}Asia/Omsk\u{a}");
+    out.push_str("Asia/Oral\u{a}Asia/Phnom_Penh\u{a}Asia/Pontianak\u{a}Asia/Pyongyang\u{a}Asia/Qatar\u{a}Asia/Qostanay\u{a}Asia/Qyzylorda\u{a}Asia/Riyadh\u{a}Asia/Sakhalin\u{a}Asia/Samarkand\u{a}Asia/Seoul\u{a}Asia/Shanghai\u{a}Asia/Singapore\u{a}Asia/Srednekolymsk\u{a}Asia/Taipei\u{a}Asia/Tashkent\u{a}Asia/Tbilisi\u{a}Asia/Tehran\u{a}Asia/Tel_Aviv\u{a}Asia/Thimphu\u{a}Asia/Tokyo\u{a}Asia/Tomsk\u{a}Asia/Ulaanbaatar\u{a}Asia/Urumqi\u{a}Asia/Ust-Nera\u{a}Asia/Vientiane\u{a}Asia/Vladivostok\u{a}Asia/Yakutsk\u{a}Asia/Yangon\u{a}Asia");
+    out.push_str("/Yekaterinburg\u{a}Asia/Yerevan\u{a}Atlantic/Azores\u{a}Atlantic/Bermuda\u{a}Atlantic/Canary\u{a}Atlantic/Cape_Verde\u{a}Atlantic/Faroe\u{a}Atlantic/Jan_Mayen\u{a}Atlantic/Madeira\u{a}Atlantic/Reykjavik utc\u{a}Atlantic/South_Georgia\u{a}Atlantic/St_Helena utc\u{a}Atlantic/Stanley\u{a}Australia/Adelaide\u{a}Australia/Brisbane\u{a}Australia/Broken_Hill\u{a}Australia/Canberra\u{a}Australia/Currie\u{a}Australia/Darwin\u{a}Australia/Eucla\u{a}Australia/Hobart\u{a}Australia/Lindeman\u{a}A");
+    out.push_str("ustralia/Lord_Howe\u{a}Australia/Melbourne\u{a}Australia/Perth\u{a}Australia/Sydney\u{a}Australia/Yancowinna\u{a}CET\u{a}CST6CDT\u{a}EET\u{a}EST\u{a}EST5EDT\u{a}Etc/GMT utc\u{a}Etc/GMT+0 utc\u{a}Etc/GMT+1\u{a}Etc/GMT+10\u{a}Etc/GMT+11\u{a}Etc/GMT+12\u{a}Etc/GMT+2\u{a}Etc/GMT+3\u{a}Etc/GMT+4\u{a}Etc/GMT+5\u{a}Etc/GMT+6\u{a}Etc/GMT+7\u{a}Etc/GMT+8\u{a}Etc/GMT+9\u{a}Etc/GMT-0 utc\u{a}Etc/GMT-1\u{a}Etc/GMT-10\u{a}Etc/GMT-11\u{a}Etc/GMT-12\u{a}Etc/GMT-13\u{a}Etc/GMT-14\u{a}Etc/GMT-2\u{a}Etc/GMT-3\u{a}Etc/GMT-4\u{a}Etc/GMT-5\u{a}Etc/GMT-6\u{a}E");
+    out.push_str("tc/GMT-7\u{a}Etc/GMT-8\u{a}Etc/GMT-9\u{a}Etc/GMT0 utc\u{a}Etc/Greenwich utc\u{a}Etc/UCT utc\u{a}Etc/UTC utc\u{a}Etc/Universal utc\u{a}Etc/Zulu utc\u{a}Europe/Amsterdam\u{a}Europe/Andorra\u{a}Europe/Astrakhan\u{a}Europe/Athens\u{a}Europe/Belfast\u{a}Europe/Belgrade\u{a}Europe/Berlin\u{a}Europe/Bratislava\u{a}Europe/Brussels\u{a}Europe/Bucharest\u{a}Europe/Budapest\u{a}Europe/Busingen\u{a}Europe/Chisinau\u{a}Europe/Copenhagen\u{a}Europe/Dublin\u{a}Europe/Gibraltar\u{a}Europe/Guernsey\u{a}Europe/Helsin");
+    out.push_str("ki\u{a}Europe/Isle_of_Man\u{a}Europe/Istanbul\u{a}Europe/Jersey\u{a}Europe/Kaliningrad\u{a}Europe/Kirov\u{a}Europe/Kyiv\u{a}Europe/Lisbon\u{a}Europe/Ljubljana\u{a}Europe/London\u{a}Europe/Luxembourg\u{a}Europe/Madrid\u{a}Europe/Malta\u{a}Europe/Mariehamn\u{a}Europe/Minsk\u{a}Europe/Monaco\u{a}Europe/Moscow\u{a}Europe/Nicosia\u{a}Europe/Oslo\u{a}Europe/Paris\u{a}Europe/Podgorica\u{a}Europe/Prague\u{a}Europe/Riga\u{a}Europe/Rome\u{a}Europe/Samara\u{a}Europe/San_Marino\u{a}Europe/Sarajevo\u{a}Europe/Sarato");
+    out.push_str("v\u{a}Europe/Simferopol\u{a}Europe/Skopje\u{a}Europe/Sofia\u{a}Europe/Stockholm\u{a}Europe/Tallinn\u{a}Europe/Tirane\u{a}Europe/Tiraspol\u{a}Europe/Ulyanovsk\u{a}Europe/Vaduz\u{a}Europe/Vatican\u{a}Europe/Vienna\u{a}Europe/Vilnius\u{a}Europe/Volgograd\u{a}Europe/Warsaw\u{a}Europe/Zagreb\u{a}Europe/Zurich\u{a}Factory\u{a}GMT utc\u{a}HST\u{a}Indian/Antananarivo\u{a}Indian/Chagos\u{a}Indian/Christmas\u{a}Indian/Cocos\u{a}Indian/Comoro\u{a}Indian/Kerguelen\u{a}Indian/Mahe\u{a}Indian/Maldives\u{a}Indian/Mauritiu");
+    out.push_str("s\u{a}Indian/Mayotte\u{a}Indian/Reunion\u{a}MET\u{a}MST\u{a}MST7MDT\u{a}PST8PDT\u{a}Pacific/Apia\u{a}Pacific/Auckland\u{a}Pacific/Bougainville\u{a}Pacific/Chatham\u{a}Pacific/Chuuk\u{a}Pacific/Easter\u{a}Pacific/Efate\u{a}Pacific/Fakaofo\u{a}Pacific/Fiji\u{a}Pacific/Funafuti\u{a}Pacific/Galapagos\u{a}Pacific/Gambier\u{a}Pacific/Guadalcanal\u{a}Pacific/Guam\u{a}Pacific/Honolulu\u{a}Pacific/Johnston\u{a}Pacific/Kanton\u{a}Pacific/Kiritimati\u{a}Pacific/Kosrae\u{a}Pacific/Kwajalein\u{a}Pacific/Majuro\u{a}Pacif");
+    out.push_str("ic/Marquesas\u{a}Pacific/Midway\u{a}Pacific/Nauru\u{a}Pacific/Niue\u{a}Pacific/Norfolk\u{a}Pacific/Noumea\u{a}Pacific/Pago_Pago\u{a}Pacific/Palau\u{a}Pacific/Pitcairn\u{a}Pacific/Pohnpei\u{a}Pacific/Port_Moresby\u{a}Pacific/Rarotonga\u{a}Pacific/Saipan\u{a}Pacific/Samoa\u{a}Pacific/Tahiti\u{a}Pacific/Tarawa\u{a}Pacific/Tongatapu\u{a}Pacific/Wake\u{a}Pacific/Wallis\u{a}Pacific/Yap\u{a}UTC utc\u{a}WET\u{a}localtime\u{a}");
+}
+
+fn file_21() -> String {
+    let mut out = String.new();
+    file_21_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("calendars.txt".to_string(), file_0()));
+    v.push(("calendars/broken/bad_offset.ics".to_string(), file_1()));
+    v.push(("calendars/broken/bad_param.ics".to_string(), file_2()));
+    v.push(("calendars/broken/bad_todo_due.ics".to_string(), file_3()));
+    v.push(("calendars/broken/control_char.ics".to_string(), file_4()));
+    v.push(("calendars/broken/empty.ics".to_string(), file_5()));
+    v.push(("calendars/broken/orphan_property.ics".to_string(), file_6()));
+    v.push(("calendars/broken/param_without_value.ics".to_string(), file_7()));
+    v.push(("calendars/broken/stray_end.ics".to_string(), file_8()));
+    v.push(("calendars/broken/unterminated.ics".to_string(), file_9()));
+    v.push(("calendars/broken/x_comment_only.ics".to_string(), file_10()));
+    v.push(("calendars/field_journal.ics".to_string(), file_11()));
+    v.push(("calendars/freebusy_reply.ics".to_string(), file_12()));
+    v.push(("calendars/google_team.ics".to_string(), file_13()));
+    v.push(("calendars/importer_errors.ics".to_string(), file_14()));
+    v.push(("calendars/lenient.ics".to_string(), file_15()));
+    v.push(("calendars/outlook_invite.ics".to_string(), file_16()));
+    v.push(("calendars/teams_publish.ics".to_string(), file_17()));
+    v.push(("calendars/thunderbird_tasks.ics".to_string(), file_18()));
+    v.push(("calendars/two_calendars.ics".to_string(), file_19()));
+    v.push(("calendars/value_types.ics".to_string(), file_20()));
+    v.push(("tz/zones.txt".to_string(), file_21()));
+    v
+}

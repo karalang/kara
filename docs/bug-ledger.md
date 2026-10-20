@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 291 |
 | codegen-gap | 277 |
-| false-positive | 249 |
+| false-positive | 250 |
 | other | 184 |
 | perf | 180 |
 | diagnostics | 175 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2967 |
 | interp | 985 |
-| typecheck | 503 |
+| typecheck | 504 |
 | ownership | 123 |
 | other | 121 |
 | cli | 81 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 12 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -186,6 +186,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-19-67 | 2026-10-19 | other | low | Atomic operations require a `MemoryOrdering` argument (B-2026-06-30-5, legacy era) although docs/library/concurrency.md and deferred.md say v1 atomics are SeqCst with no ordering argument: the IMPLEMENTATION is stale, not the doc (corrected 10-19 from 'the library doc is stale') | — |
 | B-2026-10-19-70 | 2026-10-19 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64)` | — |
+| B-2026-10-20-1 | 2026-10-20 | typecheck | low | A tuple literal that holds a string literal, passed to a method or generic-function parameter whose type is a tuple with a `Str` slot, is still typed `(String, ...)`: `let mut v: Vec[(Str, Str)] = Vec.new(); v.push(("a", "b"));` is refused with "expected '(StringSlice, StringSlice)', found '(String, String)'" (remainder of B-2026-10-14-68) | — |
 
 ### Relocated
 
