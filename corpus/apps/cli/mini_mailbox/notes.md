@@ -64,6 +64,7 @@ Maildir keys of delivered messages come from the clock and the process
 id, so the jobs never print them, and the dates `Maildir` keeps are file
 modification times, which the jobs never print either.
 
-It matched on every backend. One workaround stays in the port: `*key` on
-a captured `ref String` inside a closure fails MIR validation, so two
-closures compare without the `*` (filed as a ledger row).
+It matched on every backend. Two closures first compared a captured
+`ref String` without the `*`, because `*key` there failed MIR validation
+(B-2026-10-20-21). That was fixed in kara e97d43b5df, and the port now
+writes `*key`.

@@ -5713,9 +5713,7 @@ impl Box {
             all[i] = (name, kl2);
         }
         for s in pending.iter() {
-            // Workaround (B-2026-10-20-21): `*s` in the closure fails MIR
-            // validation ("deref of non-reference String").
-            if not all.iter().any(|t| t.0 == s) {
+            if not all.iter().any(|t| t.0 == *s) {
                 all.push((s.clone(), vec![key]));
             }
         }
@@ -6014,9 +6012,7 @@ impl Box {
     fn contains_key(mut ref self, key: ref String) -> Result[bool, String] {
         match self.kind {
             BoxKind.Mh => Ok(exists(self.mh_file(int_key(key)))),
-            // Workaround (B-2026-10-20-21): `*key` in the closure fails MIR
-            // validation ("deref of non-reference String").
-            BoxKind.Maildir => Ok(self.md_toc()?.iter().any(|t| t.0 == key)),
+            BoxKind.Maildir => Ok(self.md_toc()?.iter().any(|t| t.0 == *key)),
             _ => {
                 self.ensure_toc();
                 let k = int_key(key);
