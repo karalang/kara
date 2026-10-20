@@ -1,0 +1,9 @@
+=== connection 1 ===
+HTTP/1.1 200 OK
+X-Custom-Header: custom-value
+X-Trace-Id: abc-123
+Content-Type: text/plain
+content-length: 2
+connection: close
+
+ok

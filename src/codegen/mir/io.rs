@@ -77,6 +77,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("RegexEngine", _) => self.regex_native(method, args, dest),
             ("Server", "serve") => self.serve_native(args, dest).map(Some),
+            ("Server", "serve_static") => self.serve_static_native(args, dest).map(Some),
             ("Request", _) => self.request_native(method, args, dest),
             ("Clock", "now" | "monotonic_ns" | "wall_ns") => {
                 let i64t = self.llcx.i64_type();
@@ -1415,6 +1416,91 @@ impl<'ctx> Cx<'ctx, '_> {
         if !Self::consumes(&c) {
             self.drop_moved(&args[1..])?;
         }
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let erv = self.variant_of(dty, "Err")?;
+        let et = self
+            .tys
+            .field_ty(dty, Some(erv), 0)
+            .ok_or("Result.Err has no payload")?;
+        self.store_tag(d, dty, erv)?;
+        let er = self.offset(d, self.field_offset(dty, Some(erv), 0)?)?;
+        self.copy(
+            self.offset(er, self.field_offset(et, None, 0)?)?,
+            msg,
+            string,
+        )
+    }
+
+    /// `Server.serve_static(addr, body)`: `serve` with a 200 and `body` as
+    /// every answer, as the interpreter's.
+    fn serve_static_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let ptr = self.ptr_ty();
+        let i64t = self.llcx.i64_type();
+        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let (a, an) = self.str_parts(&args[0])?;
+        let (b, bn) = self.str_parts(&args[1])?;
+        let msg = self.temp(string, "serve.msg")?;
+        let bind = self.extern_fn(
+            "karac_mir_http_bind",
+            ptr.fn_type(&[ptr.into(), i64t.into(), ptr.into()], false),
+        );
+        let server = self
+            .builder
+            .build_call(bind, &[a.into(), an.into(), msg.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let f = self.cur_fn()?;
+        let head = self.llcx.append_basic_block(f, "serve.next");
+        let each = self.llcx.append_basic_block(f, "serve.answer");
+        let done = self.llcx.append_basic_block(f, "serve.done");
+        let failed = self.builder.build_is_null(server, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(failed, done, head)
+            .map_err(e)?;
+        self.builder.position_at_end(head);
+        let got = self.rt_named("karac_mir_http_next", &[server.into(), msg.into()], 32)?;
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::NE, got, self.llcx.i32_type().const_zero(), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(more, each, done)
+            .map_err(e)?;
+        self.builder.position_at_end(each);
+        let respond = self.extern_fn(
+            "karac_mir_http_respond",
+            self.llcx.void_type().fn_type(
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
+        );
+        self.builder
+            .build_call(
+                respond,
+                &[
+                    server.into(),
+                    self.i64(200).into(),
+                    b.into(),
+                    bn.into(),
+                    ptr.const_null().into(),
+                    self.i64(0).into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        self.builder.position_at_end(done);
+        self.drop_moved(args)?;
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
         let erv = self.variant_of(dty, "Err")?;

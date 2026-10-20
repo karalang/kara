@@ -1,0 +1,2 @@
+[[connection]]
+send = "GET /echo-hdr HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Test-Echo: greetings\r\nConnection: close\r\n\r\n"

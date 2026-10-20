@@ -1,0 +1,2 @@
+[[connection]]
+send = ["GET /first HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "GET /second HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"]

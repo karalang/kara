@@ -1062,6 +1062,94 @@ fn http_server_natives_match_the_interpreter() {
     }
 }
 
+/// `Server.serve_static` answers every request with a 200 and its body,
+/// and `Request.headers()` names each header in lower case, as legacy's
+/// server did (a `header` lookup ignores case either way). Found by the
+/// corpus driver (ADR-4 plan step 4).
+const SERVE_STATIC: &str = r#"
+fn main() {
+    match Server.serve_static("127.0.0.1:0", "{}") {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}
+"#;
+
+const HEADER_NAMES: &str = r#"
+fn handle(req: Request) -> Response {
+    let mut s = "".to_string();
+    for (k, v) in req.headers() {
+        s = s + k + "=" + v + ";";
+    }
+    match req.header("X-TEST-ECHO") {
+        Some(v) => { s = s + " found " + v; }
+        None => { s = s + " none"; }
+    }
+    Response { status: 200, body: s }
+}
+
+fn main() {
+    let _ = Server.serve("127.0.0.1:0", handle);
+}
+"#;
+
+#[test]
+fn serve_static_and_lowercased_header_names_match_on_both_backends() {
+    let dir = Scratch::new("serve_static");
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let one = |port: u16| {
+        let mut t = String::new();
+        let mut s = connect(port);
+        round_trip(
+            &mut s,
+            "GET /x HTTP/1.1\r\nHost: h\r\nX-Test-Echo: hi\r\nConnection: close\r\n\r\n",
+            true,
+            &mut t,
+        );
+        t
+    };
+    for (name, src, want) in [
+        (
+            "static",
+            SERVE_STATIC,
+            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 2\n\
+             connection: close\n\n{}\nclosed after 0 more bytes\n",
+        ),
+        (
+            "names",
+            HEADER_NAMES,
+            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 48\n\
+             connection: close\n\nhost=h;x-test-echo=hi;connection=close; found hi\n\
+             closed after 0 more bytes\n",
+        ),
+    ] {
+        let file = dir.path().join(format!("{name}.kara"));
+        std::fs::write(&file, src).unwrap();
+        let mut interp = Command::new(karac);
+        interp.args(["__mir-run", file.to_str().unwrap()]);
+        assert_eq!(exchange(interp, one), want, "{name} on the interpreter");
+        let exe = dir.path().join(name);
+        let built = Command::new(karac)
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let linked = common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&built.stderr).to_string())
+        });
+        if linked.is_some() {
+            assert_eq!(exchange(Command::new(&exe), one), want, "{name} built");
+        }
+    }
+}
+
 /// B-2026-10-14-44 — io.md's spellings: paths and addresses are `Str`
 /// (a `String` still passes), and `File.read` / `write` count in `i64`.
 /// `karac check` accepts the program and both MIR backends run it.

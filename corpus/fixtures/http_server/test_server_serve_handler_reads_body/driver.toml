@@ -1,0 +1,2 @@
+[[connection]]
+send = "POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"hello\":\"world\"}"

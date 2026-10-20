@@ -1,0 +1,2 @@
+[[connection]]
+send = "GET /search?q=hello+world&lang=en HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"

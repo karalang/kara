@@ -202,8 +202,10 @@ fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<Request>> {
             break;
         }
         let (k, v) = h.split_once(':').ok_or_else(|| bad("a malformed header"))?;
+        // Names lowercased, as hyper gives them to legacy's handlers; a
+        // lookup by `header` ignores case either way.
         req.headers
-            .push((k.trim().to_string(), v.trim().to_string()));
+            .push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
     }
     let connection = req.header("connection").map(str::to_ascii_lowercase);
     req.keep_alive = match http10 {

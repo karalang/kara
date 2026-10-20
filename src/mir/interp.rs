@@ -1705,7 +1705,7 @@ impl<'a> Interp<'a> {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
             }
             ("RegexEngine", _) => self.regex_method(name, method, args, arg_tys),
-            ("Server", "serve") | ("Request", _) => {
+            ("Server", "serve" | "serve_static") | ("Request", _) => {
                 self.http_server_method(name, base, method, args, arg_tys, ret)
             }
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
@@ -11104,6 +11104,25 @@ impl<'a> Interp<'a> {
             me.alloc_box(&vname, Value::Agg(elems))
         };
         match (base, method) {
+            // The fixed-body responder: every request gets a 200 and `body`.
+            ("Server", "serve_static") => {
+                let addr = text_of(self, 0)?;
+                let body = text_of(self, 1)?;
+                let mut server = match crate::http1::Server::bind(&addr) {
+                    Ok((server, port)) => {
+                        self.write_out(true, &format!("BOUND_PORT={port}\n"));
+                        server
+                    }
+                    Err(message) => return self.http_error(message, ret),
+                };
+                let message = loop {
+                    if let Err(message) = server.accept_request() {
+                        break message;
+                    }
+                    server.respond(200, body.as_bytes(), &[]);
+                };
+                self.http_error(message, ret)
+            }
             ("Server", "serve") => {
                 let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
                     return err(format!("{name} takes an address and a handler"));
