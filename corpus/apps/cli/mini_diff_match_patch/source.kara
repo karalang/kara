@@ -1,0 +1,2599 @@
+// mini_diff_match_patch: a port of diff-match-patch 20241021 (Apache 2.0,
+// see LICENSE-diff-match-patch), Neil Fraser's library for synchronizing
+// plain text, which collaborative editors, wikis and sync servers use to
+// diff two versions, find a fuzzy match and apply a patch to a text that
+// has changed in the meantime.
+//
+// - diffs: the common prefix and suffix, the half match, Myers' bisection,
+//   the line-level pass for long texts, and the semantic, lossless and
+//   efficiency cleanups with their scores for word and line boundaries;
+// - deltas (UTF-16 lengths and %-escaped insertions), the Levenshtein
+//   distance and the HTML report;
+// - fuzzy matching with Bitap, scored by errors and distance;
+// - patches: making them, their GNU-diff-like text with %-escapes,
+//   parsing it back, and applying them with padding, splitting of long
+//   patches and fuzzy placement.
+//
+// The run writes data/ (documents in several versions, patch files and
+// the job list, from mk.py), then runs each job and prints its result.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through diff-match-patch itself.
+
+// ---------------------------------------------------------------- errors
+
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn value_error(msg: own String) -> PyErr {
+    PyErr { kind: "ValueError".to_string(), msg: msg }
+}
+
+// ---------------------------------------------------------------- text
+
+// Texts are kept as characters, as Python indexes them.
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in v.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn lit(s: Str) -> Vec[char] {
+    s.chars().collect()
+}
+
+// v[lo:hi], clamped the way Python clamps a slice
+fn sl(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let n = v.len();
+    let a = if lo < 0 { 0 } else if lo > n { n } else { lo };
+    let b = if hi < 0 { 0 } else if hi > n { n } else { hi };
+    let mut out: Vec[char] = Vec.new();
+    let mut i = a;
+    while i < b {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn from_(v: ref Vec[char], lo: i64) -> Vec[char] {
+    sl(v, lo, v.len())
+}
+
+fn upto(v: ref Vec[char], hi: i64) -> Vec[char] {
+    sl(v, 0, hi)
+}
+
+// v[-n:] (all of v when n is 0, as in Python)
+fn last_n(v: ref Vec[char], n: i64) -> Vec[char] {
+    if n == 0 { v.clone() } else { sl(v, v.len() - n, v.len()) }
+}
+
+fn cat(a: ref Vec[char], b: ref Vec[char]) -> Vec[char] {
+    let mut out = a.clone();
+    for c in b.iter() {
+        out.push(*c);
+    }
+    out
+}
+
+fn cat3(a: ref Vec[char], b: ref Vec[char], c: ref Vec[char]) -> Vec[char] {
+    let mut out = cat(a, b);
+    for x in c.iter() {
+        out.push(*x);
+    }
+    out
+}
+
+fn same(a: ref Vec[char], b: ref Vec[char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn match_at(v: ref Vec[char], i: i64, pat: ref Vec[char]) -> bool {
+    if i < 0 or i + pat.len() > v.len() {
+        return false;
+    }
+    for j in 0..pat.len() {
+        if v[i + j] != pat[j] {
+            return false;
+        }
+    }
+    true
+}
+
+// str.find(sub, start)
+fn find_from(v: ref Vec[char], pat: ref Vec[char], start: i64) -> i64 {
+    let s = if start < 0 { 0 } else { start };
+    if s > v.len() {
+        return -1;
+    }
+    let mut i = s;
+    while i + pat.len() <= v.len() {
+        if match_at(v, i, pat) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find(v: ref Vec[char], pat: ref Vec[char]) -> i64 {
+    find_from(v, pat, 0)
+}
+
+// str.rfind(sub, start)
+fn rfind_from(v: ref Vec[char], pat: ref Vec[char], start: i64) -> i64 {
+    let s = if start < 0 { 0 } else { start };
+    if s > v.len() {
+        return -1;
+    }
+    let mut i = v.len() - pat.len();
+    while i >= s {
+        if match_at(v, i, pat) {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn starts_with_v(v: ref Vec[char], p: ref Vec[char]) -> bool {
+    match_at(v, 0, p)
+}
+
+fn ends_with_v(v: ref Vec[char], p: ref Vec[char]) -> bool {
+    match_at(v, v.len() - p.len(), p)
+}
+
+fn hex2(n: i64) -> String {
+    let digits: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+fn hex_upper(n: i64) -> String {
+    let digits: Vec[char] = "0123456789ABCDEF".chars().collect();
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+// repr() of a str
+fn py_repr(v: ref Vec[char]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for c in v.iter() {
+        if *c == '\'' {
+            has_sq = true;
+        }
+        if *c == '"' {
+            has_dq = true;
+        }
+    }
+    let q = if has_sq and not has_dq { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c0 in v.iter() {
+        let c = *c0;
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o < 32 or (o >= 127 and o <= 0xA0) or o == 0xAD {
+            out.push_str("\\x");
+            out.push_str(hex2(o));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn bool_list(v: ref Vec[bool]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_bool(v[i]));
+    }
+    out.push(']');
+    out
+}
+
+// ---------------------------------------------------------------- str methods
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x20) or o == 0x85 or o == 0xA0 or o == 0x1680
+        or (o >= 0x2000 and o <= 0x200A) or o == 0x2028 or o == 0x2029 or o == 0x202F or o == 0x205F or o == 0x3000
+}
+
+// str.isalnum() on one character: ASCII letters and digits, and the
+// letters and digits beyond ASCII, which here means everything but
+// spaces, Latin-1 and general punctuation, currency signs, arrows,
+// symbols and emoji.
+fn is_py_alnum(c: char) -> bool {
+    let o = c as i64;
+    if o < 128 {
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+    }
+    if is_py_space(c) {
+        return false;
+    }
+    if o < 0xC0 {
+        return o == 0xAA or o == 0xB2 or o == 0xB3 or o == 0xB5 or o == 0xB9 or o == 0xBA or (o >= 0xBC and o <= 0xBE);
+    }
+    if o == 0xD7 or o == 0xF7 {
+        return false;
+    }
+    if (o >= 0x2000 and o <= 0x2BFF) or (o >= 0x3000 and o <= 0x303F) or (o >= 0x1F000 and o <= 0x1FAFF) or (o >= 0xFE00 and o <= 0xFE0F) {
+        return false;
+    }
+    true
+}
+
+// ---------------------------------------------------------------- URL escapes
+
+fn utf8_bytes(v: ref Vec[char]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v.iter() {
+        let o = *c as i64;
+        if o < 0x80 {
+            out.push(o);
+        } else if o < 0x800 {
+            out.push(0xC0 + o / 64);
+            out.push(0x80 + o % 64);
+        } else if o < 0x10000 {
+            out.push(0xE0 + o / 4096);
+            out.push(0x80 + (o / 64) % 64);
+            out.push(0x80 + o % 64);
+        } else {
+            out.push(0xF0 + o / 262144);
+            out.push(0x80 + (o / 4096) % 64);
+            out.push(0x80 + (o / 64) % 64);
+            out.push(0x80 + o % 64);
+        }
+    }
+    out
+}
+
+// urllib.parse.quote(data.encode("utf-8"), "!~*'();/?:@&=+$,# ")
+fn quote(v: ref Vec[char]) -> String {
+    let safe: Vec[char] = "_.-~!*'();/?:@&=+$,# ".chars().collect();
+    let mut out = String.new();
+    for b in utf8_bytes(v).iter() {
+        let o = *b;
+        let mut keep = false;
+        if o < 128 {
+            let c = char.try_from(o as u32).unwrap();
+            keep = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or safe.contains(c);
+            if keep {
+                out.push(c);
+            }
+        }
+        if not keep {
+            out.push('%');
+            out.push_str(hex_upper(o));
+        }
+    }
+    out
+}
+
+fn hex_digit(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        (c as i64) - 48
+    } else if c >= 'a' and c <= 'f' {
+        (c as i64) - 87
+    } else if c >= 'A' and c <= 'F' {
+        (c as i64) - 55
+    } else {
+        -1
+    }
+}
+
+// UTF-8 bytes to characters, a U+FFFD for each byte that does not start
+// a valid sequence
+fn utf8_decode(bs: ref Vec[i64], out: mut ref Vec[char]) {
+    let mut i = 0;
+    while i < bs.len() {
+        let b = bs[i];
+        let mut need = 0;
+        let mut cp = 0;
+        if b < 0x80 {
+            cp = b;
+        } else if b >= 0xC2 and b < 0xE0 {
+            need = 1;
+            cp = b - 0xC0;
+        } else if b >= 0xE0 and b < 0xF0 {
+            need = 2;
+            cp = b - 0xE0;
+        } else if b >= 0xF0 and b < 0xF5 {
+            need = 3;
+            cp = b - 0xF0;
+        } else {
+            out.push('\u{FFFD}');
+            i += 1;
+            continue;
+        }
+        let mut ok = i + need < bs.len();
+        let mut j = 1;
+        while ok and j <= need {
+            let c = bs[i + j];
+            if c < 0x80 or c >= 0xC0 {
+                ok = false;
+            } else {
+                cp = cp * 64 + (c - 0x80);
+            }
+            j += 1;
+        }
+        let ch = if ok { char.try_from(cp as u32) } else { char.try_from(0xFFFD as u32) };
+        match ch {
+            Ok(c) => {
+                out.push(c);
+                i += if ok { need + 1 } else { 1 };
+            }
+            Err(_) => {
+                out.push('\u{FFFD}');
+                i += 1;
+            }
+        }
+    }
+}
+
+// urllib.parse.unquote: runs of %XX in the ASCII parts become UTF-8 bytes
+fn unquote(v: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut bytes: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if c == '%' and i + 2 < v.len() + 0 and hex_digit(v[i + 1]) >= 0 and hex_digit(v[i + 2]) >= 0 {
+            bytes.push(hex_digit(v[i + 1]) * 16 + hex_digit(v[i + 2]));
+            i += 3;
+            continue;
+        }
+        if (c as i64) < 128 {
+            bytes.push(c as i64);
+        } else {
+            utf8_decode(bytes, mut out);
+            bytes = Vec.new();
+            out.push(c);
+        }
+        i += 1;
+    }
+    utf8_decode(bytes, mut out);
+    out
+}
+
+// ---------------------------------------------------------------- UTF-16
+
+fn utf16_len(v: ref Vec[char]) -> i64 {
+    let mut n = 0;
+    for c in v.iter() {
+        n += if (*c as i64) > 0xFFFF { 2 } else { 1 };
+    }
+    n
+}
+
+fn utf16_units(v: ref Vec[char]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v.iter() {
+        let o = *c as i64;
+        if o > 0xFFFF {
+            let u = o - 0x10000;
+            out.push(0xD800 + u / 1024);
+            out.push(0xDC00 + u % 1024);
+        } else {
+            out.push(o);
+        }
+    }
+    out
+}
+
+fn utf16_decode(us: ref Vec[i64], lo: i64, hi: i64) -> Result[Vec[char], PyErr] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = lo;
+    let end = if hi > us.len() { us.len() } else { hi };
+    while i < end {
+        let u = us[i];
+        if u >= 0xD800 and u < 0xDC00 and i + 1 < end and us[i + 1] >= 0xDC00 and us[i + 1] < 0xE000 {
+            let cp = 0x10000 + (u - 0xD800) * 1024 + (us[i + 1] - 0xDC00);
+            out.push(char.try_from(cp as u32).unwrap());
+            i += 2;
+        } else if u >= 0xD800 and u < 0xE000 {
+            return Err(PyErr { kind: "UnicodeDecodeError".to_string(), msg: "'utf-16-be' codec can't decode a surrogate".to_string() });
+        } else {
+            out.push(char.try_from(u as u32).unwrap());
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
+// int(): an optional sign and decimal digits
+fn py_int(s: ref String) -> Option[i64] {
+    let cs: Vec[char] = s.trim().chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return None;
+    }
+    let mut v = 0;
+    while i < cs.len() {
+        if cs[i] < '0' or cs[i] > '9' {
+            return None;
+        }
+        v = v * 10 + ((cs[i] as i64) - 48);
+        i += 1;
+    }
+    Some(if neg { 0 - v } else { v })
+}
+
+// ---------------------------------------------------------------- settings
+
+const DIFF_DELETE: i64 = -1;
+const DIFF_INSERT: i64 = 1;
+const DIFF_EQUAL: i64 = 0;
+
+// diff_match_patch's settings. The library gives up on a diff after
+// Diff_Timeout seconds; this port always finishes, which gives the same
+// diffs whenever the library finished in time, and only the sign of the
+// timeout matters (at 0 or less the half match is not tried).
+struct Dmp {
+    timeout: f64,
+    edit_cost: i64,
+    match_threshold: f64,
+    match_distance: i64,
+    delete_threshold: f64,
+    margin: i64,
+    max_bits: i64,
+}
+
+fn new_dmp() -> Dmp {
+    Dmp { timeout: 1.0, edit_cost: 4, match_threshold: 0.5, match_distance: 1000, delete_threshold: 0.5, margin: 4, max_bits: 32 }
+}
+
+#[derive(Clone)]
+struct Diff {
+    op: i64,
+    text: Vec[char],
+}
+
+fn df(op: i64, t: own Vec[char]) -> Diff {
+    Diff { op: op, text: t }
+}
+
+fn diff_repr(x: ref Diff) -> String {
+    f"({x.op}, {py_repr(x.text)})"
+}
+
+fn diffs_repr(ds: ref Vec[Diff]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..ds.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(diff_repr(ds[i]));
+    }
+    out.push(']');
+    out
+}
+
+fn same_diffs(a: ref Vec[Diff], b: ref Vec[Diff]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i].op != b[i].op or not same(a[i].text, b[i].text) {
+            return false;
+        }
+    }
+    true
+}
+
+// v[lo:hi] = mid
+fn splice_diffs(v: ref Vec[Diff], lo: i64, hi: i64, mid: ref Vec[Diff]) -> Vec[Diff] {
+    let mut out: Vec[Diff] = Vec.new();
+    for i in 0..lo {
+        out.push(v[i].clone());
+    }
+    for x in mid.iter() {
+        out.push(x.clone());
+    }
+    let mut i = hi;
+    while i < v.len() {
+        out.push(v[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn set_text(v: mut ref Vec[Diff], i: i64, t: own Vec[char]) {
+    v[i].text = t;
+}
+
+// ---------------------------------------------------------------- diff_main
+
+fn diff_main(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char], checklines: bool) -> Vec[Diff] {
+    if same(text1, text2) {
+        let mut out: Vec[Diff] = Vec.new();
+        if text1.len() > 0 {
+            out.push(df(DIFF_EQUAL, text1.clone()));
+        }
+        return out;
+    }
+    let commonlength = common_prefix(text1, text2);
+    let commonprefix = upto(text1, commonlength);
+    let a = from_(text1, commonlength);
+    let b = from_(text2, commonlength);
+    let cs = common_suffix(a, b);
+    let commonsuffix = if cs == 0 { Vec.new() } else { last_n(a, cs) };
+    let a2 = upto(a, a.len() - cs);
+    let b2 = upto(b, b.len() - cs);
+    let mut diffs = diff_compute(dmp, a2, b2, checklines);
+    if commonprefix.len() > 0 {
+        diffs.insert(0, df(DIFF_EQUAL, commonprefix));
+    }
+    if commonsuffix.len() > 0 {
+        diffs.push(df(DIFF_EQUAL, commonsuffix));
+    }
+    cleanup_merge(mut diffs);
+    diffs
+}
+
+fn diff_compute(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char], checklines: bool) -> Vec[Diff] {
+    let mut out: Vec[Diff] = Vec.new();
+    if text1.len() == 0 {
+        out.push(df(DIFF_INSERT, text2.clone()));
+        return out;
+    }
+    if text2.len() == 0 {
+        out.push(df(DIFF_DELETE, text1.clone()));
+        return out;
+    }
+    let swapped = text1.len() > text2.len();
+    let longtext = if swapped { text1.clone() } else { text2.clone() };
+    let shorttext = if swapped { text2.clone() } else { text1.clone() };
+    let i = find(longtext, shorttext);
+    if i != -1 {
+        let op = if swapped { DIFF_DELETE } else { DIFF_INSERT };
+        out.push(df(op, upto(longtext, i)));
+        out.push(df(DIFF_EQUAL, shorttext.clone()));
+        out.push(df(op, from_(longtext, i + shorttext.len())));
+        return out;
+    }
+    if shorttext.len() == 1 {
+        out.push(df(DIFF_DELETE, text1.clone()));
+        out.push(df(DIFF_INSERT, text2.clone()));
+        return out;
+    }
+    if let Some(hm) = half_match(dmp, text1, text2) {
+        let diffs_a = diff_main(dmp, hm.text1_a, hm.text2_a, checklines);
+        let diffs_b = diff_main(dmp, hm.text1_b, hm.text2_b, checklines);
+        let mut all = diffs_a;
+        all.push(df(DIFF_EQUAL, hm.mid));
+        for x in diffs_b.iter() {
+            all.push(x.clone());
+        }
+        return all;
+    }
+    if checklines and text1.len() > 100 and text2.len() > 100 {
+        return diff_line_mode(dmp, text1, text2);
+    }
+    diff_bisect(dmp, text1, text2)
+}
+
+fn diff_line_mode(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char]) -> Vec[Diff] {
+    let lc = lines_to_chars(text1, text2);
+    let mut diffs = diff_main(dmp, lc.chars1, lc.chars2, false);
+    chars_to_lines(mut diffs, lc.lines);
+    cleanup_semantic(dmp, mut diffs);
+    diffs.push(df(DIFF_EQUAL, Vec.new()));
+    let mut pointer = 0;
+    let mut count_delete = 0;
+    let mut count_insert = 0;
+    let mut text_delete: Vec[char] = Vec.new();
+    let mut text_insert: Vec[char] = Vec.new();
+    while pointer < diffs.len() {
+        let op = diffs[pointer].op;
+        if op == DIFF_INSERT {
+            count_insert += 1;
+            text_insert = cat(text_insert, diffs[pointer].text);
+        } else if op == DIFF_DELETE {
+            count_delete += 1;
+            text_delete = cat(text_delete, diffs[pointer].text);
+        } else {
+            if count_delete >= 1 and count_insert >= 1 {
+                let sub = diff_main(dmp, text_delete, text_insert, false);
+                let lo = pointer - count_delete - count_insert;
+                diffs = splice_diffs(diffs, lo, pointer, sub);
+                pointer = lo + sub.len();
+            }
+            count_insert = 0;
+            count_delete = 0;
+            text_delete = Vec.new();
+            text_insert = Vec.new();
+        }
+        pointer += 1;
+    }
+    diffs.pop();
+    diffs
+}
+
+fn diff_bisect(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char]) -> Vec[Diff] {
+    let text1_length = text1.len();
+    let text2_length = text2.len();
+    let max_d = (text1_length + text2_length + 1) / 2;
+    let v_offset = max_d;
+    let v_length = 2 * max_d;
+    let mut v1: Vec[i64] = Vec.new();
+    for _i in 0..v_length {
+        v1.push(-1);
+    }
+    v1[v_offset + 1] = 0;
+    let mut v2 = v1.clone();
+    let delta = text1_length - text2_length;
+    let front = delta % 2 != 0;
+    let mut k1start = 0;
+    let mut k1end = 0;
+    let mut k2start = 0;
+    let mut k2end = 0;
+    for d in 0..max_d {
+        let mut k1 = 0 - d + k1start;
+        while k1 < d + 1 - k1end {
+            let k1_offset = v_offset + k1;
+            let mut x1 = 0;
+            if k1 == 0 - d or (k1 != d and v1[k1_offset - 1] < v1[k1_offset + 1]) {
+                x1 = v1[k1_offset + 1];
+            } else {
+                x1 = v1[k1_offset - 1] + 1;
+            }
+            let mut y1 = x1 - k1;
+            while x1 < text1_length and y1 < text2_length and text1[x1] == text2[y1] {
+                x1 += 1;
+                y1 += 1;
+            }
+            v1[k1_offset] = x1;
+            if x1 > text1_length {
+                k1end += 2;
+            } else if y1 > text2_length {
+                k1start += 2;
+            } else if front {
+                let k2_offset = v_offset + delta - k1;
+                if k2_offset >= 0 and k2_offset < v_length and v2[k2_offset] != -1 {
+                    let x2 = text1_length - v2[k2_offset];
+                    if x1 >= x2 {
+                        return bisect_split(dmp, text1, text2, x1, y1);
+                    }
+                }
+            }
+            k1 += 2;
+        }
+        let mut k2 = 0 - d + k2start;
+        while k2 < d + 1 - k2end {
+            let k2_offset = v_offset + k2;
+            let mut x2 = 0;
+            if k2 == 0 - d or (k2 != d and v2[k2_offset - 1] < v2[k2_offset + 1]) {
+                x2 = v2[k2_offset + 1];
+            } else {
+                x2 = v2[k2_offset - 1] + 1;
+            }
+            let mut y2 = x2 - k2;
+            while x2 < text1_length and y2 < text2_length and text1[text1_length - x2 - 1] == text2[text2_length - y2 - 1] {
+                x2 += 1;
+                y2 += 1;
+            }
+            v2[k2_offset] = x2;
+            if x2 > text1_length {
+                k2end += 2;
+            } else if y2 > text2_length {
+                k2start += 2;
+            } else if not front {
+                let k1_offset = v_offset + delta - k2;
+                if k1_offset >= 0 and k1_offset < v_length and v1[k1_offset] != -1 {
+                    let x1 = v1[k1_offset];
+                    let y1 = v_offset + x1 - k1_offset;
+                    let x2m = text1_length - x2;
+                    if x1 >= x2m {
+                        return bisect_split(dmp, text1, text2, x1, y1);
+                    }
+                }
+            }
+            k2 += 2;
+        }
+    }
+    let mut out: Vec[Diff] = Vec.new();
+    out.push(df(DIFF_DELETE, text1.clone()));
+    out.push(df(DIFF_INSERT, text2.clone()));
+    out
+}
+
+fn bisect_split(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char], x: i64, y: i64) -> Vec[Diff] {
+    let mut diffs = diff_main(dmp, upto(text1, x), upto(text2, y), false);
+    let diffsb = diff_main(dmp, from_(text1, x), from_(text2, y), false);
+    for d in diffsb.iter() {
+        diffs.push(d.clone());
+    }
+    diffs
+}
+
+struct LinesChars {
+    chars1: Vec[char],
+    chars2: Vec[char],
+    lines: Vec[Vec[char]],
+}
+
+fn lines_munge(t: ref Vec[char], lines: mut ref Vec[Vec[char]], hash: mut ref Map[String, i64], max_lines: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut line_start = 0;
+    let mut line_end = -1;
+    let nl = lit("\n");
+    while line_end < t.len() - 1 {
+        line_end = find_from(t, nl, line_start);
+        if line_end == -1 {
+            line_end = t.len() - 1;
+        }
+        let mut line = sl(t, line_start, line_end + 1);
+        let key = text(line);
+        match hash.get(key) {
+            Some(idx) => out.push(char.try_from(*idx as u32).unwrap()),
+            None => {
+                if lines.len() == max_lines {
+                    line = from_(t, line_start);
+                    line_end = t.len();
+                }
+                let k2 = text(line);
+                lines.push(line);
+                hash.insert(k2, lines.len() - 1);
+                out.push(char.try_from((lines.len() - 1) as u32).unwrap());
+            }
+        }
+        line_start = line_end + 1;
+    }
+    out
+}
+
+fn lines_to_chars(text1: ref Vec[char], text2: ref Vec[char]) -> LinesChars {
+    let mut lines: Vec[Vec[char]] = Vec.new();
+    let mut hash: Map[String, i64] = Map.new();
+    lines.push(Vec.new());
+    let c1 = lines_munge(text1, mut lines, mut hash, 666666);
+    let c2 = lines_munge(text2, mut lines, mut hash, 1114111);
+    LinesChars { chars1: c1, chars2: c2, lines: lines }
+}
+
+fn chars_to_lines(diffs: mut ref Vec[Diff], lines: ref Vec[Vec[char]]) {
+    for i in 0..diffs.len() {
+        let mut t: Vec[char] = Vec.new();
+        for c in diffs[i].text.iter() {
+            for x in lines[*c as i64].iter() {
+                t.push(*x);
+            }
+        }
+        diffs[i].text = t;
+    }
+}
+
+fn common_prefix(text1: ref Vec[char], text2: ref Vec[char]) -> i64 {
+    let n = if text1.len() < text2.len() { text1.len() } else { text2.len() };
+    let mut i = 0;
+    while i < n and text1[i] == text2[i] {
+        i += 1;
+    }
+    i
+}
+
+fn common_suffix(text1: ref Vec[char], text2: ref Vec[char]) -> i64 {
+    let n = if text1.len() < text2.len() { text1.len() } else { text2.len() };
+    let mut i = 0;
+    while i < n and text1[text1.len() - 1 - i] == text2[text2.len() - 1 - i] {
+        i += 1;
+    }
+    i
+}
+
+fn common_overlap(t1: ref Vec[char], t2: ref Vec[char]) -> i64 {
+    let text1_length = t1.len();
+    let text2_length = t2.len();
+    if text1_length == 0 or text2_length == 0 {
+        return 0;
+    }
+    let mut text1 = t1.clone();
+    let mut text2 = t2.clone();
+    if text1_length > text2_length {
+        text1 = last_n(t1, text2_length);
+    } else if text1_length < text2_length {
+        text2 = upto(t2, text1_length);
+    }
+    let text_length = if text1_length < text2_length { text1_length } else { text2_length };
+    if same(text1, text2) {
+        return text_length;
+    }
+    let mut best = 0;
+    let mut length = 1;
+    loop {
+        let pattern = last_n(text1, length);
+        let found = find(text2, pattern);
+        if found == -1 {
+            return best;
+        }
+        length += found;
+        if found == 0 or same(last_n(text1, length), upto(text2, length)) {
+            best = length;
+            length += 1;
+        }
+    }
+}
+
+struct HalfMatch {
+    text1_a: Vec[char],
+    text1_b: Vec[char],
+    text2_a: Vec[char],
+    text2_b: Vec[char],
+    mid: Vec[char],
+}
+
+// diff_halfMatchI: (longtext_a, longtext_b, shorttext_a, shorttext_b, common)
+fn half_match_i(longtext: ref Vec[char], shorttext: ref Vec[char], i: i64) -> Option[HalfMatch] {
+    let seed = sl(longtext, i, i + longtext.len() / 4);
+    let mut best_common: Vec[char] = Vec.new();
+    let mut best_la: Vec[char] = Vec.new();
+    let mut best_lb: Vec[char] = Vec.new();
+    let mut best_sa: Vec[char] = Vec.new();
+    let mut best_sb: Vec[char] = Vec.new();
+    let mut j = find(shorttext, seed);
+    while j != -1 {
+        let prefix_length = common_prefix(from_(longtext, i), from_(shorttext, j));
+        let suffix_length = common_suffix(upto(longtext, i), upto(shorttext, j));
+        if best_common.len() < suffix_length + prefix_length {
+            best_common = cat(sl(shorttext, j - suffix_length, j), sl(shorttext, j, j + prefix_length));
+            best_la = upto(longtext, i - suffix_length);
+            best_lb = from_(longtext, i + prefix_length);
+            best_sa = upto(shorttext, j - suffix_length);
+            best_sb = from_(shorttext, j + prefix_length);
+        }
+        j = find_from(shorttext, seed, j + 1);
+    }
+    if best_common.len() * 2 >= longtext.len() {
+        Some(HalfMatch { text1_a: best_la, text1_b: best_lb, text2_a: best_sa, text2_b: best_sb, mid: best_common })
+    } else {
+        None
+    }
+}
+
+fn half_match(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char]) -> Option[HalfMatch] {
+    if dmp.timeout <= 0.0 {
+        return None;
+    }
+    let swapped = text1.len() > text2.len();
+    let longtext = if swapped { text1.clone() } else { text2.clone() };
+    let shorttext = if swapped { text2.clone() } else { text1.clone() };
+    if longtext.len() < 4 or shorttext.len() * 2 < longtext.len() {
+        return None;
+    }
+    let hm1 = half_match_i(longtext, shorttext, (longtext.len() + 3) / 4);
+    let hm2 = half_match_i(longtext, shorttext, (longtext.len() + 1) / 2);
+    let hm = match (hm1, hm2) {
+        (None, None) => return None,
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (Some(a), Some(b)) => if a.mid.len() > b.mid.len() { a } else { b },
+    };
+    if swapped {
+        Some(hm)
+    } else {
+        // the half match is (short a, short b, long a, long b) the other way round
+        Some(HalfMatch { text1_a: hm.text2_a, text1_b: hm.text2_b, text2_a: hm.text1_a, text2_b: hm.text1_b, mid: hm.mid })
+    }
+}
+
+fn half_match_repr(h: ref Option[HalfMatch]) -> String {
+    match h {
+        None => "None".to_string(),
+        Some(m) => f"({py_repr(m.text1_a)}, {py_repr(m.text1_b)}, {py_repr(m.text2_a)}, {py_repr(m.text2_b)}, {py_repr(m.mid)})",
+    }
+}
+
+// ---------------------------------------------------------------- cleanups
+
+fn cleanup_semantic(dmp: ref Dmp, diffs: mut ref Vec[Diff]) {
+    let mut changes = false;
+    let mut equalities: Vec[i64] = Vec.new();
+    let mut last_equality: Vec[char] = Vec.new();
+    let mut pointer = 0;
+    let mut length_insertions1 = 0;
+    let mut length_deletions1 = 0;
+    let mut length_insertions2 = 0;
+    let mut length_deletions2 = 0;
+    while pointer < diffs.len() {
+        if diffs[pointer].op == DIFF_EQUAL {
+            equalities.push(pointer);
+            length_insertions1 = length_insertions2;
+            length_insertions2 = 0;
+            length_deletions1 = length_deletions2;
+            length_deletions2 = 0;
+            last_equality = diffs[pointer].text.clone();
+        } else {
+            if diffs[pointer].op == DIFF_INSERT {
+                length_insertions2 += diffs[pointer].text.len();
+            } else {
+                length_deletions2 += diffs[pointer].text.len();
+            }
+            let le = last_equality.len();
+            let m1 = if length_insertions1 > length_deletions1 { length_insertions1 } else { length_deletions1 };
+            let m2 = if length_insertions2 > length_deletions2 { length_insertions2 } else { length_deletions2 };
+            if le > 0 and le <= m1 and le <= m2 {
+                let at = equalities[equalities.len() - 1];
+                diffs.insert(at, df(DIFF_DELETE, last_equality.clone()));
+                diffs[at + 1].op = DIFF_INSERT;
+                equalities.pop();
+                if equalities.len() > 0 {
+                    equalities.pop();
+                }
+                if equalities.len() > 0 {
+                    pointer = equalities[equalities.len() - 1];
+                } else {
+                    pointer = -1;
+                }
+                length_insertions1 = 0;
+                length_deletions1 = 0;
+                length_insertions2 = 0;
+                length_deletions2 = 0;
+                last_equality = Vec.new();
+                changes = true;
+            }
+        }
+        pointer += 1;
+    }
+    if changes {
+        cleanup_merge(mut diffs);
+    }
+    cleanup_semantic_lossless(mut diffs);
+
+    let mut pointer = 1;
+    while pointer < diffs.len() {
+        if diffs[pointer - 1].op == DIFF_DELETE and diffs[pointer].op == DIFF_INSERT {
+            let deletion = diffs[pointer - 1].text.clone();
+            let insertion = diffs[pointer].text.clone();
+            let overlap_length1 = common_overlap(deletion, insertion);
+            let overlap_length2 = common_overlap(insertion, deletion);
+            if overlap_length1 >= overlap_length2 {
+                if overlap_length1 * 2 >= deletion.len() or overlap_length1 * 2 >= insertion.len() {
+                    diffs.insert(pointer, df(DIFF_EQUAL, upto(insertion, overlap_length1)));
+                    diffs[pointer - 1] = df(DIFF_DELETE, upto(deletion, deletion.len() - overlap_length1));
+                    diffs[pointer + 1] = df(DIFF_INSERT, from_(insertion, overlap_length1));
+                    pointer += 1;
+                }
+            } else {
+                if overlap_length2 * 2 >= deletion.len() or overlap_length2 * 2 >= insertion.len() {
+                    diffs.insert(pointer, df(DIFF_EQUAL, upto(deletion, overlap_length2)));
+                    diffs[pointer - 1] = df(DIFF_INSERT, upto(insertion, insertion.len() - overlap_length2));
+                    diffs[pointer + 1] = df(DIFF_DELETE, from_(deletion, overlap_length2));
+                    pointer += 1;
+                }
+            }
+            pointer += 1;
+        }
+        pointer += 1;
+    }
+}
+
+// BLANKLINEEND.search(one): \n\r?\n$ ($ also matches before a final \n)
+fn blank_line_end(v: ref Vec[char]) -> bool {
+    ends_with_v(v, lit("\n\n")) or ends_with_v(v, lit("\n\r\n")) or ends_with_v(v, lit("\n\n\n"))
+        or ends_with_v(v, lit("\n\r\n\n"))
+}
+
+// BLANKLINESTART.match(two): ^\r?\n\r?\n
+fn blank_line_start(v: ref Vec[char]) -> bool {
+    starts_with_v(v, lit("\n\n")) or starts_with_v(v, lit("\r\n\n")) or starts_with_v(v, lit("\n\r\n"))
+        or starts_with_v(v, lit("\r\n\r\n"))
+}
+
+fn semantic_score(one: ref Vec[char], two: ref Vec[char]) -> i64 {
+    if one.len() == 0 or two.len() == 0 {
+        return 6;
+    }
+    let char1 = one[one.len() - 1];
+    let char2 = two[0];
+    let non_alnum1 = not is_py_alnum(char1);
+    let non_alnum2 = not is_py_alnum(char2);
+    let whitespace1 = non_alnum1 and is_py_space(char1);
+    let whitespace2 = non_alnum2 and is_py_space(char2);
+    let line_break1 = whitespace1 and (char1 == '\r' or char1 == '\n');
+    let line_break2 = whitespace2 and (char2 == '\r' or char2 == '\n');
+    let blank_line1 = line_break1 and blank_line_end(one);
+    let blank_line2 = line_break2 and blank_line_start(two);
+    if blank_line1 or blank_line2 {
+        5
+    } else if line_break1 or line_break2 {
+        4
+    } else if non_alnum1 and not whitespace1 and whitespace2 {
+        3
+    } else if whitespace1 or whitespace2 {
+        2
+    } else if non_alnum1 or non_alnum2 {
+        1
+    } else {
+        0
+    }
+}
+
+fn cleanup_semantic_lossless(diffs: mut ref Vec[Diff]) {
+    let mut pointer = 1;
+    while pointer < diffs.len() - 1 {
+        if diffs[pointer - 1].op == DIFF_EQUAL and diffs[pointer + 1].op == DIFF_EQUAL {
+            let mut equality1 = diffs[pointer - 1].text.clone();
+            let mut edit = diffs[pointer].text.clone();
+            let mut equality2 = diffs[pointer + 1].text.clone();
+            let common_offset = common_suffix(equality1, edit);
+            if common_offset > 0 {
+                let common_string = last_n(edit, common_offset);
+                equality1 = upto(equality1, equality1.len() - common_offset);
+                edit = cat(common_string, upto(edit, edit.len() - common_offset));
+                equality2 = cat(common_string, equality2);
+            }
+            let mut best_equality1 = equality1.clone();
+            let mut best_edit = edit.clone();
+            let mut best_equality2 = equality2.clone();
+            let mut best_score = semantic_score(equality1, edit) + semantic_score(edit, equality2);
+            while edit.len() > 0 and equality2.len() > 0 and edit[0] == equality2[0] {
+                equality1.push(edit[0]);
+                let mut e2 = from_(edit, 1);
+                e2.push(equality2[0]);
+                edit = e2;
+                equality2 = from_(equality2, 1);
+                let score = semantic_score(equality1, edit) + semantic_score(edit, equality2);
+                if score >= best_score {
+                    best_score = score;
+                    best_equality1 = equality1.clone();
+                    best_edit = edit.clone();
+                    best_equality2 = equality2.clone();
+                }
+            }
+            if not same(diffs[pointer - 1].text, best_equality1) {
+                if best_equality1.len() > 0 {
+                    set_text(mut diffs, pointer - 1, best_equality1);
+                } else {
+                    diffs.remove(pointer - 1);
+                    pointer -= 1;
+                }
+                set_text(mut diffs, pointer, best_edit);
+                if best_equality2.len() > 0 {
+                    set_text(mut diffs, pointer + 1, best_equality2);
+                } else {
+                    diffs.remove(pointer + 1);
+                    pointer -= 1;
+                }
+            }
+        }
+        pointer += 1;
+    }
+}
+
+fn cleanup_efficiency(dmp: ref Dmp, diffs: mut ref Vec[Diff]) {
+    let mut changes = false;
+    let mut equalities: Vec[i64] = Vec.new();
+    let mut last_equality: Vec[char] = Vec.new();
+    let mut pointer = 0;
+    let mut pre_ins = false;
+    let mut pre_del = false;
+    let mut post_ins = false;
+    let mut post_del = false;
+    while pointer < diffs.len() {
+        if diffs[pointer].op == DIFF_EQUAL {
+            if diffs[pointer].text.len() < dmp.edit_cost and (post_ins or post_del) {
+                equalities.push(pointer);
+                pre_ins = post_ins;
+                pre_del = post_del;
+                last_equality = diffs[pointer].text.clone();
+            } else {
+                equalities = Vec.new();
+                last_equality = Vec.new();
+            }
+            post_ins = false;
+            post_del = false;
+        } else {
+            if diffs[pointer].op == DIFF_DELETE {
+                post_del = true;
+            } else {
+                post_ins = true;
+            }
+            let mut count = 0;
+            if pre_ins {
+                count += 1;
+            }
+            if pre_del {
+                count += 1;
+            }
+            if post_ins {
+                count += 1;
+            }
+            if post_del {
+                count += 1;
+            }
+            let le = last_equality.len();
+            if le > 0 and ((pre_ins and pre_del and post_ins and post_del) or (le * 2 < dmp.edit_cost and count == 3)) {
+                let at = equalities[equalities.len() - 1];
+                diffs.insert(at, df(DIFF_DELETE, last_equality.clone()));
+                diffs[at + 1].op = DIFF_INSERT;
+                equalities.pop();
+                last_equality = Vec.new();
+                if pre_ins and pre_del {
+                    post_ins = true;
+                    post_del = true;
+                    equalities = Vec.new();
+                } else {
+                    if equalities.len() > 0 {
+                        equalities.pop();
+                    }
+                    if equalities.len() > 0 {
+                        pointer = equalities[equalities.len() - 1];
+                    } else {
+                        pointer = -1;
+                    }
+                    post_ins = false;
+                    post_del = false;
+                }
+                changes = true;
+            }
+        }
+        pointer += 1;
+    }
+    if changes {
+        cleanup_merge(mut diffs);
+    }
+}
+
+fn cleanup_merge(diffs: mut ref Vec[Diff]) {
+    diffs.push(df(DIFF_EQUAL, Vec.new()));
+    let mut pointer = 0;
+    let mut count_delete = 0;
+    let mut count_insert = 0;
+    let mut text_delete: Vec[char] = Vec.new();
+    let mut text_insert: Vec[char] = Vec.new();
+    while pointer < diffs.len() {
+        let op = diffs[pointer].op;
+        if op == DIFF_INSERT {
+            count_insert += 1;
+            text_insert = cat(text_insert, diffs[pointer].text);
+            pointer += 1;
+        } else if op == DIFF_DELETE {
+            count_delete += 1;
+            text_delete = cat(text_delete, diffs[pointer].text);
+            pointer += 1;
+        } else {
+            if count_delete + count_insert > 1 {
+                if count_delete != 0 and count_insert != 0 {
+                    let commonlength = common_prefix(text_insert, text_delete);
+                    if commonlength != 0 {
+                        let x = pointer - count_delete - count_insert - 1;
+                        if x >= 0 and diffs[x].op == DIFF_EQUAL {
+                            let t = cat(diffs[x].text, upto(text_insert, commonlength));
+                            set_text(mut diffs, x, t);
+                        } else {
+                            diffs.insert(0, df(DIFF_EQUAL, upto(text_insert, commonlength)));
+                            pointer += 1;
+                        }
+                        text_insert = from_(text_insert, commonlength);
+                        text_delete = from_(text_delete, commonlength);
+                    }
+                    let cs = common_suffix(text_insert, text_delete);
+                    if cs != 0 {
+                        let t = cat(last_n(text_insert, cs), diffs[pointer].text);
+                        set_text(mut diffs, pointer, t);
+                        text_insert = upto(text_insert, text_insert.len() - cs);
+                        text_delete = upto(text_delete, text_delete.len() - cs);
+                    }
+                }
+                let mut new_ops: Vec[Diff] = Vec.new();
+                if text_delete.len() != 0 {
+                    new_ops.push(df(DIFF_DELETE, text_delete.clone()));
+                }
+                if text_insert.len() != 0 {
+                    new_ops.push(df(DIFF_INSERT, text_insert.clone()));
+                }
+                pointer -= count_delete + count_insert;
+                let replaced = splice_diffs(diffs, pointer, pointer + count_delete + count_insert, new_ops);
+                *diffs = replaced;
+                pointer += new_ops.len() + 1;
+            } else if pointer != 0 and diffs[pointer - 1].op == DIFF_EQUAL {
+                let t = cat(diffs[pointer - 1].text, diffs[pointer].text);
+                set_text(mut diffs, pointer - 1, t);
+                diffs.remove(pointer);
+            } else {
+                pointer += 1;
+            }
+            count_insert = 0;
+            count_delete = 0;
+            text_delete = Vec.new();
+            text_insert = Vec.new();
+        }
+    }
+    if diffs[diffs.len() - 1].text.len() == 0 {
+        diffs.pop();
+    }
+
+    let mut changes = false;
+    let mut pointer = 1;
+    while pointer < diffs.len() - 1 {
+        if diffs[pointer - 1].op == DIFF_EQUAL and diffs[pointer + 1].op == DIFF_EQUAL {
+            let prev = diffs[pointer - 1].text.clone();
+            let cur = diffs[pointer].text.clone();
+            let next = diffs[pointer + 1].text.clone();
+            if ends_with_v(cur, prev) {
+                if prev.len() != 0 {
+                    set_text(mut diffs, pointer, cat(prev, upto(cur, cur.len() - prev.len())));
+                    set_text(mut diffs, pointer + 1, cat(prev, next));
+                }
+                diffs.remove(pointer - 1);
+                changes = true;
+            } else if starts_with_v(cur, next) {
+                set_text(mut diffs, pointer - 1, cat(prev, next));
+                set_text(mut diffs, pointer, cat(from_(cur, next.len()), next));
+                diffs.remove(pointer + 1);
+                changes = true;
+            }
+        }
+        pointer += 1;
+    }
+    if changes {
+        cleanup_merge(mut diffs);
+    }
+}
+
+// ---------------------------------------------------------------- diff utilities
+
+fn x_index(diffs: ref Vec[Diff], loc: i64) -> i64 {
+    let mut chars1 = 0;
+    let mut chars2 = 0;
+    let mut last_chars1 = 0;
+    let mut last_chars2 = 0;
+    let mut x = 0;
+    while x < diffs.len() {
+        let op = diffs[x].op;
+        if op != DIFF_INSERT {
+            chars1 += diffs[x].text.len();
+        }
+        if op != DIFF_DELETE {
+            chars2 += diffs[x].text.len();
+        }
+        if chars1 > loc {
+            break;
+        }
+        last_chars1 = chars1;
+        last_chars2 = chars2;
+        x += 1;
+    }
+    // the loop variable keeps its last value when the loop runs out
+    if x == diffs.len() {
+        x -= 1;
+    }
+    if diffs[x].op == DIFF_DELETE {
+        return last_chars2;
+    }
+    last_chars2 + (loc - last_chars1)
+}
+
+fn pretty_html(diffs: ref Vec[Diff]) -> String {
+    let mut html = String.new();
+    for x in diffs.iter() {
+        if x.text.len() == 0 {
+            continue;
+        }
+        let mut t = String.new();
+        for c in x.text.iter() {
+            if *c == '&' {
+                t.push_str("&amp;");
+            } else if *c == '<' {
+                t.push_str("&lt;");
+            } else if *c == '>' {
+                t.push_str("&gt;");
+            } else if *c == '\n' {
+                t.push_str("&para;<br>");
+            } else {
+                t.push(*c);
+            }
+        }
+        if x.op == DIFF_INSERT {
+            html.push_str(f"<ins style=\"background:#e6ffe6;\">{t}</ins>");
+        } else if x.op == DIFF_DELETE {
+            html.push_str(f"<del style=\"background:#ffe6e6;\">{t}</del>");
+        } else {
+            html.push_str(f"<span>{t}</span>");
+        }
+    }
+    html
+}
+
+fn diff_text1(diffs: ref Vec[Diff]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for x in diffs.iter() {
+        if x.op != DIFF_INSERT {
+            for c in x.text.iter() {
+                out.push(*c);
+            }
+        }
+    }
+    out
+}
+
+fn diff_text2(diffs: ref Vec[Diff]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for x in diffs.iter() {
+        if x.op != DIFF_DELETE {
+            for c in x.text.iter() {
+                out.push(*c);
+            }
+        }
+    }
+    out
+}
+
+fn levenshtein(diffs: ref Vec[Diff]) -> i64 {
+    let mut lev = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    for x in diffs.iter() {
+        if x.op == DIFF_INSERT {
+            insertions += x.text.len();
+        } else if x.op == DIFF_DELETE {
+            deletions += x.text.len();
+        } else {
+            lev += if insertions > deletions { insertions } else { deletions };
+            insertions = 0;
+            deletions = 0;
+        }
+    }
+    lev + if insertions > deletions { insertions } else { deletions }
+}
+
+fn to_delta(diffs: ref Vec[Diff]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in diffs.iter() {
+        if x.op == DIFF_INSERT {
+            parts.push(f"+{quote(x.text)}");
+        } else if x.op == DIFF_DELETE {
+            parts.push(f"-{utf16_len(x.text)}");
+        } else {
+            parts.push(f"={utf16_len(x.text)}");
+        }
+    }
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push('\t');
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn from_delta(text1: ref Vec[char], delta: ref Vec[char]) -> Result[Vec[Diff], PyErr] {
+    let mut diffs: Vec[Diff] = Vec.new();
+    let units = utf16_units(text1);
+    let mut pointer = 0;
+    let mut tokens: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in delta.iter() {
+        if *c == '\t' {
+            tokens.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    tokens.push(cur);
+    for token in tokens.iter() {
+        if token.len() == 0 {
+            continue;
+        }
+        let param = from_(token, 1);
+        let sign = token[0];
+        if sign == '+' {
+            diffs.push(df(DIFF_INSERT, unquote(param)));
+        } else if sign == '-' or sign == '=' {
+            let ps = text(param);
+            let n = match py_int(ps) {
+                Some(v) => v,
+                None => return Err(value_error(f"Invalid number in diff_fromDelta: {ps}")),
+            };
+            if n < 0 {
+                return Err(value_error(f"Negative number in diff_fromDelta: {ps}"));
+            }
+            let t = utf16_decode(units, pointer, pointer + n)?;
+            pointer += n;
+            if sign == '=' {
+                diffs.push(df(DIFF_EQUAL, t));
+            } else {
+                diffs.push(df(DIFF_DELETE, t));
+            }
+        } else {
+            return Err(value_error(f"Invalid diff operation in diff_fromDelta: {sign}"));
+        }
+    }
+    if pointer != units.len() {
+        return Err(value_error(f"Delta length ({pointer * 2}) does not equal source text length ({units.len() * 2})."));
+    }
+    Ok(diffs)
+}
+
+
+// ---------------------------------------------------------------- fuzzy matching
+
+// Bitap keeps a bit per pattern character. Python's integers have no
+// width, but bits only ever move up, so keeping the low 62 is exact for
+// patterns of up to 62 characters (Match_MaxBits is 32).
+const BIT_MASK: i64 = 4611686018427387903;
+
+fn match_main(dmp: ref Dmp, t: ref Vec[char], pattern: ref Vec[char], loc0: i64) -> i64 {
+    let loc = if loc0 < 0 { 0 } else if loc0 > t.len() { t.len() } else { loc0 };
+    if same(t, pattern) {
+        return 0;
+    }
+    if t.len() == 0 {
+        return -1;
+    }
+    if same(sl(t, loc, loc + pattern.len()), pattern) {
+        return loc;
+    }
+    match_bitap(dmp, t, pattern, loc)
+}
+
+fn bitap_score(dmp: ref Dmp, e: i64, x: i64, loc: i64, plen: i64) -> f64 {
+    let accuracy = (e as f64) / (plen as f64);
+    let proximity = if loc > x { loc - x } else { x - loc };
+    if dmp.match_distance == 0 {
+        return if proximity != 0 { 1.0 } else { accuracy };
+    }
+    accuracy + (proximity as f64) / (dmp.match_distance as f64)
+}
+
+struct Alpha {
+    keys: Vec[char],
+    masks: Vec[i64],
+}
+
+fn match_alphabet(pattern: ref Vec[char]) -> Alpha {
+    let mut a = Alpha { keys: Vec.new(), masks: Vec.new() };
+    for i in 0..pattern.len() {
+        let c = pattern[i];
+        let bit = (1 << (pattern.len() - i - 1)) & BIT_MASK;
+        let mut found = false;
+        for k in 0..a.keys.len() {
+            if a.keys[k] == c {
+                a.masks[k] = a.masks[k] | bit;
+                found = true;
+            }
+        }
+        if not found {
+            a.keys.push(c);
+            a.masks.push(bit);
+        }
+    }
+    a
+}
+
+fn alpha_get(a: ref Alpha, c: char) -> i64 {
+    for k in 0..a.keys.len() {
+        if a.keys[k] == c {
+            return a.masks[k];
+        }
+    }
+    0
+}
+
+fn match_bitap(dmp: ref Dmp, t: ref Vec[char], pattern: ref Vec[char], loc: i64) -> i64 {
+    let s = match_alphabet(pattern);
+    let plen = pattern.len();
+    let mut score_threshold = dmp.match_threshold;
+    let mut best_loc = find_from(t, pattern, loc);
+    if best_loc != -1 {
+        let sc = bitap_score(dmp, 0, best_loc, loc, plen);
+        if sc < score_threshold {
+            score_threshold = sc;
+        }
+        best_loc = rfind_from(t, pattern, loc + plen);
+        if best_loc != -1 {
+            let sc2 = bitap_score(dmp, 0, best_loc, loc, plen);
+            if sc2 < score_threshold {
+                score_threshold = sc2;
+            }
+        }
+    }
+    let matchmask = 1 << (plen - 1);
+    best_loc = -1;
+    let mut bin_max = plen + t.len();
+    let mut last_rd: Vec[i64] = Vec.new();
+    for d in 0..plen {
+        let mut bin_min = 0;
+        let mut bin_mid = bin_max;
+        while bin_min < bin_mid {
+            if bitap_score(dmp, d, loc + bin_mid, loc, plen) <= score_threshold {
+                bin_min = bin_mid;
+            } else {
+                bin_max = bin_mid;
+            }
+            bin_mid = (bin_max - bin_min) / 2 + bin_min;
+        }
+        bin_max = bin_mid;
+        // the library moves `start` inside the loop below, but the range
+        // of j is fixed when the loop begins, so that has no effect
+        let start = if loc - bin_mid + 1 > 1 { loc - bin_mid + 1 } else { 1 };
+        let finish = (if loc + bin_mid < t.len() { loc + bin_mid } else { t.len() }) + plen;
+        let mut rd: Vec[i64] = Vec.filled(finish + 2, 0);
+        rd[finish + 1] = ((1 << d) - 1) & BIT_MASK;
+        let mut j = finish;
+        while j >= start {
+            let char_match = if t.len() <= j - 1 { 0 } else { alpha_get(s, t[j - 1]) };
+            if d == 0 {
+                rd[j] = (((rd[j + 1] << 1) | 1) & char_match) & BIT_MASK;
+            } else {
+                rd[j] = ((((rd[j + 1] << 1) | 1) & char_match) | (((last_rd[j + 1] | last_rd[j]) << 1) | 1) | last_rd[j + 1]) & BIT_MASK;
+            }
+            if (rd[j] & matchmask) != 0 {
+                let score = bitap_score(dmp, d, j - 1, loc, plen);
+                if score <= score_threshold {
+                    score_threshold = score;
+                    best_loc = j - 1;
+                    if best_loc <= loc {
+                        break;
+                    }
+                }
+            }
+            j -= 1;
+        }
+        if bitap_score(dmp, d + 1, loc, loc, plen) > score_threshold {
+            break;
+        }
+        last_rd = rd;
+    }
+    best_loc
+}
+
+// ---------------------------------------------------------------- patches
+
+#[derive(Clone)]
+struct Patch {
+    diffs: Vec[Diff],
+    start1: i64,
+    start2: i64,
+    length1: i64,
+    length2: i64,
+}
+
+fn new_patch() -> Patch {
+    Patch { diffs: Vec.new(), start1: 0, start2: 0, length1: 0, length2: 0 }
+}
+
+fn patch_add_context(dmp: ref Dmp, patch: mut ref Patch, t: ref Vec[char]) {
+    if t.len() == 0 {
+        return;
+    }
+    let mut pattern = sl(t, patch.start2, patch.start2 + patch.length1);
+    let mut padding = 0;
+    while find(t, pattern) != rfind_from(t, pattern, 0) and (dmp.max_bits == 0 or pattern.len() < dmp.max_bits - dmp.margin - dmp.margin) {
+        padding += dmp.margin;
+        let lo = if patch.start2 - padding > 0 { patch.start2 - padding } else { 0 };
+        pattern = sl(t, lo, patch.start2 + patch.length1 + padding);
+    }
+    padding += dmp.margin;
+    let lo = if patch.start2 - padding > 0 { patch.start2 - padding } else { 0 };
+    let prefix = sl(t, lo, patch.start2);
+    let plen = prefix.len();
+    if plen > 0 {
+        patch.diffs.insert(0, df(DIFF_EQUAL, prefix));
+    }
+    let suffix = sl(t, patch.start2 + patch.length1, patch.start2 + patch.length1 + padding);
+    let slen = suffix.len();
+    if slen > 0 {
+        patch.diffs.push(df(DIFF_EQUAL, suffix));
+    }
+    patch.start1 -= plen;
+    patch.start2 -= plen;
+    patch.length1 += plen + slen;
+    patch.length2 += plen + slen;
+}
+
+fn patch_make(dmp: ref Dmp, text1: ref Vec[char], text2: ref Vec[char]) -> Vec[Patch] {
+    let mut diffs = diff_main(dmp, text1, text2, true);
+    if diffs.len() > 2 {
+        cleanup_semantic(dmp, mut diffs);
+        cleanup_efficiency(dmp, mut diffs);
+    }
+    let mut patches: Vec[Patch] = Vec.new();
+    if diffs.len() == 0 {
+        return patches;
+    }
+    let mut patch = new_patch();
+    let mut char_count1 = 0;
+    let mut char_count2 = 0;
+    let mut prepatch = text1.clone();
+    let mut postpatch = text1.clone();
+    for x in 0..diffs.len() {
+        let op = diffs[x].op;
+        let dt = diffs[x].text.clone();
+        let n = dt.len();
+        if patch.diffs.len() == 0 and op != DIFF_EQUAL {
+            patch.start1 = char_count1;
+            patch.start2 = char_count2;
+        }
+        if op == DIFF_INSERT {
+            patch.diffs.push(diffs[x].clone());
+            patch.length2 += n;
+            postpatch = cat3(upto(postpatch, char_count2), dt, from_(postpatch, char_count2));
+        } else if op == DIFF_DELETE {
+            patch.length1 += n;
+            patch.diffs.push(diffs[x].clone());
+            postpatch = cat(upto(postpatch, char_count2), from_(postpatch, char_count2 + n));
+        } else if n <= 2 * dmp.margin and patch.diffs.len() != 0 and diffs.len() != x + 1 {
+            patch.diffs.push(diffs[x].clone());
+            patch.length1 += n;
+            patch.length2 += n;
+        }
+        if op == DIFF_EQUAL and n >= 2 * dmp.margin {
+            if patch.diffs.len() != 0 {
+                patch_add_context(dmp, mut patch, prepatch);
+                patches.push(patch);
+                patch = new_patch();
+                prepatch = postpatch.clone();
+                char_count1 = char_count2;
+            }
+        }
+        if op != DIFF_INSERT {
+            char_count1 += n;
+        }
+        if op != DIFF_DELETE {
+            char_count2 += n;
+        }
+    }
+    if patch.diffs.len() != 0 {
+        patch_add_context(dmp, mut patch, prepatch);
+        patches.push(patch);
+    }
+    patches
+}
+
+fn pad_first(p: mut ref Patch, pad: ref Vec[char]) {
+    let n = pad.len();
+    if p.diffs.len() == 0 or p.diffs[0].op != DIFF_EQUAL {
+        p.diffs.insert(0, df(DIFF_EQUAL, pad.clone()));
+        p.start1 -= n;
+        p.start2 -= n;
+        p.length1 += n;
+        p.length2 += n;
+    } else if n > p.diffs[0].text.len() {
+        let have = p.diffs[0].text.len();
+        let extra = n - have;
+        let t = cat(from_(pad, have), p.diffs[0].text);
+        p.diffs[0].text = t;
+        p.start1 -= extra;
+        p.start2 -= extra;
+        p.length1 += extra;
+        p.length2 += extra;
+    }
+}
+
+fn pad_last(p: mut ref Patch, pad: ref Vec[char]) {
+    let n = pad.len();
+    let last = p.diffs.len() - 1;
+    if p.diffs.len() == 0 or p.diffs[last].op != DIFF_EQUAL {
+        p.diffs.push(df(DIFF_EQUAL, pad.clone()));
+        p.length1 += n;
+        p.length2 += n;
+    } else if n > p.diffs[last].text.len() {
+        let extra = n - p.diffs[last].text.len();
+        let t = cat(p.diffs[last].text, upto(pad, extra));
+        p.diffs[last].text = t;
+        p.length1 += extra;
+        p.length2 += extra;
+    }
+}
+
+// the characters 1 to Patch_Margin around the text, so that patches at
+// its ends have context to match
+fn patch_add_padding(dmp: ref Dmp, patches: mut ref Vec[Patch]) -> Vec[char] {
+    let n = dmp.margin;
+    let mut pad: Vec[char] = Vec.new();
+    for x in 1..(n + 1) {
+        pad.push(char.try_from(x as u32).unwrap());
+    }
+    for i in 0..patches.len() {
+        patches[i].start1 += n;
+        patches[i].start2 += n;
+    }
+    pad_first(mut patches[0], pad);
+    let last = patches.len() - 1;
+    pad_last(mut patches[last], pad);
+    pad
+}
+
+// Splits patches longer than Match_MaxBits. The library loops over
+// range(len(patches)) as the list was when it started, while it inserts
+// the pieces, so each loop index is the next one in that range whatever
+// the loop body did to its own copy.
+fn patch_split_max(dmp: ref Dmp, patches: mut ref Vec[Patch]) -> Result[(), PyErr] {
+    let size = dmp.max_bits;
+    if size == 0 {
+        return Ok(());
+    }
+    let n0 = patches.len();
+    for xr in 0..n0 {
+        let mut x = xr;
+        if x >= patches.len() {
+            return Err(PyErr { kind: "IndexError".to_string(), msg: "list index out of range".to_string() });
+        }
+        if patches[x].length1 <= size {
+            continue;
+        }
+        let mut big = patches.remove(x);
+        x -= 1;
+        let mut start1 = big.start1;
+        let mut start2 = big.start2;
+        let mut precontext: Vec[char] = Vec.new();
+        while big.diffs.len() != 0 {
+            let mut patch = new_patch();
+            let mut empty = true;
+            patch.start1 = start1 - precontext.len();
+            patch.start2 = start2 - precontext.len();
+            if precontext.len() > 0 {
+                patch.length1 = precontext.len();
+                patch.length2 = precontext.len();
+                patch.diffs.push(df(DIFF_EQUAL, precontext.clone()));
+            }
+            while big.diffs.len() != 0 and patch.length1 < size - dmp.margin {
+                let op = big.diffs[0].op;
+                let dt = big.diffs[0].text.clone();
+                if op == DIFF_INSERT {
+                    patch.length2 += dt.len();
+                    start2 += dt.len();
+                    patch.diffs.push(big.diffs.remove(0));
+                    empty = false;
+                } else if op == DIFF_DELETE and patch.diffs.len() == 1 and patch.diffs[0].op == DIFF_EQUAL and dt.len() > 2 * size {
+                    patch.length1 += dt.len();
+                    start1 += dt.len();
+                    empty = false;
+                    patch.diffs.push(df(op, dt));
+                    big.diffs.remove(0);
+                } else {
+                    let cut = upto(dt, size - patch.length1 - dmp.margin);
+                    patch.length1 += cut.len();
+                    start1 += cut.len();
+                    if op == DIFF_EQUAL {
+                        patch.length2 += cut.len();
+                        start2 += cut.len();
+                    } else {
+                        empty = false;
+                    }
+                    patch.diffs.push(df(op, cut.clone()));
+                    if same(cut, big.diffs[0].text) {
+                        big.diffs.remove(0);
+                    } else {
+                        let rest = from_(big.diffs[0].text, cut.len());
+                        big.diffs[0].text = rest;
+                    }
+                }
+            }
+            precontext = last_n(diff_text2(patch.diffs), dmp.margin);
+            let postcontext = upto(diff_text1(big.diffs), dmp.margin);
+            if postcontext.len() > 0 {
+                patch.length1 += postcontext.len();
+                patch.length2 += postcontext.len();
+                let k = patch.diffs.len();
+                if k != 0 and patch.diffs[k - 1].op == DIFF_EQUAL {
+                    let t = cat(patch.diffs[k - 1].text, postcontext);
+                    patch.diffs[k - 1].text = t;
+                } else {
+                    patch.diffs.push(df(DIFF_EQUAL, postcontext));
+                }
+            }
+            if not empty {
+                x += 1;
+                patches.insert(x, patch);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct Applied {
+    text: Vec[char],
+    results: Vec[bool],
+}
+
+fn patch_apply(dmp: ref Dmp, patches0: ref Vec[Patch], text0: ref Vec[char]) -> Result[Applied, PyErr] {
+    if patches0.len() == 0 {
+        return Ok(Applied { text: text0.clone(), results: Vec.new() });
+    }
+    let mut patches = patches0.clone();
+    let pad = patch_add_padding(dmp, mut patches);
+    let mut t = cat3(pad, text0, pad);
+    patch_split_max(dmp, mut patches)?;
+    let mut delta = 0;
+    let mut results: Vec[bool] = Vec.new();
+    let maxb = dmp.max_bits;
+    for patch in patches.iter() {
+        let expected_loc = patch.start2 + delta;
+        let text1 = diff_text1(patch.diffs);
+        let mut end_loc = -1;
+        let mut start_loc = -1;
+        if text1.len() > maxb {
+            start_loc = match_main(dmp, t, upto(text1, maxb), expected_loc);
+            if start_loc != -1 {
+                end_loc = match_main(dmp, t, last_n(text1, maxb), expected_loc + text1.len() - maxb);
+                if end_loc == -1 or start_loc >= end_loc {
+                    start_loc = -1;
+                }
+            }
+        } else {
+            start_loc = match_main(dmp, t, text1, expected_loc);
+        }
+        if start_loc == -1 {
+            results.push(false);
+            delta -= patch.length2 - patch.length1;
+            continue;
+        }
+        results.push(true);
+        delta = start_loc - expected_loc;
+        let text2 = if end_loc == -1 { sl(t, start_loc, start_loc + text1.len()) } else { sl(t, start_loc, end_loc + maxb) };
+        if same(text1, text2) {
+            t = cat3(upto(t, start_loc), diff_text2(patch.diffs), from_(t, start_loc + text1.len()));
+            continue;
+        }
+        let mut diffs = diff_main(dmp, text1, text2, false);
+        if text1.len() > maxb and (levenshtein(diffs) as f64) / (text1.len() as f64) > dmp.delete_threshold {
+            let last = results.len() - 1;
+            results[last] = false;
+            continue;
+        }
+        cleanup_semantic_lossless(mut diffs);
+        let mut index1 = 0;
+        let mut index2 = 0;
+        for d in patch.diffs.iter() {
+            if d.op != DIFF_EQUAL {
+                index2 = x_index(diffs, index1);
+            }
+            if d.op == DIFF_INSERT {
+                t = cat3(upto(t, start_loc + index2), d.text, from_(t, start_loc + index2));
+            } else if d.op == DIFF_DELETE {
+                let end = x_index(diffs, index1 + d.text.len());
+                t = cat(upto(t, start_loc + index2), from_(t, start_loc + end));
+            }
+            if d.op != DIFF_DELETE {
+                index1 += d.text.len();
+            }
+        }
+    }
+    // text[len(pad):-len(pad)], which is empty when there is no padding
+    let out = if pad.len() == 0 { Vec.new() } else { sl(t, pad.len(), t.len() - pad.len()) };
+    Ok(Applied { text: out, results: results })
+}
+
+// ---------------------------------------------------------------- patch text
+
+fn coords(start: i64, length: i64) -> String {
+    if length == 0 {
+        f"{start},0"
+    } else if length == 1 {
+        f"{start + 1}"
+    } else {
+        f"{start + 1},{length}"
+    }
+}
+
+fn patch_str(p: ref Patch) -> String {
+    let c1 = coords(p.start1, p.length1);
+    let c2 = coords(p.start2, p.length2);
+    let mut out = f"@@ -{c1} +{c2} @@\n";
+    for d in p.diffs.iter() {
+        if d.op == DIFF_INSERT {
+            out.push('+');
+        } else if d.op == DIFF_DELETE {
+            out.push('-');
+        } else {
+            out.push(' ');
+        }
+        out.push_str(quote(d.text));
+        out.push('\n');
+    }
+    out
+}
+
+fn patch_to_text(patches: ref Vec[Patch]) -> String {
+    let mut out = String.new();
+    for p in patches.iter() {
+        out.push_str(patch_str(p));
+    }
+    out
+}
+
+struct Hdr {
+    s1: i64,
+    l1: String,
+    s2: i64,
+    l2: String,
+}
+
+fn digits_at(v: ref Vec[char], i: mut ref i64) -> String {
+    let mut s = String.new();
+    while *i < v.len() and v[*i] >= '0' and v[*i] <= '9' {
+        s.push(v[*i]);
+        *i += 1;
+    }
+    s
+}
+
+// ^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@$
+fn parse_header(v: ref Vec[char]) -> Option[Hdr] {
+    if not starts_with_v(v, lit("@@ -")) {
+        return None;
+    }
+    let mut i = 4;
+    let a = digits_at(v, mut i);
+    if a.len() == 0 {
+        return None;
+    }
+    if i < v.len() and v[i] == ',' {
+        i += 1;
+    }
+    let b = digits_at(v, mut i);
+    if not match_at(v, i, lit(" +")) {
+        return None;
+    }
+    i += 2;
+    let c = digits_at(v, mut i);
+    if c.len() == 0 {
+        return None;
+    }
+    if i < v.len() and v[i] == ',' {
+        i += 1;
+    }
+    let d = digits_at(v, mut i);
+    if not match_at(v, i, lit(" @@")) or i + 3 != v.len() {
+        return None;
+    }
+    Some(Hdr { s1: py_int(a).unwrap(), l1: b, s2: py_int(c).unwrap(), l2: d })
+}
+
+fn patch_from_text(textline: ref Vec[char]) -> Result[Vec[Patch], PyErr] {
+    let mut patches: Vec[Patch] = Vec.new();
+    if textline.len() == 0 {
+        return Ok(patches);
+    }
+    let mut lines: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    for c in textline.iter() {
+        if *c == '\n' {
+            lines.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    lines.push(cur);
+    let mut k = 0;
+    while k < lines.len() {
+        let h = match parse_header(lines[k]) {
+            Some(h) => h,
+            None => return Err(value_error(f"Invalid patch string: {text(lines[k])}")),
+        };
+        let mut patch = new_patch();
+        patch.start1 = h.s1;
+        if h.l1 == "" {
+            patch.start1 -= 1;
+            patch.length1 = 1;
+        } else if h.l1 == "0" {
+            patch.length1 = 0;
+        } else {
+            patch.start1 -= 1;
+            patch.length1 = py_int(h.l1).unwrap();
+        }
+        patch.start2 = h.s2;
+        if h.l2 == "" {
+            patch.start2 -= 1;
+            patch.length2 = 1;
+        } else if h.l2 == "0" {
+            patch.length2 = 0;
+        } else {
+            patch.start2 -= 1;
+            patch.length2 = py_int(h.l2).unwrap();
+        }
+        k += 1;
+        while k < lines.len() {
+            let l = ref lines[k];
+            let line = unquote(from_(l, 1));
+            if l.len() == 0 {
+                k += 1;
+                continue;
+            }
+            let sign = l[0];
+            if sign == '+' {
+                patch.diffs.push(df(DIFF_INSERT, line));
+            } else if sign == '-' {
+                patch.diffs.push(df(DIFF_DELETE, line));
+            } else if sign == ' ' {
+                patch.diffs.push(df(DIFF_EQUAL, line));
+            } else if sign == '@' {
+                break;
+            } else {
+                return Err(value_error(f"Invalid patch mode: '{sign}'\n{text(line)}"));
+            }
+            k += 1;
+        }
+        patches.push(patch);
+    }
+    Ok(patches)
+}
+
+// ---------------------------------------------------------------- the run
+
+fn read_data(rel: ref String) -> Result[String, PyErr] {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(PyErr { kind: "FileNotFoundError".to_string(), msg: f"cannot read {rel}: {e}" }),
+    }
+}
+
+fn parent_dir(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '/' {
+        i -= 1;
+    }
+    if i == 0 { String.new() } else { text(upto(cs, i - 1)) }
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, body) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), body) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// s.split(sep)
+fn split_on(v: ref Vec[char], sep: ref Vec[char]) -> Vec[Vec[char]] {
+    let mut out: Vec[Vec[char]] = Vec.new();
+    let mut cur: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if match_at(v, i, sep) {
+            out.push(cur);
+            cur = Vec.new();
+            i += sep.len();
+        } else {
+            cur.push(v[i]);
+            i += 1;
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// \n, \t, \r, \\ and \uXXXX; any other backslash pair stays as it is
+fn unescape(s: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if c == '\\' and i + 1 < s.len() {
+            let n = s[i + 1];
+            if n == 'n' {
+                out.push('\n');
+            } else if n == 't' {
+                out.push('\t');
+            } else if n == 'r' {
+                out.push('\r');
+            } else if n == '\\' {
+                out.push('\\');
+            } else if n == 'u' {
+                let mut cp = 0;
+                for k in 0..4 {
+                    cp = cp * 16 + hex_digit(s[i + 2 + k]);
+                }
+                out.push(char.try_from(cp as u32).unwrap());
+                i += 4;
+            } else {
+                out.push(c);
+                out.push(n);
+            }
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn arg(s: ref Vec[char]) -> Result[Vec[char], PyErr] {
+    if starts_with_v(s, lit("file:")) {
+        let body = read_data(text(from_(s, 5)))?;
+        return Ok(chars(body));
+    }
+    Ok(unescape(s))
+}
+
+fn show_text(t: ref Vec[char]) {
+    println(text(t));
+    println("--- end");
+}
+
+// what sys.stdout.write prints: the text, which ends in a newline
+fn write_out(s: ref String) {
+    if s.len() > 0 {
+        let cs = chars(s);
+        println(text(upto(cs, cs.len() - 1)));
+    }
+}
+
+fn set_value(dmp: mut ref Dmp, name: ref String, value: ref String) -> Result[(), PyErr] {
+    let bad = value_error(f"could not convert '{value}'");
+    if name == "Diff_Timeout" or name == "Match_Threshold" or name == "Patch_DeleteThreshold" {
+        let f = match f64.parse(value.clone()) {
+            Ok(v) => v,
+            Err(_) => return Err(bad),
+        };
+        if name == "Diff_Timeout" {
+            dmp.timeout = f;
+        } else if name == "Match_Threshold" {
+            dmp.match_threshold = f;
+        } else {
+            dmp.delete_threshold = f;
+        }
+        return Ok(());
+    }
+    let n = match py_int(value) {
+        Some(v) => v,
+        None => return Err(bad),
+    };
+    if name == "Diff_EditCost" {
+        dmp.edit_cost = n;
+    } else if name == "Match_Distance" {
+        dmp.match_distance = n;
+    } else if name == "Patch_Margin" {
+        dmp.margin = n;
+    } else if name == "Match_MaxBits" {
+        dmp.max_bits = n;
+    } else {
+        return Err(PyErr { kind: "KeyError".to_string(), msg: f"'{name}'" });
+    }
+    Ok(())
+}
+
+fn has_word(words: ref Vec[String], w: Str) -> bool {
+    for x in words.iter() {
+        if x == w {
+            return true;
+        }
+    }
+    false
+}
+
+fn run_job(dmp: mut ref Dmp, kind: ref Vec[char], raw: ref Vec[Vec[char]]) -> Result[(), PyErr] {
+    let words: Vec[String] = split_on(kind, lit(" ")).iter().map(|w| text(w)).collect();
+    let op = words[0].clone();
+    let mut a: Vec[Vec[char]] = Vec.new();
+    for x in raw.iter() {
+        a.push(arg(x)?);
+    }
+    if op == "set" {
+        let name = text(raw[0]);
+        let value = text(raw[1]);
+        set_value(mut dmp, name, value)?;
+        println(f"{name} = {value}");
+    } else if op == "prefix" {
+        println(f"{common_prefix(a[0], a[1])}");
+    } else if op == "suffix" {
+        println(f"{common_suffix(a[0], a[1])}");
+    } else if op == "overlap" {
+        println(f"{common_overlap(a[0], a[1])}");
+    } else if op == "halfmatch" {
+        println(half_match_repr(half_match(dmp, a[0], a[1])));
+    } else if op == "lines" {
+        let lc = lines_to_chars(a[0], a[1]);
+        let mut ls = String.new();
+        ls.push('[');
+        for i in 0..lc.lines.len() {
+            if i > 0 {
+                ls.push_str(", ");
+            }
+            ls.push_str(py_repr(lc.lines[i]));
+        }
+        ls.push(']');
+        println(f"({py_repr(lc.chars1)}, {py_repr(lc.chars2)}, {ls})");
+    } else if op == "bisect" {
+        println(diffs_repr(diff_bisect(dmp, a[0], a[1])));
+    } else if op == "xindex" {
+        let diffs = diff_main(dmp, a[0], a[1], true);
+        println(diffs_repr(diffs));
+        let loc = match py_int(text(a[2])) {
+            Some(v) => v,
+            None => return Err(value_error("invalid literal for int()".to_string())),
+        };
+        println(f"{x_index(diffs, loc)}");
+    } else if op == "diff" {
+        let mut diffs = diff_main(dmp, a[0], a[1], not has_word(words, "nolines"));
+        if has_word(words, "semantic") {
+            cleanup_semantic(dmp, mut diffs);
+        }
+        if has_word(words, "efficiency") {
+            cleanup_efficiency(dmp, mut diffs);
+        }
+        if has_word(words, "lossless") {
+            cleanup_semantic_lossless(mut diffs);
+        }
+        println(f"diffs: {diffs.len()}");
+        for d in diffs.iter() {
+            println(f"  {diff_repr(d)}");
+        }
+        let ok1 = py_bool(same(diff_text1(diffs), a[0]));
+        let ok2 = py_bool(same(diff_text2(diffs), a[1]));
+        println(f"text1: {ok1}, text2: {ok2}");
+        let delta = to_delta(diffs);
+        println(f"delta: {py_repr(chars(delta))}");
+        let back = from_delta(a[0], chars(delta))?;
+        println(f"delta back: {py_bool(same_diffs(back, diffs))}");
+        println(f"levenshtein: {levenshtein(diffs)}");
+        let html = pretty_html(diffs);
+        let hn = chars(html).len();
+        if hn <= 2000 {
+            println(f"html: {html}");
+        } else {
+            println(f"html: {hn} characters");
+        }
+    } else if op == "fromdelta" {
+        println(diffs_repr(from_delta(a[0], a[1])?));
+    } else if op == "match" {
+        let loc = match py_int(text(a[2])) {
+            Some(v) => v,
+            None => return Err(value_error("invalid literal for int()".to_string())),
+        };
+        println(f"{match_main(dmp, a[0], a[1], loc)}");
+    } else if op == "patch" {
+        let patches = patch_make(dmp, a[0], a[1]);
+        let t = patch_to_text(patches);
+        println(f"patches: {patches.len()}");
+        write_out(t);
+        println("--- end");
+        let again = patch_to_text(patch_from_text(chars(t))?);
+        println(f"text back: {py_bool(again == t)}");
+        let r = patch_apply(dmp, patches, a[0])?;
+        println(f"applied: {bool_list(r.results)}, gives text2: {py_bool(same(r.text, a[1]))}");
+    } else if op == "fromtext" {
+        let patches = patch_from_text(a[0])?;
+        println(f"patches: {patches.len()}");
+        write_out(patch_to_text(patches));
+        println("--- end");
+    } else if op == "sync" {
+        let patches = patch_make(dmp, a[0], a[1]);
+        println(f"patches: {patches.len()}");
+        let r = patch_apply(dmp, patches, a[2])?;
+        println(f"applied: {bool_list(r.results)}");
+        if same(r.text, a[1]) {
+            println("gives the edited text");
+        } else {
+            show_text(r.text);
+        }
+    } else if op == "applytext" {
+        let patches = patch_from_text(a[0])?;
+        let r = patch_apply(dmp, patches, a[1])?;
+        println(f"applied: {bool_list(r.results)}");
+        show_text(r.text);
+    } else {
+        return Err(PyErr { kind: "SystemExit".to_string(), msg: f"unknown job {op}" });
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match read_data("jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(e.msg),
+    };
+    let mut dmp = new_dmp();
+    let lines = split_on(chars(jobs), lit("\n"));
+    for n in 0..lines.len() {
+        let line = ref lines[n];
+        if line.len() == 0 or line[0] == '#' {
+            continue;
+        }
+        let parts = split_on(line, lit(" | "));
+        println(f"== jobs.txt:{n + 1} {text(line)}");
+        let raw = parts[1..].to_vec();
+        if let Err(e) = run_job(mut dmp, parts[0], raw) {
+            println(f"error: {e.kind}: {e.msg}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("service:\u{a}  name: checkout\u{a}  port: 8080\u{a}  replicas: 4\u{a}database:\u{a}  host: db.internal\u{a}  pool: 10\u{a}  timeout_ms: 2500\u{a}cache:\u{a}  host: redis.internal\u{a}  ttl_s: 300\u{a}features:\u{a}  new_cart: true\u{a}  express_pay: true\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("service:\u{a}  name: checkout\u{a}  port: 8080\u{a}  replicas: 5\u{a}database:\u{a}  host: db.internal\u{a}  pool: 20\u{a}  timeout_ms: 2500\u{a}cache:\u{a}  host: redis.internal\u{a}  ttl_s: 300\u{a}features:\u{a}  new_cart: false\u{a}  express_pay: true\u{a}");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+fn file_2_0(out: mut ref String) {
+    out.push_str("# rewritten by the platform team\u{a}checkout:\u{a}  listen: 0.0.0.0:9090\u{a}  instances: 2\u{a}");
+}
+
+fn file_2() -> String {
+    let mut out = String.new();
+    file_2_0(mut out);
+    out
+}
+
+fn file_3_0(out: mut ref String) {
+    out.push_str("service:\u{a}  name: checkout\u{a}  port: 8080\u{a}  replicas: 3\u{a}database:\u{a}  host: db.internal\u{a}  pool: 10\u{a}  timeout_ms: 2500\u{a}cache:\u{a}  host: redis.internal\u{a}  ttl_s: 300\u{a}features:\u{a}  new_cart: false\u{a}  express_pay: true\u{a}");
+}
+
+fn file_3() -> String {
+    let mut out = String.new();
+    file_3_0(mut out);
+    out
+}
+
+fn file_4_0(out: mut ref String) {
+    out.push_str("This Agreement (the “Agreement”) is made between Acme Café Ltd. — the\u{a}“Supplier” — and the Customer. Payment is due within 30 days of the invoice\u{a}date; late payments accrue interest at 1.5% per month. 🙂\u{a}");
+}
+
+fn file_4() -> String {
+    let mut out = String.new();
+    file_4_0(mut out);
+    out
+}
+
+fn file_5_0(out: mut ref String) {
+    out.push_str("This Agreement (the “Agreement”) is made between Acme Café GmbH — the\u{a}“Supplier” — and the Customer named below. Payment is due within 45 days of the\u{a}invoice date; late payments accrue interest at 1% per month. 🙂👍\u{a}");
+}
+
+fn file_5() -> String {
+    let mut out = String.new();
+    file_5_0(mut out);
+    out
+}
+
+fn file_6_0(out: mut ref String) {
+    out.push_str("# Deploying the billing service\u{a}\u{a}1. Announce the deploy in #ops and wait five minutes.\u{a}2. Check that the build on main is green and that the canary passed.\u{a}3. Pull the release branch:\u{a}\u{a}       git fetch origin\u{a}       git checkout release/2.4\u{a}\u{a}4. Run the database migrations:\u{a}\u{a}       ./manage.py migrate --plan\u{a}       ./manage.py check --deploy\u{a}       ./manage.py migrate\u{a}\u{a}5. Restart the workers one at");
+    out.push_str(" a time:\u{a}\u{a}       systemctl restart billing-worker@1\u{a}       systemctl restart billing-worker@2\u{a}\u{a}6. Watch the error rate on the dashboard for fifteen minutes.\u{a}7. If it goes above 2%, roll back with `./deploy.sh rollback`.\u{a}");
+}
+
+fn file_6() -> String {
+    let mut out = String.new();
+    file_6_0(mut out);
+    out
+}
+
+fn file_7_0(out: mut ref String) {
+    out.push_str("# Deploying the billing service\u{a}\u{a}1. Announce the deploy in #ops and wait 5 minutes.\u{a}2. Check that the build on main is green.\u{a}3. Pull the release branch:\u{a}\u{a}       git fetch origin\u{a}       git checkout release/2.5\u{a}\u{a}4. Run the database migrations:\u{a}\u{a}       ./manage.py migrate --plan\u{a}       ./manage.py migrate\u{a}\u{a}5. Restart the workers one at a time:\u{a}\u{a}       systemctl restart billing-worker@1\u{a}       syste");
+    out.push_str("mctl restart billing-worker@2\u{a}\u{a}6. Watch the error rate on the dashboard for ten minutes.\u{a}7. If it goes above 2%, roll back with `./deploy.sh rollback`.\u{a}8. Post the release notes in #billing.\u{a}");
+}
+
+fn file_7() -> String {
+    let mut out = String.new();
+    file_7_0(mut out);
+    out
+}
+
+fn file_8_0(out: mut ref String) {
+    out.push_str("# Deploying the billing service\u{a}\u{a}1. Announce the deploy in #ops and wait five minutes.\u{a}2. Check that the build on main is green.\u{a}3. Pull the release branch:\u{a}\u{a}       git fetch origin\u{a}       git checkout release/2.4\u{a}\u{a}4. Run the database migrations:\u{a}\u{a}       ./manage.py migrate --plan\u{a}       ./manage.py migrate\u{a}\u{a}5. Restart the workers one at a time:\u{a}\u{a}       systemctl restart billing-worker@1\u{a}       sy");
+    out.push_str("stemctl restart billing-worker@2\u{a}\u{a}6. Watch the error rate on the dashboard for ten minutes.\u{a}7. If it goes above 2%, roll back with `./deploy.sh rollback`.\u{a}");
+}
+
+fn file_8() -> String {
+    let mut out = String.new();
+    file_8_0(mut out);
+    out
+}
+
+fn file_9_0(out: mut ref String) {
+    out.push_str("2024-05-01T12:00:01Z INFO request /api/items/7 served in 11 ms\u{a}2024-05-01T12:00:02Z INFO request /api/items/14 served in 12 ms\u{a}2024-05-01T12:00:03Z INFO request /api/items/21 served in 13 ms\u{a}2024-05-01T12:00:04Z INFO request /api/items/28 served in 14 ms\u{a}2024-05-01T12:00:05Z INFO request /api/items/35 served in 15 ms\u{a}2024-05-01T12:00:06Z INFO request /api/items/42 served in 16 ms\u{a}2024-05-01T12:00:");
+    out.push_str("07Z INFO request /api/items/49 served in 17 ms\u{a}2024-05-01T12:00:08Z INFO request /api/items/56 served in 18 ms\u{a}2024-05-01T12:00:09Z INFO request /api/items/63 served in 19 ms\u{a}2024-05-01T12:00:10Z INFO request /api/items/70 served in 20 ms\u{a}2024-05-01T12:00:11Z INFO request /api/items/77 served in 21 ms\u{a}2024-05-01T12:00:12Z INFO request /api/items/84 served in 22 ms\u{a}2024-05-01T12:00:13Z INFO request");
+    out.push_str(" /api/items/91 served in 23 ms\u{a}2024-05-01T12:00:14Z INFO request /api/items/98 served in 24 ms\u{a}2024-05-01T12:00:15Z INFO request /api/items/105 served in 25 ms\u{a}2024-05-01T12:00:16Z INFO request /api/items/112 served in 26 ms\u{a}2024-05-01T12:00:17Z WARN slow request /api/orders took 917 ms\u{a}2024-05-01T12:00:18Z INFO request /api/items/126 served in 28 ms\u{a}2024-05-01T12:00:19Z INFO request /api/items/13");
+    out.push_str("3 served in 29 ms\u{a}2024-05-01T12:00:20Z INFO request /api/items/140 served in 30 ms\u{a}2024-05-01T12:00:21Z INFO request /api/items/147 served in 31 ms\u{a}2024-05-01T12:00:22Z INFO request /api/items/154 served in 32 ms\u{a}2024-05-01T12:00:23Z INFO request /api/items/161 served from cache\u{a}2024-05-01T12:00:24Z INFO request /api/items/168 served from cache\u{a}2024-05-01T12:00:25Z INFO request /api/items/175 serv");
+    out.push_str("ed in 35 ms\u{a}2024-05-01T12:00:26Z INFO request /api/items/182 served in 36 ms\u{a}2024-05-01T12:00:27Z INFO request /api/items/189 served in 37 ms\u{a}2024-05-01T12:00:28Z INFO request /api/items/196 served in 38 ms\u{a}2024-05-01T12:00:29Z INFO request /api/items/203 served in 39 ms\u{a}2024-05-01T12:00:30Z INFO request /api/items/210 served in 40 ms\u{a}2024-05-01T12:00:31Z INFO request /api/items/217 served in 41 m");
+    out.push_str("s\u{a}2024-05-01T12:00:32Z INFO request /api/items/224 served in 42 ms\u{a}2024-05-01T12:00:33Z INFO request /api/items/231 served in 43 ms\u{a}2024-05-01T12:00:34Z WARN slow request /api/orders took 934 ms\u{a}2024-05-01T12:00:35Z INFO request /api/items/245 served in 45 ms\u{a}2024-05-01T12:00:36Z INFO request /api/items/252 served in 46 ms\u{a}2024-05-01T12:00:37Z INFO request /api/items/259 served in 47 ms\u{a}2024-05-01");
+    out.push_str("T12:00:38Z INFO request /api/items/266 served in 48 ms\u{a}2024-05-01T12:00:39Z INFO request /api/items/273 served in 49 ms\u{a}2024-05-01T12:00:40Z INFO request /api/items/280 served in 10 ms\u{a}2024-05-01T12:00:41Z INFO request /api/items/287 served in 11 ms\u{a}2024-05-01T12:00:42Z INFO request /api/items/294 served in 12 ms\u{a}2024-05-01T12:00:43Z INFO request /api/items/1 served in 13 ms\u{a}2024-05-01T12:00:44Z I");
+    out.push_str("NFO request /api/items/8 served in 14 ms\u{a}2024-05-01T12:00:45Z INFO request /api/items/15 served in 15 ms\u{a}2024-05-01T12:00:46Z INFO request /api/items/22 served in 16 ms\u{a}2024-05-01T12:00:47Z INFO request /api/items/29 served in 17 ms\u{a}2024-05-01T12:00:48Z INFO request /api/items/36 served in 18 ms\u{a}2024-05-01T12:00:49Z INFO request /api/items/43 served in 19 ms\u{a}2024-05-01T12:00:50Z INFO request /api/");
+    out.push_str("items/50 served in 20 ms\u{a}2024-05-01T12:00:51Z WARN slow request /api/orders took 951 ms\u{a}2024-05-01T12:00:52Z INFO request /api/items/64 served in 22 ms\u{a}2024-05-01T12:00:53Z INFO request /api/items/71 served in 23 ms\u{a}2024-05-01T12:00:54Z INFO request /api/items/78 served in 24 ms\u{a}2024-05-01T12:00:55Z INFO request /api/items/85 served in 25 ms\u{a}2024-05-01T12:00:56Z INFO request /api/items/92 served i");
+    out.push_str("n 26 ms\u{a}2024-05-01T12:00:57Z INFO request /api/items/99 served in 27 ms\u{a}2024-05-01T12:00:58Z INFO request /api/items/106 served in 28 ms\u{a}2024-05-01T12:00:59Z INFO request /api/items/113 served in 29 ms\u{a}2024-05-01T12:01:00Z INFO request /api/items/120 served in 30 ms\u{a}2024-05-01T12:01:04Z INFO request /api/items/148 served in 34 ms\u{a}2024-05-01T12:01:05Z INFO request /api/items/155 served in 35 ms\u{a}202");
+    out.push_str("4-05-01T12:01:06Z INFO request /api/items/162 served in 36 ms\u{a}2024-05-01T12:01:07Z INFO request /api/items/169 served in 37 ms\u{a}2024-05-01T12:01:08Z WARN slow request /api/orders took 968 ms\u{a}2024-05-01T12:01:09Z INFO request /api/items/183 served in 39 ms\u{a}2024-05-01T12:01:10Z INFO request /api/items/190 served in 40 ms\u{a}2024-05-01T12:01:11Z INFO request /api/items/197 served in 41 ms\u{a}2024-05-01T12:0");
+    out.push_str("1:12Z INFO request /api/items/204 served in 42 ms\u{a}2024-05-01T12:01:13Z INFO request /api/items/211 served in 43 ms\u{a}2024-05-01T12:01:14Z INFO request /api/items/218 served in 44 ms\u{a}2024-05-01T12:01:15Z INFO request /api/items/225 served in 45 ms\u{a}2024-05-01T12:01:16Z INFO request /api/items/232 served in 46 ms\u{a}2024-05-01T12:01:17Z INFO request /api/items/239 served in 47 ms\u{a}2024-05-01T12:01:18Z INFO");
+    out.push_str(" request /api/items/246 served in 48 ms\u{a}2024-05-01T12:01:19Z INFO request /api/items/253 served in 49 ms\u{a}2024-05-01T12:01:20Z INFO request /api/items/260 served in 10 ms\u{a}2024-05-01T12:01:21Z INFO request /api/items/267 served in 11 ms\u{a}2024-05-01T12:01:22Z INFO request /api/items/274 served in 12 ms\u{a}2024-05-01T12:01:23Z INFO request /api/items/281 served in 13 ms\u{a}2024-05-01T12:01:24Z INFO request /");
+    out.push_str("api/items/288 served in 14 ms\u{a}2024-05-01T12:01:25Z WARN slow request /api/orders took 985 ms\u{a}2024-05-01T12:01:26Z INFO request /api/items/2 served in 16 ms\u{a}2024-05-01T12:01:27Z INFO request /api/items/9 served in 17 ms\u{a}2024-05-01T12:01:28Z INFO request /api/items/16 served in 18 ms\u{a}2024-05-01T12:01:29Z INFO request /api/items/23 served in 19 ms\u{a}2024-05-01T12:01:30Z INFO request /api/items/30 serve");
+    out.push_str("d from cache\u{a}2024-05-01T12:01:31Z INFO request /api/items/37 served in 21 ms\u{a}2024-05-01T12:01:32Z INFO request /api/items/44 served in 22 ms\u{a}2024-05-01T12:01:33Z INFO request /api/items/51 served in 23 ms\u{a}2024-05-01T12:01:34Z INFO request /api/items/58 served in 24 ms\u{a}2024-05-01T12:01:35Z INFO request /api/items/65 served in 25 ms\u{a}2024-05-01T12:01:36Z INFO request /api/items/72 served in 26 ms\u{a}202");
+    out.push_str("4-05-01T12:01:37Z INFO request /api/items/79 served in 27 ms\u{a}2024-05-01T12:01:38Z INFO request /api/items/86 served in 28 ms\u{a}2024-05-01T12:01:39Z INFO request /api/items/93 served in 29 ms\u{a}2024-05-01T12:01:40Z INFO request /api/items/100 served in 30 ms\u{a}2024-05-01T12:01:41Z INFO request /api/items/107 served in 31 ms\u{a}2024-05-01T12:01:42Z WARN slow request /api/orders took 1002 ms\u{a}2024-05-01T12:01:");
+    out.push_str("43Z INFO request /api/items/121 served in 33 ms\u{a}2024-05-01T12:01:44Z INFO request /api/items/128 served in 34 ms\u{a}2024-05-01T12:01:45Z INFO request /api/items/135 served in 35 ms\u{a}2024-05-01T12:01:46Z INFO request /api/items/142 served in 36 ms\u{a}2024-05-01T12:01:47Z INFO request /api/items/149 served in 37 ms\u{a}2024-05-01T12:01:48Z INFO request /api/items/156 served in 38 ms\u{a}2024-05-01T12:01:49Z INFO r");
+    out.push_str("equest /api/items/163 served in 39 ms\u{a}2024-05-01T12:01:50Z INFO request /api/items/170 served in 40 ms\u{a}2024-05-01T12:01:51Z INFO request /api/items/177 served in 41 ms\u{a}2024-05-01T12:01:52Z INFO request /api/items/184 served in 42 ms\u{a}2024-05-01T12:01:53Z INFO request /api/items/191 served in 43 ms\u{a}2024-05-01T12:01:54Z INFO request /api/items/198 served in 44 ms\u{a}2024-05-01T12:01:55Z INFO request /ap");
+    out.push_str("i/items/205 served in 45 ms\u{a}2024-05-01T12:01:56Z INFO request /api/items/212 served in 46 ms\u{a}2024-05-01T12:01:57Z INFO request /api/items/219 served in 47 ms\u{a}2024-05-01T12:01:58Z INFO request /api/items/226 served in 48 ms\u{a}2024-05-01T12:01:59Z WARN slow request /api/orders took 1019 ms\u{a}2024-05-01T12:02:00Z ERROR worker 3 restarted\u{a}2024-05-01T12:02:00Z INFO request /api/items/240 served in 10 ms\u{a}20");
+    out.push_str("24-05-01T12:02:01Z INFO request /api/items/247 served in 11 ms\u{a}2024-05-01T12:02:02Z INFO request /api/items/254 served in 12 ms\u{a}2024-05-01T12:02:03Z INFO request /api/items/261 served in 13 ms\u{a}2024-05-01T12:02:04Z INFO request /api/items/268 served in 14 ms\u{a}2024-05-01T12:02:05Z INFO request /api/items/275 served in 15 ms\u{a}2024-05-01T12:02:06Z INFO request /api/items/282 served in 16 ms\u{a}2024-05-01T1");
+    out.push_str("2:02:07Z INFO request /api/items/289 served in 17 ms\u{a}2024-05-01T12:02:08Z INFO request /api/items/296 served in 18 ms\u{a}2024-05-01T12:02:09Z INFO request /api/items/3 served in 19 ms\u{a}2024-05-01T12:02:10Z INFO request /api/items/10 served in 20 ms\u{a}2024-05-01T12:02:11Z INFO request /api/items/17 served in 21 ms\u{a}2024-05-01T12:02:12Z INFO request /api/items/24 served in 22 ms\u{a}2024-05-01T12:02:13Z INFO r");
+    out.push_str("equest /api/items/31 served in 23 ms\u{a}2024-05-01T12:02:14Z INFO request /api/items/38 served in 24 ms\u{a}2024-05-01T12:02:15Z INFO request /api/items/45 served in 25 ms\u{a}2024-05-01T12:02:16Z WARN slow request /api/orders took 1036 ms\u{a}2024-05-01T12:02:17Z INFO request /api/items/59 served in 27 ms\u{a}2024-05-01T12:02:18Z INFO request /api/items/66 served in 28 ms\u{a}2024-05-01T12:02:19Z INFO request /api/item");
+    out.push_str("s/73 served in 29 ms\u{a}2024-05-01T12:02:20Z INFO request /api/items/80 served in 30 ms\u{a}2024-05-01T12:02:21Z INFO request /api/items/87 served in 31 ms\u{a}2024-05-01T12:02:22Z INFO request /api/items/94 served in 32 ms\u{a}2024-05-01T12:02:23Z INFO request /api/items/101 served in 33 ms\u{a}2024-05-01T12:02:24Z INFO request /api/items/108 served in 34 ms\u{a}2024-05-01T12:02:25Z INFO request /api/items/115 served i");
+    out.push_str("n 35 ms\u{a}2024-05-01T12:02:26Z INFO request /api/items/122 served in 36 ms\u{a}2024-05-01T12:02:27Z INFO request /api/items/129 served in 37 ms\u{a}2024-05-01T12:02:28Z INFO request /api/items/136 served in 38 ms\u{a}2024-05-01T12:02:29Z INFO request /api/items/143 served in 39 ms\u{a}2024-05-01T12:02:30Z INFO request /api/items/150 served in 40 ms\u{a}2024-05-01T12:02:31Z INFO request /api/items/157 served in 41 ms\u{a}20");
+    out.push_str("24-05-01T12:02:32Z INFO request /api/items/164 served in 42 ms\u{a}2024-05-01T12:02:33Z WARN slow request /api/orders took 1053 ms\u{a}2024-05-01T12:02:34Z INFO request /api/items/178 served in 44 ms\u{a}2024-05-01T12:02:35Z INFO request /api/items/185 served in 45 ms\u{a}2024-05-01T12:02:36Z INFO request /api/items/192 served in 46 ms\u{a}2024-05-01T12:02:37Z INFO request /api/items/199 served in 47 ms\u{a}2024-05-01T12");
+    out.push_str(":02:38Z INFO request /api/items/206 served in 48 ms\u{a}2024-05-01T12:02:39Z INFO request /api/items/213 served in 49 ms\u{a}2024-05-01T12:02:40Z INFO request /api/items/220 served in 10 ms\u{a}");
+}
+
+fn file_9() -> String {
+    let mut out = String.new();
+    file_9_0(mut out);
+    out
+}
+
+fn file_10_0(out: mut ref String) {
+    out.push_str("2024-05-01T12:00:01Z INFO request /api/items/7 served in 11 ms\u{a}2024-05-01T12:00:02Z INFO request /api/items/14 served in 12 ms\u{a}2024-05-01T12:00:03Z INFO request /api/items/21 served in 13 ms\u{a}2024-05-01T12:00:04Z INFO request /api/items/28 served in 14 ms\u{a}2024-05-01T12:00:05Z INFO request /api/items/35 served in 15 ms\u{a}2024-05-01T12:00:06Z INFO request /api/items/42 served in 16 ms\u{a}2024-05-01T12:00:");
+    out.push_str("07Z INFO request /api/items/49 served in 17 ms\u{a}2024-05-01T12:00:08Z INFO request /api/items/56 served in 18 ms\u{a}2024-05-01T12:00:09Z INFO request /api/items/63 served in 19 ms\u{a}2024-05-01T12:00:10Z INFO request /api/items/70 served in 20 ms\u{a}2024-05-01T12:00:11Z INFO request /api/items/77 served in 21 ms\u{a}2024-05-01T12:00:12Z INFO request /api/items/84 served in 22 ms\u{a}2024-05-01T12:00:13Z INFO request");
+    out.push_str(" /api/items/91 served in 23 ms\u{a}2024-05-01T12:00:14Z INFO request /api/items/98 served in 24 ms\u{a}2024-05-01T12:00:15Z INFO request /api/items/105 served in 25 ms\u{a}2024-05-01T12:00:16Z INFO request /api/items/112 served in 26 ms\u{a}2024-05-01T12:00:17Z WARN slow request /api/orders took 917 ms\u{a}2024-05-01T12:00:18Z INFO request /api/items/126 served in 28 ms\u{a}2024-05-01T12:00:19Z INFO request /api/items/13");
+    out.push_str("3 served in 29 ms\u{a}2024-05-01T12:00:20Z INFO request /api/items/140 served in 30 ms\u{a}2024-05-01T12:00:21Z INFO request /api/items/147 served in 31 ms\u{a}2024-05-01T12:00:22Z INFO request /api/items/154 served in 32 ms\u{a}2024-05-01T12:00:23Z INFO request /api/items/161 served in 33 ms\u{a}2024-05-01T12:00:24Z INFO request /api/items/168 served in 34 ms\u{a}2024-05-01T12:00:25Z INFO request /api/items/175 served i");
+    out.push_str("n 35 ms\u{a}2024-05-01T12:00:26Z INFO request /api/items/182 served in 36 ms\u{a}2024-05-01T12:00:27Z INFO request /api/items/189 served in 37 ms\u{a}2024-05-01T12:00:28Z INFO request /api/items/196 served in 38 ms\u{a}2024-05-01T12:00:29Z INFO request /api/items/203 served in 39 ms\u{a}2024-05-01T12:00:30Z INFO request /api/items/210 served in 40 ms\u{a}2024-05-01T12:00:31Z INFO request /api/items/217 served in 41 ms\u{a}20");
+    out.push_str("24-05-01T12:00:32Z INFO request /api/items/224 served in 42 ms\u{a}2024-05-01T12:00:33Z INFO request /api/items/231 served in 43 ms\u{a}2024-05-01T12:00:34Z WARN slow request /api/orders took 934 ms\u{a}2024-05-01T12:00:35Z INFO request /api/items/245 served in 45 ms\u{a}2024-05-01T12:00:36Z INFO request /api/items/252 served in 46 ms\u{a}2024-05-01T12:00:37Z INFO request /api/items/259 served in 47 ms\u{a}2024-05-01T12:");
+    out.push_str("00:38Z INFO request /api/items/266 served in 48 ms\u{a}2024-05-01T12:00:39Z INFO request /api/items/273 served in 49 ms\u{a}2024-05-01T12:00:40Z INFO request /api/items/280 served in 10 ms\u{a}2024-05-01T12:00:41Z INFO request /api/items/287 served in 11 ms\u{a}2024-05-01T12:00:42Z INFO request /api/items/294 served in 12 ms\u{a}2024-05-01T12:00:43Z INFO request /api/items/1 served in 13 ms\u{a}2024-05-01T12:00:44Z INFO ");
+    out.push_str("request /api/items/8 served in 14 ms\u{a}2024-05-01T12:00:45Z INFO request /api/items/15 served in 15 ms\u{a}2024-05-01T12:00:46Z INFO request /api/items/22 served in 16 ms\u{a}2024-05-01T12:00:47Z INFO request /api/items/29 served in 17 ms\u{a}2024-05-01T12:00:48Z INFO request /api/items/36 served in 18 ms\u{a}2024-05-01T12:00:49Z INFO request /api/items/43 served in 19 ms\u{a}2024-05-01T12:00:50Z INFO request /api/item");
+    out.push_str("s/50 served in 20 ms\u{a}2024-05-01T12:00:51Z WARN slow request /api/orders took 951 ms\u{a}2024-05-01T12:00:52Z INFO request /api/items/64 served in 22 ms\u{a}2024-05-01T12:00:53Z INFO request /api/items/71 served in 23 ms\u{a}2024-05-01T12:00:54Z INFO request /api/items/78 served in 24 ms\u{a}2024-05-01T12:00:55Z INFO request /api/items/85 served in 25 ms\u{a}2024-05-01T12:00:56Z INFO request /api/items/92 served in 26");
+    out.push_str(" ms\u{a}2024-05-01T12:00:57Z INFO request /api/items/99 served in 27 ms\u{a}2024-05-01T12:00:58Z INFO request /api/items/106 served in 28 ms\u{a}2024-05-01T12:00:59Z INFO request /api/items/113 served in 29 ms\u{a}2024-05-01T12:01:00Z INFO request /api/items/120 served in 30 ms\u{a}2024-05-01T12:01:01Z INFO request /api/items/127 served in 31 ms\u{a}2024-05-01T12:01:02Z INFO request /api/items/134 served in 32 ms\u{a}2024-05");
+    out.push_str("-01T12:01:03Z INFO request /api/items/141 served in 33 ms\u{a}2024-05-01T12:01:04Z INFO request /api/items/148 served in 34 ms\u{a}2024-05-01T12:01:05Z INFO request /api/items/155 served in 35 ms\u{a}2024-05-01T12:01:06Z INFO request /api/items/162 served in 36 ms\u{a}2024-05-01T12:01:07Z INFO request /api/items/169 served in 37 ms\u{a}2024-05-01T12:01:08Z WARN slow request /api/orders took 968 ms\u{a}2024-05-01T12:01:09");
+    out.push_str("Z INFO request /api/items/183 served in 39 ms\u{a}2024-05-01T12:01:10Z INFO request /api/items/190 served in 40 ms\u{a}2024-05-01T12:01:11Z INFO request /api/items/197 served in 41 ms\u{a}2024-05-01T12:01:12Z INFO request /api/items/204 served in 42 ms\u{a}2024-05-01T12:01:13Z INFO request /api/items/211 served in 43 ms\u{a}2024-05-01T12:01:14Z INFO request /api/items/218 served in 44 ms\u{a}2024-05-01T12:01:15Z INFO req");
+    out.push_str("uest /api/items/225 served in 45 ms\u{a}2024-05-01T12:01:16Z INFO request /api/items/232 served in 46 ms\u{a}2024-05-01T12:01:17Z INFO request /api/items/239 served in 47 ms\u{a}2024-05-01T12:01:18Z INFO request /api/items/246 served in 48 ms\u{a}2024-05-01T12:01:19Z INFO request /api/items/253 served in 49 ms\u{a}2024-05-01T12:01:20Z INFO request /api/items/260 served in 10 ms\u{a}2024-05-01T12:01:21Z INFO request /api/");
+    out.push_str("items/267 served in 11 ms\u{a}2024-05-01T12:01:22Z INFO request /api/items/274 served in 12 ms\u{a}2024-05-01T12:01:23Z INFO request /api/items/281 served in 13 ms\u{a}2024-05-01T12:01:24Z INFO request /api/items/288 served in 14 ms\u{a}2024-05-01T12:01:25Z WARN slow request /api/orders took 985 ms\u{a}2024-05-01T12:01:26Z INFO request /api/items/2 served in 16 ms\u{a}2024-05-01T12:01:27Z INFO request /api/items/9 served");
+    out.push_str(" in 17 ms\u{a}2024-05-01T12:01:28Z INFO request /api/items/16 served in 18 ms\u{a}2024-05-01T12:01:29Z INFO request /api/items/23 served in 19 ms\u{a}2024-05-01T12:01:30Z INFO request /api/items/30 served in 20 ms\u{a}2024-05-01T12:01:31Z INFO request /api/items/37 served in 21 ms\u{a}2024-05-01T12:01:32Z INFO request /api/items/44 served in 22 ms\u{a}2024-05-01T12:01:33Z INFO request /api/items/51 served in 23 ms\u{a}2024-0");
+    out.push_str("5-01T12:01:34Z INFO request /api/items/58 served in 24 ms\u{a}2024-05-01T12:01:35Z INFO request /api/items/65 served in 25 ms\u{a}2024-05-01T12:01:36Z INFO request /api/items/72 served in 26 ms\u{a}2024-05-01T12:01:37Z INFO request /api/items/79 served in 27 ms\u{a}2024-05-01T12:01:38Z INFO request /api/items/86 served in 28 ms\u{a}2024-05-01T12:01:39Z INFO request /api/items/93 served in 29 ms\u{a}2024-05-01T12:01:40Z I");
+    out.push_str("NFO request /api/items/100 served in 30 ms\u{a}2024-05-01T12:01:41Z INFO request /api/items/107 served in 31 ms\u{a}2024-05-01T12:01:42Z WARN slow request /api/orders took 1002 ms\u{a}2024-05-01T12:01:43Z INFO request /api/items/121 served in 33 ms\u{a}2024-05-01T12:01:44Z INFO request /api/items/128 served in 34 ms\u{a}2024-05-01T12:01:45Z INFO request /api/items/135 served in 35 ms\u{a}2024-05-01T12:01:46Z INFO request");
+    out.push_str(" /api/items/142 served in 36 ms\u{a}2024-05-01T12:01:47Z INFO request /api/items/149 served in 37 ms\u{a}2024-05-01T12:01:48Z INFO request /api/items/156 served in 38 ms\u{a}2024-05-01T12:01:49Z INFO request /api/items/163 served in 39 ms\u{a}2024-05-01T12:01:50Z INFO request /api/items/170 served in 40 ms\u{a}2024-05-01T12:01:51Z INFO request /api/items/177 served in 41 ms\u{a}2024-05-01T12:01:52Z INFO request /api/item");
+    out.push_str("s/184 served in 42 ms\u{a}2024-05-01T12:01:53Z INFO request /api/items/191 served in 43 ms\u{a}2024-05-01T12:01:54Z INFO request /api/items/198 served in 44 ms\u{a}2024-05-01T12:01:55Z INFO request /api/items/205 served in 45 ms\u{a}2024-05-01T12:01:56Z INFO request /api/items/212 served in 46 ms\u{a}2024-05-01T12:01:57Z INFO request /api/items/219 served in 47 ms\u{a}2024-05-01T12:01:58Z INFO request /api/items/226 serv");
+    out.push_str("ed in 48 ms\u{a}2024-05-01T12:01:59Z WARN slow request /api/orders took 1019 ms\u{a}2024-05-01T12:02:00Z INFO request /api/items/240 served in 10 ms\u{a}2024-05-01T12:02:01Z INFO request /api/items/247 served in 11 ms\u{a}2024-05-01T12:02:02Z INFO request /api/items/254 served in 12 ms\u{a}2024-05-01T12:02:03Z INFO request /api/items/261 served in 13 ms\u{a}2024-05-01T12:02:04Z INFO request /api/items/268 served in 14 ms");
+    out.push_str("\u{a}2024-05-01T12:02:05Z INFO request /api/items/275 served in 15 ms\u{a}2024-05-01T12:02:06Z INFO request /api/items/282 served in 16 ms\u{a}2024-05-01T12:02:07Z INFO request /api/items/289 served in 17 ms\u{a}2024-05-01T12:02:08Z INFO request /api/items/296 served in 18 ms\u{a}2024-05-01T12:02:09Z INFO request /api/items/3 served in 19 ms\u{a}2024-05-01T12:02:10Z INFO request /api/items/10 served in 20 ms\u{a}2024-05-01T1");
+    out.push_str("2:02:11Z INFO request /api/items/17 served in 21 ms\u{a}2024-05-01T12:02:12Z INFO request /api/items/24 served in 22 ms\u{a}2024-05-01T12:02:13Z INFO request /api/items/31 served in 23 ms\u{a}2024-05-01T12:02:14Z INFO request /api/items/38 served in 24 ms\u{a}2024-05-01T12:02:15Z INFO request /api/items/45 served in 25 ms\u{a}2024-05-01T12:02:16Z WARN slow request /api/orders took 1036 ms\u{a}2024-05-01T12:02:17Z INFO re");
+    out.push_str("quest /api/items/59 served in 27 ms\u{a}2024-05-01T12:02:18Z INFO request /api/items/66 served in 28 ms\u{a}2024-05-01T12:02:19Z INFO request /api/items/73 served in 29 ms\u{a}2024-05-01T12:02:20Z INFO request /api/items/80 served in 30 ms\u{a}2024-05-01T12:02:21Z INFO request /api/items/87 served in 31 ms\u{a}2024-05-01T12:02:22Z INFO request /api/items/94 served in 32 ms\u{a}2024-05-01T12:02:23Z INFO request /api/items");
+    out.push_str("/101 served in 33 ms\u{a}2024-05-01T12:02:24Z INFO request /api/items/108 served in 34 ms\u{a}2024-05-01T12:02:25Z INFO request /api/items/115 served in 35 ms\u{a}2024-05-01T12:02:26Z INFO request /api/items/122 served in 36 ms\u{a}2024-05-01T12:02:27Z INFO request /api/items/129 served in 37 ms\u{a}2024-05-01T12:02:28Z INFO request /api/items/136 served in 38 ms\u{a}2024-05-01T12:02:29Z INFO request /api/items/143 serve");
+    out.push_str("d in 39 ms\u{a}2024-05-01T12:02:30Z INFO request /api/items/150 served in 40 ms\u{a}2024-05-01T12:02:31Z INFO request /api/items/157 served in 41 ms\u{a}2024-05-01T12:02:32Z INFO request /api/items/164 served in 42 ms\u{a}2024-05-01T12:02:33Z WARN slow request /api/orders took 1053 ms\u{a}2024-05-01T12:02:34Z INFO request /api/items/178 served in 44 ms\u{a}2024-05-01T12:02:35Z INFO request /api/items/185 served in 45 ms\u{a}");
+    out.push_str("2024-05-01T12:02:36Z INFO request /api/items/192 served in 46 ms\u{a}2024-05-01T12:02:37Z INFO request /api/items/199 served in 47 ms\u{a}2024-05-01T12:02:38Z INFO request /api/items/206 served in 48 ms\u{a}2024-05-01T12:02:39Z INFO request /api/items/213 served in 49 ms\u{a}2024-05-01T12:02:40Z INFO request /api/items/220 served in 10 ms\u{a}");
+}
+
+fn file_10() -> String {
+    let mut out = String.new();
+    file_10_0(mut out);
+    out
+}
+
+fn file_11_0(out: mut ref String) {
+    out.push_str("The lighthouse keeper climbed the stairs every evening at dusk. There were\u{a}one hundred and twelve of them, and he counted each one out loud, because the\u{a}counting kept his mind off the wind. At the top he trimmed the wick, wiped the\u{a}glass, and lit the lamp. Then he sat by the window with his tea and watched the\u{a}light sweep across the water, once every eight seconds, all night long.\u{a}");
+}
+
+fn file_11() -> String {
+    let mut out = String.new();
+    file_11_0(mut out);
+    out
+}
+
+fn file_12_0(out: mut ref String) {
+    out.push_str("The lighthouse keeper climbed the stairs each evening at dusk. There were\u{a}one hundred and twelve of them, and she counted every one out loud, because the\u{a}counting kept her mind off the wind. At the top she trimmed the wick, polished the\u{a}glass, and lit the lamp. Then she sat by the window with her coffee and watched the\u{a}beam sweep across the dark water, once every eight seconds, all night long.\u{a}");
+}
+
+fn file_12() -> String {
+    let mut out = String.new();
+    file_12_0(mut out);
+    out
+}
+
+fn file_13_0(out: mut ref String) {
+    out.push_str("# Each job: a kind and its arguments, separated by \" | \". An argument\u{a}# that starts with file: names a file in data/; otherwise \\n, \\t, \\\\ and \\uXXXX\u{a}# are escapes. \"set\" changes a setting for the jobs after it.\u{a}\u{a}# the building blocks, on the examples in the library's tests\u{a}prefix | abc | xyz\u{a}prefix | 1234abcdef | 1234xyz\u{a}prefix | 1234 | 1234xyz\u{a}suffix | abcdef1234 | xyz1234\u{a}suffix | 1234 | xyz123");
+    out.push_str("4\u{a}overlap | abc | abcd\u{a}overlap | 123456xxx | xxxabcd\u{a}overlap | fi | \\ufb01i\u{a}halfmatch | 1234567890 | a345678z\u{a}halfmatch | 121231234123451234123121 | a1234123451234z\u{a}halfmatch | qHilloHelloHew | xHelloHeHulloy\u{a}halfmatch | 1234567890 | abcdef\u{a}lines | alpha\\nbeta\\nalpha\\n | beta\\nalpha\\nbeta\\n\u{a}bisect | cat | map\u{a}xindex | The cat | The big cat | 5\u{a}xindex | The cat | The bat | 4\u{a}\u{a}# diffs\u{a}diff | The cat");
+    out.push_str(" sat on the mat. | The big cat sat on a mat.\u{a}diff | Apples are a fruit. | Bananas are also fruit.\u{a}diff | ax\\t | \\u0680x\\u00e9\u{a}diff | 1ayb2 | abxab\u{a}diff | abcy | xaxcxabc\u{a}diff | a | b\u{a}diff | abc | abc\u{a}diff |  | abc\u{a}diff semantic | The cat came. | The cat came, so did the dog.\u{a}diff semantic | mouse | sofas\u{a}diff semantic | abcxxx | xxxdef\u{a}diff semantic | The cat sat. | The cat sat on the hat.\u{a}diff ef");
+    out.push_str("ficiency | abxyzcd | 12xyz34\u{a}diff efficiency | ab12xyz34cd | ab1xyz4cd\u{a}diff lossless | AAA\\r\\n\\r\\nBBB\\r\\nDDD | AAA\\r\\n\\r\\nBBB\\r\\n\\r\\nDDD\\r\\nBBB\u{a}diff lossless | The xxx. The zzz. | The xxx. The yyy. The zzz.\u{a}diff semantic | file:docs/story.txt | file:docs/story.v2.txt\u{a}diff semantic nolines | file:docs/story.txt | file:docs/story.v2.txt\u{a}diff semantic | file:docs/contract.txt | file:docs/contract.v2.");
+    out.push_str("txt\u{a}diff efficiency | file:docs/config.yaml | file:docs/config.ops.yaml\u{a}diff semantic | file:docs/server.log | file:docs/server.edited.log\u{a}set | Diff_Timeout | 0\u{a}diff | 1234567890 | a345678z\u{a}diff semantic | file:docs/story.txt | file:docs/story.v2.txt\u{a}set | Diff_Timeout | 1.0\u{a}set | Diff_EditCost | 5\u{a}diff efficiency | abxyzcd | 12xyz34\u{a}set | Diff_EditCost | 4\u{a}\u{a}# deltas\u{a}fromdelta | The cat sat. | =4");
+    out.push_str("\\t-3\\t+dog\\t=5\u{a}fromdelta | The cat sat. | =4\\t-3\\t+%E2%80%9Ccat%E2%80%9D\\t=5\u{a}fromdelta | Hello 🙂 | =6\\t-2\\t+%F0%9F%91%8B\u{a}fromdelta | abc | =2\u{a}fromdelta | abc | =x3\u{a}fromdelta | abc | =1\\t-2\\t=1\u{a}fromdelta | abc | *3\u{a}fromdelta | abc | =-1\\t=4\u{a}\u{a}# fuzzy matching\u{a}match | abcdef | abcdef | 1000\u{a}match |  | abcdef | 1\u{a}match | abcdef |  | 3\u{a}match | abcdef | de | 3\u{a}match | abcdefghijk | fgh | 5\u{a}match | abcde");
+    out.push_str("fghijk | efxhi | 0\u{a}match | abcdefghijk | bxy | 1\u{a}match | 123456789xx0 | 3456789x0 | 2\u{a}match | abcdef | xxabc | 4\u{a}match | I am the very model of a modern major general. | majr | 33\u{a}match | I am the very model of a modern major general. | modern major general | 3\u{a}match | The quick brown fox jumps over the lazy dog. | lazy cat | 30\u{a}set | Match_Threshold | 0.4\u{a}match | abcdefghijk | efxyhi | 1\u{a}set | Ma");
+    out.push_str("tch_Threshold | 0.3\u{a}match | abcdefghijk | efxyhi | 1\u{a}set | Match_Threshold | 0.0\u{a}match | abcdefghijk | bcdef | 1\u{a}set | Match_Threshold | 0.5\u{a}set | Match_Distance | 10\u{a}match | abcdefghijklmnopqrstuvwxyz | abcdefg | 24\u{a}match | abcdefghijklmnopqrstuvwxyz | abcdxxefg | 1\u{a}set | Match_Distance | 0\u{a}match | abcdefghijklmnopqrstuvwxyz | defg | 3\u{a}set | Match_Distance | 1000\u{a}match | abcdefghijklmnopqrstuvwxy");
+    out.push_str("z | abcdefg | 24\u{a}\u{a}# patches between two versions, and back from their text\u{a}patch | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy dog.\u{a}patch | file:docs/deploy.md | file:docs/deploy.alice.md\u{a}patch | file:docs/contract.txt | file:docs/contract.v2.txt\u{a}patch | file:docs/config.yaml | file:docs/config.ops.yaml\u{a}patch |  | test\u{a}patch | abcdef | abcdef\u{a}fromtext | f");
+    out.push_str("ile:patches/hand.patch\u{a}fromtext | @@ -1 +1 @@\\n-a\\n+b\\n\u{a}fromtext | @@ -0,0 +1,3 @@\\n+abc\\n\u{a}fromtext | Bad\\nPatch\\n\u{a}fromtext | @@ -1,3 +1,3 @@\\n*abc\\n\u{a}\u{a}# a sync server: patch(base, edited) applied to someone else's copy\u{a}sync | file:docs/deploy.md | file:docs/deploy.alice.md | file:docs/deploy.bob.md\u{a}sync | file:docs/config.yaml | file:docs/config.ops.yaml | file:docs/config.dev.yaml\u{a}sync | file:doc");
+    out.push_str("s/config.yaml | file:docs/config.ops.yaml | file:docs/config.rewrite.yaml\u{a}sync | file:docs/server.log | file:docs/server.edited.log | file:docs/server.log\u{a}sync | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy dog. | The quick red rabbit jumps over the tired tiger.\u{a}sync | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy d");
+    out.push_str("og. | I am the very model of a modern major general.\u{a}sync | x | y | \u{a}sync | y |  | xxyyzz\u{a}applytext | file:patches/hand.patch | file:docs/config.dev.yaml\u{a}set | Patch_DeleteThreshold | 0.6\u{a}sync | abcdefghijklmnopqrstuvwxyz--------------------1234567890 | abcXXXXXXXXXXdefghijklmnopqrstuvwxyz--------------------1234567YYYYYYYYYY890 | ABCDEFGHIJKLMNOPQRSTUVWXYZ--------------------1234567890\u{a}set | Patc");
+    out.push_str("h_DeleteThreshold | 0.5\u{a}sync | xabcdefghijklmnopqrstuvwxyz--------------------1234567890123456789012345678901234567890xyz | x1234567890123456789012345678901234567890xyz | xabc12345678901234567890---------------++++++++++---------------12345678901234567890y\u{a}set | Patch_Margin | 2\u{a}patch | file:docs/config.yaml | file:docs/config.ops.yaml\u{a}set | Patch_Margin | 4\u{a}");
+}
+
+fn file_13() -> String {
+    let mut out = String.new();
+    file_13_0(mut out);
+    out
+}
+
+fn file_14_0(out: mut ref String) {
+    out.push_str("@@ -1,8 +1,9 @@\u{a} service\u{a}+s\u{a} :%0A  na\u{a}@@ -40,9 +41,9 @@\u{a} ica\u{a}-s: 3\u{a}+s: 7\u{a} %0Adat\u{a}");
+}
+
+fn file_14() -> String {
+    let mut out = String.new();
+    file_14_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("docs/config.dev.yaml".to_string(), file_0()));
+    v.push(("docs/config.ops.yaml".to_string(), file_1()));
+    v.push(("docs/config.rewrite.yaml".to_string(), file_2()));
+    v.push(("docs/config.yaml".to_string(), file_3()));
+    v.push(("docs/contract.txt".to_string(), file_4()));
+    v.push(("docs/contract.v2.txt".to_string(), file_5()));
+    v.push(("docs/deploy.alice.md".to_string(), file_6()));
+    v.push(("docs/deploy.bob.md".to_string(), file_7()));
+    v.push(("docs/deploy.md".to_string(), file_8()));
+    v.push(("docs/server.edited.log".to_string(), file_9()));
+    v.push(("docs/server.log".to_string(), file_10()));
+    v.push(("docs/story.txt".to_string(), file_11()));
+    v.push(("docs/story.v2.txt".to_string(), file_12()));
+    v.push(("jobs.txt".to_string(), file_13()));
+    v.push(("patches/hand.patch".to_string(), file_14()));
+    v
+}

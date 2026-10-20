@@ -1,0 +1,720 @@
+== jobs.txt:6 prefix | abc | xyz
+0
+== jobs.txt:7 prefix | 1234abcdef | 1234xyz
+4
+== jobs.txt:8 prefix | 1234 | 1234xyz
+4
+== jobs.txt:9 suffix | abcdef1234 | xyz1234
+4
+== jobs.txt:10 suffix | 1234 | xyz1234
+4
+== jobs.txt:11 overlap | abc | abcd
+3
+== jobs.txt:12 overlap | 123456xxx | xxxabcd
+3
+== jobs.txt:13 overlap | fi | \ufb01i
+0
+== jobs.txt:14 halfmatch | 1234567890 | a345678z
+('12', '90', 'a', 'z', '345678')
+== jobs.txt:15 halfmatch | 121231234123451234123121 | a1234123451234z
+('12123', '123121', 'a', 'z', '1234123451234')
+== jobs.txt:16 halfmatch | qHilloHelloHew | xHelloHeHulloy
+('qHillo', 'w', 'x', 'Hulloy', 'HelloHe')
+== jobs.txt:17 halfmatch | 1234567890 | abcdef
+None
+== jobs.txt:18 lines | alpha\nbeta\nalpha\n | beta\nalpha\nbeta\n
+('\x01\x02\x01', '\x02\x01\x02', ['', 'alpha\n', 'beta\n'])
+== jobs.txt:19 bisect | cat | map
+[(-1, 'c'), (1, 'm'), (0, 'a'), (-1, 't'), (1, 'p')]
+== jobs.txt:20 xindex | The cat | The big cat | 5
+[(0, 'The '), (1, 'big '), (0, 'cat')]
+9
+== jobs.txt:21 xindex | The cat | The bat | 4
+[(0, 'The '), (-1, 'c'), (1, 'b'), (0, 'at')]
+4
+== jobs.txt:24 diff | The cat sat on the mat. | The big cat sat on a mat.
+diffs: 6
+  (0, 'The ')
+  (1, 'big ')
+  (0, 'cat sat on ')
+  (-1, 'the')
+  (1, 'a')
+  (0, ' mat.')
+text1: True, text2: True
+delta: '=4\t+big \t=11\t-3\t+a\t=5'
+delta back: True
+levenshtein: 7
+html: <span>The </span><ins style="background:#e6ffe6;">big </ins><span>cat sat on </span><del style="background:#ffe6e6;">the</del><ins style="background:#e6ffe6;">a</ins><span> mat.</span>
+== jobs.txt:25 diff | Apples are a fruit. | Bananas are also fruit.
+diffs: 5
+  (-1, 'Apple')
+  (1, 'Banana')
+  (0, 's are a')
+  (1, 'lso')
+  (0, ' fruit.')
+text1: True, text2: True
+delta: '-5\t+Banana\t=7\t+lso\t=7'
+delta back: True
+levenshtein: 9
+html: <del style="background:#ffe6e6;">Apple</del><ins style="background:#e6ffe6;">Banana</ins><span>s are a</span><ins style="background:#e6ffe6;">lso</ins><span> fruit.</span>
+== jobs.txt:26 diff | ax\t | \u0680x\u00e9
+diffs: 5
+  (-1, 'a')
+  (1, 'ڀ')
+  (0, 'x')
+  (-1, '\t')
+  (1, 'é')
+text1: True, text2: True
+delta: '-1\t+%DA%80\t=1\t-1\t+%C3%A9'
+delta back: True
+levenshtein: 2
+html: <del style="background:#ffe6e6;">a</del><ins style="background:#e6ffe6;">ڀ</ins><span>x</span><del style="background:#ffe6e6;">	</del><ins style="background:#e6ffe6;">é</ins>
+== jobs.txt:27 diff | 1ayb2 | abxab
+diffs: 6
+  (-1, '1')
+  (0, 'a')
+  (-1, 'y')
+  (0, 'b')
+  (-1, '2')
+  (1, 'xab')
+text1: True, text2: True
+delta: '-1\t=1\t-1\t=1\t-1\t+xab'
+delta back: True
+levenshtein: 5
+html: <del style="background:#ffe6e6;">1</del><span>a</span><del style="background:#ffe6e6;">y</del><span>b</span><del style="background:#ffe6e6;">2</del><ins style="background:#e6ffe6;">xab</ins>
+== jobs.txt:28 diff | abcy | xaxcxabc
+diffs: 3
+  (1, 'xaxcx')
+  (0, 'abc')
+  (-1, 'y')
+text1: True, text2: True
+delta: '+xaxcx\t=3\t-1'
+delta back: True
+levenshtein: 6
+html: <ins style="background:#e6ffe6;">xaxcx</ins><span>abc</span><del style="background:#ffe6e6;">y</del>
+== jobs.txt:29 diff | a | b
+diffs: 2
+  (-1, 'a')
+  (1, 'b')
+text1: True, text2: True
+delta: '-1\t+b'
+delta back: True
+levenshtein: 1
+html: <del style="background:#ffe6e6;">a</del><ins style="background:#e6ffe6;">b</ins>
+== jobs.txt:30 diff | abc | abc
+diffs: 1
+  (0, 'abc')
+text1: True, text2: True
+delta: '=3'
+delta back: True
+levenshtein: 0
+html: <span>abc</span>
+== jobs.txt:31 diff |  | abc
+diffs: 1
+  (1, 'abc')
+text1: True, text2: True
+delta: '+abc'
+delta back: True
+levenshtein: 3
+html: <ins style="background:#e6ffe6;">abc</ins>
+== jobs.txt:32 diff semantic | The cat came. | The cat came, so did the dog.
+diffs: 3
+  (0, 'The cat came')
+  (1, ', so did the dog')
+  (0, '.')
+text1: True, text2: True
+delta: '=12\t+, so did the dog\t=1'
+delta back: True
+levenshtein: 16
+html: <span>The cat came</span><ins style="background:#e6ffe6;">, so did the dog</ins><span>.</span>
+== jobs.txt:33 diff semantic | mouse | sofas
+diffs: 2
+  (-1, 'mouse')
+  (1, 'sofas')
+text1: True, text2: True
+delta: '-5\t+sofas'
+delta back: True
+levenshtein: 5
+html: <del style="background:#ffe6e6;">mouse</del><ins style="background:#e6ffe6;">sofas</ins>
+== jobs.txt:34 diff semantic | abcxxx | xxxdef
+diffs: 3
+  (-1, 'abc')
+  (0, 'xxx')
+  (1, 'def')
+text1: True, text2: True
+delta: '-3\t=3\t+def'
+delta back: True
+levenshtein: 6
+html: <del style="background:#ffe6e6;">abc</del><span>xxx</span><ins style="background:#e6ffe6;">def</ins>
+== jobs.txt:35 diff semantic | The cat sat. | The cat sat on the hat.
+diffs: 3
+  (0, 'The cat sat')
+  (1, ' on the hat')
+  (0, '.')
+text1: True, text2: True
+delta: '=11\t+ on the hat\t=1'
+delta back: True
+levenshtein: 11
+html: <span>The cat sat</span><ins style="background:#e6ffe6;"> on the hat</ins><span>.</span>
+== jobs.txt:36 diff efficiency | abxyzcd | 12xyz34
+diffs: 2
+  (-1, 'abxyzcd')
+  (1, '12xyz34')
+text1: True, text2: True
+delta: '-7\t+12xyz34'
+delta back: True
+levenshtein: 7
+html: <del style="background:#ffe6e6;">abxyzcd</del><ins style="background:#e6ffe6;">12xyz34</ins>
+== jobs.txt:37 diff efficiency | ab12xyz34cd | ab1xyz4cd
+diffs: 5
+  (0, 'ab1')
+  (-1, '2')
+  (0, 'xyz')
+  (-1, '3')
+  (0, '4cd')
+text1: True, text2: True
+delta: '=3\t-1\t=3\t-1\t=3'
+delta back: True
+levenshtein: 2
+html: <span>ab1</span><del style="background:#ffe6e6;">2</del><span>xyz</span><del style="background:#ffe6e6;">3</del><span>4cd</span>
+== jobs.txt:38 diff lossless | AAA\r\n\r\nBBB\r\nDDD | AAA\r\n\r\nBBB\r\n\r\nDDD\r\nBBB
+diffs: 4
+  (0, 'AAA\r\n\r\nBBB\r\n')
+  (1, '\r\n')
+  (0, 'DDD')
+  (1, '\r\nBBB')
+text1: True, text2: True
+delta: '=12\t+%0D%0A\t=3\t+%0D%0ABBB'
+delta back: True
+levenshtein: 7
+html: <span>AAA&para;<br>&para;<br>BBB&para;<br></span><ins style="background:#e6ffe6;">&para;<br></ins><span>DDD</span><ins style="background:#e6ffe6;">&para;<br>BBB</ins>
+== jobs.txt:39 diff lossless | The xxx. The zzz. | The xxx. The yyy. The zzz.
+diffs: 3
+  (0, 'The xxx.')
+  (1, ' The yyy.')
+  (0, ' The zzz.')
+text1: True, text2: True
+delta: '=8\t+ The yyy.\t=9'
+delta back: True
+levenshtein: 9
+html: <span>The xxx.</span><ins style="background:#e6ffe6;"> The yyy.</ins><span> The zzz.</span>
+== jobs.txt:40 diff semantic | file:docs/story.txt | file:docs/story.v2.txt
+diffs: 27
+  (0, 'The lighthouse keeper climbed the stairs e')
+  (-1, 'very')
+  (1, 'ach')
+  (0, ' evening at dusk. There were\none hundred and twelve of them, and ')
+  (1, 's')
+  (0, 'he counted e')
+  (-1, 'ach')
+  (1, 'very')
+  (0, ' one out loud, because the\ncounting kept h')
+  (-1, 'is')
+  (1, 'er')
+  (0, ' mind off the wind. At the top ')
+  (1, 's')
+  (0, 'he trimmed the wick, ')
+  (-1, 'wip')
+  (1, 'polish')
+  (0, 'ed the\nglass, and lit the lamp. Then ')
+  (1, 's')
+  (0, 'he sat by the window with h')
+  (-1, 'is tea')
+  (1, 'er coffee')
+  (0, ' and watched the\n')
+  (-1, 'light')
+  (1, 'beam')
+  (0, ' sweep across the ')
+  (1, 'dark ')
+  (0, 'water, once every eight seconds, all night long.\n')
+text1: True, text2: True
+delta: '=42\t-4\t+ach\t=65\t+s\t=12\t-3\t+very\t=42\t-2\t+er\t=31\t+s\t=21\t-3\t+polish\t=37\t+s\t=27\t-6\t+er coffee\t=17\t-5\t+beam\t=18\t+dark \t=49'
+delta back: True
+levenshtein: 38
+html: <span>The lighthouse keeper climbed the stairs e</span><del style="background:#ffe6e6;">very</del><ins style="background:#e6ffe6;">ach</ins><span> evening at dusk. There were&para;<br>one hundred and twelve of them, and </span><ins style="background:#e6ffe6;">s</ins><span>he counted e</span><del style="background:#ffe6e6;">ach</del><ins style="background:#e6ffe6;">very</ins><span> one out loud, because the&para;<br>counting kept h</span><del style="background:#ffe6e6;">is</del><ins style="background:#e6ffe6;">er</ins><span> mind off the wind. At the top </span><ins style="background:#e6ffe6;">s</ins><span>he trimmed the wick, </span><del style="background:#ffe6e6;">wip</del><ins style="background:#e6ffe6;">polish</ins><span>ed the&para;<br>glass, and lit the lamp. Then </span><ins style="background:#e6ffe6;">s</ins><span>he sat by the window with h</span><del style="background:#ffe6e6;">is tea</del><ins style="background:#e6ffe6;">er coffee</ins><span> and watched the&para;<br></span><del style="background:#ffe6e6;">light</del><ins style="background:#e6ffe6;">beam</ins><span> sweep across the </span><ins style="background:#e6ffe6;">dark </ins><span>water, once every eight seconds, all night long.&para;<br></span>
+== jobs.txt:41 diff semantic nolines | file:docs/story.txt | file:docs/story.v2.txt
+diffs: 27
+  (0, 'The lighthouse keeper climbed the stairs e')
+  (-1, 'very')
+  (1, 'ach')
+  (0, ' evening at dusk. There were\none hundred and twelve of them, and ')
+  (1, 's')
+  (0, 'he counted e')
+  (-1, 'ach')
+  (1, 'very')
+  (0, ' one out loud, because the\ncounting kept h')
+  (-1, 'is')
+  (1, 'er')
+  (0, ' mind off the wind. At the top ')
+  (1, 's')
+  (0, 'he trimmed the wick, ')
+  (-1, 'wip')
+  (1, 'polish')
+  (0, 'ed the\nglass, and lit the lamp. Then ')
+  (1, 's')
+  (0, 'he sat by the window with h')
+  (-1, 'is tea')
+  (1, 'er coffee')
+  (0, ' and watched the\n')
+  (-1, 'light')
+  (1, 'beam')
+  (0, ' sweep across the ')
+  (1, 'dark ')
+  (0, 'water, once every eight seconds, all night long.\n')
+text1: True, text2: True
+delta: '=42\t-4\t+ach\t=65\t+s\t=12\t-3\t+very\t=42\t-2\t+er\t=31\t+s\t=21\t-3\t+polish\t=37\t+s\t=27\t-6\t+er coffee\t=17\t-5\t+beam\t=18\t+dark \t=49'
+delta back: True
+levenshtein: 38
+html: <span>The lighthouse keeper climbed the stairs e</span><del style="background:#ffe6e6;">very</del><ins style="background:#e6ffe6;">ach</ins><span> evening at dusk. There were&para;<br>one hundred and twelve of them, and </span><ins style="background:#e6ffe6;">s</ins><span>he counted e</span><del style="background:#ffe6e6;">ach</del><ins style="background:#e6ffe6;">very</ins><span> one out loud, because the&para;<br>counting kept h</span><del style="background:#ffe6e6;">is</del><ins style="background:#e6ffe6;">er</ins><span> mind off the wind. At the top </span><ins style="background:#e6ffe6;">s</ins><span>he trimmed the wick, </span><del style="background:#ffe6e6;">wip</del><ins style="background:#e6ffe6;">polish</ins><span>ed the&para;<br>glass, and lit the lamp. Then </span><ins style="background:#e6ffe6;">s</ins><span>he sat by the window with h</span><del style="background:#ffe6e6;">is tea</del><ins style="background:#e6ffe6;">er coffee</ins><span> and watched the&para;<br></span><del style="background:#ffe6e6;">light</del><ins style="background:#e6ffe6;">beam</ins><span> sweep across the </span><ins style="background:#e6ffe6;">dark </ins><span>water, once every eight seconds, all night long.&para;<br></span>
+== jobs.txt:42 diff semantic | file:docs/contract.txt | file:docs/contract.v2.txt
+diffs: 19
+  (0, 'This Agreement (the “Agreement”) is made between Acme Café ')
+  (-1, 'Ltd.')
+  (1, 'GmbH')
+  (0, ' — the\n“Supplier” — and the Customer')
+  (1, ' named below')
+  (0, '. Payment is due within ')
+  (-1, '30')
+  (1, '45')
+  (0, ' days of the')
+  (-1, ' ')
+  (1, '\n')
+  (0, 'invoice')
+  (-1, '\n')
+  (1, ' ')
+  (0, 'date; late payments accrue interest at 1')
+  (-1, '.5')
+  (0, '% per month. 🙂')
+  (1, '👍')
+  (0, '\n')
+text1: True, text2: True
+delta: '=59\t-4\t+GmbH\t=36\t+ named below\t=24\t-2\t+45\t=12\t-1\t+%0A\t=7\t-1\t+ \t=40\t-2\t=15\t+%F0%9F%91%8D\t=1'
+delta back: True
+levenshtein: 23
+html: <span>This Agreement (the “Agreement”) is made between Acme Café </span><del style="background:#ffe6e6;">Ltd.</del><ins style="background:#e6ffe6;">GmbH</ins><span> — the&para;<br>“Supplier” — and the Customer</span><ins style="background:#e6ffe6;"> named below</ins><span>. Payment is due within </span><del style="background:#ffe6e6;">30</del><ins style="background:#e6ffe6;">45</ins><span> days of the</span><del style="background:#ffe6e6;"> </del><ins style="background:#e6ffe6;">&para;<br></ins><span>invoice</span><del style="background:#ffe6e6;">&para;<br></del><ins style="background:#e6ffe6;"> </ins><span>date; late payments accrue interest at 1</span><del style="background:#ffe6e6;">.5</del><span>% per month. 🙂</span><ins style="background:#e6ffe6;">👍</ins><span>&para;<br></span>
+== jobs.txt:43 diff efficiency | file:docs/config.yaml | file:docs/config.ops.yaml
+diffs: 7
+  (0, 'service:\n  name: checkout\n  port: 8080\n  replicas: ')
+  (-1, '3')
+  (1, '5')
+  (0, '\ndatabase:\n  host: db.internal\n  pool: ')
+  (-1, '1')
+  (1, '2')
+  (0, '0\n  timeout_ms: 2500\ncache:\n  host: redis.internal\n  ttl_s: 300\nfeatures:\n  new_cart: false\n  express_pay: true\n')
+text1: True, text2: True
+delta: '=51\t-1\t+5\t=39\t-1\t+2\t=112'
+delta back: True
+levenshtein: 2
+html: <span>service:&para;<br>  name: checkout&para;<br>  port: 8080&para;<br>  replicas: </span><del style="background:#ffe6e6;">3</del><ins style="background:#e6ffe6;">5</ins><span>&para;<br>database:&para;<br>  host: db.internal&para;<br>  pool: </span><del style="background:#ffe6e6;">1</del><ins style="background:#e6ffe6;">2</ins><span>0&para;<br>  timeout_ms: 2500&para;<br>cache:&para;<br>  host: redis.internal&para;<br>  ttl_s: 300&para;<br>features:&para;<br>  new_cart: false&para;<br>  express_pay: true&para;<br></span>
+== jobs.txt:44 diff semantic | file:docs/server.log | file:docs/server.edited.log
+diffs: 16
+  (0, '2024-05-01T12:00:01Z INFO request /api/items/7 served in 11 ms\n2024-05-01T12:00:02Z INFO request /api/items/14 served in 12 ms\n2024-05-01T12:00:03Z INFO request /api/items/21 served in 13 ms\n2024-05-01T12:00:04Z INFO request /api/items/28 served in 14 ms\n2024-05-01T12:00:05Z INFO request /api/items/35 served in 15 ms\n2024-05-01T12:00:06Z INFO request /api/items/42 served in 16 ms\n2024-05-01T12:00:07Z INFO request /api/items/49 served in 17 ms\n2024-05-01T12:00:08Z INFO request /api/items/56 served in 18 ms\n2024-05-01T12:00:09Z INFO request /api/items/63 served in 19 ms\n2024-05-01T12:00:10Z INFO request /api/items/70 served in 20 ms\n2024-05-01T12:00:11Z INFO request /api/items/77 served in 21 ms\n2024-05-01T12:00:12Z INFO request /api/items/84 served in 22 ms\n2024-05-01T12:00:13Z INFO request /api/items/91 served in 23 ms\n2024-05-01T12:00:14Z INFO request /api/items/98 served in 24 ms\n2024-05-01T12:00:15Z INFO request /api/items/105 served in 25 ms\n2024-05-01T12:00:16Z INFO request /api/items/112 served in 26 ms\n2024-05-01T12:00:17Z WARN slow request /api/orders took 917 ms\n2024-05-01T12:00:18Z INFO request /api/items/126 served in 28 ms\n2024-05-01T12:00:19Z INFO request /api/items/133 served in 29 ms\n2024-05-01T12:00:20Z INFO request /api/items/140 served in 30 ms\n2024-05-01T12:00:21Z INFO request /api/items/147 served in 31 ms\n2024-05-01T12:00:22Z INFO request /api/items/154 served in 32 ms\n2024-05-01T12:00:23Z INFO request /api/items/161 served ')
+  (-1, 'in 33 ms')
+  (1, 'from cache')
+  (0, '\n2024-05-01T12:00:24Z INFO request /api/items/168 served ')
+  (-1, 'in 34 ms')
+  (1, 'from cache')
+  (0, '\n2024-05-01T12:00:25Z INFO request /api/items/175 served in 35 ms\n2024-05-01T12:00:26Z INFO request /api/items/182 served in 36 ms\n2024-05-01T12:00:27Z INFO request /api/items/189 served in 37 ms\n2024-05-01T12:00:28Z INFO request /api/items/196 served in 38 ms\n2024-05-01T12:00:29Z INFO request /api/items/203 served in 39 ms\n2024-05-01T12:00:30Z INFO request /api/items/210 served in 40 ms\n2024-05-01T12:00:31Z INFO request /api/items/217 served in 41 ms\n2024-05-01T12:00:32Z INFO request /api/items/224 served in 42 ms\n2024-05-01T12:00:33Z INFO request /api/items/231 served in 43 ms\n2024-05-01T12:00:34Z WARN slow request /api/orders took 934 ms\n2024-05-01T12:00:35Z INFO request /api/items/245 served in 45 ms\n2024-05-01T12:00:36Z INFO request /api/items/252 served in 46 ms\n2024-05-01T12:00:37Z INFO request /api/items/259 served in 47 ms\n2024-05-01T12:00:38Z INFO request /api/items/266 served in 48 ms\n2024-05-01T12:00:39Z INFO request /api/items/273 served in 49 ms\n2024-05-01T12:00:40Z INFO request /api/items/280 served in 10 ms\n2024-05-01T12:00:41Z INFO request /api/items/287 served in 11 ms\n2024-05-01T12:00:42Z INFO request /api/items/294 served in 12 ms\n2024-05-01T12:00:43Z INFO request /api/items/1 served in 13 ms\n2024-05-01T12:00:44Z INFO request /api/items/8 served in 14 ms\n2024-05-01T12:00:45Z INFO request /api/items/15 served in 15 ms\n2024-05-01T12:00:46Z INFO request /api/items/22 served in 16 ms\n2024-05-01T12:00:47Z INFO request /api/items/29 served in 17 ms\n2024-05-01T12:00:48Z INFO request /api/items/36 served in 18 ms\n2024-05-01T12:00:49Z INFO request /api/items/43 served in 19 ms\n2024-05-01T12:00:50Z INFO request /api/items/50 served in 20 ms\n2024-05-01T12:00:51Z WARN slow request /api/orders took 951 ms\n2024-05-01T12:00:52Z INFO request /api/items/64 served in 22 ms\n2024-05-01T12:00:53Z INFO request /api/items/71 served in 23 ms\n2024-05-01T12:00:54Z INFO request /api/items/78 served in 24 ms\n2024-05-01T12:00:55Z INFO request /api/items/85 served in 25 ms\n2024-05-01T12:00:56Z INFO request /api/items/92 served in 26 ms\n2024-05-01T12:00:57Z INFO request /api/items/99 served in 27 ms\n2024-05-01T12:00:58Z INFO request /api/items/106 served in 28 ms\n2024-05-01T12:00:59Z INFO request /api/items/113 served in 29 ms\n2024-05-01T12:01:00Z INFO request /api/items/120 served in 30 ms\n')
+  (-1, '2024-05-01T12:01:01Z INFO request /api/items/127 served in 31 ms\n2024-05-01T12:01:02Z INFO request /api/items/134 served in 32 ms\n2024-05-01T12:01:03Z INFO request /api/items/141 served in 33 ms\n')
+  (0, '2024-05-01T12:01:04Z INFO request /api/items/148 served in 34 ms\n2024-05-01T12:01:05Z INFO request /api/items/155 served in 35 ms\n2024-05-01T12:01:06Z INFO request /api/items/162 served in 36 ms\n2024-05-01T12:01:07Z INFO request /api/items/169 served in 37 ms\n2024-05-01T12:01:08Z WARN slow request /api/orders took 968 ms\n2024-05-01T12:01:09Z INFO request /api/items/183 served in 39 ms\n2024-05-01T12:01:10Z INFO request /api/items/190 served in 40 ms\n2024-05-01T12:01:11Z INFO request /api/items/197 served in 41 ms\n2024-05-01T12:01:12Z INFO request /api/items/204 served in 42 ms\n2024-05-01T12:01:13Z INFO request /api/items/211 served in 43 ms\n2024-05-01T12:01:14Z INFO request /api/items/218 served in 44 ms\n2024-05-01T12:01:15Z INFO request /api/items/225 served in 45 ms\n2024-05-01T12:01:16Z INFO request /api/items/232 served in 46 ms\n2024-05-01T12:01:17Z INFO request /api/items/239 served in 47 ms\n2024-05-01T12:01:18Z INFO request /api/items/246 served in 48 ms\n2024-05-01T12:01:19Z INFO request /api/items/253 served in 49 ms\n2024-05-01T12:01:20Z INFO request /api/items/260 served in 10 ms\n2024-05-01T12:01:21Z INFO request /api/items/267 served in 11 ms\n2024-05-01T12:01:22Z INFO request /api/items/274 served in 12 ms\n2024-05-01T12:01:23Z INFO request /api/items/281 served in 13 ms\n2024-05-01T12:01:24Z INFO request /api/items/288 served in 14 ms\n2024-05-01T12:01:25Z WARN slow request /api/orders took 985 ms\n2024-05-01T12:01:26Z INFO request /api/items/2 served in 16 ms\n2024-05-01T12:01:27Z INFO request /api/items/9 served in 17 ms\n2024-05-01T12:01:28Z INFO request /api/items/16 served in 18 ms\n2024-05-01T12:01:29Z INFO request /api/items/23 served in 19 ms\n2024-05-01T12:01:30Z INFO request /api/items/30 served ')
+  (-1, 'in 20 ms')
+  (1, 'from cache')
+  (0, '\n2024-05-01T12:01:31Z INFO request /api/items/37 served in 21 ms\n2024-05-01T12:01:32Z INFO request /api/items/44 served in 22 ms\n2024-05-01T12:01:33Z INFO request /api/items/51 served in 23 ms\n2024-05-01T12:01:34Z INFO request /api/items/58 served in 24 ms\n2024-05-01T12:01:35Z INFO request /api/items/65 served in 25 ms\n2024-05-01T12:01:36Z INFO request /api/items/72 served in 26 ms\n2024-05-01T12:01:37Z INFO request /api/items/79 served in 27 ms\n2024-05-01T12:01:38Z INFO request /api/items/86 served in 28 ms\n2024-05-01T12:01:39Z INFO request /api/items/93 served in 29 ms\n2024-05-01T12:01:40Z INFO request /api/items/100 served in 30 ms\n2024-05-01T12:01:41Z INFO request /api/items/107 served in 31 ms\n2024-05-01T12:01:42Z WARN slow request /api/orders took 1002 ms\n2024-05-01T12:01:43Z INFO request /api/items/121 served in 33 ms\n2024-05-01T12:01:44Z INFO request /api/items/128 served in 34 ms\n2024-05-01T12:01:45Z INFO request /api/items/135 served in 35 ms\n2024-05-01T12:01:46Z INFO request /api/items/142 served in 36 ms\n2024-05-01T12:01:47Z INFO request /api/items/149 served in 37 ms\n2024-05-01T12:01:48Z INFO request /api/items/156 served in 38 ms\n2024-05-01T12:01:49Z INFO request /api/items/163 served in 39 ms\n2024-05-01T12:01:50Z INFO request /api/items/170 served in 40 ms\n2024-05-01T12:01:51Z INFO request /api/items/177 served in 41 ms\n2024-05-01T12:01:52Z INFO request /api/items/184 served in 42 ms\n2024-05-01T12:01:53Z INFO request /api/items/191 served in 43 ms\n2024-05-01T12:01:54Z INFO request /api/items/198 served in 44 ms\n2024-05-01T12:01:55Z INFO request /api/items/205 served in 45 ms\n2024-05-01T12:01:56Z INFO request /api/items/212 served in 46 ms\n2024-05-01T12:01:57Z INFO request /api/items/219 served in 47 ms\n2024-05-01T12:01:58Z INFO request /api/items/226 served in 48 ms\n')
+  (-1, '')
+  (0, '2024-05-01T12:01:59Z WARN slow request /api/orders took 1019 ms\n')
+  (1, '2024-05-01T12:02:00Z ERROR worker 3 restarted\n')
+  (0, '2024-05-01T12:02:00Z INFO request /api/items/240 served in 10 ms\n2024-05-01T12:02:01Z INFO request /api/items/247 served in 11 ms\n2024-05-01T12:02:02Z INFO request /api/items/254 served in 12 ms\n2024-05-01T12:02:03Z INFO request /api/items/261 served in 13 ms\n2024-05-01T12:02:04Z INFO request /api/items/268 served in 14 ms\n2024-05-01T12:02:05Z INFO request /api/items/275 served in 15 ms\n2024-05-01T12:02:06Z INFO request /api/items/282 served in 16 ms\n2024-05-01T12:02:07Z INFO request /api/items/289 served in 17 ms\n2024-05-01T12:02:08Z INFO request /api/items/296 served in 18 ms\n2024-05-01T12:02:09Z INFO request /api/items/3 served in 19 ms\n2024-05-01T12:02:10Z INFO request /api/items/10 served in 20 ms\n2024-05-01T12:02:11Z INFO request /api/items/17 served in 21 ms\n2024-05-01T12:02:12Z INFO request /api/items/24 served in 22 ms\n2024-05-01T12:02:13Z INFO request /api/items/31 served in 23 ms\n2024-05-01T12:02:14Z INFO request /api/items/38 served in 24 ms\n2024-05-01T12:02:15Z INFO request /api/items/45 served in 25 ms\n2024-05-01T12:02:16Z WARN slow request /api/orders took 1036 ms\n2024-05-01T12:02:17Z INFO request /api/items/59 served in 27 ms\n2024-05-01T12:02:18Z INFO request /api/items/66 served in 28 ms\n2024-05-01T12:02:19Z INFO request /api/items/73 served in 29 ms\n2024-05-01T12:02:20Z INFO request /api/items/80 served in 30 ms\n2024-05-01T12:02:21Z INFO request /api/items/87 served in 31 ms\n2024-05-01T12:02:22Z INFO request /api/items/94 served in 32 ms\n2024-05-01T12:02:23Z INFO request /api/items/101 served in 33 ms\n2024-05-01T12:02:24Z INFO request /api/items/108 served in 34 ms\n2024-05-01T12:02:25Z INFO request /api/items/115 served in 35 ms\n2024-05-01T12:02:26Z INFO request /api/items/122 served in 36 ms\n2024-05-01T12:02:27Z INFO request /api/items/129 served in 37 ms\n2024-05-01T12:02:28Z INFO request /api/items/136 served in 38 ms\n2024-05-01T12:02:29Z INFO request /api/items/143 served in 39 ms\n2024-05-01T12:02:30Z INFO request /api/items/150 served in 40 ms\n2024-05-01T12:02:31Z INFO request /api/items/157 served in 41 ms\n2024-05-01T12:02:32Z INFO request /api/items/164 served in 42 ms\n2024-05-01T12:02:33Z WARN slow request /api/orders took 1053 ms\n2024-05-01T12:02:34Z INFO request /api/items/178 served in 44 ms\n2024-05-01T12:02:35Z INFO request /api/items/185 served in 45 ms\n2024-05-01T12:02:36Z INFO request /api/items/192 served in 46 ms\n2024-05-01T12:02:37Z INFO request /api/items/199 served in 47 ms\n2024-05-01T12:02:38Z INFO request /api/items/206 served in 48 ms\n2024-05-01T12:02:39Z INFO request /api/items/213 served in 49 ms\n2024-05-01T12:02:40Z INFO request /api/items/220 served in 10 ms\n')
+text1: True, text2: True
+delta: '=1469\t-8\t+from cache\t=57\t-8\t+from cache\t=2321\t-195\t=1735\t-8\t+from cache\t=1811\t-0\t=64\t+2024-05-01T12:02:00Z ERROR worker 3 restarted%0A\t=2649'
+delta back: True
+levenshtein: 271
+html: 12253 characters
+== jobs.txt:45 set | Diff_Timeout | 0
+Diff_Timeout = 0
+== jobs.txt:46 diff | 1234567890 | a345678z
+diffs: 5
+  (-1, '12')
+  (1, 'a')
+  (0, '345678')
+  (-1, '90')
+  (1, 'z')
+text1: True, text2: True
+delta: '-2\t+a\t=6\t-2\t+z'
+delta back: True
+levenshtein: 4
+html: <del style="background:#ffe6e6;">12</del><ins style="background:#e6ffe6;">a</ins><span>345678</span><del style="background:#ffe6e6;">90</del><ins style="background:#e6ffe6;">z</ins>
+== jobs.txt:47 diff semantic | file:docs/story.txt | file:docs/story.v2.txt
+diffs: 27
+  (0, 'The lighthouse keeper climbed the stairs e')
+  (-1, 'very')
+  (1, 'ach')
+  (0, ' evening at dusk. There were\none hundred and twelve of them, and ')
+  (1, 's')
+  (0, 'he counted e')
+  (-1, 'ach')
+  (1, 'very')
+  (0, ' one out loud, because the\ncounting kept h')
+  (-1, 'is')
+  (1, 'er')
+  (0, ' mind off the wind. At the top ')
+  (1, 's')
+  (0, 'he trimmed the wick, ')
+  (-1, 'wip')
+  (1, 'polish')
+  (0, 'ed the\nglass, and lit the lamp. Then ')
+  (1, 's')
+  (0, 'he sat by the window with h')
+  (-1, 'is tea')
+  (1, 'er coffee')
+  (0, ' and watched the\n')
+  (-1, 'light')
+  (1, 'beam')
+  (0, ' sweep across the ')
+  (1, 'dark ')
+  (0, 'water, once every eight seconds, all night long.\n')
+text1: True, text2: True
+delta: '=42\t-4\t+ach\t=65\t+s\t=12\t-3\t+very\t=42\t-2\t+er\t=31\t+s\t=21\t-3\t+polish\t=37\t+s\t=27\t-6\t+er coffee\t=17\t-5\t+beam\t=18\t+dark \t=49'
+delta back: True
+levenshtein: 38
+html: <span>The lighthouse keeper climbed the stairs e</span><del style="background:#ffe6e6;">very</del><ins style="background:#e6ffe6;">ach</ins><span> evening at dusk. There were&para;<br>one hundred and twelve of them, and </span><ins style="background:#e6ffe6;">s</ins><span>he counted e</span><del style="background:#ffe6e6;">ach</del><ins style="background:#e6ffe6;">very</ins><span> one out loud, because the&para;<br>counting kept h</span><del style="background:#ffe6e6;">is</del><ins style="background:#e6ffe6;">er</ins><span> mind off the wind. At the top </span><ins style="background:#e6ffe6;">s</ins><span>he trimmed the wick, </span><del style="background:#ffe6e6;">wip</del><ins style="background:#e6ffe6;">polish</ins><span>ed the&para;<br>glass, and lit the lamp. Then </span><ins style="background:#e6ffe6;">s</ins><span>he sat by the window with h</span><del style="background:#ffe6e6;">is tea</del><ins style="background:#e6ffe6;">er coffee</ins><span> and watched the&para;<br></span><del style="background:#ffe6e6;">light</del><ins style="background:#e6ffe6;">beam</ins><span> sweep across the </span><ins style="background:#e6ffe6;">dark </ins><span>water, once every eight seconds, all night long.&para;<br></span>
+== jobs.txt:48 set | Diff_Timeout | 1.0
+Diff_Timeout = 1.0
+== jobs.txt:49 set | Diff_EditCost | 5
+Diff_EditCost = 5
+== jobs.txt:50 diff efficiency | abxyzcd | 12xyz34
+diffs: 2
+  (-1, 'abxyzcd')
+  (1, '12xyz34')
+text1: True, text2: True
+delta: '-7\t+12xyz34'
+delta back: True
+levenshtein: 7
+html: <del style="background:#ffe6e6;">abxyzcd</del><ins style="background:#e6ffe6;">12xyz34</ins>
+== jobs.txt:51 set | Diff_EditCost | 4
+Diff_EditCost = 4
+== jobs.txt:54 fromdelta | The cat sat. | =4\t-3\t+dog\t=5
+[(0, 'The '), (-1, 'cat'), (1, 'dog'), (0, ' sat.')]
+== jobs.txt:55 fromdelta | The cat sat. | =4\t-3\t+%E2%80%9Ccat%E2%80%9D\t=5
+[(0, 'The '), (-1, 'cat'), (1, '“cat”'), (0, ' sat.')]
+== jobs.txt:56 fromdelta | Hello 🙂 | =6\t-2\t+%F0%9F%91%8B
+[(0, 'Hello '), (-1, '🙂'), (1, '👋')]
+== jobs.txt:57 fromdelta | abc | =2
+error: ValueError: Delta length (4) does not equal source text length (6).
+== jobs.txt:58 fromdelta | abc | =x3
+error: ValueError: Invalid number in diff_fromDelta: x3
+== jobs.txt:59 fromdelta | abc | =1\t-2\t=1
+error: ValueError: Delta length (8) does not equal source text length (6).
+== jobs.txt:60 fromdelta | abc | *3
+error: ValueError: Invalid diff operation in diff_fromDelta: *
+== jobs.txt:61 fromdelta | abc | =-1\t=4
+error: ValueError: Negative number in diff_fromDelta: -1
+== jobs.txt:64 match | abcdef | abcdef | 1000
+0
+== jobs.txt:65 match |  | abcdef | 1
+-1
+== jobs.txt:66 match | abcdef |  | 3
+3
+== jobs.txt:67 match | abcdef | de | 3
+3
+== jobs.txt:68 match | abcdefghijk | fgh | 5
+5
+== jobs.txt:69 match | abcdefghijk | efxhi | 0
+4
+== jobs.txt:70 match | abcdefghijk | bxy | 1
+-1
+== jobs.txt:71 match | 123456789xx0 | 3456789x0 | 2
+2
+== jobs.txt:72 match | abcdef | xxabc | 4
+0
+== jobs.txt:73 match | I am the very model of a modern major general. | majr | 33
+32
+== jobs.txt:74 match | I am the very model of a modern major general. | modern major general | 3
+25
+== jobs.txt:75 match | The quick brown fox jumps over the lazy dog. | lazy cat | 30
+35
+== jobs.txt:76 set | Match_Threshold | 0.4
+Match_Threshold = 0.4
+== jobs.txt:77 match | abcdefghijk | efxyhi | 1
+4
+== jobs.txt:78 set | Match_Threshold | 0.3
+Match_Threshold = 0.3
+== jobs.txt:79 match | abcdefghijk | efxyhi | 1
+-1
+== jobs.txt:80 set | Match_Threshold | 0.0
+Match_Threshold = 0.0
+== jobs.txt:81 match | abcdefghijk | bcdef | 1
+1
+== jobs.txt:82 set | Match_Threshold | 0.5
+Match_Threshold = 0.5
+== jobs.txt:83 set | Match_Distance | 10
+Match_Distance = 10
+== jobs.txt:84 match | abcdefghijklmnopqrstuvwxyz | abcdefg | 24
+-1
+== jobs.txt:85 match | abcdefghijklmnopqrstuvwxyz | abcdxxefg | 1
+0
+== jobs.txt:86 set | Match_Distance | 0
+Match_Distance = 0
+== jobs.txt:87 match | abcdefghijklmnopqrstuvwxyz | defg | 3
+3
+== jobs.txt:88 set | Match_Distance | 1000
+Match_Distance = 1000
+== jobs.txt:89 match | abcdefghijklmnopqrstuvwxyz | abcdefg | 24
+0
+== jobs.txt:92 patch | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy dog.
+patches: 2
+@@ -1,11 +1,12 @@
+ Th
+-e
++at
+  quick b
+@@ -22,18 +22,17 @@
+ jump
+-s
++ed
+  over 
+-the
++a
+  laz
+--- end
+text back: True
+applied: [True, True], gives text2: True
+== jobs.txt:93 patch | file:docs/deploy.md | file:docs/deploy.alice.md
+patches: 3
+@@ -120,18 +120,45 @@
+ is green
++ and that the canary passed
+ .%0A
+-
+ 3. Pull 
+@@ -302,16 +302,50 @@
+  --plan%0A
++       ./manage.py check --deploy%0A
+        .
+@@ -533,17 +533,21 @@
+ ard for 
+-t
++fifte
+ en minut
+--- end
+text back: True
+applied: [True, True, True], gives text2: True
+== jobs.txt:94 patch | file:docs/contract.txt | file:docs/contract.v2.txt
+patches: 6
+@@ -56,12 +56,12 @@
+ af%C3%A9 
+-Ltd.
++GmbH
+  %E2%80%94 t
+@@ -92,16 +92,28 @@
+ Customer
++ named below
+ . Paymen
+@@ -132,10 +132,10 @@
+ hin 
+-30
++45
+  day
+@@ -146,17 +146,17 @@
+  the
+- 
++%0A
+ invoice
+-%0A
++ 
+ date
+@@ -195,10 +195,8 @@
+ at 1
+-.5
+ %25 pe
+@@ -205,9 +205,10 @@
+ month. %F0%9F%99%82
++%F0%9F%91%8D
+ %0A
+--- end
+text back: True
+applied: [True, True, True, True, True, True], gives text2: True
+== jobs.txt:95 patch | file:docs/config.yaml | file:docs/config.ops.yaml
+patches: 2
+@@ -44,17 +44,17 @@
+ plicas: 
+-3
++5
+ %0Adatabas
+@@ -88,9 +88,9 @@
+ ol: 
+-1
++2
+ 0%0A  
+--- end
+text back: True
+applied: [True, True], gives text2: True
+== jobs.txt:96 patch |  | test
+patches: 1
+@@ -0,0 +1,4 @@
++test
+--- end
+text back: True
+applied: [True], gives text2: True
+== jobs.txt:97 patch | abcdef | abcdef
+patches: 0
+--- end
+text back: True
+applied: [], gives text2: True
+== jobs.txt:98 fromtext | file:patches/hand.patch
+patches: 2
+@@ -1,8 +1,9 @@
+ service
++s
+ :%0A  na
+@@ -40,9 +41,9 @@
+ ica
+-s: 3
++s: 7
+ %0Adat
+--- end
+== jobs.txt:99 fromtext | @@ -1 +1 @@\n-a\n+b\n
+patches: 1
+@@ -1 +1 @@
+-a
++b
+--- end
+== jobs.txt:100 fromtext | @@ -0,0 +1,3 @@\n+abc\n
+patches: 1
+@@ -0,0 +1,3 @@
++abc
+--- end
+== jobs.txt:101 fromtext | Bad\nPatch\n
+error: ValueError: Invalid patch string: Bad
+== jobs.txt:102 fromtext | @@ -1,3 +1,3 @@\n*abc\n
+error: ValueError: Invalid patch mode: '*'
+abc
+== jobs.txt:105 sync | file:docs/deploy.md | file:docs/deploy.alice.md | file:docs/deploy.bob.md
+patches: 3
+applied: [True, True, True]
+# Deploying the billing service
+
+1. Announce the deploy in #ops and wait 5 minutes.
+2. Check that the build on main is green and that the canary passed.
+3. Pull the release branch:
+
+       git fetch origin
+       git checkout release/2.5
+
+4. Run the database migrations:
+
+       ./manage.py migrate --plan
+       ./manage.py check --deploy
+       ./manage.py migrate
+
+5. Restart the workers one at a time:
+
+       systemctl restart billing-worker@1
+       systemctl restart billing-worker@2
+
+6. Watch the error rate on the dashboard for fifteen minutes.
+7. If it goes above 2%, roll back with `./deploy.sh rollback`.
+8. Post the release notes in #billing.
+
+--- end
+== jobs.txt:106 sync | file:docs/config.yaml | file:docs/config.ops.yaml | file:docs/config.dev.yaml
+patches: 2
+applied: [True, True]
+service:
+  name: checkout
+  port: 8080
+  replicas: 5
+database:
+  host: db.internal
+  pool: 20
+  timeout_ms: 2500
+cache:
+  host: redis.internal
+  ttl_s: 300
+features:
+  new_cart: true
+  express_pay: true
+
+--- end
+== jobs.txt:107 sync | file:docs/config.yaml | file:docs/config.ops.yaml | file:docs/config.rewrite.yaml
+patches: 2
+applied: [False, False]
+# rewritten by the platform team
+checkout:
+  listen: 0.0.0.0:9090
+  instances: 2
+
+--- end
+== jobs.txt:108 sync | file:docs/server.log | file:docs/server.edited.log | file:docs/server.log
+patches: 6
+applied: [True, True, True, True, True, True]
+gives the edited text
+== jobs.txt:109 sync | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy dog. | The quick red rabbit jumps over the tired tiger.
+patches: 2
+applied: [True, True]
+That quick red rabbit jumped over a tired tiger.
+--- end
+== jobs.txt:110 sync | The quick brown fox jumps over the lazy dog. | That quick brown fox jumped over a lazy dog. | I am the very model of a modern major general.
+patches: 2
+applied: [False, False]
+I am the very model of a modern major general.
+--- end
+== jobs.txt:111 sync | x | y | 
+patches: 1
+applied: [True]
+gives the edited text
+== jobs.txt:112 sync | y |  | xxyyzz
+patches: 1
+applied: [False]
+xxyyzz
+--- end
+== jobs.txt:113 applytext | file:patches/hand.patch | file:docs/config.dev.yaml
+applied: [True, True]
+services:
+  name: checkout
+  port: 8080
+  replicas: 7
+database:
+  host: db.internal
+  pool: 10
+  timeout_ms: 2500
+cache:
+  host: redis.internal
+  ttl_s: 300
+features:
+  new_cart: true
+  express_pay: true
+
+--- end
+== jobs.txt:114 set | Patch_DeleteThreshold | 0.6
+Patch_DeleteThreshold = 0.6
+== jobs.txt:115 sync | abcdefghijklmnopqrstuvwxyz--------------------1234567890 | abcXXXXXXXXXXdefghijklmnopqrstuvwxyz--------------------1234567YYYYYYYYYY890 | ABCDEFGHIJKLMNOPQRSTUVWXYZ--------------------1234567890
+patches: 2
+applied: [False, True]
+ABCDEFGHIJKLMNOPQRSTUVWXYZ--------------------1234567YYYYYYYYYY890
+--- end
+== jobs.txt:116 set | Patch_DeleteThreshold | 0.5
+Patch_DeleteThreshold = 0.5
+== jobs.txt:117 sync | xabcdefghijklmnopqrstuvwxyz--------------------1234567890123456789012345678901234567890xyz | x1234567890123456789012345678901234567890xyz | xabc12345678901234567890---------------++++++++++---------------12345678901234567890y
+patches: 1
+applied: [False, True]
+xabc12345678901234567890--------------12345678901234567890y
+--- end
+== jobs.txt:118 set | Patch_Margin | 2
+Patch_Margin = 2
+== jobs.txt:119 patch | file:docs/config.yaml | file:docs/config.ops.yaml
+patches: 2
+@@ -48,9 +48,9 @@
+ as: 
+-3
++5
+ %0Adat
+@@ -90,5 +90,5 @@
+ : 
+-1
++2
+ 0%0A
+--- end
+text back: True
+applied: [True, True], gives text2: True
+== jobs.txt:120 set | Patch_Margin | 4
+Patch_Margin = 4
