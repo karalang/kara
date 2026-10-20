@@ -11,8 +11,8 @@ fn bump(c: Counter, n: i64) {
 fn main() {
     let c = Counter { total: Mutex.new(0) };
     par {
-        bump(c, 50000);
-        bump(c, 50000);
-    }
+        bump(c, 50000),
+        bump(c, 50000),
+    };
     println(c.get());
 }

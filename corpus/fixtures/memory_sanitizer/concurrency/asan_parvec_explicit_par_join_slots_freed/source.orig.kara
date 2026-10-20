@@ -1,0 +1,16 @@
+
+fn build(n: i64) -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"payload padded beyond thirty-six bytes {n}");
+    outer.push(a);
+    outer
+}
+fn main() {
+    let total = par {
+        let x = build(1);
+        let y = build(2);
+        x.len() + y.len()
+    };
+    println(total);
+}

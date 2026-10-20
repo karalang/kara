@@ -20,8 +20,8 @@ fn bump(c: Counter, n: i64) {
 fn main() {
     let c = Counter { v: Atomic.new(0) };
     par {
-        bump(c, 50000);
-        bump(c, 50000);
-    }
+        bump(c, 50000),
+        bump(c, 50000),
+    };
     println(c.get());
 }

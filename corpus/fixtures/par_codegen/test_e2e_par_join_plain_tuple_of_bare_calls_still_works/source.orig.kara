@@ -1,0 +1,11 @@
+
+fn f1() -> i64 { 11 }
+fn f2() -> i64 { 22 }
+fn main() {
+    let (p, q) = par {
+        let p = f1();
+        let q = f2();
+        (p, q)
+    };
+    println(p + q);
+}

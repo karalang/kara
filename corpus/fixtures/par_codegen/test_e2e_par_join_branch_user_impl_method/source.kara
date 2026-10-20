@@ -5,9 +5,11 @@ impl Point {
 }
 fn main() {
     let p = Point { x: 3, y: 4 };
-    let total = par {
-        let a = p.magsq();
-        let b = 100;
+    let total = {
+        let (a, b) = par {
+        p.magsq(),
+        100,
+    };
         a + b
     };
     println(total);

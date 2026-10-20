@@ -14,9 +14,11 @@ fn count_long(docs: ref Vec[Doc], lo: i64, hi: i64) -> i64 {
 fn scan(docs: ref Vec[Doc]) -> (i64, i64) {
     let half = (docs.len() as i64) / 2i64;
     let total = docs.len() as i64;
-    par {
-        let a = count_long(docs, 0i64, half);
-        let b = count_long(docs, half, total);
+    {
+        let (a, b) = par {
+        count_long(docs, 0i64, half),
+        count_long(docs, half, total),
+    };
         (a, b)
     }
 }

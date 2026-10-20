@@ -1,0 +1,8 @@
+
+fn main() {
+    let n: i64 = 42_i64;
+    par {
+        println(n);
+        println(99);
+    }
+}

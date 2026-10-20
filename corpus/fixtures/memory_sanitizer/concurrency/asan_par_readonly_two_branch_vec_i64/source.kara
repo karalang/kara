@@ -18,9 +18,11 @@ fn sum_second_half(data: ref Vec[i64]) -> i64 {
     total
 }
 fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
-    par {
-        let a = sum_first_half(data);
-        let b = sum_second_half(data);
+    {
+        let (a, b) = par {
+        sum_first_half(data),
+        sum_second_half(data),
+    };
         (a, b)
     }
 }

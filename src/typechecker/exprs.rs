@@ -1157,6 +1157,28 @@ impl<'a> super::TypeChecker<'a> {
     /// where its parameter is lent (`Fn(ref String) -> i64`, the type a bare
     /// `Fn(String) -> i64` reads as). Where the slot takes the value
     /// (`MutFn(own T)`), the annotation keeps its owned reading.
+    /// B-2026-10-20-17 — core-semantics §11.1: the branches of `par { .. }`
+    /// are comma-separated expressions, and its value is their tuple. The
+    /// older statement form (`par { let a = f(); let b = g(); }`) is not in
+    /// the core: its bindings would have to outlive the block they are
+    /// declared in.
+    pub(super) fn core_reject_par_statements(&mut self, block: &Block) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let Some(first) = block.stmts.first() else {
+            return;
+        };
+        self.type_error(
+            "a `par` block's branches are comma-separated expressions, not statements \
+             (core-semantics.md §11.1): write `let (a, b) = par { f(), g() };` and use \
+             `a` and `b` after it, or `par { f(), g() };` when the values are not needed"
+                .to_string(),
+            first.span,
+            TypeErrorKind::RemovedInCore,
+        );
+    }
+
     /// The parameter of an iterator adaptor's closure that receives the
     /// item: the first, or `fold`'s second (after the accumulator).
     pub(super) fn adaptor_item_param(method: &str) -> Option<usize> {
@@ -2599,6 +2621,7 @@ impl<'a> super::TypeChecker<'a> {
         // the enclosing scope as in the synth arm.
         if let ExprKind::Par(block) = &expr.kind {
             if let Some(tail) = &block.final_expr {
+                self.core_reject_par_statements(block);
                 self.check_cross_task_safe_par_block(block, &expr.span);
                 for stmt in &block.stmts {
                     self.check_stmt(stmt);
@@ -9624,6 +9647,7 @@ impl<'a> super::TypeChecker<'a> {
 
             ExprKind::Seq(block) => self.infer_block(block),
             ExprKind::Par(block) => {
+                self.core_reject_par_statements(block);
                 // Phase 6 line 170 slice 3b — cross-task-safe boundary
                 // check: every binding the parallel branches read from the
                 // enclosing scope crosses a task boundary. Run before the

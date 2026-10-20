@@ -1,11 +1,11 @@
 
 fn main() {
     par {
-        println(1);
-        println(2);
-    }
+        println(1),
+        println(2),
+    };
     par {
-        println(3);
-        println(4);
-    }
+        println(3),
+        println(4),
+    };
 }

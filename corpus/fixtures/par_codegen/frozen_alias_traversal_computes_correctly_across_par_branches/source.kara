@@ -11,9 +11,11 @@ fn sum(n: frozen Node) -> i64 {
     s
 }
 fn driver(root: frozen Node) -> i64 {
-    let (a, b) = par {
-        let a = sum(root);
-        let b = sum(root);
+    let (a, b) = {
+        let (a, b) = par {
+        sum(root),
+        sum(root),
+    };
         (a, b)
     };
     a + b

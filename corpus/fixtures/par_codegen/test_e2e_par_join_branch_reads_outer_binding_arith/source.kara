@@ -1,9 +1,11 @@
 
 fn main() {
     let base = 100;
-    let total = par {
-        let x = base + 1;
-        let y = base + 2;
+    let total = {
+        let (x, y) = par {
+        base + 1,
+        base + 2,
+    };
         x + y
     };
     println(total);

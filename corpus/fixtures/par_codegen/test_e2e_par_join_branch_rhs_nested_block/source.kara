@@ -1,8 +1,10 @@
 
 fn main() {
-    let t = par {
-        let x = 1;
-        let y = { let z = 10; z + 1 };
+    let t = {
+        let (x, y) = par {
+        1,
+        { let z = 10; z + 1 },
+    };
         x + y
     };
     println(t);

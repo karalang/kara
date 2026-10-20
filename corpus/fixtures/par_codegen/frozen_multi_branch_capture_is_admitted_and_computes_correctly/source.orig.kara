@@ -1,0 +1,15 @@
+
+shared struct N { val: i64 }
+fn worker(n: frozen N, k: i64) -> i64 { n.val + k }
+fn driver(n: frozen N) -> i64 {
+    let (a, b) = par {
+        let a = worker(n, 1);
+        let b = worker(n, 2);
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let g = N { val: 7 };
+    println(driver(g));
+}

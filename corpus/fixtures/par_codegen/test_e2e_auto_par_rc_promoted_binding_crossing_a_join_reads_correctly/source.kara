@@ -22,10 +22,10 @@ fn nofanout() -> i64 { let t = mkp(9); let mut i = 0i64; let mut acc = 0i64;
   while i < 3i64 { acc = acc + t.take(); i = i + 1; }
   return acc; }
 fn explicitpar() -> i64 {
-  par {
-    let t = mkp(9);
-    let k = seed() + 41i64;
-  }
+  let (t, k) = par {
+      mkp(9),
+      seed() + 41i64,
+  };
   let mut i = 0i64;
   while i < 3i64 { takep(t); i = i + 1; }
   return k; }

@@ -7,7 +7,7 @@ impl Counter {
 fn main() {
     let c = Counter { n: 1 };
     par {
-        let _ = c.effectful();
-        let _ = c.effectful();
-    }
+        c.effectful(),
+        c.effectful(),
+    };
 }

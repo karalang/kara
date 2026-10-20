@@ -10550,3 +10550,35 @@ fn a_primitive_constant_is_checked_and_floats_have_pi() {
         "true true true true\n",
     );
 }
+
+/// B-2026-10-20-17: a `par` block's branches are comma-separated expressions
+/// (core-semantics.md §11.1); the statement form is refused, and the branch
+/// form it rewrites to runs.
+#[test]
+fn a_par_block_takes_branches_not_statements() {
+    rejected(
+        "par-statement-form",
+        "fn work(n: i64) -> String { f\"v{n}\" }\n\
+         fn main() {\n\
+             par {\n\
+                 let a = work(7);\n\
+                 let b = work(8);\n\
+             }\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+        "a `par` block's branches are comma-separated expressions, not statements",
+    );
+    accepted_and_runs(
+        "par-branch-form",
+        "fn work(n: i64) -> String { f\"v{n}\" }\n\
+         fn main() {\n\
+             let (a, b) = par {\n\
+                 work(7),\n\
+                 work(8),\n\
+             };\n\
+             let one = par { work(9) };\n\
+             println(f\"{a} {b} {one}\");\n\
+         }\n",
+        "v7 v8 v9\n",
+    );
+}

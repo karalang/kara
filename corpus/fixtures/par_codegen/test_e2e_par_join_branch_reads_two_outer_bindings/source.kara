@@ -2,9 +2,11 @@
 fn main() {
     let a = 10;
     let b = 20;
-    let total = par {
-        let x = a + b;
-        let y = a * b;
+    let total = {
+        let (x, y) = par {
+        a + b,
+        a * b,
+    };
         x + y
     };
     println(total);

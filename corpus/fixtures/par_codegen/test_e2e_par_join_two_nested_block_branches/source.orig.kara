@@ -1,0 +1,9 @@
+
+fn main() {
+    let t = par {
+        let x = { let p = 3; p + 4 };
+        let y = { let q = 5; q + 6 };
+        x + y
+    };
+    println(t);
+}

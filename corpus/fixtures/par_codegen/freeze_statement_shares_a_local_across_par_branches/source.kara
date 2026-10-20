@@ -11,9 +11,11 @@ fn main() {
     let mid = Node { val: 2, kids: [l1, l2] };
     let root = Node { val: 1, kids: [mid] };
     let g = freeze root;
-    let (a, b) = par {
-        let a = sum(g);
-        let b = sum(g);
+    let (a, b) = {
+        let (a, b) = par {
+        sum(g),
+        sum(g),
+    };
         (a, b)
     };
     println(a + b);

@@ -1,0 +1,10 @@
+
+fn main() {
+    let base = 9.0;
+    let total = par {
+        let a = base.sqrt();
+        let b = base + 1.0;
+        a + b
+    };
+    println(total);
+}

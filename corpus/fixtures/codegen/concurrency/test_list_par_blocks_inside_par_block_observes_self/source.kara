@@ -9,7 +9,7 @@ fn other_branch() {
 }
 fn main() {
     par {
-        check_par_blocks();
-        other_branch();
-    }
+        check_par_blocks(),
+        other_branch(),
+    };
 }

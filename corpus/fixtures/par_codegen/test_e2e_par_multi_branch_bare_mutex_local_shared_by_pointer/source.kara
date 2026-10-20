@@ -1,10 +1,12 @@
 
 fn main() {
     let m = Mutex.new(0);
-    par {
-        lock m { m = m + 1; }
-        lock m { m = m + 1; }
-        lock m { m = m + 1; }
+    {
+        par {
+        lock m { m = m + 1; },
+        lock m { m = m + 1; },
+        lock m { m = m + 1; },
+    };
         lock m { m = m + 1; }
     }
     lock m { print(m); }

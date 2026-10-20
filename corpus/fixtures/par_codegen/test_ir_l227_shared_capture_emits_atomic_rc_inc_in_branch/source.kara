@@ -4,7 +4,7 @@ shared struct Counter { val: i64 }
 fn main() {
     let c = Counter { val: 42 };
     par {
-        println(c.val);
-        println(99);
-    }
+        println(c.val),
+        println(99),
+    };
 }

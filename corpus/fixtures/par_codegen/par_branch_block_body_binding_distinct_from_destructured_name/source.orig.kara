@@ -1,0 +1,9 @@
+
+fn main() {
+    let (outer_left, outer_right) = par {
+        let branch_a = { let mut va: Map[i64, i64] = Map.new(); let _ = va.insert(1, 2); va.len() };
+        let branch_b = { let s: String = "abcd".to_string(); s.len() };
+        (branch_a, branch_b)
+    };
+    println(outer_left + outer_right);
+}

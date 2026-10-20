@@ -119,27 +119,29 @@ fn main() {
 
     // K=500 split 18-way: 28 × 14 + 27 × 4 = 500.
     let (s1, s2, s3, s4, s5, s6, s7, s8, s9,
-         s10, s11, s12, s13, s14, s15, s16, s17, s18) = par {
-        let s1 = sum_clones(g, 28);
-        let s2 = sum_clones(g, 28);
-        let s3 = sum_clones(g, 28);
-        let s4 = sum_clones(g, 28);
-        let s5 = sum_clones(g, 28);
-        let s6 = sum_clones(g, 28);
-        let s7 = sum_clones(g, 28);
-        let s8 = sum_clones(g, 28);
-        let s9 = sum_clones(g, 28);
-        let s10 = sum_clones(g, 28);
-        let s11 = sum_clones(g, 28);
-        let s12 = sum_clones(g, 28);
-        let s13 = sum_clones(g, 28);
-        let s14 = sum_clones(g, 28);
-        let s15 = sum_clones(g, 27);
-        let s16 = sum_clones(g, 27);
-        let s17 = sum_clones(g, 27);
-        let s18 = sum_clones(g, 27);
-        (s1, s2, s3, s4, s5, s6, s7, s8, s9,
+         s10, s11, s12, s13, s14, s15, s16, s17, s18) = {
+             let (s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18) = par {
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 28),
+             sum_clones(g, 27),
+             sum_clones(g, 27),
+             sum_clones(g, 27),
+             sum_clones(g, 27),
+         };
+             (s1, s2, s3, s4, s5, s6, s7, s8, s9,
          s10, s11, s12, s13, s14, s15, s16, s17, s18)
-    };
+         };
     println(s1+s2+s3+s4+s5+s6+s7+s8+s9+s10+s11+s12+s13+s14+s15+s16+s17+s18);
 }

@@ -18,9 +18,11 @@ fn main() {
     // precisely because its type IS deeply immutable and needs no proof.
     let root = build(7, seed);
     let g = freeze root;
-    let (a, b) = par {
-        let a = g.val + g.tag.len() + g.kids.len();
-        let b = g.val + g.tag.len() + g.kids.len();
+    let (a, b) = {
+        let (a, b) = par {
+        g.val + g.tag.len() + g.kids.len(),
+        g.val + g.tag.len() + g.kids.len(),
+    };
         (a, b)
     };
     println(a + b);

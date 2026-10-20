@@ -21,9 +21,11 @@ fn build(depth: i64, seed: i64) -> Node {
 }
 
 fn driver(root: frozen Node) -> i64 {
-    let (a, b) = par {
-        let a = root.total();
-        let b = root.total();
+    let (a, b) = {
+        let (a, b) = par {
+        root.total(),
+        root.total(),
+    };
         (a, b)
     };
     return a + b;

@@ -1,0 +1,18 @@
+
+par struct Counter { total: Mutex[i64] }
+impl Counter {
+    fn inc(ref self) { lock self.total t { t = t + 1; } }
+    fn get(ref self) -> i64 { lock self.total t { t } }
+}
+fn bump(c: Counter, n: i64) {
+    let mut i = 0;
+    while i < n { c.inc(); i = i + 1; }
+}
+fn main() {
+    let c = Counter { total: Mutex.new(0) };
+    par {
+        bump(c, 50000);
+        bump(c, 50000);
+    }
+    println(c.get());
+}

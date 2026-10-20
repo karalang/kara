@@ -13,9 +13,9 @@ fn main() {
     println(r);
 
     par {
-        println("pa");
-        println("pb");
-    }
+        println("pa"),
+        println("pb"),
+    };
 
     let mut tg = TaskGroup.new();
     tg.spawn(|| worker(1));

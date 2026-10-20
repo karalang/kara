@@ -1,0 +1,37 @@
+
+fn sum_first_half(data: ref Vec[i64]) -> i64 {
+    let mut total = 0i64;
+    let mut i = 0;
+    while i < data.len() / 2 {
+        total = total + data[i];
+        i = i + 1;
+    }
+    total
+}
+fn sum_second_half(data: ref Vec[i64]) -> i64 {
+    let mut total = 0i64;
+    let mut i = data.len() / 2;
+    while i < data.len() {
+        total = total + data[i];
+        i = i + 1;
+    }
+    total
+}
+fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
+    par {
+        let a = sum_first_half(data);
+        let b = sum_second_half(data);
+        (a, b)
+    }
+}
+fn main() {
+    let mut data: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 1000i64 {
+        data.push(i);
+        i = i + 1;
+    }
+    let (a, b) = process_in_parallel(data);
+    println(a);
+    println(b);
+}

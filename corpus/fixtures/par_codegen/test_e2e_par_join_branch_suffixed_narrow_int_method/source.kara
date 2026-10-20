@@ -1,9 +1,11 @@
 
 fn main() {
     let base: i32 = 7i32;
-    let total = par {
-        let x = base.abs();
-        let y = base + 100i32;
+    let total = {
+        let (x, y) = par {
+        base.abs(),
+        base + 100i32,
+    };
         x + y
     };
     println(total);

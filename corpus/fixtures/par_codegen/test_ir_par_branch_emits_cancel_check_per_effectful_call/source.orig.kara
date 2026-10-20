@@ -1,0 +1,10 @@
+
+effect resource Log;
+fn helper(n: i64) -> i64 writes(Log) { n + 1 }
+fn main() {
+    par {
+        let _ = helper(1_i64);
+        let _ = helper(2_i64);
+        let _ = helper(3_i64);
+    }
+}

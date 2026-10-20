@@ -6,9 +6,9 @@ impl Counter {
 fn read(c: Counter) -> i64 { c.get() }
 fn main() {
     let c = Counter { count: Atomic.new(5) };
-    par {
-        let _a = read(c);
-        let _b = read(c);
-    }
+    let (_a, _b) = par {
+        read(c),
+        read(c),
+    };
     println(c.get());
 }

@@ -1,0 +1,11 @@
+
+fn double(x: i64) -> i64 { x * 2 }
+fn main() {
+    let a: i64 = 10;
+    let b: i64 = 20;
+    par {
+        let ra = double(a);
+        let rb = double(b);
+    }
+    println(ra + rb);
+}

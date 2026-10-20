@@ -20,11 +20,13 @@ fn compute_b(n: i64) -> i64 {
 fn main() {
     let n: i64 = 10;
     let m: i64 = 5;
-    let total = par {
-        let a = compute_a(n);
-        let b = compute_b(n);
-        let c = compute_a(m);
-        let d = compute_b(m);
+    let total = {
+        let (a, b, c, d) = par {
+        compute_a(n),
+        compute_b(n),
+        compute_a(m),
+        compute_b(m),
+    };
         a + b + c + d
     };
     println(total);

@@ -1,0 +1,9 @@
+
+fn main() {
+    let c = Atomic.new(0);
+    par {
+        c.fetch_add(1);
+        c.fetch_add(1);
+    }
+    print(c.load());
+}

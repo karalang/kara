@@ -1,0 +1,12 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn compute(ref self) -> i64 { self.n + 1 }
+}
+fn main() {
+    let c = Counter { n: 1 };
+    par {
+        let _ = c.compute();
+        let _ = c.compute();
+    }
+}

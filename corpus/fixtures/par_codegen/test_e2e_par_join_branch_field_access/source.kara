@@ -2,9 +2,11 @@
 struct Point { x: i64, y: i64 }
 fn main() {
     let p = Point { x: 10, y: 20 };
-    let total = par {
-        let a = p.x;
-        let b = 5;
+    let total = {
+        let (a, b) = par {
+        p.x,
+        5,
+    };
         a + b
     };
     println(total);

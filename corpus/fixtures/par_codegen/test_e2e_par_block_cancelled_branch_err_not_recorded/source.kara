@@ -15,12 +15,14 @@ fn would_err(v: i64) -> Result[i64, i64] {
 
 fn main() {
     let g = Gate { v: Atomic.new(0) };
-    let r: Result[i64, i64] = par {
-        let r1: Result[i64, i64] = {
+    let r: Result[i64, i64] = {
+        let (r1, r2): (Result[i64, i64], Result[i64, i64]) = par {
+        {
             while not g.is_open() { }
             would_err(11_i64)
-        };
-        let r2: Result[i64, i64] = fast_err(33_i64);
+        },
+        fast_err(33_i64),
+    };
         Ok(7_i64)
     };
     match r {

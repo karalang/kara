@@ -1,0 +1,145 @@
+// Parallel-K variant — same per-clone BFS as clone_bfs.kara, but split the
+// K=500 outer clones into 18 par-block branches so each runs on a separate
+// thread. Calibrated for M5 Pro (6 performance + 12 efficiency = 18 cores);
+// 18-way reaches every core. A sweep at K=500 / N ∈ {6, 8, 12, 18, 24} on
+// this machine shows N=18 as the wall-clock optimum: par-24 slightly
+// regresses because oversubscription costs more than the marginal core
+// utilization saves.
+//
+// 500 doesn't divide cleanly by 18 — 14 branches do 28 clones each (392
+// total), the remaining 4 do 27 (108 total), summing to 500. The 4% load
+// imbalance is small enough that the longest branch still determines
+// wall-clock.
+//
+// THIS FILE DID NOT COMPILE UNTIL 2026-08-07, AND THE HEADER THAT SAID SO IS
+// NOW HISTORY. A `shared struct` reachable from more than one `par {}` branch
+// was a compile error by design (design.md § Rc vs Arc): the reason is refcount
+// traffic, not mutation — `emit_rc_inc` is a plain load/add/store, so even pure
+// READS race. That gate is still there and still correct. What changed is that
+// there is now a way to hand a branch a handle that does NO counting at all, so
+// there is nothing left to race:
+//
+//   * `frozen T` (kara B-2026-08-01-33 mechanism 3) is a non-owning,
+//     NON-COUNTING parameter mode for a deeply-immutable `shared` value. It
+//     lowers to a borrow, so the callee emits no retain/release; an escape
+//     check (E0511) is what pays for that by refusing to let the handle
+//     outlive its owner.
+//   * `let g = freeze root;` is the freeze site. It requires the source to be
+//     UNIQUELY bound, which is why `nodes` is built inside `build_graph` below
+//     and dies with it — `let root = nodes[0]` with `nodes` still live is
+//     refused, correctly, because `nodes` really does hold every node.
+//   * A local `Vec[Node]` worklist may hold those non-counting handles
+//     (B-2026-08-07-23), which is what lets the traversal be ITERATIVE.
+//
+// TWO DIFFERENCES FROM clone_bfs.kara, BOTH DELIBERATE AND NEITHER A DODGE:
+//
+//   1. The worklist is a `Vec` walked with a head cursor rather than a
+//      `VecDeque` popped from the front. This is what the C mirror does
+//      (`Node **queue` with `q_head`/`q_tail`, `while (q_head < q_tail)`), so
+//      it moves the Kāra lane TOWARD algorithm parity, not away from it. It is
+//      also what `frozen` supports: `pop_front` returns a VALUE rather than a
+//      place, so a non-counting handle coming back through it has nothing the
+//      escape checker can track. Measured as neutral to the sequential lane —
+//      see § Runtime — par lane in ../README.md.
+//   2. The graph is built in `build_graph`, purely so the freeze source is
+//      uniquely bound. Same graph, same generator, same shape.
+//
+// Everything else — the BFS, the `visited` map of clones, the `.iter()` walk,
+// the sink — is clone_bfs.kara verbatim. Note that `visited` holds CLONES,
+// which are ordinary owned nodes this branch mutates through; it is not frozen
+// and needs nothing from the mechanism. Conflating it with the queue is what
+// made an earlier reading of this kata's blocker wrong for a day.
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn clone_graph(root: frozen Node) -> Node {
+    let mut visited: Map[i64, Node] = Map.new();
+    let mut queue: Vec[Node] = Vec.new();
+
+    let root_clone = Node { val: root.val, neighbors: Vec.new() };
+    let _ = visited.insert(root.val, root_clone);
+    queue.push(root);
+
+    let mut head: u64 = 0;
+    while head < queue.len() as u64 {
+        let curr = queue[head];
+        head = head + 1;
+        let curr_clone = visited.get(curr.val).unwrap();
+        for nb in curr.neighbors.iter() {
+            if let None = visited.get(nb.val) {
+                let fresh = Node { val: nb.val, neighbors: Vec.new() };
+                let _ = visited.insert(nb.val, fresh);
+                queue.push(nb);
+            }
+            let nb_clone = visited.get(nb.val).unwrap();
+            curr_clone.neighbors.push(nb_clone);
+        }
+    }
+
+    // Return the held `root_clone` alias directly (same shape as
+    // clone_bfs.kara — see the note there; was the bug-7 hang).
+    root_clone
+}
+
+fn sum_clones(root: frozen Node, count: i64) -> i64 {
+    let mut s: i64 = 0;
+    for _ in 0..count {
+        let c = clone_graph(root);
+        s = s + c.val;
+    }
+    s
+}
+
+// Same 10-regular ring generator as clone_bfs.kara's `main`. It lives in its
+// own function so `nodes` — which holds a handle to every node, including the
+// root — dies here, leaving `root` the only live name for the instance. That
+// is the freeze site's uniqueness precondition, and it is a real one: with
+// `nodes` still in scope there genuinely are other live handles.
+fn build_graph(n: i64, half_deg: i64) -> Node {
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: i + 1, neighbors: Vec.new() });
+    }
+    for i in 0..n {
+        for d in 1..(half_deg + 1) {
+            let j = (i + d) % n;
+            nodes[i as u64].neighbors.push(nodes[j as u64]);
+            nodes[j as u64].neighbors.push(nodes[i as u64]);
+        }
+    }
+    return nodes[0];
+}
+
+fn main() {
+    let root = build_graph(2000, 5);
+    let g = freeze root;
+
+    // K=500 split 18-way: 28 × 14 + 27 × 4 = 500.
+    let (s1, s2, s3, s4, s5, s6, s7, s8, s9,
+         s10, s11, s12, s13, s14, s15, s16, s17, s18) = par {
+        let s1 = sum_clones(g, 28);
+        let s2 = sum_clones(g, 28);
+        let s3 = sum_clones(g, 28);
+        let s4 = sum_clones(g, 28);
+        let s5 = sum_clones(g, 28);
+        let s6 = sum_clones(g, 28);
+        let s7 = sum_clones(g, 28);
+        let s8 = sum_clones(g, 28);
+        let s9 = sum_clones(g, 28);
+        let s10 = sum_clones(g, 28);
+        let s11 = sum_clones(g, 28);
+        let s12 = sum_clones(g, 28);
+        let s13 = sum_clones(g, 28);
+        let s14 = sum_clones(g, 28);
+        let s15 = sum_clones(g, 27);
+        let s16 = sum_clones(g, 27);
+        let s17 = sum_clones(g, 27);
+        let s18 = sum_clones(g, 27);
+        (s1, s2, s3, s4, s5, s6, s7, s8, s9,
+         s10, s11, s12, s13, s14, s15, s16, s17, s18)
+    };
+    println(s1+s2+s3+s4+s5+s6+s7+s8+s9+s10+s11+s12+s13+s14+s15+s16+s17+s18);
+}

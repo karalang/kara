@@ -4,12 +4,12 @@ fn b() { println(2); }
 fn c() { println(3); }
 fn main() {
     par {
-        a();
-        b();
-    }
+        a(),
+        b(),
+    };
     par {
-        a();
-        b();
-        c();
-    }
+        a(),
+        b(),
+        c(),
+    };
 }

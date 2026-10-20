@@ -1,0 +1,11 @@
+
+par struct Counter { val: i64 }
+fn read(c: Counter) -> i64 { c.val }
+fn main() {
+    let c = Counter { val: 7 };
+    par {
+        let _a = read(c);
+        let _b = read(c);
+    }
+    println(c.val);
+}

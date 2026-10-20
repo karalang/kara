@@ -14,8 +14,8 @@ fn bump_many(c: Counter, n: i64) {
 fn main() {
     let c = Counter { count: Atomic.new(0) };
     par {
-        bump_many(c, 50000);
-        bump_many(c, 50000);
-    }
+        bump_many(c, 50000),
+        bump_many(c, 50000),
+    };
     println(c.get());
 }

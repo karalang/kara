@@ -1,6 +1,6 @@
 fn main() {
     par {
-        let _ = dbg(1);
-        let _ = dbg(2);
-    }
+        dbg(1),
+        dbg(2),
+    };
 }

@@ -6,7 +6,7 @@ impl Counter {
 fn main() {
     let c = Counter { n: 1 };
     par {
-        let _ = c.compute();
-        let _ = c.compute();
-    }
+        c.compute(),
+        c.compute(),
+    };
 }

@@ -69,9 +69,11 @@ fn main() {
     let expected = checksum(build(seed));
     let root = build(seed);
     let g = freeze root;
-    let (x, y) = par {
-        let x = clone_and_sum(g, 6);
-        let y = clone_and_sum(g, 6);
+    let (x, y) = {
+        let (x, y) = par {
+        clone_and_sum(g, 6),
+        clone_and_sum(g, 6),
+    };
         (x, y)
     };
     if x == expected { if y == expected { println("match"); } else { println("y"); } }

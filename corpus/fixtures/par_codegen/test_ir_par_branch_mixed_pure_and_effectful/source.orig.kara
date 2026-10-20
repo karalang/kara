@@ -1,0 +1,12 @@
+
+effect resource Log;
+fn pure_helper(n: i64) -> i64 { n + 1 }
+fn effectful_helper(n: i64) -> i64 writes(Log) { n + 1 }
+fn main() {
+    par {
+        let _ = pure_helper(1_i64);
+        let _ = effectful_helper(2_i64);
+        let _ = pure_helper(3_i64);
+        let _ = effectful_helper(4_i64);
+    }
+}

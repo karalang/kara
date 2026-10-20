@@ -26,9 +26,11 @@ fn main() {
     let mut w: i64 = 0;
     if root.tag.contains("runtime-heap") { w = 1; }
     let g = freeze root;
-    let (a, b) = par {
-        let a = sum(g);
-        let b = sum(g);
+    let (a, b) = {
+        let (a, b) = par {
+        sum(g),
+        sum(g),
+    };
         (a, b)
     };
     println(a + b + w);

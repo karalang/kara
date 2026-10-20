@@ -1,0 +1,7 @@
+
+fn main() {
+    par {
+        println(100);
+        println(200);
+    }
+}

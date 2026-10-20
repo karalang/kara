@@ -7,9 +7,11 @@ fn build(n: i64) -> Vec[Vec[String]] {
     outer
 }
 fn main() {
-    let total = par {
-        let x = build(1);
-        let y = build(2);
+    let total = {
+        let (x, y) = par {
+        build(1),
+        build(2),
+    };
         x.len() + y.len()
     };
     println(total);
