@@ -175,7 +175,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-23 | 2026-10-20 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` stop with "a type that failed to check is not lowered yet"; and floats have no `PI`, `TAU` or `E` at all | — |
 | B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
 | B-2026-10-20-28 | 2026-10-20 | effect | low | `#[allow(mutual_recursion_note)]` silences the mutual-recursion note on free functions but not on impl methods: two mutually recursive methods each carrying the attribute still print the note, whose own text says to suppress it with that attribute | — |
-| B-2026-10-20-29 | 2026-10-20 | interp | medium | MIR interpreter: `Response.bytes()` on a client response whose body is not UTF-8 returns the bytes of its lossy text (each bad byte as U+FFFD, 8 bytes for a 4-byte body) where mir-llvm returns the body as it came | — |
 
 ### Relocated
 
@@ -4281,6 +4280,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-24 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) =… | d9bd46cacb |
 | B-2026-10-20-25 | parser | low | The struct-pattern field shorthand `P { ref name, ref n }` does not parse ("'ref' is a reserved keyword and cannot be used as an identifier"), though… | 4dd4f51777 |
 | B-2026-10-20-27 | parser | low | A Rust array type `[Str; 16]` / `[i64; 3]` gets only "Expected type, found LeftBracket" with no pointer to Kāra's `Array[Str, 16]`, though the parser… | 340d9bec5b |
+| B-2026-10-20-29 | interp | medium | MIR interpreter: `Response.bytes()` on a client response whose body is not UTF-8 returns the bytes of its lossy text (each bad byte as U+FFFD, 8 byte… | 51f0e57b3a |
 
 </details>
 
