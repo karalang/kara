@@ -1,0 +1,1638 @@
+# compile_path
+'/' -> '^/$' '/' []
+'/books' -> '^/books$' '/books' []
+'/books/{book_id:int}' -> '^/books/(?P<book_id>[0-9]+)$' '/books/{book_id}' [book_id=IntegerConvertor]
+'/books/{book_id:int}/price/{currency}' -> '^/books/(?P<book_id>[0-9]+)/price/(?P<currency>[^/]+)$' '/books/{book_id}/price/{currency}' [book_id=IntegerConvertor, currency=StringConvertor]
+'/users/{username}' -> '^/users/(?P<username>[^/]+)$' '/users/{username}' [username=StringConvertor]
+'/users/{username:str}/repos/{repo}' -> '^/users/(?P<username>[^/]+)/repos/(?P<repo>[^/]+)$' '/users/{username}/repos/{repo}' [username=StringConvertor, repo=StringConvertor]
+'/files/{path:path}' -> '^/files/(?P<path>.*)$' '/files/{path}' [path=PathConvertor]
+'/rates/{rate:float}' -> '^/rates/(?P<rate>[0-9]+(\\.[0-9]+)?)$' '/rates/{rate}' [rate=FloatConvertor]
+'/orders/{order_id:uuid}' -> '^/orders/(?P<order_id>[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12})$' '/orders/{order_id}' [order_id=UUIDConvertor]
+'/static/{path:path}' -> '^/static/(?P<path>.*)$' '/static/{path}' [path=PathConvertor]
+'/a.b/c+d/{x}' -> '^/a\\.b/c\\+d/(?P<x>[^/]+)$' '/a.b/c+d/{x}' [x=StringConvertor]
+'/v1.0/(legacy)/{item}' -> '^/v1\\.0/\\(legacy\\)/(?P<item>[^/]+)$' '/v1.0/(legacy)/{item}' [item=StringConvertor]
+'/price/$/{amount:float}' -> '^/price/\\$/(?P<amount>[0-9]+(\\.[0-9]+)?)$' '/price/$/{amount}' [amount=FloatConvertor]
+'/tilde~/{x}#frag' -> '^/tilde\\~/(?P<x>[^/]+)\\#frag$' '/tilde~/{x}#frag' [x=StringConvertor]
+'/{a}{b}' -> '^/(?P<a>[^/]+)(?P<b>[^/]+)$' '/{a}{b}' [a=StringConvertor, b=StringConvertor]
+'/{a}-{b:int}-{c}' -> '^/(?P<a>[^/]+)\\-(?P<b>[0-9]+)\\-(?P<c>[^/]+)$' '/{a}-{b}-{c}' [a=StringConvertor, b=IntegerConvertor, c=StringConvertor]
+'/{x}/{x}' -> ! ValueError: Duplicated param name x at path /{x}/{x}
+'/{x}/{y}/{x}/{y}' -> ! ValueError: Duplicated param names x, y at path /{x}/{y}/{x}/{y}
+'/{x:int}/{x:float}' -> ! ValueError: Duplicated param name x at path /{x:int}/{x:float}
+'/{name:slug}' -> ! AssertionError: Unknown path convertor 'slug'
+'/{name:Int}' -> ! AssertionError: Unknown path convertor 'Int'
+'/{1bad}/{good}' -> '^/\\{1bad\\}/(?P<good>[^/]+)$' '/{1bad}/{good}' [good=StringConvertor]
+'/{bad-name}' -> '^/\\{bad\\-name\\}$' '/{bad-name}' []
+'/{:int}' -> '^/\\{:int\\}$' '/{:int}' []
+'/{_private}/{CamelCase9}' -> '^/(?P<_private>[^/]+)/(?P<CamelCase9>[^/]+)$' '/{_private}/{CamelCase9}' [_private=StringConvertor, CamelCase9=StringConvertor]
+'/{a:path}/{b:path}' -> '^/(?P<a>.*)/(?P<b>.*)$' '/{a}/{b}' [a=PathConvertor, b=PathConvertor]
+'/space here/{x}' -> '^/space\\ here/(?P<x>[^/]+)$' '/space here/{x}' [x=StringConvertor]
+'/café/{x}' -> '^/café/(?P<x>[^/]+)$' '/café/{x}' [x=StringConvertor]
+'/brace{/{x}' -> '^/brace\\{/(?P<x>[^/]+)$' '/brace{/{x}' [x=StringConvertor]
+'/brace}/{x}' -> '^/brace\\}/(?P<x>[^/]+)$' '/brace}/{x}' [x=StringConvertor]
+'{subdomain}.shop.example' -> '^(?P<subdomain>[^/]+)\\.shop\\.example$' '{subdomain}.shop.example' [subdomain=StringConvertor]
+'{subdomain}.shop.example:8080' -> '^(?P<subdomain>[^/]+)\\.shop\\.example$' '{subdomain}.shop.example:8080' [subdomain=StringConvertor]
+'api.shop.example' -> '^api\\.shop\\.example$' 'api.shop.example' []
+'{a}.{b}.example' -> '^(?P<a>[^/]+)\\.(?P<b>[^/]+)\\.example$' '{a}.{b}.example' [a=StringConvertor, b=StringConvertor]
+'{tenant:int}.example' -> '^(?P<tenant>[0-9]+)\\.example$' '{tenant}.example' [tenant=IntegerConvertor]
+'localhost:{port}' -> '^localhost:(?P<port>[^/]+)$' 'localhost:{port}' [port=StringConvertor]
+'' -> '^$' '' []
+'/{x:str}' -> '^/(?P<x>[^/]+)$' '/{x}' [x=StringConvertor]
+'/q?{x}' -> '^/q\\?(?P<x>[^/]+)$' '/q?{x}' [x=StringConvertor]
+'/*.{ext}' -> '^/\\*\\.(?P<ext>[^/]+)$' '/*.{ext}' [ext=StringConvertor]
+# url_path_for
+homepage() -> '/' protocol='http' host=''
+books() -> '/books' protocol='http' host=''
+book(book_id=3) -> '/books/3' protocol='http' host=''
+book(book_id='12') -> '/books/12' protocol='http' host=''
+book(book_id=0) -> '/books/0' protocol='http' host=''
+book(book_id=-1) -> ! AssertionError: Negative integers are not supported
+book(book_id='x') -> ! ValueError: invalid literal for int() with base 10: 'x'
+book(book_id='007') -> '/books/7' protocol='http' host=''
+book() -> ! NoMatchFound: No route exists for name "book" and params "".
+book(book_id=3, extra='y') -> ! NoMatchFound: No route exists for name "book" and params "book_id, extra".
+book(id=3) -> ! NoMatchFound: No route exists for name "book" and params "id".
+update_book(book_id=9) -> '/books/9' protocol='http' host=''
+delete_book(book_id=9) -> '/books/9' protocol='http' host=''
+create_book() -> '/books' protocol='http' host=''
+price(book_id=2, currency='EUR') -> '/books/2/price/EUR' protocol='http' host=''
+price(currency='EUR', book_id=2) -> '/books/2/price/EUR' protocol='http' host=''
+price(book_id=2, currency='a/b') -> ! AssertionError: May not contain path separators
+price(book_id=2, currency='') -> ! AssertionError: Must not be empty
+price(book_id=2, currency=5) -> '/books/2/price/5' protocol='http' host=''
+price(book_id=2, currency='café au lait') -> '/books/2/price/café au lait' protocol='http' host=''
+rate(rate=1.5) -> '/rates/1.5' protocol='http' host=''
+rate(rate=0.1) -> '/rates/0.10000000000000000555' protocol='http' host=''
+rate(rate=0.2) -> '/rates/0.2000000000000000111' protocol='http' host=''
+rate(rate=3.0) -> '/rates/3' protocol='http' host=''
+rate(rate=3) -> '/rates/3' protocol='http' host=''
+rate(rate=0.0) -> '/rates/0' protocol='http' host=''
+rate(rate=1e-07) -> '/rates/0.0000001' protocol='http' host=''
+rate(rate=123456789.125) -> '/rates/123456789.125' protocol='http' host=''
+rate(rate=1e+22) -> '/rates/10000000000000000000000' protocol='http' host=''
+rate(rate=-1.0) -> ! AssertionError: Negative floats are not supported
+rate(rate=-0.0) -> '/rates/-0' protocol='http' host=''
+rate(rate=nan) -> ! AssertionError: Negative floats are not supported
+rate(rate=inf) -> ! AssertionError: Infinite values are not supported
+rate(rate='2.50') -> '/rates/2.5' protocol='http' host=''
+rate(rate='abc') -> ! ValueError: could not convert string to float: 'abc'
+order(order_id='12345678-1234-5678-1234-567812345678') -> '/orders/12345678-1234-5678-1234-567812345678' protocol='http' host=''
+files(path='docs/guide/intro.md') -> '/files/docs/guide/intro.md' protocol='http' host=''
+files(path='') -> '/files/' protocol='http' host=''
+files(path='/etc/passwd') -> '/files//etc/passwd' protocol='http' host=''
+files(path='a b/c?d#e') -> '/files/a b/c?d#e' protocol='http' host=''
+echo() -> '/echo' protocol='http' host=''
+teapot() -> '/teapot' protocol='http' host=''
+admin() -> ! NoMatchFound: No route exists for name "admin" and params "".
+admin(path='/users/7') -> '/admin/users/7' protocol='' host=''
+admin(path='users/7') -> '/admin/users/7' protocol='' host=''
+admin(path='') -> '/admin/' protocol='' host=''
+admin(path='x', extra=1) -> ! NoMatchFound: No route exists for name "admin" and params "path, extra".
+admin:home() -> '/admin/' protocol='http' host=''
+admin:user(uid=7) -> '/admin/users/7' protocol='http' host=''
+admin:user(uid=-7) -> ! AssertionError: Negative integers are not supported
+admin:user() -> ! NoMatchFound: No route exists for name "admin:user" and params "".
+admin:reports() -> '/admin/reports/' protocol='http' host=''
+admin:tools:tool(tool='hammer') -> '/admin/tools/hammer' protocol='http' host=''
+admin:tools(path='saw') -> '/admin/tools/saw' protocol='' host=''
+admin:tools:tool() -> ! NoMatchFound: No route exists for name "admin:tools:tool" and params "".
+admin:nothing() -> ! NoMatchFound: No route exists for name "admin:nothing" and params "".
+admin:() -> ! NoMatchFound: No route exists for name "admin:" and params "".
+home() -> ! NoMatchFound: No route exists for name "home" and params "".
+user(uid=7) -> ! NoMatchFound: No route exists for name "user" and params "uid".
+static(path='css/site.css') -> '/static/css/site.css' protocol='' host=''
+static(path='/css/site.css') -> '/static/css/site.css' protocol='' host=''
+static:anything(path='x') -> ! NoMatchFound: No route exists for name "static:anything" and params "path".
+tenant(path='/stats', tenant='acme') -> '/stats' protocol='' host='acme.shop.example'
+tenant(tenant='acme', path='/') -> '/' protocol='' host='acme.shop.example'
+tenant(path='/') -> '/' protocol='' host='{tenant}.shop.example'
+tenant:home(tenant='acme') -> '/' protocol='http' host='acme.shop.example'
+tenant:stats(tenant='globex') -> '/stats' protocol='http' host='globex.shop.example'
+tenant:stats() -> '/stats' protocol='http' host='{tenant}.shop.example'
+tenant:home(tenant='a/b') -> ! AssertionError: May not contain path separators
+tenant:missing(tenant='acme') -> ! NoMatchFound: No route exists for name "tenant:missing" and params "tenant".
+stock(sku='DUNE-HB') -> '/stock/DUNE-HB' protocol='http' host=''
+cache(key='greeting') -> '/cache/greeting' protocol='http' host=''
+search() -> '/search/' protocol='http' host=''
+missing() -> ! NoMatchFound: No route exists for name "missing" and params "".
+missing(a=1, b='2') -> ! NoMatchFound: No route exists for name "missing" and params "a, b".
+# routes
+Route(path='/', name='homepage', methods=['GET', 'HEAD'])
+Route(path='/books', name='books', methods=['GET', 'HEAD'])
+Route(path='/books', name='create_book', methods=['POST'])
+Route(path='/books/{book_id:int}', name='book', methods=['GET', 'HEAD'])
+Route(path='/books/{book_id:int}', name='update_book', methods=['PATCH', 'PUT'])
+Route(path='/books/{book_id:int}', name='delete_book', methods=['DELETE'])
+Route(path='/books/{book_id:int}/price/{currency}', name='price', methods=['GET', 'HEAD'])
+Route(path='/rates/{rate:float}', name='rate', methods=['GET', 'HEAD'])
+Route(path='/orders/{order_id:uuid}', name='order', methods=['DELETE', 'GET', 'HEAD', 'POST'])
+Route(path='/files/{path:path}', name='files', methods=['GET', 'HEAD'])
+Route(path='/search/', name='search', methods=['GET', 'HEAD'])
+Route(path='/old-catalog', name='old_catalog', methods=['GET', 'HEAD'])
+Route(path='/go', name='go', methods=['GET', 'HEAD'])
+Route(path='/echo', name='echo', methods=['DELETE', 'GET', 'HEAD', 'PATCH', 'POST', 'PUT'])
+Route(path='/login', name='login', methods=['POST'])
+Route(path='/logout', name='logout', methods=['POST'])
+Route(path='/whoami', name='whoami', methods=['GET', 'HEAD'])
+Route(path='/teapot', name='teapot', methods=['BREW', 'GET', 'HEAD', 'POST'])
+Route(path='/boom', name='boom', methods=['GET', 'HEAD'])
+Route(path='/stock/{sku}', name='stock', methods=['GET', 'HEAD'])
+Route(path='/cache/{key}', name='cache', methods=['GET', 'HEAD'])
+# requests
+== 000-home
+> GET '/'
+< 200
+< content-length: 13
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-1
+| 'Bookshop API\n'
+== 001-home-head
+> HEAD '/'
+< 200
+< content-length: 13
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-2
+| 'Bookshop API\n'
+== 002-home-post
+> POST '/'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-3
+| 'Method Not Allowed'
+== 003-home-query
+> GET '/' ?utm_source=mail&utm_campaign=fall
+< 200
+< content-length: 13
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-4
+| 'Bookshop API\n'
+== 004-books
+> GET '/books'
+< 200
+< content-length: 339
+< content-type: application/json
+< x-request-id: req-5
+| '{"total":3,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]},{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}]}'
+== 005-books-slash
+> GET '/books/'
+< 307
+< content-length: 0
+< location: http://bookshop.test/books
+< x-request-id: req-6
+== 006-books-slash-query
+> GET '/books/' ?author=frank%20herbert
+< 307
+< content-length: 0
+< location: http://bookshop.test/books?author=frank%20herbert
+< x-request-id: req-7
+== 007-books-author
+> GET '/books' ?author=Frank+Herbert
+< 200
+< content-length: 111
+< content-type: application/json
+< x-request-id: req-8
+| '{"total":1,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]}]}'
+== 008-books-author-case
+> GET '/books' ?author=URSULA%20K.%20LE%20GUIN
+< 200
+< content-length: 126
+< content-type: application/json
+< x-request-id: req-9
+| '{"total":1,"items":[{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]}]}'
+== 009-books-tag
+> GET '/books' ?tag=classic
+< 200
+< content-length: 234
+< content-type: application/json
+< x-request-id: req-10
+| '{"total":2,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}]}'
+== 010-books-two-tags
+> GET '/books' ?tag=classic&tag=sci-fi
+< 200
+< content-length: 111
+< content-type: application/json
+< x-request-id: req-11
+| '{"total":1,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]}]}'
+== 011-books-no-match
+> GET '/books' ?tag=poetry
+< 200
+< content-length: 22
+< content-type: application/json
+< x-request-id: req-12
+| '{"total":0,"items":[]}'
+== 012-books-limit
+> GET '/books' ?limit=1&offset=1
+< 200
+< content-length: 126
+< content-type: application/json
+< x-request-id: req-13
+| '{"total":3,"items":[{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]}]}'
+== 013-books-limit-spaces
+> GET '/books' ?limit=%202%20
+< 200
+< content-length: 216
+< content-type: application/json
+< x-request-id: req-14
+| '{"total":3,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]}]}'
+== 014-books-limit-plus
+> GET '/books' ?limit=+2
+< 200
+< content-length: 216
+< content-type: application/json
+< x-request-id: req-15
+| '{"total":3,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]}]}'
+== 015-books-limit-underscore
+> GET '/books' ?limit=1_0
+< 200
+< content-length: 339
+< content-type: application/json
+< x-request-id: req-16
+| '{"total":3,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]},{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}]}'
+== 016-books-limit-bad
+> GET '/books' ?limit=ten
+< 400
+< content-length: 33
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-17
+| 'limit and offset must be integers'
+== 017-books-limit-double-underscore
+> GET '/books' ?limit=1__0
+< 400
+< content-length: 33
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-18
+| 'limit and offset must be integers'
+== 018-books-limit-negative
+> GET '/books' ?limit=-1
+< 400
+< content-length: 37
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-19
+| 'limit and offset must not be negative'
+== 019-books-offset-past
+> GET '/books' ?offset=10
+< 200
+< content-length: 22
+< content-type: application/json
+< x-request-id: req-20
+| '{"total":3,"items":[]}'
+== 020-books-blank-param
+> GET '/books' ?author=&tag
+< 200
+< content-length: 22
+< content-type: application/json
+< x-request-id: req-21
+| '{"total":0,"items":[]}'
+== 021-books-last-wins
+> GET '/books' ?author=nobody&author=Frank%20Herbert
+< 200
+< content-length: 111
+< content-type: application/json
+< x-request-id: req-22
+| '{"total":1,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]}]}'
+== 022-books-head
+> HEAD '/books'
+< 200
+< content-length: 339
+< content-type: application/json
+< x-request-id: req-23
+| '{"total":3,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]},{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}]}'
+== 023-books-put
+> PUT '/books'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-24
+| 'Method Not Allowed'
+== 024-books-delete
+> DELETE '/books'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-25
+| 'Method Not Allowed'
+== 025-books-options
+> OPTIONS '/books'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-26
+| 'Method Not Allowed'
+== 026-book-1
+> GET '/books/1'
+< 200
+< content-length: 89
+< content-type: application/json
+< x-request-id: req-27
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]}'
+== 027-book-3
+> GET '/books/3'
+< 200
+< content-length: 122
+< content-type: application/json
+< x-request-id: req-28
+| '{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}'
+== 028-book-leading-zero
+> GET '/books/003'
+< 200
+< content-length: 122
+< content-type: application/json
+< x-request-id: req-29
+| '{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]}'
+== 029-book-missing
+> GET '/books/42'
+< 404
+< content-length: 49
+< content-type: application/json
+< x-request-id: req-30
+| '{"detail":"Book 42 not found","path":"/books/42"}'
+== 030-book-not-int
+> GET '/books/dune'
+< 404
+< content-length: 43
+< content-type: application/json
+< x-request-id: req-31
+| '{"detail":"Not Found","path":"/books/dune"}'
+== 031-book-negative
+> GET '/books/-1'
+< 404
+< content-length: 41
+< content-type: application/json
+< x-request-id: req-32
+| '{"detail":"Not Found","path":"/books/-1"}'
+== 032-book-trailing-slash
+> GET '/books/2/'
+< 307
+< content-length: 0
+< location: http://bookshop.test/books/2
+< x-request-id: req-33
+== 033-book-patch-method
+> TRACE '/books/2'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-34
+| 'Method Not Allowed'
+== 034-book-options
+> OPTIONS '/books/2'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-35
+| 'Method Not Allowed'
+== 035-create
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/4
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-36
+| '{"id":4,"title":"Kindred","author":"Octavia E. Butler","price":11.0,"tags":["sci-fi","historical"]}'
+== 036-create-then-get
+> GET '/books/4'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-37
+| '{"id":4,"title":"Kindred","author":"Octavia E. Butler","price":11.0,"tags":["sci-fi","historical"]}'
+== 037-create-int-price
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/5
+< content-length: 74
+< content-type: application/json
+< x-request-id: req-38
+| '{"id":5,"title":"Piranesi","author":"Susanna Clarke","price":14,"tags":[]}'
+== 038-create-unicode
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/6
+< content-length: 86
+< content-type: application/json
+< x-request-id: req-39
+| '{"id":6,"title":"Étranger","author":"Albert Camus","price":7.25,"tags":["classique"]}'
+== 039-create-raw-unicode
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/7
+< content-length: 110
+< content-type: application/json
+< x-request-id: req-40
+| '{"id":7,"title":"Норвежский лес","author":"Харуки Мураками","price":10.0,"tags":[]}'
+== 040-create-escapes
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/8
+< content-length: 90
+< content-type: application/json
+< x-request-id: req-41
+| '{"id":8,"title":"Tab\\there \\"quoted\\" back\\\\slash/","author":"A\\nB","price":0.1,"tags":[]}'
+== 041-create-duplicate-key
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/9
+< content-length: 61
+< content-type: application/json
+< x-request-id: req-42
+| '{"id":9,"title":"Second","author":"Anon","price":1,"tags":[]}'
+== 042-create-missing
+> POST '/books'
+< 422
+< content-length: 124
+< content-type: application/json
+< x-request-id: req-43
+| '{"errors":["title is required","author is required","price must be a non-negative number","tags must be a list of strings"]}'
+== 043-create-bool-price
+> POST '/books'
+< 422
+< content-length: 50
+< content-type: application/json
+< x-request-id: req-44
+| '{"errors":["price must be a non-negative number"]}'
+== 044-create-null-price
+> POST '/books'
+< 422
+< content-length: 50
+< content-type: application/json
+< x-request-id: req-45
+| '{"errors":["price must be a non-negative number"]}'
+== 045-create-tags-mixed
+> POST '/books'
+< 422
+< content-length: 45
+< content-type: application/json
+< x-request-id: req-46
+| '{"errors":["tags must be a list of strings"]}'
+== 046-create-not-object
+> POST '/books'
+< 422
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-47
+| 'Expected a JSON object'
+== 047-create-string
+> POST '/books'
+< 422
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-48
+| 'Expected a JSON object'
+== 048-create-bad-json
+> POST '/books'
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-49
+| 'Body must be valid JSON'
+== 049-create-trailing-comma
+> POST '/books'
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-50
+| 'Body must be valid JSON'
+== 050-create-empty
+> POST '/books'
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-51
+| 'Body must be valid JSON'
+== 051-create-whitespace
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/10
+< content-length: 64
+< content-type: application/json
+< x-request-id: req-52
+| '{"id":10,"title":"Spaced","author":"Out","price":0.25,"tags":[]}'
+== 052-create-trailing-garbage
+> POST '/books'
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-53
+| 'Body must be valid JSON'
+== 053-create-number-forms
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/11
+< content-length: 58
+< content-type: application/json
+< x-request-id: req-54
+| '{"id":11,"title":"N","author":"M","price":150.0,"tags":[]}'
+== 054-create-big-exp
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/12
+< content-length: 71
+< content-type: application/json
+< x-request-id: req-55
+| '{"id":12,"title":"N","author":"M","price":1234567890.1234567,"tags":[]}'
+== 055-create-leading-zero
+> POST '/books'
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-56
+| 'Body must be valid JSON'
+== 056-create-minus-zero-int
+> POST '/books'
+< 201
+< location: http://bookshop.test/books/13
+< content-length: 54
+< content-type: application/json
+< x-request-id: req-57
+| '{"id":13,"title":"Z","author":"Z","price":0,"tags":[]}'
+== 057-create-nested
+> POST '/books'
+< 422
+< content-length: 35
+< content-type: application/json
+< x-request-id: req-58
+| '{"errors":["unknown field \'meta\'"]}'
+== 058-list-after-creates
+> GET '/books' ?limit=20
+< 200
+< content-length: 1117
+< content-type: application/json
+< x-request-id: req-59
+| '{"total":13,"items":[{"id":1,"title":"Dune","author":"Frank Herbert","price":9.99,"tags":["sci-fi","classic"]},{"id":2,"title":"The Left Hand of Darkness","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]},{"id":3,"title":"Cien años de soledad","author":"Gabriel García Márquez","price":15,"tags":["classic","magic-realism"]},{"id":4,"title":"Kindred","author":"Octavia E. Butler","price":11.0,"tags":["sci-fi","historical"]},{"id":5,"title":"Piranesi","author":"Susanna Clarke","price":14,"tags":[]},{"id":6,"title":"Étranger","author":"Albert Camus","price":7.25,"tags":["classique"]},{"id":7,"title":"Норвежский лес","author":"Харуки Мураками","price":10.0,"tags":[]},{"id":8,"title":"Tab\\there \\"quoted\\" back\\\\slash/","author":"A\\nB","price":0.1,"tags":[]},{"id":9,"title":"Second","author":"Anon","price":1,"tags":[]},{"id":10,"title":"Spaced","author":"Out","price":0.25,"tags":[]},{"id":11,"title":"N","author":"M","price":150.0,"tags":[]},{"id":12,"title":"N","author":"M","price":1234567890.1234567,"tags":[]},{"id":13,"title":"Z","author":"Z","price":0,"tags":[]}]}'
+== 059-update
+> PUT '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-60
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 060-update-patch
+> PATCH '/books/2'
+< 200
+< content-length: 95
+< content-type: application/json
+< x-request-id: req-61
+| '{"id":2,"title":"The Dispossessed","author":"Ursula K. Le Guin","price":12.5,"tags":["sci-fi"]}'
+== 061-update-bad
+> PATCH '/books/2'
+< 422
+< content-length: 71
+< content-type: application/json
+< x-request-id: req-62
+| '{"errors":["author is required","price must be a non-negative number"]}'
+== 062-update-missing
+> PUT '/books/99'
+< 404
+< content-length: 49
+< content-type: application/json
+< x-request-id: req-63
+| '{"detail":"Book 99 not found","path":"/books/99"}'
+== 063-update-not-object
+> PUT '/books/1'
+< 422
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-64
+| 'Expected a JSON object'
+== 064-get-updated
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-65
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 065-delete
+> DELETE '/books/3'
+< 204
+< x-request-id: req-66
+== 066-delete-again
+> DELETE '/books/3'
+< 404
+< content-length: 47
+< content-type: application/json
+< x-request-id: req-67
+| '{"detail":"Book 3 not found","path":"/books/3"}'
+== 067-get-deleted
+> GET '/books/3'
+< 404
+< content-length: 47
+< content-type: application/json
+< x-request-id: req-68
+| '{"detail":"Book 3 not found","path":"/books/3"}'
+== 068-price-eur
+> GET '/books/1/price/eur'
+< 200
+< content-length: 42
+< content-type: application/json
+< x-request-id: req-69
+| '{"book":1,"currency":"EUR","price":9.6508}'
+== 069-price-jpy
+> GET '/books/2/price/JPY'
+< 200
+< content-length: 43
+< content-type: application/json
+< x-request-id: req-70
+| '{"book":2,"currency":"JPY","price":1868.75}'
+== 070-price-unknown
+> GET '/books/1/price/xyz'
+< 400
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-71
+| "Unknown currency 'XYZ'"
+== 071-price-missing-book
+> GET '/books/77/price/USD'
+< 404
+< content-length: 59
+< content-type: application/json
+< x-request-id: req-72
+| '{"detail":"Book 77 not found","path":"/books/77/price/USD"}'
+== 072-price-quote
+> GET "/books/1/price/it's"
+< 400
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-73
+| 'Unknown currency "IT\'S"'
+== 073-rate
+> GET '/rates/1.5'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-74
+| '{"rate":1.5,"double":"http://bookshop.test/rates/3"}'
+== 074-rate-int
+> GET '/rates/2'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-75
+| '{"rate":2.0,"double":"http://bookshop.test/rates/4"}'
+== 075-rate-tenth
+> GET '/rates/0.1'
+< 200
+< content-length: 72
+< content-type: application/json
+< x-request-id: req-76
+| '{"rate":0.1,"double":"http://bookshop.test/rates/0.2000000000000000111"}'
+== 076-rate-long
+> GET '/rates/0.30000000000000004'
+< 200
+< content-length: 89
+< content-type: application/json
+< x-request-id: req-77
+| '{"rate":0.30000000000000004,"double":"http://bookshop.test/rates/0.60000000000000008882"}'
+== 077-rate-trailing-dot
+> GET '/rates/2.'
+< 404
+< content-length: 41
+< content-type: application/json
+< x-request-id: req-78
+| '{"detail":"Not Found","path":"/rates/2."}'
+== 078-rate-exp
+> GET '/rates/1e5'
+< 404
+< content-length: 42
+< content-type: application/json
+< x-request-id: req-79
+| '{"detail":"Not Found","path":"/rates/1e5"}'
+== 079-rate-zeros
+> GET '/rates/000.500'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-80
+| '{"rate":0.5,"double":"http://bookshop.test/rates/1"}'
+== 080-order
+> GET '/orders/12345678-1234-5678-1234-567812345678'
+< 200
+< content-length: 104
+< content-type: application/json
+< x-request-id: req-81
+| '{"order":"12345678-1234-5678-1234-567812345678","hex":"12345678123456781234567812345678","version":null}'
+== 081-order-upper-nodash
+> GET '/orders/ABCDEF0123456789ABCDEF0123456789'
+< 200
+< content-length: 101
+< content-type: application/json
+< x-request-id: req-82
+| '{"order":"abcdef01-2345-6789-abcd-ef0123456789","hex":"abcdef0123456789abcdef0123456789","version":6}'
+== 082-order-mixed-dashes
+> GET '/orders/abcdef01-23456789-abcd-ef0123456789'
+< 200
+< content-length: 101
+< content-type: application/json
+< x-request-id: req-83
+| '{"order":"abcdef01-2345-6789-abcd-ef0123456789","hex":"abcdef0123456789abcdef0123456789","version":6}'
+== 083-order-short
+> GET '/orders/1234'
+< 404
+< content-length: 44
+< content-type: application/json
+< x-request-id: req-84
+| '{"detail":"Not Found","path":"/orders/1234"}'
+== 084-order-delete
+> DELETE '/orders/12345678-1234-5678-1234-567812345678'
+< 204
+< x-order: 12345678-1234-5678-1234-567812345678
+< x-request-id: req-85
+== 085-order-put
+> PUT '/orders/12345678-1234-5678-1234-567812345678'
+< 405
+< allow: GET, HEAD, DELETE, POST
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-86
+| 'Method Not Allowed'
+== 086-order-post
+> POST '/orders/00000000-0000-0000-0000-000000000000'
+< 409
+< content-length: 30
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-87
+| 'The nil order cannot be placed'
+== 087-files
+> GET '/files/docs/guide/intro.md'
+< 200
+< content-length: 38
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-88
+| "file 'docs/guide/intro.md' (19 chars)\n"
+== 088-files-empty
+> GET '/files/'
+< 200
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-89
+| "file '' (0 chars)\n"
+== 089-files-encoded
+> GET '/files/My Documents/résumé.pdf'
+< 200
+< content-length: 44
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-90
+| "file 'My Documents/résumé.pdf' (23 chars)\n"
+== 090-files-encoded-slash
+> GET '/files/a/b'
+< 200
+< content-length: 21
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-91
+| "file 'a/b' (3 chars)\n"
+== 091-files-dots
+> GET '/files/../../etc/passwd'
+< 200
+< content-length: 35
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-92
+| "file '../../etc/passwd' (16 chars)\n"
+== 092-files-no-slash
+> GET '/files'
+< 307
+< content-length: 0
+< location: http://bookshop.test/files/
+< x-request-id: req-93
+== 093-files-question
+> GET '/files/what?.txt'
+< 200
+< content-length: 27
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-94
+| "file 'what?.txt' (9 chars)\n"
+== 094-files-hash
+> GET '/files/notes#draft.txt'
+< 200
+< content-length: 34
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-95
+| "file 'notes#draft.txt' (15 chars)\n"
+== 095-files-bad-utf8
+> GET '/files/��x'
+< 200
+< content-length: 25
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-96
+| "file '��x' (3 chars)\n"
+== 096-search-redirect
+> GET '/search' ?q=dune
+< 307
+< content-length: 0
+< location: http://bookshop.test/search/?q=dune
+< x-request-id: req-97
+== 097-search
+> GET '/search/' ?q=DUNE
+< 200
+< content-length: 28
+< content-type: application/json
+< x-request-id: req-98
+| '{"q":"dune","hits":["Dune"]}'
+== 098-search-empty
+> GET '/search/'
+< 200
+< content-length: 172
+< content-type: application/json
+< x-request-id: req-99
+| '{"q":"","hits":["Dune","The Dispossessed","Kindred","Piranesi","Étranger","Норвежский лес","Tab\\there \\"quoted\\" back\\\\slash/","Second","Spaced","N","N","Z"]}'
+== 099-search-post-redirect
+> POST '/search'
+< 307
+< content-length: 0
+< location: http://bookshop.test/search/
+< x-request-id: req-100
+== 100-old-catalog
+> GET '/old-catalog'
+< 301
+< content-length: 0
+< location: http://bookshop.test/books
+< x-request-id: req-101
+== 101-go
+> GET '/go' ?next=/books/1
+< 303
+< content-length: 0
+< location: /books/1
+< x-request-id: req-102
+== 102-go-unicode
+> GET '/go' ?next=/caf%C3%A9%20menu?x=1%262
+< 303
+< content-length: 0
+< location: /caf%C3%A9%20menu?x=1&2
+< x-request-id: req-103
+== 103-go-absolute
+> GET '/go' ?next=https://evil.example/
+< 400
+< content-length: 25
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-104
+| 'next must be a local path'
+== 104-go-scheme-relative
+> GET '/go' ?next=//evil.example/
+< 400
+< content-length: 25
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-105
+| 'next must be a local path'
+== 105-go-default
+> GET '/go'
+< 303
+< content-length: 0
+< location: /
+< x-request-id: req-106
+== 106-go-quote-chars
+> GET '/go' ?next=/a%22b%3Cc%3E%7Bd%7D%7Ce%5Ef%60g
+< 303
+< content-length: 0
+< location: /a%22b%3Cc%3E%7Bd%7D%7Ce%5Ef%60g
+< x-request-id: req-107
+== 107-go-safe-chars
+> GET '/go' ?next=/x:y@z!$%26%27()*%2B,;=%25zz%5B%5D
+< 303
+< content-length: 0
+< location: /x:y@z!$&'()*+,;=%zz[]
+< x-request-id: req-108
+== 108-redirect-https-host
+> GET '/search'
+< 307
+< content-length: 0
+< location: https://bookshop.test/search/
+< x-request-id: req-109
+== 109-redirect-host-port
+> GET '/search'
+< 307
+< content-length: 0
+< location: http://bookshop.test:8443/search/
+< x-request-id: req-110
+== 110-redirect-bad-host
+> GET '/books/'
+< 307
+< content-length: 0
+< location: http://bookshop.test/books
+< x-request-id: req-111
+== 111-echo
+> GET '/echo' ?a=1&b=two&a=3
+< 200
+< content-length: 323
+< content-type: application/json
+< x-request-id: req-112
+| '{"method":"GET","url":"http://bookshop.test/echo?a=1&b=two&a=3","base_url":"http://bookshop.test/","path":"/echo","query":[["a","1"],["b","two"],["a","3"]],"query_string":"a=1&b=two&a=3","headers":[["host","bookshop.test"],["user-agent","curl/8.5.0"],["accept","*/*"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 112-echo-plus
+> GET '/echo' ?q=a+b%2Bc&empty=&flag
+< 200
+< content-length: 302
+< content-type: application/json
+< x-request-id: req-113
+| '{"method":"GET","url":"http://bookshop.test/echo?q=a+b%2Bc&empty=&flag","base_url":"http://bookshop.test/","path":"/echo","query":[["q","a b+c"],["empty",""],["flag",""]],"query_string":"q=a+b%2Bc&empty=&flag=","headers":[["host","bookshop.test"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 113-echo-unicode-query
+> GET '/echo' ?name=Jos%C3%A9&bad=%E9
+< 200
+< content-length: 301
+< content-type: application/json
+< x-request-id: req-114
+| '{"method":"GET","url":"http://bookshop.test/echo?name=Jos%C3%A9&bad=%E9","base_url":"http://bookshop.test/","path":"/echo","query":[["name","José"],["bad","�"]],"query_string":"name=Jos%C3%A9&bad=%EF%BF%BD","headers":[["host","bookshop.test"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 114-echo-semicolon
+> GET '/echo' ?a=1;b=2
+< 200
+< content-length: 252
+< content-type: application/json
+< x-request-id: req-115
+| '{"method":"GET","url":"http://bookshop.test/echo?a=1;b=2","base_url":"http://bookshop.test/","path":"/echo","query":[["a","1;b=2"]],"query_string":"a=1%3Bb%3D2","headers":[["host","bookshop.test"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 115-echo-post
+> POST '/echo'
+< 200
+< content-length: 286
+< content-type: application/json
+< x-request-id: req-116
+| '{"method":"POST","url":"http://bookshop.test/echo","base_url":"http://bookshop.test/","path":"/echo","query":[],"query_string":"","headers":[["host","bookshop.test"],["content-type","text/plain"],["content-length","11"]],"cookies":{},"client":["203.0.113.9",50123],"body":"hello world"}'
+== 116-echo-dup-headers
+> GET '/echo'
+< 200
+< content-length: 270
+< content-type: application/json
+< x-request-id: req-117
+| '{"method":"GET","url":"http://bookshop.test/echo","base_url":"http://bookshop.test/","path":"/echo","query":[],"query_string":"","headers":[["host","bookshop.test"],["x-tag","one"],["x-tag","two"],["x-tag","three"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 117-echo-cookies
+> GET '/echo'
+< 200
+< content-length: 393
+< content-type: application/json
+< x-request-id: req-118
+| '{"method":"GET","url":"http://bookshop.test/echo","base_url":"http://bookshop.test/","path":"/echo","query":[],"query_string":"","headers":[["host","bookshop.test"],["cookie","session=alice:5; theme=dark;  lang = en ; =blank; novalue; quoted=\\"a\\\\073b\\\\\\"c\\""]],"cookies":{"session":"alice:5","theme":"dark","lang":"en","":"novalue","quoted":"a;b\\"c"},"client":["203.0.113.9",50123],"body":""}'
+== 118-echo-two-cookie-headers
+> GET '/echo'
+< 200
+< content-length: 287
+< content-type: application/json
+< x-request-id: req-119
+| '{"method":"GET","url":"http://bookshop.test/echo","base_url":"http://bookshop.test/","path":"/echo","query":[],"query_string":"","headers":[["host","bookshop.test"],["cookie","a=1; b=2"],["cookie","b=3; c=4"]],"cookies":{"a":"1","b":"3","c":"4"},"client":["203.0.113.9",50123],"body":""}'
+== 119-echo-https
+> GET '/echo'
+< 200
+< content-length: 222
+< content-type: application/json
+< x-request-id: req-120
+| '{"method":"GET","url":"https://bookshop.test/echo","base_url":"https://bookshop.test/","path":"/echo","query":[],"query_string":"","headers":[["host","bookshop.test"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 120-echo-no-host
+> GET '/echo'
+< 400
+< content-length: 19
+< content-type: text/plain; charset=utf-8
+| 'Invalid host header'
+== 121-echo-delete
+> DELETE '/echo' ?id=4
+< 200
+< content-length: 242
+< content-type: application/json
+< x-request-id: req-121
+| '{"method":"DELETE","url":"http://bookshop.test/echo?id=4","base_url":"http://bookshop.test/","path":"/echo","query":[["id","4"]],"query_string":"id=4","headers":[["host","bookshop.test"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 122-echo-options
+> OPTIONS '/echo'
+< 405
+< allow: GET, DELETE, PUT, HEAD, POST, PATCH
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-122
+| 'Method Not Allowed'
+== 123-login
+> POST '/login'
+< 200
+< content-length: 26
+< content-type: application/json
+< set-cookie: session=alice:5; HttpOnly; Max-Age=3600; Path=/; SameSite=lax
+< set-cookie: prefs="theme=dark\073 lang=en"; Path=/books; SameSite=strict; Secure
+< x-request-id: req-123
+| '{"ok":true,"user":"alice"}'
+== 124-login-unicode
+> POST '/login'
+< 200
+< content-length: 35
+< content-type: application/json
+< set-cookie: session="Zo\353 \305nstr\366m:11"; HttpOnly; Max-Age=3600; Path=/; SameSite=lax
+< set-cookie: prefs="theme=dark\073 lang=en"; Path=/books; SameSite=strict; Secure
+< x-request-id: req-124
+| '{"ok":true,"user":"Zoë Ånström"}'
+== 125-login-missing
+> POST '/login'
+< 422
+< content-length: 16
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-125
+| 'user is required'
+== 126-login-spaces
+> POST '/login'
+< 200
+< content-length: 30
+< content-type: application/json
+< set-cookie: session="bob smith:9"; HttpOnly; Max-Age=3600; Path=/; SameSite=lax
+< set-cookie: prefs="theme=dark\073 lang=en"; Path=/books; SameSite=strict; Secure
+< x-request-id: req-126
+| '{"ok":true,"user":"bob smith"}'
+== 127-login-get
+> GET '/login'
+< 405
+< allow: POST
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-127
+| 'Method Not Allowed'
+== 128-whoami
+> GET '/whoami'
+< 200
+< content-length: 36
+< content-type: application/json
+< x-request-id: req-128
+| '{"user":"alice","session":"alice:5"}'
+== 129-whoami-none
+> GET '/whoami'
+< 401
+< www-authenticate: Cookie realm="shop"
+< content-length: 12
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-129
+| 'Unauthorized'
+== 130-whoami-quoted
+> GET '/whoami'
+< 200
+< content-length: 36
+< content-type: application/json
+< x-request-id: req-130
+| '{"user":"carol","session":"carol:9"}'
+== 131-logout
+> POST '/logout'
+< 200
+< content-length: 4
+< content-type: text/plain; charset=utf-8
+< set-cookie: session=""; Max-Age=0; Path=/; SameSite=lax
+< x-request-id: req-131
+| 'bye\n'
+== 132-teapot
+> GET '/teapot'
+< 418
+< x-tea: Earl Grey
+< content-length: 12
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-132
+| "I'm a Teapot"
+== 133-teapot-brew
+> BREW '/teapot'
+< 202
+< content-length: 8
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-133
+| 'brewing\n'
+== 134-teapot-delete
+> DELETE '/teapot'
+< 405
+< allow: HEAD, GET, BREW, POST
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-134
+| 'Method Not Allowed'
+== 135-boom
+> GET '/boom' ?n=4
+< 200
+< content-length: 13
+< content-type: application/json
+< x-request-id: req-135
+| '{"result":25}'
+== 136-boom-zero
+> GET '/boom' ?n=0
+< 500
+< content-length: 21
+< content-type: text/plain; charset=utf-8
+| 'Internal Server Error'
+! raised ZeroDivisionError: integer division or modulo by zero
+== 137-boom-bad
+> GET '/boom' ?n=four
+< 500
+< content-length: 21
+< content-type: text/plain; charset=utf-8
+| 'Internal Server Error'
+! raised ValueError: invalid literal for int() with base 10: 'four'
+== 138-boom-negative
+> GET '/boom' ?n=-3
+< 200
+< content-length: 14
+< content-type: application/json
+< x-request-id: req-138
+| '{"result":-34}'
+== 139-stock
+> GET '/stock/DUNE-HB'
+< 200
+< content-length: 31
+< content-type: application/json
+< x-request-id: req-139
+| '{"sku":"DUNE-HB","available":4}'
+== 140-stock-out
+> GET '/stock/LHOD-PB'
+< 409
+< retry-after: 120
+< content-length: 40
+< content-type: application/json
+< x-request-id: req-140
+| '{"sku":"LHOD-PB","error":"out of stock"}'
+== 141-stock-unknown
+> GET '/stock/NOPE'
+< 404
+< content-length: 50
+< content-type: application/json
+< x-request-id: req-141
+| '{"detail":"Unknown SKU NOPE","path":"/stock/NOPE"}'
+== 142-cache
+> GET '/cache/greeting'
+< 200
+< etag: "greeting-v1"
+< cache-control: max-age=60
+< vary: Accept-Encoding
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-142
+| 'value of greeting\n'
+== 143-cache-hit
+> GET '/cache/greeting'
+< 304
+< etag: "greeting-v1"
+< x-request-id: req-143
+== 144-cache-miss
+> GET '/cache/greeting'
+< 200
+< etag: "greeting-v1"
+< cache-control: max-age=60
+< vary: Accept-Encoding
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-144
+| 'value of greeting\n'
+== 145-not-found
+> GET '/nope'
+< 404
+< content-length: 37
+< content-type: application/json
+< x-request-id: req-145
+| '{"detail":"Not Found","path":"/nope"}'
+== 146-not-found-slash
+> GET '/nope/'
+< 404
+< content-length: 38
+< content-type: application/json
+< x-request-id: req-146
+| '{"detail":"Not Found","path":"/nope/"}'
+== 147-not-found-encoded
+> GET '/nöpe?q'
+< 404
+< content-length: 38
+< content-type: application/json
+< x-request-id: req-147
+| '{"detail":"Not Found","path":"/nöpe"}'
+== 148-root-slashes
+> GET '//'
+< 404
+< content-length: 34
+< content-type: application/json
+< x-request-id: req-148
+| '{"detail":"Not Found","path":"//"}'
+== 149-admin-home
+> GET '/admin/'
+< 200
+< content-length: 32
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-149
+| "admin home (root_path '/admin')\n"
+== 150-admin-bare
+> GET '/admin'
+< 307
+< content-length: 0
+< location: http://bookshop.test/admin/
+< x-request-id: req-150
+== 151-admin-user
+> GET '/admin/users/7'
+< 200
+< content-length: 114
+< content-type: application/json
+< x-request-id: req-151
+| '{"uid":7,"self":"http://bookshop.test/admin/users/7","home":"http://bookshop.test/admin/","route_path":"/users/7"}'
+== 152-admin-user-bad
+> GET '/admin/users/x'
+< 404
+< content-length: 46
+< content-type: application/json
+< x-request-id: req-152
+| '{"detail":"Not Found","path":"/admin/users/x"}'
+== 153-admin-reports-redirect
+> GET '/admin/reports' ?year=2026
+< 307
+< content-length: 0
+< location: http://bookshop.test/admin/reports/?year=2026
+< x-request-id: req-153
+== 154-admin-reports
+> GET '/admin/reports/'
+< 200
+< content-length: 16
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-154
+| 'reports for all\n'
+== 155-admin-tool
+> GET '/admin/tools/hammer'
+< 200
+< content-length: 31
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-155
+| 'tool hammer under /admin/tools\n'
+== 156-admin-tools-root
+> GET '/admin/tools/'
+< 404
+< content-length: 45
+< content-type: application/json
+< x-request-id: req-156
+| '{"detail":"Not Found","path":"/admin/tools/"}'
+== 157-admin-tool-slash
+> GET '/admin/tools/hammer/'
+< 307
+< content-length: 0
+< location: http://bookshop.test/admin/tools/hammer
+< x-request-id: req-157
+== 158-admin-post
+> POST '/admin/users/7'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-158
+| 'Method Not Allowed'
+== 159-admin-missing
+> GET '/admin/nothing'
+< 404
+< content-length: 46
+< content-type: application/json
+< x-request-id: req-159
+| '{"detail":"Not Found","path":"/admin/nothing"}'
+== 160-admin-prefix
+> GET '/administrator'
+< 404
+< content-length: 46
+< content-type: application/json
+< x-request-id: req-160
+| '{"detail":"Not Found","path":"/administrator"}'
+== 161-static
+> GET '/static/css/site.css'
+< 200
+< content-length: 19
+< content-type: text/css; charset=utf-8
+< x-request-id: req-161
+| 'body { margin: 0 }\n'
+== 162-static-js
+> GET '/static/js/app.js'
+< 200
+< content-length: 19
+< content-type: text/javascript; charset=utf-8
+< x-request-id: req-162
+| "console.log('hi');\n"
+== 163-static-missing
+> GET '/static/img/logo.png'
+< 404
+< content-length: 46
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-163
+| "no static file '/img/logo.png' under '/static'"
+== 164-static-root
+> GET '/static/'
+< 404
+< content-length: 34
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-164
+| "no static file '/' under '/static'"
+== 165-static-bare
+> GET '/static'
+< 307
+< content-length: 0
+< location: http://bookshop.test/static/
+< x-request-id: req-165
+== 166-static-post
+> POST '/static/css/site.css'
+< 405
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-166
+| 'Method Not Allowed'
+== 167-tenant
+> GET '/'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-167
+| '{"tenant":"acme","home":"http://acme.shop.example/"}'
+== 168-tenant-port
+> GET '/'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-168
+| '{"tenant":"acme","home":"http://acme.shop.example/"}'
+== 169-tenant-stats
+> GET '/stats'
+< 200
+< content-length: 31
+< content-type: application/json
+< x-request-id: req-169
+| '{"tenant":"globex","orders":42}'
+== 170-tenant-stats-slash
+> GET '/stats/'
+< 307
+< content-length: 0
+< location: http://globex.shop.example/stats
+< x-request-id: req-170
+== 171-tenant-missing
+> GET '/books'
+< 404
+< content-length: 38
+< content-type: application/json
+< x-request-id: req-171
+| '{"detail":"Not Found","path":"/books"}'
+== 172-tenant-upper
+> GET '/'
+< 200
+< content-length: 52
+< content-type: application/json
+< x-request-id: req-172
+| '{"tenant":"ACME","home":"http://ACME.shop.example/"}'
+== 173-tenant-nested
+> GET '/'
+< 200
+< content-length: 50
+< content-type: application/json
+< x-request-id: req-173
+| '{"tenant":"a.b","home":"http://a.b.shop.example/"}'
+== 174-host-www-redirect
+> GET '/books' ?x=1
+< 307
+< content-length: 0
+< location: http://www.shop.example/books?x=1
+== 175-host-www
+> GET '/'
+< 200
+< content-length: 50
+< content-type: application/json
+< x-request-id: req-174
+| '{"tenant":"www","home":"http://www.shop.example/"}'
+== 176-host-bad
+> GET '/'
+< 400
+< content-length: 19
+< content-type: text/plain; charset=utf-8
+| 'Invalid host header'
+== 177-host-empty
+> GET '/'
+< 400
+< content-length: 19
+< content-type: text/plain; charset=utf-8
+| 'Invalid host header'
+== 178-host-localhost
+> GET '/echo'
+< 200
+< content-length: 223
+< content-type: application/json
+< x-request-id: req-175
+| '{"method":"GET","url":"http://localhost:8000/echo","base_url":"http://localhost:8000/","path":"/echo","query":[],"query_string":"","headers":[["host","localhost:8000"]],"cookies":{},"client":["203.0.113.9",50123],"body":""}'
+== 179-host-suffix-trick
+> GET '/'
+< 400
+< content-length: 19
+< content-type: text/plain; charset=utf-8
+| 'Invalid host header'
+== 180-cors-simple
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-176
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 181-cors-simple-other
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-177
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://admin.example.com
+< vary: Origin
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 182-cors-disallowed
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-178
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 183-cors-preflight
+> OPTIONS '/books'
+< 200
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 2
+< content-type: text/plain; charset=utf-8
+| 'OK'
+== 184-cors-preflight-no-headers
+> OPTIONS '/books/2'
+< 200
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 2
+< content-type: text/plain; charset=utf-8
+| 'OK'
+== 185-cors-preflight-bad-method
+> OPTIONS '/books'
+< 400
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+| 'Disallowed CORS method'
+== 186-cors-preflight-bad-header
+> OPTIONS '/books'
+< 400
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 23
+< content-type: text/plain; charset=utf-8
+| 'Disallowed CORS headers'
+== 187-cors-preflight-bad-everything
+> OPTIONS '/books'
+< 400
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< content-length: 56
+< content-type: text/plain; charset=utf-8
+| 'Disallowed CORS origin, method, headers, private-network'
+== 188-cors-preflight-private
+> OPTIONS '/books'
+< 400
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 31
+< content-type: text/plain; charset=utf-8
+| 'Disallowed CORS private-network'
+== 189-cors-preflight-case
+> OPTIONS '/books'
+< 400
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 22
+< content-type: text/plain; charset=utf-8
+| 'Disallowed CORS method'
+== 190-cors-preflight-missing-route
+> OPTIONS '/nowhere'
+< 200
+< vary: Origin
+< access-control-allow-methods: GET, POST, PUT, DELETE
+< access-control-max-age: 300
+< access-control-allow-headers: Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id
+< access-control-allow-credentials: true
+< access-control-allow-origin: https://app.example.com
+< content-length: 2
+< content-type: text/plain; charset=utf-8
+| 'OK'
+== 191-cors-options-no-request-method
+> OPTIONS '/books'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-179
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| 'Method Not Allowed'
+== 192-cors-on-404
+> GET '/nope'
+< 404
+< content-length: 37
+< content-type: application/json
+< x-request-id: req-180
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| '{"detail":"Not Found","path":"/nope"}'
+== 193-cors-on-405
+> PUT '/books'
+< 405
+< allow: GET, HEAD
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-181
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| 'Method Not Allowed'
+== 194-cors-on-redirect
+> GET '/search'
+< 307
+< content-length: 0
+< location: http://bookshop.test/search/
+< x-request-id: req-182
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+== 195-cors-on-500
+> GET '/boom' ?n=0
+< 500
+< content-length: 21
+< content-type: text/plain; charset=utf-8
+| 'Internal Server Error'
+! raised ZeroDivisionError: integer division or modulo by zero
+== 196-cors-on-teapot
+> GET '/teapot'
+< 418
+< x-tea: Earl Grey
+< content-length: 12
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-184
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| "I'm a Teapot"
+== 197-cors-on-cookies
+> POST '/login'
+< 200
+< content-length: 25
+< content-type: application/json
+< set-cookie: session=dave:4; HttpOnly; Max-Age=3600; Path=/; SameSite=lax
+< set-cookie: prefs="theme=dark\073 lang=en"; Path=/books; SameSite=strict; Secure
+< x-request-id: req-185
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+< vary: Origin
+| '{"ok":true,"user":"dave"}'
+== 198-cors-vary-exists
+> GET '/cache/greeting'
+< 200
+< etag: "greeting-v1"
+< cache-control: max-age=60
+< vary: Accept-Encoding, Origin
+< content-length: 18
+< content-type: text/plain; charset=utf-8
+< x-request-id: req-186
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+< access-control-allow-origin: https://app.example.com
+| 'value of greeting\n'
+== 199-cors-empty-origin
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-187
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'
+== 200-cors-null-origin
+> GET '/books/1'
+< 200
+< content-length: 99
+< content-type: application/json
+< x-request-id: req-188
+< access-control-allow-credentials: true
+< access-control-expose-headers: X-Request-Id, Location
+| '{"id":1,"title":"Dune","author":"Frank Herbert","price":10.49,"tags":["sci-fi","classic","desert"]}'

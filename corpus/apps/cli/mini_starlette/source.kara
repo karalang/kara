@@ -1,0 +1,5676 @@
+// mini_starlette: a bookshop service on Starlette 1.6.0, with the parts of
+// Starlette it runs ported from `routing.py`, `convertors.py`,
+// `datastructures.py`, `responses.py`, the exception handling and the
+// CORS, trusted-host and server-error middleware:
+// - compile_path with its pattern text, format and convertors, the
+//   duplicate-name and unknown-convertor errors, and matching that
+//   backtracks the way the compiled regex does;
+// - url_path_for through Routes, named Mounts and a Host, with each
+//   convertor's to_string and its assertions, and NoMatchFound;
+// - the Router: full and partial matches, 405 with an Allow header in the
+//   method set's own order (a str set under PYTHONHASHSEED=0, so SipHash-1-3
+//   and CPython's probing), redirect_slashes, root_path under Mounts;
+// - Response headers as init_headers writes them, JSONResponse,
+//   RedirectResponse's quoting, set_cookie through SimpleCookie, request
+//   cookies, query params and URLs built from the scope.
+//
+// The program writes data/ (route templates, url_path_for calls and 201
+// HTTP requests), then prints compile_path's results, url_path_for's, the
+// routes, and each request's response. expected.out is the output of
+// oracle.py, which drives the real Starlette app through ASGI.
+// ------------------------------------------------------------ text, from mini_urlparse
+
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+// The data files spell tabs, line ends and control characters as \t,
+// \n, \r and \xNN.
+fn unescape(line: Str) -> String {
+    let b = to_bytes(line);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let n = b[i + 1];
+            if n == b't' {
+                out.push(b'\t');
+                i += 2;
+                continue;
+            }
+            if n == b'n' {
+                out.push(b'\n');
+                i += 2;
+                continue;
+            }
+            if n == b'r' {
+                out.push(b'\r');
+                i += 2;
+                continue;
+            }
+            if n == b'\\' {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if n == b'x' and i + 3 < b.len() {
+                out.push(hex_val(b[i + 2]) * 16 + hex_val(b[i + 3]));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// A stable sort of (name, count) pairs: the highest count first, then
+// by name.
+fn sort_counts(names: ref Vec[String], counts: ref Vec[i64]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..names.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 {
+            let a = order[j - 1];
+            let b = order[j];
+            let after = counts[a] < counts[b] or (counts[a] == counts[b] and names[a] > names[b]);
+            if not after {
+                break;
+            }
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    order
+}
+
+fn bump(names: mut ref Vec[String], counts: mut ref Vec[i64], name: Str) {
+    for i in 0..names.len() {
+        if names[i] == name {
+            counts[i] += 1;
+            return;
+        }
+    }
+    names.push(name.to_string());
+    counts.push(1);
+}
+
+// ------------------------------------------------------------ ipaddress
+
+// IPv4Address's parser: four decimal octets, no leading zeros.
+fn is_ipv4(s: Str) -> bool {
+    let parts = split_on(s, b'.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for i in 0..parts.len() {
+        let b = to_bytes(parts[i]);
+        if b.len() == 0 or b.len() > 3 {
+            return false;
+        }
+        let mut n: i64 = 0;
+        for k in 0..b.len() {
+            if not is_digit(b[k]) {
+                return false;
+            }
+            n = n * 10 + (b[k] - b'0') as i64;
+        }
+        if n > 255 or (b.len() > 1 and b[0] == b'0') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or b.len() > 4 {
+        return false;
+    }
+    for k in 0..b.len() {
+        if not is_hex(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// IPv6Address's parser: at most one `::`, eight hextets in all, an IPv4
+// tail, and a `%scope`.
+fn is_ipv6(s: Str) -> bool {
+    let (addr, has_scope, scope) = partition(s, b'%');
+    if has_scope and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return false;
+    }
+    let mut parts = split_on(addr, b':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+    }
+    let mut hi = n;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else if n != 8 or parts[0].len() == 0 or parts[n - 1].len() == 0 {
+        return false;
+    }
+    for i in 0..hi {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    for i in n - lo..n {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// urllib.parse's _check_bracketed_host.
+fn check_bracketed_host(host: Str) -> Result[(), String] {
+    let b = to_bytes(host);
+    if b.len() > 0 and (b[0] == b'v' or b[0] == b'V') {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let mut i: i64 = 1;
+        while i < b.len() and is_hex(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i >= b.len() or b[i] != b'.' or i + 1 >= b.len() {
+            return Err("IPvFuture address is invalid".to_string());
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err("An IPv4 address cannot be in brackets".to_string());
+    }
+    if not is_ipv6(host) {
+        return Err(f"{py_repr(host)} does not appear to be an IPv4 or IPv6 address");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ split and parse
+
+fn uses_relative(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"], s)
+}
+
+fn uses_netloc(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services"], s)
+}
+
+fn uses_params(s: Str) -> bool {
+    contains_str(["", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms", "sftp", "tel"], s)
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alnum(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+#[derive(Clone)]
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+#[derive(Clone)]
+struct Parsed {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+impl Split {
+    fn repr(ref self) -> String {
+        f"SplitResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+
+    // _userinfo
+    fn username(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (user, _, _) = partition(userinfo, b':');
+        Some(user)
+    }
+
+    fn password(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (_, have_password, password) = partition(userinfo, b':');
+        if have_password { Some(password) } else { None }
+    }
+
+    // _hostinfo: the host and the port as written.
+    fn hostinfo(ref self) -> (String, Option[String]) {
+        let (_, _, hostinfo) = rpartition(self.netloc, b'@');
+        let (_, have_open_br, bracketed) = partition(hostinfo, b'[');
+        let mut host = String.new();
+        let mut port = String.new();
+        if have_open_br {
+            let (h, _, rest) = partition(bracketed, b']');
+            let (_, _, p) = partition(rest, b':');
+            host = h;
+            port = p;
+        } else {
+            let (h, _, p) = partition(hostinfo, b':');
+            host = h;
+            port = p;
+        }
+        if port.len() == 0 { (host, None) } else { (host, Some(port)) }
+    }
+
+    fn hostname(ref self) -> Option[String] {
+        let (host, _) = self.hostinfo();
+        if host.len() == 0 {
+            return None;
+        }
+        // a scope's zone keeps its case
+        let (h, percent, zone) = partition(host, b'%');
+        if percent { Some(f"{lower(h)}%{zone}") } else { Some(lower(h)) }
+    }
+
+    fn port(ref self) -> Result[Option[i64], String] {
+        let (_, port) = self.hostinfo();
+        let p = match port {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let b = to_bytes(p);
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if not is_digit(b[i]) {
+                return Err(f"Port could not be cast to integer value as {py_repr(p)}");
+            }
+            if n <= 1000000 {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if n > 65535 {
+            return Err("Port out of range 0-65535".to_string());
+        }
+        Ok(Some(n))
+    }
+}
+
+impl Parsed {
+    fn repr(ref self) -> String {
+        f"ParseResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, params={py_repr(self.params)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+}
+
+// _splitnetloc: the netloc runs to the first of / ? #.
+fn split_netloc(url: Str, start: i64) -> (String, String) {
+    let b = to_bytes(url);
+    let mut delim = b.len();
+    for i in start..b.len() {
+        if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+            delim = i;
+            break;
+        }
+    }
+    (byte_str(b, start, delim), byte_str(b, delim, b.len()))
+}
+
+fn check_bracketed_netloc(netloc: Str) -> Result[(), String] {
+    let (_, _, host_and_port) = rpartition(netloc, b'@');
+    let (before, have_open_br, bracketed) = partition(host_and_port, b'[');
+    if have_open_br {
+        if before.len() > 0 {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        let (host, _, port) = partition(bracketed, b']');
+        if port.len() > 0 and first_byte(port) != b':' {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        return check_bracketed_host(host);
+    }
+    let (host, _, _) = partition(host_and_port, b':');
+    check_bracketed_host(host)
+}
+
+fn urlsplit(url_in: Str, scheme_in: Str) -> Result[Split, String] {
+    // lstrip the C0 controls and space, then drop every tab and line end
+    let ub = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < ub.len() and ub[st] <= 32 {
+        st += 1;
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in st..ub.len() {
+        let c = ub[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            kept.push(c);
+        }
+    }
+    let mut url = from_bytes(kept);
+    let mut scheme = strip_scheme(scheme_in);
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let i = find_byte(url, b':');
+    if i > 0 and is_alpha(first_byte(url)) {
+        let b = to_bytes(url);
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(b[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(byte_str(b, 0, i));
+            url = byte_str(b, i + 1, b.len());
+        }
+    }
+    if starts_with(url, "//") {
+        let (n, rest) = split_netloc(url, 2);
+        netloc = n;
+        url = rest;
+        let open = has_byte(netloc, b'[');
+        let close = has_byte(netloc, b']');
+        if open != close {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        if open and close {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_byte(url, b'#') {
+        let (u, _, f) = partition(url, b'#');
+        url = u;
+        fragment = f;
+    }
+    if has_byte(url, b'?') {
+        let (u, _, q) = partition(url, b'?');
+        url = u;
+        query = q;
+    }
+    Ok(Split { scheme: scheme, netloc: netloc, path: url, query: query, fragment: fragment })
+}
+
+// The scheme argument: C0 controls and space stripped at both ends, tabs
+// and line ends dropped.
+fn strip_scheme(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and b[st] <= 32 {
+        st += 1;
+    }
+    while en > st and b[en - 1] <= 32 {
+        en -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in st..en {
+        if b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _splitparams: the params follow the `;` in the last segment.
+fn split_params(url: Str) -> (String, String) {
+    let i = if has_byte(url, b'/') {
+        let b = to_bytes(url);
+        let mut at: i64 = -1;
+        for k in rfind_byte(url, b'/')..b.len() {
+            if b[k] == b';' {
+                at = k;
+                break;
+            }
+        }
+        if at < 0 {
+            return (url.to_string(), String.new());
+        }
+        at
+    } else {
+        find_byte(url, b';')
+    };
+    (slice(url, 0, i), slice_from(url, i + 1))
+}
+
+fn urlparse(url: Str, scheme: Str) -> Result[Parsed, String] {
+    let s = urlsplit(url, scheme)?;
+    let mut path = s.path.clone();
+    let mut params = String.new();
+    if uses_params(s.scheme) and has_byte(path, b';') {
+        let (p, a) = split_params(path);
+        path = p;
+        params = a;
+    }
+    Ok(Parsed { scheme: s.scheme, netloc: s.netloc, path: path, params: params, query: s.query, fragment: s.fragment })
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and first_byte(url) != b'/' {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if starts_with(url, "//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and uses_netloc(scheme) and (url.len() == 0 or first_byte(url) == b'/') {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn unsplit(s: ref Split) -> String {
+    urlunsplit(s.scheme, s.netloc, s.path, s.query, s.fragment)
+}
+
+fn urlunparse(p: ref Parsed) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment)
+}
+
+fn urljoin(base: Str, url: Str) -> Result[String, String] {
+    if base.len() == 0 {
+        return Ok(url.to_string());
+    }
+    if url.len() == 0 {
+        return Ok(base.to_string());
+    }
+    let b = urlparse(base, "")?;
+    let mut u = urlparse(url, b.scheme)?;
+    if u.scheme != b.scheme or not uses_relative(u.scheme) {
+        return Ok(url.to_string());
+    }
+    if uses_netloc(u.scheme) {
+        if u.netloc.len() > 0 {
+            return Ok(urlunparse(u));
+        }
+        u.netloc = b.netloc.clone();
+    }
+    if u.path.len() == 0 and u.params.len() == 0 {
+        u.path = b.path.clone();
+        u.params = b.params.clone();
+        if u.query.len() == 0 {
+            u.query = b.query.clone();
+        }
+        return Ok(urlunparse(u));
+    }
+    let mut base_parts = split_on(b.path, b'/');
+    if base_parts[base_parts.len() - 1].len() > 0 {
+        // the last segment is not a directory
+        base_parts.pop();
+    }
+    let mut segments: Vec[String] = Vec.new();
+    if first_byte(u.path) == b'/' {
+        segments = split_on(u.path, b'/');
+    } else {
+        let rel = split_on(u.path, b'/');
+        let mut all = base_parts.clone();
+        for i in 0..rel.len() {
+            all.push(rel[i].clone());
+        }
+        // drop the empty segments between the first and the last
+        for i in 0..all.len() {
+            if i == 0 or i == all.len() - 1 or all[i].len() > 0 {
+                segments.push(all[i].clone());
+            }
+        }
+    }
+    let mut resolved: Vec[String] = Vec.new();
+    for i in 0..segments.len() {
+        if segments[i] == ".." {
+            if resolved.len() > 0 {
+                resolved.pop();
+            }
+        } else if segments[i] != "." {
+            resolved.push(segments[i].clone());
+        }
+    }
+    let last = segments[segments.len() - 1].clone();
+    if last == "." or last == ".." {
+        resolved.push(String.new());
+    }
+    let joined = join(resolved, "/");
+    u.path = if joined.len() > 0 { joined } else { "/".to_string() };
+    Ok(urlunparse(u))
+}
+
+fn urldefrag(url: Str) -> Result[(String, String), String] {
+    if not has_byte(url, b'#') {
+        return Ok((url.to_string(), String.new()));
+    }
+    let mut p = urlparse(url, "")?;
+    let frag = p.fragment.clone();
+    p.fragment = String.new();
+    Ok((urlunparse(p), frag))
+}
+
+// ------------------------------------------------------------ quoting
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote_plus(s: Str, safe: Str) -> String {
+    if not has_byte(s, b' ') {
+        return quote(s, safe);
+    }
+    replace_byte(quote(s, f"{safe} "), b' ', "+")
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+// unquote: the ASCII runs are unquoted and decoded as UTF-8 one run at a
+// time; the rest is kept as it is.
+fn unquote(s: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, utf8_replace(run));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_plus(s: Str) -> String {
+    unquote(replace_byte(s, b'+', " "))
+}
+
+// ------------------------------------------------------------ queries
+
+#[derive(Clone)]
+struct Pair {
+    name: String,
+    value: String,
+}
+
+fn parse_qsl(qs: Str, keep_blank: bool, strict: bool, sep: Str) -> Result[Vec[Pair], String] {
+    let mut r: Vec[Pair] = Vec.new();
+    if qs.len() == 0 {
+        return Ok(r);
+    }
+    let fields = split_on(qs, first_byte(sep));
+    for i in 0..fields.len() {
+        let nv = fields[i].clone();
+        if nv.len() == 0 and not strict {
+            continue;
+        }
+        let (name, has_eq, value) = partition(nv, b'=');
+        if not has_eq and strict {
+            return Err(f"bad query field: {py_repr(nv)}");
+        }
+        if value.len() > 0 or keep_blank {
+            r.push(Pair { name: unquote_plus(name), value: unquote_plus(value) });
+        }
+    }
+    Ok(r)
+}
+
+fn pairs_repr(v: ref Vec[Pair]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        parts.push(f"({py_repr(v[i].name)}, {py_repr(v[i].value)})");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// parse_qs: the values of each name, the names in the order first seen.
+struct Multi {
+    names: Vec[String],
+    values: Vec[Vec[String]],
+}
+
+impl Multi {
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..self.names.len() {
+            let mut vs: Vec[String] = Vec.new();
+            let list = self.values[i].clone();
+            for k in 0..list.len() {
+                vs.push(py_repr(list[k]));
+            }
+            parts.push(f"{py_repr(self.names[i])}: [{join(vs, ", ")}]");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+}
+
+fn parse_qs(pairs: ref Vec[Pair]) -> Multi {
+    let mut m = Multi { names: Vec.new(), values: Vec.new() };
+    for i in 0..pairs.len() {
+        let mut at: i64 = -1;
+        for k in 0..m.names.len() {
+            if m.names[k] == pairs[i].name {
+                at = k;
+            }
+        }
+        if at < 0 {
+            m.names.push(pairs[i].name.clone());
+            m.values.push(Vec.new());
+            at = m.names.len() - 1;
+        }
+        m.values[at].push(pairs[i].value.clone());
+    }
+    m
+}
+
+// urlencode over pairs, with quote_plus or quote.
+fn urlencode(pairs: ref Vec[Pair], safe: Str, plus: bool) -> String {
+    let mut l: Vec[String] = Vec.new();
+    for i in 0..pairs.len() {
+        let k = if plus { quote_plus(pairs[i].name, safe) } else { quote(pairs[i].name, safe) };
+        let v = if plus { quote_plus(pairs[i].value, safe) } else { quote(pairs[i].value, safe) };
+        l.push(f"{k}={v}");
+    }
+    join(l, "&")
+}
+
+// urlencode(d, doseq=True): one name=value for each value in the lists.
+fn urlencode_multi(m: ref Multi) -> String {
+    let mut pairs: Vec[Pair] = Vec.new();
+    for i in 0..m.names.len() {
+        let list = m.values[i].clone();
+        for k in 0..list.len() {
+            pairs.push(Pair { name: m.names[i].clone(), value: list[k].clone() });
+        }
+    }
+    urlencode(pairs, "", true)
+}
+
+// ------------------------------------------------------------ the files
+
+
+// ------------------------------------------------------------ from mini_cookies
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+// _LegalChars: what a key, or a value that needs no quotes, is made of.
+fn is_legal_char(c: i64) -> bool {
+    if c >= 128 {
+        return false;
+    }
+    let b = c as u8;
+    is_alnum(b) or has_byte("!#$%&'*+-.^_`|~:", b)
+}
+
+fn is_legal_key(s: Str) -> bool {
+    let cps = code_points(s);
+    if cps.len() == 0 {
+        return false;
+    }
+    for i in 0..cps.len() {
+        if not is_legal_char(cps[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_unescaped(c: i64) -> bool {
+    is_legal_char(c) or (c < 128 and has_byte(" ()/<=>?@[]{}", c as u8))
+}
+
+// _quote: a value that is not a legal key goes in double quotes, with
+// `"` and `\` escaped and the other bytes below 256 written in octal.
+fn cookie_quote(s: Str) -> String {
+    if is_legal_key(s) {
+        return s.to_string();
+    }
+    let cps = code_points(s);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for i in 0..cps.len() {
+        let c = cps[i];
+        if c == 34 {
+            push_str_bytes(mut out, "\\\"");
+        } else if c == 92 {
+            push_str_bytes(mut out, "\\\\");
+        } else if is_unescaped(c) or c >= 256 {
+            push_code_point(mut out, c);
+        } else {
+            out.push(b'\\');
+            out.push(b'0' + (c / 64) as u8);
+            out.push(b'0' + ((c / 8) % 8) as u8);
+            out.push(b'0' + (c % 8) as u8);
+        }
+    }
+    out.push(b'"');
+    from_bytes(out)
+}
+
+fn is_octal(c: u8) -> bool {
+    c >= b'0' and c <= b'7'
+}
+
+// _unquote: strip the quotes, and replace \ooo and \x as _unquote_sub does.
+fn cookie_unquote(s: Str) -> String {
+    let b = to_bytes(s);
+    if b.len() < 2 or b[0] != b'"' or b[b.len() - 1] != b'"' {
+        return s.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let end = b.len() - 1;
+    let mut i: i64 = 1;
+    while i < end {
+        let c = b[i];
+        if c == b'\\' and i + 3 < end + 1 and b[i + 1] >= b'0' and b[i + 1] <= b'3' and is_octal(b[i + 2]) and is_octal(b[i + 3]) {
+            let n = ((b[i + 1] - b'0') as i64) * 64 + ((b[i + 2] - b'0') as i64) * 8 + (b[i + 3] - b'0') as i64;
+            push_code_point(mut out, n);
+            i += 4;
+        } else if c == b'\\' and i + 1 < end and b[i + 1] != b'\n' {
+            // (.) takes one character, which may be several bytes
+            i += 1;
+            let mut j = i + 1;
+            while j < end and b[j] >= 0x80 and b[j] < 0xC0 {
+                j += 1;
+            }
+            for k in i..j {
+                out.push(b[k]);
+            }
+            i = j;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+// ------------------------------------------------------------ JSON
+
+// A value as json.loads hands it back, and as JSONResponse renders it.
+const J_NULL: i64 = 0;
+const J_BOOL: i64 = 1;
+const J_INT: i64 = 2;
+const J_FLOAT: i64 = 3;
+const J_STR: i64 = 4;
+const J_LIST: i64 = 5;
+const J_DICT: i64 = 6;
+
+#[derive(Clone)]
+struct Jv {
+    t: i64,
+    b: bool,
+    i: i64,
+    f: f64,
+    s: String,
+    // a list's items, or a dict's values in order
+    items: Vec[Jv],
+    // a dict's keys, in insertion order
+    keys: Vec[String],
+}
+
+fn jv(t: i64) -> Jv {
+    Jv { t: t, b: false, i: 0, f: 0.0, s: String.new(), items: Vec.new(), keys: Vec.new() }
+}
+
+fn jnull() -> Jv {
+    jv(J_NULL)
+}
+
+fn jbool(b: bool) -> Jv {
+    let mut v = jv(J_BOOL);
+    v.b = b;
+    v
+}
+
+fn jint(n: i64) -> Jv {
+    let mut v = jv(J_INT);
+    v.i = n;
+    v
+}
+
+fn jfloat(x: f64) -> Jv {
+    let mut v = jv(J_FLOAT);
+    v.f = x;
+    v
+}
+
+fn jstr(s: Str) -> Jv {
+    let mut v = jv(J_STR);
+    v.s = s.to_string();
+    v
+}
+
+fn jlist(items: own Vec[Jv]) -> Jv {
+    let mut v = jv(J_LIST);
+    v.items = items;
+    v
+}
+
+fn jstrs(items: ref Vec[String]) -> Jv {
+    let mut out: Vec[Jv] = Vec.new();
+    for s in items.iter() {
+        out.push(jstr(s));
+    }
+    jlist(out)
+}
+
+fn jdict() -> Jv {
+    jv(J_DICT)
+}
+
+fn dfind(d: ref Jv, k: Str) -> i64 {
+    let mut n = 0;
+    while n < d.keys.len() {
+        if d.keys[n] == k {
+            return n;
+        }
+        n += 1;
+    }
+    -1
+}
+
+// d[k] = v: a key already there keeps its place.
+fn dset(d: mut ref Jv, k: Str, v: own Jv) {
+    let at = dfind(d, k);
+    if at >= 0 {
+        d.items[at] = v;
+    } else {
+        d.keys.push(k.to_string());
+        d.items.push(v);
+    }
+}
+
+fn is_number(v: ref Jv) -> bool {
+    v.t == J_INT or v.t == J_FLOAT
+}
+
+fn num_value(v: ref Jv) -> f64 {
+    if v.t == J_FLOAT { v.f } else { v.i as f64 }
+}
+
+// ------------------------------------------------------------ loads
+
+struct Scanner {
+    b: Vec[u8],
+    pos: i64,
+}
+
+impl Scanner {
+    fn peek(ref self) -> u8 {
+        if self.pos < self.b.len() { self.b[self.pos] } else { 0 }
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn at_word(ref self, w: Str) -> bool {
+        starts_at(self.b, self.pos, w)
+    }
+
+    fn hex4(ref self, at: i64) -> i64 {
+        if at + 4 > self.b.len() {
+            return -1;
+        }
+        let mut n: i64 = 0;
+        for k in at..at + 4 {
+            let c = self.b[k];
+            if not is_hex(c) {
+                return -1;
+            }
+            n = n * 16 + hex_val(c) as i64;
+        }
+        n
+    }
+
+    // py_scanstring in strict mode: no control characters, the JSON
+    // escapes, and \u pairs joined into one code point.
+    fn string(mut ref self) -> Result[String, ()] {
+        self.pos += 1;
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.pos >= self.b.len() {
+                return Err(());
+            }
+            let c = self.b[self.pos];
+            if c == b'"' {
+                self.pos += 1;
+                return Ok(from_bytes(out));
+            }
+            if c < 0x20 {
+                return Err(());
+            }
+            if c != b'\\' {
+                out.push(c);
+                self.pos += 1;
+                continue;
+            }
+            if self.pos + 1 >= self.b.len() {
+                return Err(());
+            }
+            let e = self.b[self.pos + 1];
+            if e == b'u' {
+                let mut u = self.hex4(self.pos + 2);
+                if u < 0 {
+                    return Err(());
+                }
+                self.pos += 6;
+                if u >= 0xD800 and u <= 0xDBFF and self.at_word("\\u") {
+                    let lo = self.hex4(self.pos + 2);
+                    if lo >= 0xDC00 and lo <= 0xDFFF {
+                        u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
+                        self.pos += 6;
+                    }
+                }
+                if u >= 0xD800 and u <= 0xDFFF {
+                    // a lone surrogate has no UTF-8; none of the inputs carry one
+                    return Err(());
+                }
+                push_code_point(mut out, u);
+                continue;
+            }
+            let r: u8 = if e == b'"' {
+                b'"'
+            } else if e == b'\\' {
+                b'\\'
+            } else if e == b'/' {
+                b'/'
+            } else if e == b'b' {
+                8
+            } else if e == b'f' {
+                12
+            } else if e == b'n' {
+                b'\n'
+            } else if e == b'r' {
+                b'\r'
+            } else if e == b't' {
+                b'\t'
+            } else {
+                return Err(());
+            };
+            out.push(r);
+            self.pos += 2;
+        }
+    }
+
+    fn digits(ref self, from: i64) -> i64 {
+        let mut k = from;
+        while k < self.b.len() and is_digit(self.b[k]) {
+            k += 1;
+        }
+        k
+    }
+
+    // NUMBER_RE: (-?(?:0|[1-9][0-9]*))(\.[0-9]+)?([eE][-+]?[0-9]+)?
+    fn number(mut ref self) -> Result[Jv, ()] {
+        let st = self.pos;
+        let mut k = st;
+        if k < self.b.len() and self.b[k] == b'-' {
+            k += 1;
+        }
+        if k >= self.b.len() or not is_digit(self.b[k]) {
+            return Err(());
+        }
+        if self.b[k] == b'0' {
+            k += 1;
+        } else {
+            k = self.digits(k);
+        }
+        let mut is_float = false;
+        if k < self.b.len() and self.b[k] == b'.' {
+            let e = self.digits(k + 1);
+            if e > k + 1 {
+                k = e;
+                is_float = true;
+            }
+        }
+        if k < self.b.len() and (self.b[k] == b'e' or self.b[k] == b'E') {
+            let mut j = k + 1;
+            if j < self.b.len() and (self.b[j] == b'+' or self.b[j] == b'-') {
+                j += 1;
+            }
+            let e = self.digits(j);
+            if e > j {
+                k = e;
+                is_float = true;
+            }
+        }
+        let text = byte_str(self.b, st, k);
+        self.pos = k;
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok(jfloat(x)),
+                Err(_) => Err(()),
+            };
+        }
+        match i64.parse(text) {
+            Ok(n) => Ok(jint(n)),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn value(mut ref self) -> Result[Jv, ()] {
+        let c = self.peek();
+        if c == b'"' {
+            let s = self.string()?;
+            let mut v = jv(J_STR);
+            v.s = s;
+            return Ok(v);
+        }
+        if c == b'{' {
+            return self.object();
+        }
+        if c == b'[' {
+            return self.array();
+        }
+        if self.at_word("null") {
+            self.pos += 4;
+            return Ok(jnull());
+        }
+        if self.at_word("true") {
+            self.pos += 4;
+            return Ok(jbool(true));
+        }
+        if self.at_word("false") {
+            self.pos += 5;
+            return Ok(jbool(false));
+        }
+        if self.at_word("NaN") {
+            self.pos += 3;
+            return Ok(jfloat(f64.NAN));
+        }
+        if self.at_word("Infinity") {
+            self.pos += 8;
+            return Ok(jfloat(f64.INFINITY));
+        }
+        if self.at_word("-Infinity") {
+            self.pos += 9;
+            return Ok(jfloat(-f64.INFINITY));
+        }
+        self.number()
+    }
+
+    fn object(mut ref self) -> Result[Jv, ()] {
+        self.pos += 1;
+        let mut d = jdict();
+        self.skip_ws();
+        if self.peek() == b'}' {
+            self.pos += 1;
+            return Ok(d);
+        }
+        loop {
+            if self.peek() != b'"' {
+                return Err(());
+            }
+            let key = self.string()?;
+            self.skip_ws();
+            if self.peek() != b':' {
+                return Err(());
+            }
+            self.pos += 1;
+            self.skip_ws();
+            let v = self.value()?;
+            dset(mut d, key, v);
+            self.skip_ws();
+            let c = self.peek();
+            self.pos += 1;
+            if c == b'}' {
+                return Ok(d);
+            }
+            if c != b',' {
+                return Err(());
+            }
+            self.skip_ws();
+        }
+    }
+
+    fn array(mut ref self) -> Result[Jv, ()] {
+        self.pos += 1;
+        let mut items: Vec[Jv] = Vec.new();
+        self.skip_ws();
+        if self.peek() == b']' {
+            self.pos += 1;
+            return Ok(jlist(items));
+        }
+        loop {
+            items.push(self.value()?);
+            self.skip_ws();
+            let c = self.peek();
+            self.pos += 1;
+            if c == b']' {
+                return Ok(jlist(items));
+            }
+            if c != b',' {
+                return Err(());
+            }
+            self.skip_ws();
+        }
+    }
+}
+
+// json.loads(body): Err for anything that raises a ValueError, a body that
+// is not UTF-8 included.
+fn json_loads(body: ref Vec[u8]) -> Result[Jv, ()] {
+    match String.from_utf8(body.clone()) {
+        Ok(_) => {},
+        Err(_) => return Err(()),
+    }
+    let mut sc = Scanner { b: body.clone(), pos: 0 };
+    sc.skip_ws();
+    let v = sc.value()?;
+    sc.skip_ws();
+    if sc.pos != sc.b.len() {
+        return Err(());
+    }
+    Ok(v)
+}
+
+// ------------------------------------------------------------ dumps
+
+// float.__repr__
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// py_encode_basestring: ensure_ascii off, so only `"`, `\` and the
+// control characters are escaped.
+fn json_str(s: Str, out: mut ref String) {
+    let hex = to_bytes("0123456789abcdef");
+    let mut b: Vec[u8] = Vec.new();
+    b.push(b'"');
+    for c in s.bytes() {
+        if c == b'"' {
+            push_str_bytes(mut b, "\\\"");
+        } else if c == b'\\' {
+            push_str_bytes(mut b, "\\\\");
+        } else if c == b'\n' {
+            push_str_bytes(mut b, "\\n");
+        } else if c == b'\r' {
+            push_str_bytes(mut b, "\\r");
+        } else if c == b'\t' {
+            push_str_bytes(mut b, "\\t");
+        } else if c == 8 {
+            push_str_bytes(mut b, "\\b");
+        } else if c == 12 {
+            push_str_bytes(mut b, "\\f");
+        } else if c < 0x20 {
+            push_str_bytes(mut b, "\\u00");
+            b.push(hex[(c / 16) as i64]);
+            b.push(hex[(c % 16) as i64]);
+        } else {
+            b.push(c);
+        }
+    }
+    b.push(b'"');
+    out.push_str(from_bytes(b).as_str());
+}
+
+// json.dumps(v, separators=(",", ":"), ensure_ascii=False)
+fn json_dump(v: ref Jv, out: mut ref String) {
+    if v.t == J_NULL {
+        out.push_str("null");
+    } else if v.t == J_BOOL {
+        out.push_str(if v.b { "true" } else { "false" });
+    } else if v.t == J_INT {
+        out.push_str(v.i.to_string().as_str());
+    } else if v.t == J_FLOAT {
+        out.push_str(float_repr(v.f).as_str());
+    } else if v.t == J_STR {
+        json_str(v.s, mut out);
+    } else if v.t == J_LIST {
+        out.push_str("[");
+        let mut k = 0;
+        while k < v.items.len() {
+            if k > 0 {
+                out.push_str(",");
+            }
+            json_dump(v.items[k], mut out);
+            k += 1;
+        }
+        out.push_str("]");
+    } else {
+        out.push_str("{");
+        let mut k = 0;
+        while k < v.keys.len() {
+            if k > 0 {
+                out.push_str(",");
+            }
+            json_str(v.keys[k], mut out);
+            out.push_str(":");
+            json_dump(v.items[k], mut out);
+            k += 1;
+        }
+        out.push_str("}");
+    }
+}
+
+fn json_dumps(v: ref Jv) -> String {
+    let mut out = String.new();
+    json_dump(v, mut out);
+    out
+}
+// ------------------------------------------------------------ compile_path
+
+// The convertors: str, path, int, float, uuid.
+const C_STR: i64 = 0;
+const C_PATH: i64 = 1;
+const C_INT: i64 = 2;
+const C_FLOAT: i64 = 3;
+const C_UUID: i64 = 4;
+
+fn conv_kind(name: Str) -> i64 {
+    if name == "str" {
+        return C_STR;
+    }
+    if name == "path" {
+        return C_PATH;
+    }
+    if name == "int" {
+        return C_INT;
+    }
+    if name == "float" {
+        return C_FLOAT;
+    }
+    if name == "uuid" {
+        return C_UUID;
+    }
+    -1
+}
+
+fn conv_class(k: i64) -> String {
+    let n = match k {
+        0 => "StringConvertor",
+        1 => "PathConvertor",
+        2 => "IntegerConvertor",
+        3 => "FloatConvertor",
+        _ => "UUIDConvertor",
+    };
+    n.to_string()
+}
+
+fn conv_regex(k: i64) -> String {
+    let r = match k {
+        0 => "[^/]+",
+        1 => ".*",
+        2 => "[0-9]+",
+        3 => "[0-9]+(\\.[0-9]+)?",
+        _ => "[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}",
+    };
+    r.to_string()
+}
+
+// A piece of a compiled path: literal text, or a named parameter.
+#[derive(Clone)]
+struct Seg {
+    lit: bool,
+    text: Vec[i64],
+    name: String,
+    conv: i64,
+}
+
+#[derive(Clone)]
+struct Compiled {
+    segs: Vec[Seg],
+    pattern: String,
+    format: String,
+    // the parameters in first-seen order, each with its convertor
+    names: Vec[String],
+    convs: Vec[i64],
+}
+
+fn conv_of(c: ref Compiled, name: Str) -> i64 {
+    let mut k = 0;
+    while k < c.names.len() {
+        if c.names[k] == name {
+            return c.convs[k];
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn is_name_start(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+}
+
+fn is_name_char(c: i64) -> bool {
+    is_name_start(c) or (c >= 48 and c <= 57)
+}
+
+// An identifier from `at`; its end, or `at` when there is none.
+fn name_end(v: ref Vec[i64], at: i64) -> i64 {
+    if at >= v.len() or not is_name_start(v[at]) {
+        return at;
+    }
+    let mut k = at + 1;
+    while k < v.len() and is_name_char(v[k]) {
+        k += 1;
+    }
+    k
+}
+
+fn cp_text(v: ref Vec[i64], from: i64, to: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for k in from..to {
+        push_code_point(mut out, v[k]);
+    }
+    from_bytes(out)
+}
+
+// re.escape: the characters that mean something in a pattern get a
+// backslash; everything else, non-ASCII included, stays as it is.
+fn re_escape(v: ref Vec[i64], from: i64, to: i64) -> String {
+    let special = to_bytes("()[]{}?*+-|^$\\.&~# \t\n\r");
+    let mut out: Vec[u8] = Vec.new();
+    for k in from..to {
+        let c = v[k];
+        let mut esc = c == 11 or c == 12;
+        for s in special.iter() {
+            if c == s as i64 {
+                esc = true;
+            }
+        }
+        if esc {
+            out.push(b'\\');
+        }
+        push_code_point(mut out, c);
+    }
+    from_bytes(out)
+}
+
+// One match of PARAM_REGEX, {name} or {name:convertor}, starting at `at`.
+struct ParamMatch {
+    end: i64,
+    name: String,
+    conv: String,
+}
+
+fn param_at(v: ref Vec[i64], at: i64) -> Option[ParamMatch] {
+    if v[at] != 123 {
+        return None;
+    }
+    let ne = name_end(v, at + 1);
+    if ne == at + 1 {
+        return None;
+    }
+    let name = cp_text(v, at + 1, ne);
+    let mut k = ne;
+    let mut conv = "str".to_string();
+    if k < v.len() and v[k] == 58 {
+        let ce = name_end(v, k + 1);
+        if ce > k + 1 {
+            conv = cp_text(v, k + 1, ce);
+            k = ce;
+        }
+    }
+    if k < v.len() and v[k] == 125 {
+        return Some(ParamMatch { end: k + 1, name: name, conv: conv });
+    }
+    None
+}
+
+fn add_lit(segs: mut ref Vec[Seg], v: ref Vec[i64], from: i64, to: i64) {
+    if to > from {
+        segs.push(Seg { lit: true, text: slice_cps(v, from, to), name: String.new(), conv: 0 });
+    }
+}
+
+fn slice_cps(v: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for k in from..to {
+        out.push(v[k]);
+    }
+    out
+}
+
+// compile_path: Err carries the exception as "Class: message".
+fn compile_path(path: Str) -> Result[Compiled, String] {
+    let v = code_points(path);
+    let is_host = not starts_with(path, "/");
+    let mut pattern = "^".to_string();
+    let mut format = String.new();
+    let mut segs: Vec[Seg] = Vec.new();
+    let mut names: Vec[String] = Vec.new();
+    let mut convs: Vec[i64] = Vec.new();
+    let mut dups: Vec[String] = Vec.new();
+    let mut idx = 0;
+    let mut at = 0;
+    while at < v.len() {
+        let m = match param_at(v, at) {
+            Some(m) => m,
+            None => {
+                at += 1;
+                continue;
+            },
+        };
+        let kind = conv_kind(m.conv);
+        if kind < 0 {
+            return Err(f"AssertionError: Unknown path convertor '{m.conv}'");
+        }
+        pattern.push_str(re_escape(v, idx, at).as_str());
+        pattern.push_str(f"(?P<{m.name}>{conv_regex(kind)})");
+        format.push_str(cp_text(v, idx, at).as_str());
+        format.push_str("{");
+        format.push_str(m.name.as_str());
+        format.push_str("}");
+        add_lit(mut segs, v, idx, at);
+        segs.push(Seg { lit: false, text: Vec.new(), name: m.name.clone(), conv: kind });
+        let mut seen = -1;
+        let mut k = 0;
+        while k < names.len() {
+            if names[k] == m.name {
+                seen = k;
+            }
+            k += 1;
+        }
+        if seen >= 0 {
+            if not contains_str(dups, m.name) {
+                dups.push(m.name.clone());
+            }
+            convs[seen] = kind;
+        } else {
+            names.push(m.name.clone());
+            convs.push(kind);
+        }
+        idx = m.end;
+        at = m.end;
+    }
+    if dups.len() > 0 {
+        let sorted = sort_strings(dups.clone());
+        let ending = if dups.len() > 1 { "s" } else { "" };
+        return Err(f"ValueError: Duplicated param name{ending} {join(sorted, ", ")} at path {path}");
+    }
+    let tail = cp_text(v, idx, v.len());
+    if is_host {
+        // like Host.matches, a port in the template is not matched
+        let (hostname, _, _) = partition(tail, b':');
+        let hv = code_points(hostname);
+        pattern.push_str(re_escape(hv, 0, hv.len()).as_str());
+        add_lit(mut segs, hv, 0, hv.len());
+    } else {
+        pattern.push_str(re_escape(v, idx, v.len()).as_str());
+        add_lit(mut segs, v, idx, v.len());
+    }
+    pattern.push_str("$");
+    format.push_str(tail.as_str());
+    Ok(Compiled { segs: segs, pattern: pattern, format: format, names: names, convs: convs })
+}
+
+// ------------------------------------------------------------ matching
+
+fn is_hex_cp(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+}
+
+fn is_digit_cp(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn run_of_digits(v: ref Vec[i64], at: i64) -> i64 {
+    let mut k = at;
+    while k < v.len() and is_digit_cp(v[k]) {
+        k += 1;
+    }
+    k
+}
+
+// The uuid pattern's ends from `at`, in the order the regex tries them:
+// each optional dash taken before it is skipped.
+fn uuid_ends(v: ref Vec[i64], at: i64, group: i64, out: mut ref Vec[i64]) {
+    let widths = vec![8, 4, 4, 4, 12];
+    let w = widths[group];
+    if at + w > v.len() {
+        return;
+    }
+    for k in at..at + w {
+        if not is_hex_cp(v[k]) {
+            return;
+        }
+    }
+    let e = at + w;
+    if group == 4 {
+        out.push(e);
+        return;
+    }
+    if e < v.len() and v[e] == 45 {
+        uuid_ends(v, e + 1, group + 1, mut out);
+    }
+    uuid_ends(v, e, group + 1, mut out);
+}
+
+// Where a convertor's pattern can end, starting at `at`, most preferred
+// first (each quantifier greedy, backing off one at a time).
+fn conv_ends(v: ref Vec[i64], at: i64, kind: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if kind == C_STR or kind == C_PATH {
+        let mut k = at;
+        while k < v.len() and (if kind == C_STR { v[k] != 47 } else { v[k] != 10 }) {
+            k += 1;
+        }
+        let low = if kind == C_STR { at + 1 } else { at };
+        let mut e = k;
+        while e >= low {
+            out.push(e);
+            e -= 1;
+        }
+    } else if kind == C_INT {
+        let mut e = run_of_digits(v, at);
+        while e > at {
+            out.push(e);
+            e -= 1;
+        }
+    } else if kind == C_FLOAT {
+        let mut d = run_of_digits(v, at);
+        while d > at {
+            if d < v.len() and v[d] == 46 {
+                let mut f = run_of_digits(v, d + 1);
+                while f > d + 1 {
+                    out.push(f);
+                    f -= 1;
+                }
+            }
+            out.push(d);
+            d -= 1;
+        }
+    } else {
+        uuid_ends(v, at, 0, mut out);
+    }
+    out
+}
+
+// The text each parameter matched, in pattern order.
+struct Capture {
+    name: String,
+    kind: i64,
+    text: String,
+}
+
+fn match_from(c: ref Compiled, si: i64, v: ref Vec[i64], at: i64, caps: mut ref Vec[Capture]) -> bool {
+    if si == c.segs.len() {
+        // `$` also matches before a final newline
+        return at == v.len() or (at == v.len() - 1 and v[at] == 10);
+    }
+    let seg = c.segs[si].clone();
+    if seg.lit {
+        if at + seg.text.len() > v.len() {
+            return false;
+        }
+        for k in 0..seg.text.len() {
+            if v[at + k] != seg.text[k] {
+                return false;
+            }
+        }
+        return match_from(c, si + 1, v, at + seg.text.len(), mut caps);
+    }
+    for e in conv_ends(v, at, seg.conv).iter() {
+        caps.push(Capture { name: seg.name.clone(), kind: seg.conv, text: cp_text(v, at, e) });
+        if match_from(c, si + 1, v, e, mut caps) {
+            return true;
+        }
+        caps.pop();
+    }
+    false
+}
+
+// ------------------------------------------------------------ path params
+
+// A path parameter's value: an int, a float, a str, or a uuid kept as its
+// canonical text.
+const V_INT: i64 = 0;
+const V_FLOAT: i64 = 1;
+const V_STR: i64 = 2;
+const V_UUID: i64 = 3;
+
+#[derive(Clone)]
+struct Pv {
+    t: i64,
+    i: i64,
+    f: f64,
+    s: String,
+}
+
+fn pv_int(n: i64) -> Pv {
+    Pv { t: V_INT, i: n, f: 0.0, s: String.new() }
+}
+
+fn pv_float(x: f64) -> Pv {
+    Pv { t: V_FLOAT, i: 0, f: x, s: String.new() }
+}
+
+fn pv_str(s: Str) -> Pv {
+    Pv { t: V_STR, i: 0, f: 0.0, s: s.to_string() }
+}
+
+fn pv_repr(v: ref Pv) -> String {
+    if v.t == V_INT {
+        return v.i.to_string();
+    }
+    if v.t == V_FLOAT {
+        if v.f == f64.INFINITY {
+            return "inf".to_string();
+        }
+        return float_repr(v.f);
+    }
+    if v.t == V_UUID {
+        return f"UUID('{v.s}')";
+    }
+    py_repr(v.s)
+}
+
+// str(value)
+fn pv_str_of(v: ref Pv) -> String {
+    if v.t == V_INT {
+        return v.i.to_string();
+    }
+    if v.t == V_FLOAT {
+        return pv_repr(v);
+    }
+    v.s.clone()
+}
+
+fn pv_json(v: ref Pv) -> Jv {
+    if v.t == V_INT {
+        return jint(v.i);
+    }
+    if v.t == V_FLOAT {
+        return jfloat(v.f);
+    }
+    jstr(v.s)
+}
+
+#[derive(Clone)]
+struct Param {
+    name: String,
+    value: Pv,
+}
+
+fn param_find(ps: ref Vec[Param], name: Str) -> i64 {
+    let mut k = 0;
+    while k < ps.len() {
+        if ps[k].name == name {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn param_set(ps: mut ref Vec[Param], name: Str, value: own Pv) {
+    let at = param_find(ps, name);
+    if at >= 0 {
+        ps[at].value = value;
+    } else {
+        ps.push(Param { name: name.to_string(), value: value });
+    }
+}
+
+// uuid.UUID(hex) for text the pattern matched: dashes out, lower case,
+// then 8-4-4-4-12.
+fn uuid_canonical(s: Str) -> String {
+    let mut h: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b'-' {
+            h.push(lower_byte(c));
+        }
+    }
+    let t = from_bytes(h);
+    f"{slice(t, 0, 8)}-{slice(t, 8, 12)}-{slice(t, 12, 16)}-{slice(t, 16, 20)}-{slice(t, 20, 32)}"
+}
+
+// convert()
+fn convert(kind: i64, text: Str) -> Pv {
+    if kind == C_INT {
+        return pv_int(py_int(text).unwrap_or(0));
+    }
+    if kind == C_FLOAT {
+        return pv_float(f64.parse(text).unwrap_or(0.0));
+    }
+    if kind == C_UUID {
+        return Pv { t: V_UUID, i: 0, f: 0.0, s: uuid_canonical(text) };
+    }
+    pv_str(text)
+}
+
+// Matches `text` against a compiled path; the parameters it binds,
+// converted, or None.
+fn path_match(c: ref Compiled, text: Str) -> Option[Vec[Param]] {
+    let v = code_points(text);
+    let mut caps: Vec[Capture] = Vec.new();
+    if not match_from(c, 0, v, 0, mut caps) {
+        return None;
+    }
+    // groupdict(): one entry per name, the last group of that name
+    let mut out: Vec[Param] = Vec.new();
+    for cap in caps.iter() {
+        param_set(mut out, cap.name, convert(cap.kind, cap.text));
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------ to_string
+
+// float(s): Python's syntax, underscores and words included.
+fn py_float(s: Str) -> Option[f64] {
+    let t = strip(s);
+    let b = to_bytes(t);
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let word = lower(slice_from(t, i));
+    if word == "inf" or word == "infinity" {
+        return Some(if neg { -f64.INFINITY } else { f64.INFINITY });
+    }
+    if word == "nan" {
+        return Some(f64.NAN);
+    }
+    let mut digits = false;
+    let mut clean: Vec[u8] = Vec.new();
+    let mut k = i;
+    let mut prev_digit = false;
+    let mut seen_dot = false;
+    let mut seen_e = false;
+    while k < b.len() {
+        let c = b[k];
+        if is_digit(c) {
+            digits = true;
+            prev_digit = true;
+            clean.push(c);
+        } else if c == b'_' and prev_digit and k + 1 < b.len() and is_digit(b[k + 1]) {
+            prev_digit = false;
+        } else if c == b'.' and not seen_dot and not seen_e {
+            seen_dot = true;
+            prev_digit = false;
+            clean.push(c);
+        } else if (c == b'e' or c == b'E') and digits and not seen_e {
+            seen_e = true;
+            prev_digit = false;
+            clean.push(c);
+            if k + 1 < b.len() and (b[k + 1] == b'+' or b[k + 1] == b'-') {
+                clean.push(b[k + 1]);
+                k += 1;
+            }
+            if k + 1 >= b.len() or not is_digit(b[k + 1]) {
+                return None;
+            }
+        } else {
+            return None;
+        }
+        k += 1;
+    }
+    if not digits {
+        return None;
+    }
+    match f64.parse(from_bytes(clean)) {
+        Ok(x) => Some(if neg { -x } else { x }),
+        Err(_) => None,
+    }
+}
+
+// convertor.to_string(value); Err is "Class: message".
+fn to_string_param(kind: i64, v: ref Pv) -> Result[String, String] {
+    if kind == C_STR {
+        let s = pv_str_of(v);
+        if has_byte(s, b'/') {
+            return Err("AssertionError: May not contain path separators".to_string());
+        }
+        if s.len() == 0 {
+            return Err("AssertionError: Must not be empty".to_string());
+        }
+        return Ok(s);
+    }
+    if kind == C_INT {
+        let n = if v.t == V_INT {
+            v.i
+        } else {
+            match py_int(v.s) {
+                Some(n) => n,
+                None => return Err(f"ValueError: invalid literal for int() with base 10: {py_repr(v.s)}"),
+            }
+        };
+        if n < 0 {
+            return Err("AssertionError: Negative integers are not supported".to_string());
+        }
+        return Ok(n.to_string());
+    }
+    if kind == C_FLOAT {
+        let x = if v.t == V_FLOAT {
+            v.f
+        } else if v.t == V_INT {
+            v.i as f64
+        } else {
+            match py_float(v.s) {
+                Some(x) => x,
+                None => return Err(f"ValueError: could not convert string to float: {py_repr(v.s)}"),
+            }
+        };
+        if not (x >= 0.0) {
+            return Err("AssertionError: Negative floats are not supported".to_string());
+        }
+        if x == f64.INFINITY {
+            return Err("AssertionError: Infinite values are not supported".to_string());
+        }
+        // ("%0.20f" % value).rstrip("0").rstrip(".")
+        let mut t = to_bytes(f"{x:.20}");
+        while t.len() > 0 and t[t.len() - 1] == b'0' {
+            t.pop();
+        }
+        while t.len() > 0 and t[t.len() - 1] == b'.' {
+            t.pop();
+        }
+        return Ok(from_bytes(t));
+    }
+    Ok(pv_str_of(v))
+}
+
+fn replace_all(s: Str, pat: Str, with: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if pat.len() > 0 and starts_at(b, i, pat) {
+            push_str_bytes(mut out, with);
+            i += pat.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+// replace_params: each parameter the format names is filled in and taken
+// out of `params`.
+fn replace_params(format: Str, c: ref Compiled, params: mut ref Vec[Param]) -> Result[String, String] {
+    let mut path = format.to_string();
+    let keys = params.clone();
+    for p in keys.iter() {
+        let hole = f"{{{p.name}}}";
+        if find_str(path, hole) >= 0 {
+            let value = to_string_param(conv_of(c, p.name), p.value)?;
+            path = replace_all(path, hole, value);
+            let at = param_find(params, p.name);
+            params.remove(at);
+        }
+    }
+    Ok(path)
+}
+// ------------------------------------------------------------ set order
+
+// A Route's methods are a set, and a 405 joins that set into its Allow
+// header, so the header lists them in the set's slot order. Under
+// PYTHONHASHSEED=0 a str hashes with SipHash-1-3 and an all-zero key.
+fn sip_round(v: mut ref Vec[u64]) {
+    v[0] = v[0].wrapping_add(v[1]);
+    v[1] = v[1].rotate_left(13) ^ v[0];
+    v[0] = v[0].rotate_left(32);
+    v[2] = v[2].wrapping_add(v[3]);
+    v[3] = v[3].rotate_left(16) ^ v[2];
+    v[0] = v[0].wrapping_add(v[3]);
+    v[3] = v[3].rotate_left(21) ^ v[0];
+    v[2] = v[2].wrapping_add(v[1]);
+    v[1] = v[1].rotate_left(17) ^ v[2];
+    v[2] = v[2].rotate_left(32);
+}
+
+fn str_hash(s: Str) -> u64 {
+    let b = to_bytes(s);
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut v: Vec[u64] = vec![0x736f6d6570736575, 0x646f72616e646f6d, 0x6c7967656e657261, 0x7465646279746573];
+    let mut i: i64 = 0;
+    while i + 8 <= n {
+        let mut m: u64 = 0;
+        for k in 0..8 {
+            m = m | ((b[i + k] as u64) << (8 * k) as u64);
+        }
+        v[3] = v[3] ^ m;
+        sip_round(mut v);
+        v[0] = v[0] ^ m;
+        i += 8;
+    }
+    let mut last: u64 = ((n & 0xff) as u64) << 56;
+    let mut k: i64 = 0;
+    while i + k < n {
+        last = last | ((b[i + k] as u64) << (8 * k) as u64);
+        k += 1;
+    }
+    v[3] = v[3] ^ last;
+    sip_round(mut v);
+    v[0] = v[0] ^ last;
+    v[2] = v[2] ^ 0xff;
+    sip_round(mut v);
+    sip_round(mut v);
+    sip_round(mut v);
+    let h = v[0] ^ v[1] ^ v[2] ^ v[3];
+    // -1 is the error return, so a hash of -1 becomes -2
+    if h == 0xffffffffffffffff { 0xfffffffffffffffe } else { h }
+}
+
+// set_insert_clean / set_add_entry over a table with no dummies: nine
+// linear probes when they fit, then the perturbed jump.
+fn set_insert(table: mut ref Vec[String], used: mut ref Vec[bool], key: Str) -> bool {
+    let mask = (table.len() - 1) as u64;
+    let h = str_hash(key);
+    let mut perturb = h;
+    let mut i = h & mask;
+    loop {
+        let at = i as i64;
+        if not used[at] {
+            table[at] = key.to_string();
+            used[at] = true;
+            return true;
+        }
+        if table[at] == key {
+            return false;
+        }
+        if i + 9 <= mask {
+            for j in 1..10 {
+                let a = at + j;
+                if not used[a] {
+                    table[a] = key.to_string();
+                    used[a] = true;
+                    return true;
+                }
+                if table[a] == key {
+                    return false;
+                }
+            }
+        }
+        perturb = perturb >> 5;
+        i = (i.wrapping_mul(5).wrapping_add(1).wrapping_add(perturb)) & mask;
+    }
+}
+
+// The iteration order of a set of strs built by adding `items` in order.
+fn set_order(items: ref Vec[String]) -> Vec[String] {
+    let mut size = 8;
+    let mut table: Vec[String] = Vec.new();
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..size {
+        table.push(String.new());
+        used.push(false);
+    }
+    let mut fill = 0;
+    for key in items.iter() {
+        if set_insert(mut table, mut used, key) {
+            fill += 1;
+            if fill * 5 >= (size - 1) * 3 {
+                let mut ns = 8;
+                while ns <= fill * 4 {
+                    ns = ns * 2;
+                }
+                let mut old: Vec[String] = Vec.new();
+                for k in 0..size {
+                    if used[k] {
+                        old.push(table[k].clone());
+                    }
+                }
+                size = ns;
+                table = Vec.new();
+                used = Vec.new();
+                for _ in 0..size {
+                    table.push(String.new());
+                    used.push(false);
+                }
+                for o in old.iter() {
+                    set_insert(mut table, mut used, o);
+                }
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..size {
+        if used[k] {
+            out.push(table[k].clone());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ headers
+
+#[derive(Clone)]
+struct Header {
+    key: String,
+    value: String,
+}
+
+fn hdr(k: Str, v: Str) -> Header {
+    Header { key: lower(k), value: v.to_string() }
+}
+
+fn header_get(hs: ref Vec[Header], key: Str) -> Option[String] {
+    let k = lower(key);
+    for h in hs.iter() {
+        if h.key == k {
+            return Some(h.value.clone());
+        }
+    }
+    None
+}
+
+fn header_list(hs: ref Vec[Header], key: Str) -> Vec[String] {
+    let k = lower(key);
+    let mut out: Vec[String] = Vec.new();
+    for h in hs.iter() {
+        if h.key == k {
+            out.push(h.value.clone());
+        }
+    }
+    out
+}
+
+// MutableHeaders.__setitem__: the first entry with the key takes the
+// value, any later ones go, and a new key goes at the end.
+fn header_set(hs: mut ref Vec[Header], key: Str, value: Str) {
+    let k = lower(key);
+    let mut found: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < hs.len() {
+        if hs[i].key == k {
+            found.push(i);
+        }
+        i += 1;
+    }
+    let mut j = found.len() - 1;
+    while j >= 1 {
+        hs.remove(found[j]);
+        j -= 1;
+    }
+    if found.len() > 0 {
+        hs[found[0]] = Header { key: k, value: value.to_string() };
+    } else {
+        hs.push(Header { key: k, value: value.to_string() });
+    }
+}
+
+fn add_vary_header(hs: mut ref Vec[Header], vary: Str) {
+    let v = match header_get(hs, "vary") {
+        Some(existing) => f"{existing}, {vary}",
+        None => vary.to_string(),
+    };
+    header_set(mut hs, "vary", v);
+}
+
+// ------------------------------------------------------------ responses
+
+#[derive(Clone)]
+struct HttpResponse {
+    status: i64,
+    headers: Vec[Header],
+    body: String,
+}
+
+// HttpResponse.__init__ and init_headers: the given headers first, then
+// content-length (not below 200, nor for 204 and 304), then content-type,
+// with a charset for text/.
+fn response(body: Str, status: i64, given: ref Vec[Header], media: Str) -> HttpResponse {
+    let mut hs: Vec[Header] = Vec.new();
+    let mut have_length = false;
+    let mut have_type = false;
+    for h in given.iter() {
+        let k = lower(h.key);
+        if k == "content-length" {
+            have_length = true;
+        }
+        if k == "content-type" {
+            have_type = true;
+        }
+        hs.push(Header { key: k, value: h.value.clone() });
+    }
+    if not have_length and not (status < 200 or status == 204 or status == 304) {
+        hs.push(hdr("content-length", body.len().to_string()));
+    }
+    if media.len() > 0 and not have_type {
+        let mut ct = media.to_string();
+        if starts_with(media, "text/") and find_str(lower(media), "charset=") < 0 {
+            ct.push_str("; charset=utf-8");
+        }
+        hs.push(hdr("content-type", ct));
+    }
+    HttpResponse { status: status, headers: hs, body: body.to_string() }
+}
+
+fn plain(text: Str, status: i64, given: ref Vec[Header]) -> HttpResponse {
+    response(text, status, given, "text/plain")
+}
+
+fn json_response(v: ref Jv, status: i64, given: ref Vec[Header]) -> HttpResponse {
+    response(json_dumps(v), status, given, "application/json")
+}
+
+fn no_headers() -> Vec[Header] {
+    Vec.new()
+}
+
+// RedirectResponse: an empty body, then the location, quoted.
+fn redirect(url: Str, status: i64) -> HttpResponse {
+    let mut r = response("", status, no_headers(), "");
+    header_set(mut r.headers, "location", quote(url, ":/%#?=@[]!$&'()*+,;"));
+    r
+}
+
+// HttpResponse.set_cookie through SimpleCookie: the attributes in sorted
+// order, as Morsel.OutputString writes them.
+fn set_cookie(r: mut ref HttpResponse, key: Str, value: Str, max_age: i64, path: Str, secure: bool, httponly: bool, samesite: Str) {
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(f"{key}={cookie_quote(value)}");
+    if httponly {
+        parts.push("HttpOnly".to_string());
+    }
+    if max_age >= 0 {
+        parts.push(f"Max-Age={max_age}");
+    }
+    if path.len() > 0 {
+        parts.push(f"Path={path}");
+    }
+    if samesite.len() > 0 {
+        parts.push(f"SameSite={samesite}");
+    }
+    if secure {
+        parts.push("Secure".to_string());
+    }
+    r.headers.push(hdr("set-cookie", join(parts, "; ")));
+}
+
+// ------------------------------------------------------------ exceptions
+
+const E_HTTP: i64 = 0;
+const E_STOCK: i64 = 1;
+const E_PY: i64 = 2;
+
+// A raised exception: an HTTPException with its status, detail and
+// headers; the app's OutOfStock with its sku; or any other Python error,
+// as its class name and str().
+struct Exc {
+    kind: i64,
+    status: i64,
+    detail: String,
+    headers: Vec[Header],
+    name: String,
+}
+
+fn http_exc(status: i64, detail: Str, headers: own Vec[Header]) -> Exc {
+    let d = if detail.len() == 0 { status_phrase(status) } else { detail.to_string() };
+    Exc { kind: E_HTTP, status: status, detail: d, headers: headers, name: String.new() }
+}
+
+fn http_error(status: i64, detail: Str) -> Exc {
+    http_exc(status, detail, no_headers())
+}
+
+fn py_error(name: Str, text: own String) -> Exc {
+    Exc { kind: E_PY, status: 0, detail: text, headers: Vec.new(), name: name.to_string() }
+}
+
+// ------------------------------------------------------------ the scope
+
+#[derive(Clone)]
+struct Scope {
+    method: String,
+    scheme: String,
+    path: String,
+    query: String,
+    root_path: String,
+    // None until a Mount sets it
+    app_root_path: Option[String],
+    headers: Vec[Header],
+    params: Vec[Param],
+}
+
+// get_route_path
+fn route_path(s: ref Scope) -> String {
+    let root = s.root_path.clone();
+    if root.len() == 0 or not starts_with(s.path, root) {
+        return s.path.clone();
+    }
+    if s.path == root {
+        return String.new();
+    }
+    if byte_at(s.path, root.len()) == b'/' {
+        return slice_from(s.path, root.len());
+    }
+    s.path.clone()
+}
+
+fn is_host_label(c: u8) -> bool {
+    is_alnum(c) or c == b'.' or c == b'-'
+}
+
+fn is_hex_lower(c: u8) -> bool {
+    is_digit(c) or (lower_byte(c) >= b'a' and lower_byte(c) <= b'f')
+}
+
+// _HOST_RE.fullmatch, case-insensitive:
+// ([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9.:]+\])(?::[0-9]+)?
+fn host_ok(h: Str) -> bool {
+    let b = to_bytes(h);
+    let mut i: i64 = 0;
+    if i < b.len() and b[i] == b'[' {
+        let close = find_byte(h, b']');
+        if close < 0 {
+            return false;
+        }
+        let inner = slice(h, 1, close);
+        // [a-f0-9]*:[a-f0-9.:]+ backtracks to the last colon that leaves
+        // something after it
+        let ib = to_bytes(inner);
+        let mut colon: i64 = -1;
+        for k in 0..ib.len() {
+            if ib[k] == b':' {
+                colon = k;
+                break;
+            }
+        }
+        if colon < 0 or colon + 1 >= ib.len() {
+            return false;
+        }
+        for k in 0..colon {
+            if not is_hex_lower(ib[k]) {
+                return false;
+            }
+        }
+        for k in colon + 1..ib.len() {
+            if not (is_hex_lower(ib[k]) or ib[k] == b'.' or ib[k] == b':') {
+                return false;
+            }
+        }
+        i = close + 1;
+    } else {
+        let st = i;
+        while i < b.len() and is_host_label(b[i]) {
+            i += 1;
+        }
+        if i == st {
+            return false;
+        }
+    }
+    if i == b.len() {
+        return true;
+    }
+    if b[i] != b':' or i + 1 >= b.len() {
+        return false;
+    }
+    for k in i + 1..b.len() {
+        if not is_digit(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+const SERVER_HOST: Str = "bookshop.test";
+
+// URL(scope=scope)
+fn scope_url(s: ref Scope) -> String {
+    let netloc = match header_get(s.headers, "host") {
+        Some(h) => if host_ok(h) { h } else { server_netloc(s.scheme) },
+        None => server_netloc(s.scheme),
+    };
+    urlunsplit(s.scheme, netloc, s.path, s.query, "")
+}
+
+fn server_netloc(scheme: Str) -> String {
+    // the server is ("bookshop.test", 80) for http and 443 for https
+    let _ = scheme;
+    SERVER_HOST.to_string()
+}
+
+// request.base_url
+fn base_url(s: ref Scope) -> String {
+    let mut b = s.clone();
+    let root = match s.app_root_path {
+        Some(p) => p.clone(),
+        None => s.root_path.clone(),
+    };
+    let mut path = root.clone();
+    if not ends_with(path, "/") {
+        path.push_str("/");
+    }
+    b.path = path;
+    b.query = String.new();
+    b.root_path = root;
+    scope_url(b)
+}
+
+// URL(...).path
+fn url_path(url: Str) -> String {
+    match urlsplit(url, "") {
+        Ok(sp) => sp.path,
+        Err(_) => String.new(),
+    }
+}
+
+fn rstrip_slash(s: Str) -> String {
+    let mut b = to_bytes(s);
+    while b.len() > 0 and b[b.len() - 1] == b'/' {
+        b.pop();
+    }
+    from_bytes(b)
+}
+
+fn ends_with(s: Str, pat: Str) -> bool {
+    s.len() >= pat.len() and slice_from(s, s.len() - pat.len()) == pat
+}
+
+// A url_path_for result: URLPath's text, protocol and host.
+#[derive(Clone)]
+struct UrlPath {
+    path: String,
+    protocol: String,
+    host: String,
+}
+
+// URLPath.make_absolute_url(base_url)
+fn make_absolute(u: ref UrlPath, base: Str) -> String {
+    let b = match urlsplit(base, "") {
+        Ok(sp) => sp,
+        Err(_) => return String.new(),
+    };
+    let secure = b.scheme == "https" or b.scheme == "wss";
+    let scheme = if u.protocol == "http" {
+        if secure { "https".to_string() } else { "http".to_string() }
+    } else if u.protocol == "websocket" {
+        if secure { "wss".to_string() } else { "ws".to_string() }
+    } else {
+        b.scheme.clone()
+    };
+    let netloc = if u.host.len() > 0 { u.host.clone() } else { b.netloc.clone() };
+    let path = f"{rstrip_slash(b.path)}{u.path}";
+    urlunsplit(scheme, netloc, path, "", "")
+}
+fn status_phrase(code: i64) -> String {
+    let p = match code {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        102 => "Processing",
+        103 => "Early Hints",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Content Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a Teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Content",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "",
+    };
+    p.to_string()
+}
+// ------------------------------------------------------------ routes
+
+const R_ROUTE: i64 = 0;
+const R_MOUNT: i64 = 1;
+const R_HOST: i64 = 2;
+
+// A Route, a Mount (over a router, or over the static files app) or a
+// Host (over a router).
+#[derive(Clone)]
+struct RouteDef {
+    kind: i64,
+    path: String,
+    name: String,
+    has_name: bool,
+    // the method set in its iteration order; empty for a Mount or Host
+    methods: Vec[String],
+    compiled: Compiled,
+    endpoint: String,
+    routes: Vec[RouteDef],
+    static_app: bool,
+}
+
+fn compiled_or_panic(path: Str) -> Compiled {
+    match compile_path(path) {
+        Ok(c) => c,
+        Err(e) => {
+            println(f"! {e}");
+            compile_path("/").unwrap()
+        },
+    }
+}
+
+// Route(path, endpoint, methods=..., name=...): the name defaults to the
+// endpoint's, the methods to GET, and GET brings HEAD.
+fn route(path: Str, endpoint: Str, methods: ref Vec[Str], name: Str) -> RouteDef {
+    let mut ms: Vec[String] = Vec.new();
+    let mut have_get = false;
+    for m in methods.iter() {
+        let u = upper(m);
+        if u == "GET" {
+            have_get = true;
+        }
+        ms.push(u);
+    }
+    if methods.len() == 0 {
+        ms.push("GET".to_string());
+        have_get = true;
+    }
+    if have_get {
+        ms.push("HEAD".to_string());
+    }
+    let n = if name.len() > 0 { name.to_string() } else { endpoint.to_string() };
+    RouteDef { kind: R_ROUTE, path: path.to_string(), name: n, has_name: true, methods: set_order(ms), compiled: compiled_or_panic(path), endpoint: endpoint.to_string(), routes: Vec.new(), static_app: false }
+}
+
+fn get(path: Str, endpoint: Str) -> RouteDef {
+    route(path, endpoint, Vec.new(), "")
+}
+
+fn mount(path: Str, name: Str, routes: own Vec[RouteDef], static_app: bool) -> RouteDef {
+    let p = rstrip_slash(path);
+    let template = f"{p}/{{path:path}}";
+    RouteDef { kind: R_MOUNT, path: p, name: name.to_string(), has_name: name.len() > 0, methods: Vec.new(), compiled: compiled_or_panic(template), endpoint: String.new(), routes: routes, static_app: static_app }
+}
+
+fn host(template: Str, name: Str, routes: own Vec[RouteDef]) -> RouteDef {
+    RouteDef { kind: R_HOST, path: template.to_string(), name: name.to_string(), has_name: name.len() > 0, methods: Vec.new(), compiled: compiled_or_panic(template), endpoint: String.new(), routes: routes, static_app: false }
+}
+
+fn app_routes() -> Vec[RouteDef] {
+    let tenant = vec![route("/", "tenant_home", Vec.new(), "home"), route("/stats", "tenant_stats", Vec.new(), "stats")];
+    let tools = vec![route("/{tool}", "tool", Vec.new(), "tool")];
+    let admin = vec![
+        route("/", "admin_home", Vec.new(), "home"),
+        route("/users/{uid:int}", "admin_user", Vec.new(), "user"),
+        route("/reports/", "reports", Vec.new(), "reports"),
+        mount("/tools", "tools", tools, false),
+    ];
+    vec![
+        host("{tenant}.shop.example", "tenant", tenant),
+        get("/", "homepage"),
+        route("/books", "list_books", Vec.new(), "books"),
+        route("/books", "create_book", vec!["POST"], ""),
+        route("/books/{book_id:int}", "get_book", Vec.new(), "book"),
+        route("/books/{book_id:int}", "update_book", vec!["PUT", "PATCH"], ""),
+        route("/books/{book_id:int}", "delete_book", vec!["DELETE"], ""),
+        route("/books/{book_id:int}/price/{currency}", "price_in", Vec.new(), "price"),
+        route("/rates/{rate:float}", "rate", Vec.new(), "rate"),
+        route("/orders/{order_id:uuid}", "order", vec!["GET", "DELETE", "POST"], "order"),
+        route("/files/{path:path}", "files", Vec.new(), "files"),
+        route("/search/", "search", Vec.new(), "search"),
+        get("/old-catalog", "old_catalog"),
+        get("/go", "go"),
+        route("/echo", "echo", vec!["GET", "POST", "PUT", "PATCH", "DELETE"], ""),
+        route("/login", "login", vec!["POST"], ""),
+        route("/logout", "logout", vec!["POST"], ""),
+        get("/whoami", "whoami"),
+        route("/teapot", "teapot", vec!["GET", "POST", "brew"], ""),
+        get("/boom", "boom"),
+        route("/stock/{sku}", "stock", Vec.new(), "stock"),
+        route("/cache/{key}", "cache", Vec.new(), "cache"),
+        mount("/admin", "admin", admin, false),
+        mount("/static", "static", Vec.new(), true),
+    ]
+}
+
+fn route_repr(r: ref RouteDef) -> String {
+    let sorted = sort_strings(r.methods.clone());
+    let mut ms: Vec[String] = Vec.new();
+    for m in sorted.iter() {
+        ms.push(py_repr(m));
+    }
+    f"Route(path={py_repr(r.path)}, name={py_repr(r.name)}, methods=[{join(ms, ", ")}])"
+}
+
+// ------------------------------------------------------------ url_path_for
+
+fn param_names(ps: ref Vec[Param]) -> String {
+    let mut names: Vec[String] = Vec.new();
+    for p in ps.iter() {
+        names.push(p.name.clone());
+    }
+    join(names, ", ")
+}
+
+fn no_match(name: Str, ps: ref Vec[Param]) -> String {
+    f"NoMatchFound: No route exists for name \"{name}\" and params \"{param_names(ps)}\"."
+}
+
+fn same_names(ps: ref Vec[Param], names: ref Vec[String]) -> bool {
+    if ps.len() != names.len() {
+        return false;
+    }
+    for p in ps.iter() {
+        if not contains_str(names, p.name) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_no_match(e: ref String) -> bool {
+    starts_with(e, "NoMatchFound")
+}
+
+// BaseRoute.url_path_for: Err is the exception, "Class: message".
+fn route_url(r: ref RouteDef, name: Str, params_in: ref Vec[Param]) -> Result[UrlPath, String] {
+    let mut params = params_in.clone();
+    if r.kind == R_ROUTE {
+        if name != r.name or not same_names(params, r.compiled.names) {
+            return Err(no_match(name, params));
+        }
+        let path = replace_params(r.compiled.format, r.compiled, mut params)?;
+        return Ok(UrlPath { path: path, protocol: "http".to_string(), host: String.new() });
+    }
+    let has_path = param_find(params, "path") >= 0;
+    if r.kind == R_MOUNT {
+        if r.has_name and name == r.name and has_path {
+            let at = param_find(params, "path");
+            let lstripped = lstrip_slash(pv_str_of(params[at].value));
+            params[at].value = pv_str(lstripped);
+            let path = replace_params(r.compiled.format, r.compiled, mut params)?;
+            if params.len() == 0 {
+                return Ok(UrlPath { path: path, protocol: String.new(), host: String.new() });
+            }
+        } else if not r.has_name or starts_with(name, f"{r.name}:") {
+            let rest = if r.has_name { slice_from(name, r.name.len() + 1) } else { name.to_string() };
+            let kwarg = param_find(params, "path");
+            let saved = if kwarg >= 0 { Some(params[kwarg].value.clone()) } else { None };
+            param_set(mut params, "path", pv_str(""));
+            let prefix = replace_params(r.compiled.format, r.compiled, mut params)?;
+            match saved {
+                Some(v) => param_set(mut params, "path", v),
+                None => {},
+            }
+            for child in r.routes.iter() {
+                match route_url(child, rest, params) {
+                    Ok(u) => return Ok(UrlPath { path: f"{rstrip_slash(prefix)}{u.path}", protocol: u.protocol, host: String.new() }),
+                    Err(e) => if not is_no_match(e) {
+                        return Err(e);
+                    },
+                }
+            }
+        }
+        return Err(no_match(name, params));
+    }
+    // Host
+    if r.has_name and name == r.name and has_path {
+        let at = param_find(params, "path");
+        let path = pv_str_of(params[at].value);
+        params.remove(at);
+        let h = replace_params(r.compiled.format, r.compiled, mut params)?;
+        if params.len() == 0 {
+            return Ok(UrlPath { path: path, protocol: String.new(), host: h });
+        }
+    } else if not r.has_name or starts_with(name, f"{r.name}:") {
+        let rest = if r.has_name { slice_from(name, r.name.len() + 1) } else { name.to_string() };
+        let h = replace_params(r.compiled.format, r.compiled, mut params)?;
+        for child in r.routes.iter() {
+            match route_url(child, rest, params) {
+                Ok(u) => return Ok(UrlPath { path: u.path, protocol: u.protocol, host: h }),
+                Err(e) => if not is_no_match(e) {
+                    return Err(e);
+                },
+            }
+        }
+    }
+    Err(no_match(name, params))
+}
+
+fn lstrip_slash(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and b[i] == b'/' {
+        i += 1;
+    }
+    byte_str(b, i, b.len())
+}
+
+// Router.url_path_for
+fn url_path_for(routes: ref Vec[RouteDef], name: Str, params: ref Vec[Param]) -> Result[UrlPath, String] {
+    for r in routes.iter() {
+        match route_url(r, name, params) {
+            Ok(u) => return Ok(u),
+            Err(e) => if not is_no_match(e) {
+                return Err(e);
+            },
+        }
+    }
+    Err(no_match(name, params))
+}
+
+// ------------------------------------------------------------ the app's state
+
+#[derive(Clone)]
+struct Book {
+    id: i64,
+    title: String,
+    author: String,
+    price: Jv,
+    tags: Vec[String],
+}
+
+struct App {
+    routes: Vec[RouteDef],
+    books: Vec[Book],
+    next_id: i64,
+    requests: i64,
+}
+
+fn new_app() -> App {
+    let mut app = App { routes: app_routes(), books: Vec.new(), next_id: 1, requests: 0 };
+    add_book(mut app, "Dune", "Frank Herbert", jfloat(9.99), vec!["sci-fi".to_string(), "classic".to_string()]);
+    add_book(mut app, "The Left Hand of Darkness", "Ursula K. Le Guin", jfloat(12.5), vec!["sci-fi".to_string()]);
+    add_book(mut app, "Cien años de soledad", "Gabriel García Márquez", jint(15), vec!["classic".to_string(), "magic-realism".to_string()]);
+    app
+}
+
+fn add_book(app: mut ref App, title: Str, author: Str, price: own Jv, tags: own Vec[String]) -> i64 {
+    let id = app.next_id;
+    app.next_id += 1;
+    app.books.push(Book { id: id, title: title.to_string(), author: author.to_string(), price: price, tags: tags });
+    id
+}
+
+fn book_index(app: ref App, id: i64) -> i64 {
+    let mut k = 0;
+    while k < app.books.len() {
+        if app.books[k].id == id {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn book_json(b: ref Book) -> Jv {
+    let mut d = jdict();
+    dset(mut d, "id", jint(b.id));
+    dset(mut d, "title", jstr(b.title));
+    dset(mut d, "author", jstr(b.author));
+    dset(mut d, "price", b.price.clone());
+    dset(mut d, "tags", jstrs(b.tags));
+    d
+}
+
+// ------------------------------------------------------------ requests
+
+// What an endpoint sees: the scope as routing left it, and the body.
+struct HttpRequest {
+    scope: Scope,
+    body: Vec[u8],
+}
+
+impl HttpRequest {
+    fn param(ref self, name: Str) -> Pv {
+        let at = param_find(self.scope.params, name);
+        self.scope.params[at].value.clone()
+    }
+
+    fn query(ref self) -> Vec[Pair] {
+        match parse_qsl(self.scope.query, true, false, "&") {
+            Ok(p) => p,
+            Err(_) => Vec.new(),
+        }
+    }
+
+    // QueryParams.get: the last value given for the name
+    fn query_get(ref self, name: Str) -> Option[String] {
+        let mut found: Option[String] = None;
+        for p in self.query().iter() {
+            if p.name == name {
+                found = Some(p.value.clone());
+            }
+        }
+        found
+    }
+
+    fn query_list(ref self, name: Str) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for p in self.query().iter() {
+            if p.name == name {
+                out.push(p.value.clone());
+            }
+        }
+        out
+    }
+
+    // request.cookies: every Cookie header through cookie_parser
+    fn cookies(ref self) -> Jv {
+        let mut d = jdict();
+        for header in header_list(self.scope.headers, "cookie").iter() {
+            for chunk in split_on(header, b';').iter() {
+                let (key, val) = if has_byte(chunk, b'=') {
+                    let (k, _, v) = partition(chunk, b'=');
+                    (k, v)
+                } else {
+                    (String.new(), chunk.clone())
+                };
+                let k = strip(key);
+                let v = strip(val);
+                if k.len() > 0 or v.len() > 0 {
+                    dset(mut d, k, jstr(cookie_unquote(v)));
+                }
+            }
+        }
+        d
+    }
+
+    fn url_for(ref self, app: ref App, name: Str, params: ref Vec[Param]) -> Result[String, Exc] {
+        match url_path_for(app.routes, name, params) {
+            Ok(u) => Ok(make_absolute(u, base_url(self.scope))),
+            Err(e) => {
+                let (cls, _, msg) = partition(e, b':');
+                Err(py_error(cls, strip(msg)))
+            },
+        }
+    }
+
+    // request.json(); a ValueError becomes the endpoint's 400
+    fn json(ref self) -> Result[Jv, Exc] {
+        match json_loads(self.body) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(http_error(400, "Body must be valid JSON")),
+        }
+    }
+}
+
+fn one_param(name: Str, v: own Pv) -> Vec[Param] {
+    vec![Param { name: name.to_string(), value: v }]
+}
+
+fn code_len(s: Str) -> i64 {
+    code_points(s).len()
+}
+
+// ------------------------------------------------------------ endpoints
+
+fn check_fields(data: ref Jv, partial: bool) -> Vec[String] {
+    let mut errors: Vec[String] = Vec.new();
+    for key in data.keys.iter() {
+        if key != "title" and key != "author" and key != "price" and key != "tags" {
+            errors.push(f"unknown field {py_repr(key)}");
+        }
+    }
+    for key in vec!["title", "author"].iter() {
+        let at = dfind(data, key);
+        if at >= 0 or not partial {
+            let ok = at >= 0 and data.items[at].t == J_STR and strip(data.items[at].s).len() > 0;
+            if not ok {
+                errors.push(f"{key} is required");
+            }
+        }
+    }
+    let p = dfind(data, "price");
+    if p >= 0 {
+        let v = data.items[p].clone();
+        if not is_number(v) or num_value(v) < 0.0 {
+            errors.push("price must be a non-negative number".to_string());
+        }
+    }
+    let t = dfind(data, "tags");
+    if t >= 0 {
+        let v = data.items[t].clone();
+        let mut ok = v.t == J_LIST;
+        if ok {
+            for x in v.items.iter() {
+                if x.t != J_STR {
+                    ok = false;
+                }
+            }
+        }
+        if not ok {
+            errors.push("tags must be a list of strings".to_string());
+        }
+    }
+    errors
+}
+
+fn errors_response(errors: ref Vec[String]) -> HttpResponse {
+    let mut d = jdict();
+    dset(mut d, "errors", jstrs(errors));
+    json_response(d, 422, no_headers())
+}
+
+fn str_items(v: ref Jv) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in v.items.iter() {
+        out.push(x.s.clone());
+    }
+    out
+}
+
+fn list_books(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let mut items: Vec[Book] = app.books.clone();
+    match req.query_get("author") {
+        Some(a) => if a.len() > 0 {
+            let want = a.to_lowercase();
+            let mut kept: Vec[Book] = Vec.new();
+            for b in items.iter() {
+                if b.author.to_lowercase() == want {
+                    kept.push(b.clone());
+                }
+            }
+            items = kept;
+        },
+        None => {},
+    }
+    for tag in req.query_list("tag").iter() {
+        let mut kept: Vec[Book] = Vec.new();
+        for b in items.iter() {
+            if contains_str(b.tags, tag) {
+                kept.push(b.clone());
+            }
+        }
+        items = kept;
+    }
+    let limit = py_int(req.query_get("limit").unwrap_or("10".to_string()));
+    let offset = py_int(req.query_get("offset").unwrap_or("0".to_string()));
+    let (l, o) = match (limit, offset) {
+        (Some(l), Some(o)) => (l, o),
+        _ => return Err(http_error(400, "limit and offset must be integers")),
+    };
+    if l < 0 or o < 0 {
+        return Err(http_error(400, "limit and offset must not be negative"));
+    }
+    let mut page: Vec[Jv] = Vec.new();
+    let mut k = o;
+    while k < items.len() and k < o + l {
+        page.push(book_json(items[k]));
+        k += 1;
+    }
+    let mut d = jdict();
+    dset(mut d, "total", jint(items.len()));
+    dset(mut d, "items", jlist(page));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn create_book(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let data = req.json()?;
+    if data.t != J_DICT {
+        return Err(http_error(422, "Expected a JSON object"));
+    }
+    let errors = check_fields(data, false);
+    if errors.len() > 0 {
+        return Ok(errors_response(errors));
+    }
+    let p = dfind(data, "price");
+    let price = if p >= 0 { data.items[p].clone() } else { jint(0) };
+    let t = dfind(data, "tags");
+    let tags = if t >= 0 { str_items(data.items[t]) } else { Vec.new() };
+    let title = strip(data.items[dfind(data, "title")].s);
+    let author = strip(data.items[dfind(data, "author")].s);
+    let id = add_book(mut app, title, author, price, tags);
+    let location = req.url_for(app, "book", one_param("book_id", pv_int(id)))?;
+    let b = app.books[book_index(app, id)].clone();
+    Ok(json_response(book_json(b), 201, vec![hdr("Location", location)]))
+}
+
+fn book_or_404(app: ref App, req: ref HttpRequest) -> Result[i64, Exc] {
+    let id = req.param("book_id").i;
+    let at = book_index(app, id);
+    if at < 0 {
+        return Err(http_error(404, f"Book {id} not found"));
+    }
+    Ok(at)
+}
+
+fn get_book(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let at = book_or_404(app, req)?;
+    Ok(json_response(book_json(app.books[at]), 200, no_headers()))
+}
+
+fn update_book(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let at = book_or_404(app, req)?;
+    let data = req.json()?;
+    if data.t != J_DICT {
+        return Err(http_error(422, "Expected a JSON object"));
+    }
+    let errors = check_fields(data, true);
+    if errors.len() > 0 {
+        return Ok(errors_response(errors));
+    }
+    let mut k = 0;
+    while k < data.keys.len() {
+        let key = data.keys[k].clone();
+        let v = data.items[k].clone();
+        if key == "title" {
+            app.books[at].title = strip(v.s);
+        } else if key == "author" {
+            app.books[at].author = strip(v.s);
+        } else if key == "price" {
+            app.books[at].price = v;
+        } else {
+            app.books[at].tags = str_items(v);
+        }
+        k += 1;
+    }
+    Ok(json_response(book_json(app.books[at]), 200, no_headers()))
+}
+
+fn delete_book(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let at = book_or_404(app, req)?;
+    app.books.remove(at);
+    Ok(response("", 204, no_headers(), ""))
+}
+
+fn rate_for(currency: Str) -> Option[f64] {
+    if currency == "USD" {
+        return Some(1.0);
+    }
+    if currency == "EUR" {
+        return Some(0.92);
+    }
+    if currency == "GBP" {
+        return Some(0.79);
+    }
+    if currency == "JPY" {
+        return Some(149.5);
+    }
+    None
+}
+
+fn price_in(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let id = req.param("book_id").i;
+    let currency = req.param("currency").s.to_uppercase();
+    let at = book_index(app, id);
+    if at < 0 {
+        return Err(http_error(404, f"Book {id} not found"));
+    }
+    let r = match rate_for(currency) {
+        Some(r) => r,
+        None => return Err(http_error(400, f"Unknown currency {py_repr(currency)}")),
+    };
+    let mut d = jdict();
+    dset(mut d, "book", jint(id));
+    dset(mut d, "currency", jstr(currency));
+    dset(mut d, "price", jfloat(num_value(app.books[at].price) * r));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn rate(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let r = req.param("rate").f;
+    let double = req.url_for(app, "rate", one_param("rate", pv_float(r * 2.0)))?;
+    let mut d = jdict();
+    dset(mut d, "rate", jfloat(r));
+    dset(mut d, "double", jstr(double));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn order(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let oid = req.param("order_id").s;
+    let hex = replace_all(oid, "-", "");
+    if req.scope.method == "DELETE" {
+        return Ok(response("", 204, vec![hdr("X-Order", oid)], ""));
+    }
+    let mut zero = true;
+    for c in hex.bytes() {
+        if c != b'0' {
+            zero = false;
+        }
+    }
+    if req.scope.method == "POST" and zero {
+        return Err(http_error(409, "The nil order cannot be placed"));
+    }
+    // uuid.version: only for the RFC 4122 variant
+    let variant = hex_val(byte_at(hex, 16)) as i64;
+    let version = if variant >= 8 and variant < 12 { jint(hex_val(byte_at(hex, 12)) as i64) } else { jnull() };
+    let mut d = jdict();
+    dset(mut d, "order", jstr(oid));
+    dset(mut d, "hex", jstr(hex));
+    dset(mut d, "version", version);
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn files(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let path = req.param("path").s;
+    Ok(plain(f"file {py_repr(path)} ({code_len(path)} chars)\n", 200, no_headers()))
+}
+
+fn search(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let q = req.query_get("q").unwrap_or(String.new()).to_lowercase();
+    let mut hits: Vec[String] = Vec.new();
+    for b in app.books.iter() {
+        if find_str(b.title.to_lowercase(), q) >= 0 {
+            hits.push(b.title.clone());
+        }
+    }
+    let mut d = jdict();
+    dset(mut d, "q", jstr(q));
+    dset(mut d, "hits", jstrs(hits));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn old_catalog(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let url = req.url_for(app, "books", Vec.new())?;
+    Ok(redirect(url, 301))
+}
+
+fn go(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let target = req.query_get("next").unwrap_or("/".to_string());
+    if not starts_with(target, "/") or starts_with(target, "//") {
+        return Err(http_error(400, "next must be a local path"));
+    }
+    Ok(redirect(target, 303))
+}
+
+fn pairs_json(ps: ref Vec[Pair]) -> Jv {
+    let mut out: Vec[Jv] = Vec.new();
+    for p in ps.iter() {
+        out.push(jlist(vec![jstr(p.name), jstr(p.value)]));
+    }
+    jlist(out)
+}
+
+fn echo(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let url = scope_url(req.scope);
+    let mut hs: Vec[Jv] = Vec.new();
+    for h in req.scope.headers.iter() {
+        hs.push(jlist(vec![jstr(h.key), jstr(h.value)]));
+    }
+    let q = req.query();
+    let mut d = jdict();
+    dset(mut d, "method", jstr(req.scope.method));
+    dset(mut d, "url", jstr(url));
+    dset(mut d, "base_url", jstr(base_url(req.scope)));
+    dset(mut d, "path", jstr(url_path(url)));
+    dset(mut d, "query", pairs_json(q));
+    dset(mut d, "query_string", jstr(urlencode(q, "", true)));
+    dset(mut d, "headers", jlist(hs));
+    dset(mut d, "cookies", req.cookies());
+    dset(mut d, "client", jlist(vec![jstr("203.0.113.9"), jint(50123)]));
+    dset(mut d, "body", jstr(from_bytes(req.body.clone())));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn login(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let data = req.json()?;
+    let mut user = String.new();
+    if data.t == J_DICT {
+        let at = dfind(data, "user");
+        if at >= 0 and data.items[at].t == J_STR {
+            user = data.items[at].s.clone();
+        }
+    }
+    if user.len() == 0 {
+        return Err(http_error(422, "user is required"));
+    }
+    let mut d = jdict();
+    dset(mut d, "ok", jbool(true));
+    dset(mut d, "user", jstr(user));
+    let mut r = json_response(d, 200, no_headers());
+    set_cookie(mut r, "session", f"{user}:{code_len(user)}", 3600, "/", false, true, "lax");
+    set_cookie(mut r, "prefs", "theme=dark; lang=en", -1, "/books", true, false, "strict");
+    Ok(r)
+}
+
+fn logout(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let _ = req;
+    let mut r = plain("bye\n", 200, no_headers());
+    set_cookie(mut r, "session", "", 0, "/", false, false, "lax");
+    Ok(r)
+}
+
+fn whoami(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let cookies = req.cookies();
+    let at = dfind(cookies, "session");
+    if at < 0 {
+        return Err(http_exc(401, "", vec![hdr("WWW-Authenticate", "Cookie realm=\"shop\"")]));
+    }
+    let session = cookies.items[at].s.clone();
+    let (user, _, _) = partition(session, b':');
+    let mut d = jdict();
+    dset(mut d, "user", jstr(user));
+    dset(mut d, "session", jstr(session));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn teapot(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    if req.scope.method == "BREW" {
+        return Ok(plain("brewing\n", 202, no_headers()));
+    }
+    Err(http_exc(418, "", vec![hdr("X-Tea", "Earl Grey")]))
+}
+
+// Python's // rounds toward negative infinity.
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn boom(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let raw = req.query_get("n").unwrap_or("1".to_string());
+    let n = match py_int(raw) {
+        Some(n) => n,
+        None => return Err(py_error("ValueError", f"invalid literal for int() with base 10: {py_repr(raw)}")),
+    };
+    if n == 0 {
+        return Err(py_error("ZeroDivisionError", "integer division or modulo by zero".to_string()));
+    }
+    let mut d = jdict();
+    dset(mut d, "result", jint(floor_div(100, n)));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn stock(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let sku = req.param("sku").s;
+    let count = if sku == "DUNE-HB" {
+        4
+    } else if sku == "LHOD-PB" {
+        0
+    } else {
+        return Err(http_error(404, f"Unknown SKU {sku}"));
+    };
+    if count == 0 {
+        return Err(Exc { kind: E_STOCK, status: 0, detail: sku, headers: Vec.new(), name: String.new() });
+    }
+    let mut d = jdict();
+    dset(mut d, "sku", jstr(sku));
+    dset(mut d, "available", jint(count));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn cache(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let key = req.param("key").s;
+    let etag = f"\"{key}-v1\"";
+    match header_get(req.scope.headers, "if-none-match") {
+        Some(v) => if v == etag {
+            return Err(http_exc(304, "", vec![hdr("ETag", etag)]));
+        },
+        None => {},
+    }
+    Ok(plain(f"value of {key}\n", 200, vec![hdr("ETag", etag), hdr("Cache-Control", "max-age=60"), hdr("Vary", "Accept-Encoding")]))
+}
+
+fn admin_home(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    Ok(plain(f"admin home (root_path {py_repr(req.scope.root_path)})\n", 200, no_headers()))
+}
+
+fn admin_user(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let uid = req.param("uid").i;
+    let me = req.url_for(app, "admin:user", one_param("uid", pv_int(uid)))?;
+    let home = req.url_for(app, "admin:home", Vec.new())?;
+    let mut d = jdict();
+    dset(mut d, "uid", jint(uid));
+    dset(mut d, "self", jstr(me));
+    dset(mut d, "home", jstr(home));
+    dset(mut d, "route_path", jstr(route_path(req.scope)));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn reports(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let year = req.query_get("year").unwrap_or("all".to_string());
+    Ok(plain(f"reports for {year}\n", 200, no_headers()))
+}
+
+fn tool(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    Ok(plain(f"tool {req.param("tool").s} under {req.scope.root_path}\n", 200, no_headers()))
+}
+
+fn tenant_home(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let t = req.param("tenant").s;
+    let home = req.url_for(app, "tenant:home", one_param("tenant", pv_str(t)))?;
+    let mut d = jdict();
+    dset(mut d, "tenant", jstr(t));
+    dset(mut d, "home", jstr(home));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn tenant_stats(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let t = req.param("tenant").s;
+    let mut d = jdict();
+    dset(mut d, "tenant", jstr(t));
+    dset(mut d, "orders", jint(code_len(t) * 7));
+    Ok(json_response(d, 200, no_headers()))
+}
+
+fn homepage(app: mut ref App, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    let _ = app;
+    let _ = req;
+    Ok(plain("Bookshop API\n", 200, no_headers()))
+}
+
+fn call_endpoint(app: mut ref App, name: Str, req: ref HttpRequest) -> Result[HttpResponse, Exc] {
+    match name {
+        "homepage" => homepage(mut app, req),
+        "list_books" => list_books(mut app, req),
+        "create_book" => create_book(mut app, req),
+        "get_book" => get_book(mut app, req),
+        "update_book" => update_book(mut app, req),
+        "delete_book" => delete_book(mut app, req),
+        "price_in" => price_in(mut app, req),
+        "rate" => rate(mut app, req),
+        "order" => order(mut app, req),
+        "files" => files(mut app, req),
+        "search" => search(mut app, req),
+        "old_catalog" => old_catalog(mut app, req),
+        "go" => go(mut app, req),
+        "echo" => echo(mut app, req),
+        "login" => login(mut app, req),
+        "logout" => logout(mut app, req),
+        "whoami" => whoami(mut app, req),
+        "teapot" => teapot(mut app, req),
+        "boom" => boom(mut app, req),
+        "stock" => stock(mut app, req),
+        "cache" => cache(mut app, req),
+        "admin_home" => admin_home(mut app, req),
+        "admin_user" => admin_user(mut app, req),
+        "reports" => reports(mut app, req),
+        "tool" => tool(mut app, req),
+        "tenant_home" => tenant_home(mut app, req),
+        _ => tenant_stats(mut app, req),
+    }
+}
+
+// The Mount("/static") app: a plain ASGI app that answers for itself.
+fn static_files(s: ref Scope) -> HttpResponse {
+    let path = route_path(s);
+    if s.method != "GET" and s.method != "HEAD" {
+        return plain("Method Not Allowed", 405, no_headers());
+    }
+    if path == "/css/site.css" {
+        return response("body { margin: 0 }\n", 200, no_headers(), "text/css");
+    }
+    if path == "/js/app.js" {
+        return response("console.log('hi');\n", 200, no_headers(), "text/javascript");
+    }
+    plain(f"no static file {py_repr(path)} under {py_repr(s.root_path)}", 404, no_headers())
+}
+
+// ------------------------------------------------------------ routing
+
+const M_NONE: i64 = 0;
+const M_PARTIAL: i64 = 1;
+const M_FULL: i64 = 2;
+
+fn merged(s: ref Scope, found: ref Vec[Param]) -> Vec[Param] {
+    let mut ps = s.params.clone();
+    for p in found.iter() {
+        param_set(mut ps, p.name, p.value.clone());
+    }
+    ps
+}
+
+// BaseRoute.matches: the match and the child scope it would apply.
+fn route_matches(r: ref RouteDef, s: ref Scope) -> (i64, Scope) {
+    let mut child = s.clone();
+    if r.kind == R_ROUTE {
+        match path_match(r.compiled, route_path(s)) {
+            Some(found) => {
+                child.params = merged(s, found);
+                let m = if r.methods.len() > 0 and not contains_str(r.methods, s.method) { M_PARTIAL } else { M_FULL };
+                return (m, child);
+            },
+            None => return (M_NONE, child),
+        }
+    }
+    if r.kind == R_MOUNT {
+        let rp = route_path(s);
+        match path_match(r.compiled, rp) {
+            Some(found) => {
+                let mut rest: Vec[Param] = Vec.new();
+                let mut remaining = String.new();
+                for p in found.iter() {
+                    if p.name == "path" {
+                        remaining = f"/{p.value.s}";
+                    } else {
+                        rest.push(p.clone());
+                    }
+                }
+                let matched = slice(rp, 0, rp.len() - remaining.len());
+                child.params = merged(s, rest);
+                if child.app_root_path.is_none() {
+                    child.app_root_path = Some(s.root_path.clone());
+                }
+                child.root_path = f"{s.root_path}{matched}";
+                return (M_FULL, child);
+            },
+            None => return (M_NONE, child),
+        }
+    }
+    let h = header_get(s.headers, "host").unwrap_or(String.new());
+    let (hostname, _, _) = partition(h, b':');
+    match path_match(r.compiled, hostname) {
+        Some(found) => {
+            child.params = merged(s, found);
+            (M_FULL, child)
+        },
+        None => (M_NONE, child),
+    }
+}
+
+#[allow(mutual_recursion_note)]
+fn handle(app: mut ref App, r: ref RouteDef, s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    if r.kind == R_ROUTE {
+        if r.methods.len() > 0 and not contains_str(r.methods, s.method) {
+            return Err(http_exc(405, "", vec![hdr("Allow", join(r.methods, ", "))]));
+        }
+        let req = HttpRequest { scope: s.clone(), body: body.clone() };
+        return call_endpoint(mut app, r.endpoint, req);
+    }
+    if r.static_app {
+        return Ok(static_files(s));
+    }
+    router(mut app, r.routes, s, body)
+}
+
+// Router.app: the first full match, else the first partial one, else a
+// redirect to the path with its trailing slash added or taken off, else
+// a 404.
+#[allow(mutual_recursion_note)]
+fn router(app: mut ref App, routes: ref Vec[RouteDef], s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    let mut partial: i64 = -1;
+    let mut partial_scope = s.clone();
+    let mut k = 0;
+    while k < routes.len() {
+        let (m, child) = route_matches(routes[k], s);
+        if m == M_FULL {
+            return handle(mut app, routes[k], child, body);
+        }
+        if m == M_PARTIAL and partial < 0 {
+            partial = k;
+            partial_scope = child;
+        }
+        k += 1;
+    }
+    if partial >= 0 {
+        return handle(mut app, routes[partial], partial_scope, body);
+    }
+    let rp = route_path(s);
+    if rp != "/" {
+        let mut rs = s.clone();
+        rs.path = if ends_with(rp, "/") { rstrip_slash(s.path) } else { f"{s.path}/" };
+        for r in routes.iter() {
+            let (m, _) = route_matches(r, rs);
+            if m != M_NONE {
+                return Ok(redirect(scope_url(rs), 307));
+            }
+        }
+    }
+    Err(http_error(404, ""))
+}
+
+// ------------------------------------------------------------ middleware
+
+// ExceptionMiddleware (and request_response's wrapper, which holds the
+// same handlers): the 404 handler, the OutOfStock handler, and the
+// default HTTPException response.
+fn handled(app: mut ref App, s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    let e = match router(mut app, app.routes.clone(), s, body) {
+        Ok(r) => return Ok(r),
+        Err(e) => e,
+    };
+    if e.kind == E_HTTP and e.status == 404 {
+        let mut d = jdict();
+        dset(mut d, "detail", jstr(e.detail));
+        dset(mut d, "path", jstr(url_path(scope_url(s))));
+        return Ok(json_response(d, 404, no_headers()));
+    }
+    if e.kind == E_STOCK {
+        let mut d = jdict();
+        dset(mut d, "sku", jstr(e.detail));
+        dset(mut d, "error", jstr("out of stock"));
+        return Ok(json_response(d, 409, vec![hdr("Retry-After", "120")]));
+    }
+    if e.kind == E_HTTP {
+        if e.status == 204 or e.status == 304 {
+            return Ok(response("", e.status, e.headers, ""));
+        }
+        return Ok(plain(e.detail, e.status, e.headers));
+    }
+    Err(e)
+}
+
+// RequestIdMiddleware: counts every request that reaches it.
+fn with_request_id(app: mut ref App, s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    app.requests += 1;
+    let rid = f"req-{app.requests}";
+    let mut r = handled(mut app, s, body)?;
+    r.headers.push(hdr("X-Request-Id", rid));
+    Ok(r)
+}
+
+const ALLOW_ORIGINS: Array[Str, 2] = ["https://app.example.com", "https://admin.example.com"];
+
+fn origin_allowed(o: Str) -> bool {
+    o == ALLOW_ORIGINS[0] or o == ALLOW_ORIGINS[1]
+}
+
+// CORSMiddleware with credentials, two origins, four methods and two
+// extra headers.
+fn cors(app: mut ref App, s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    let origin = match header_get(s.headers, "origin") {
+        Some(o) => o,
+        None => return with_request_id(mut app, s, body),
+    };
+    let allow_methods = vec!["GET", "POST", "PUT", "DELETE"];
+    let allow_headers = vec!["accept", "accept-language", "authorization", "content-language", "content-type", "x-request-id"];
+    match header_get(s.headers, "access-control-request-method") {
+        Some(method) => if s.method == "OPTIONS" {
+            let mut hs: Vec[Header] = Vec.new();
+            hs.push(hdr("Vary", "Origin"));
+            hs.push(hdr("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE"));
+            hs.push(hdr("Access-Control-Max-Age", "300"));
+            hs.push(hdr("Access-Control-Allow-Headers", "Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Request-Id"));
+            hs.push(hdr("Access-Control-Allow-Credentials", "true"));
+            let mut failures: Vec[String] = Vec.new();
+            if origin_allowed(origin) {
+                header_set(mut hs, "Access-Control-Allow-Origin", origin);
+            } else {
+                failures.push("origin".to_string());
+            }
+            let mut method_ok = false;
+            for m in allow_methods.iter() {
+                if m == method {
+                    method_ok = true;
+                }
+            }
+            if not method_ok {
+                failures.push("method".to_string());
+            }
+            match header_get(s.headers, "access-control-request-headers") {
+                Some(rh) => {
+                    for h in split_on(lower(rh), b',').iter() {
+                        let mut ok = false;
+                        let t = strip(h);
+                        for a in allow_headers.iter() {
+                            if a == t {
+                                ok = true;
+                            }
+                        }
+                        if not ok {
+                            failures.push("headers".to_string());
+                            break;
+                        }
+                    }
+                },
+                None => {},
+            }
+            if header_get(s.headers, "access-control-request-private-network").is_some() {
+                failures.push("private-network".to_string());
+            }
+            if failures.len() > 0 {
+                return Ok(plain(f"Disallowed CORS {join(failures, ", ")}", 400, hs));
+            }
+            return Ok(plain("OK", 200, hs));
+        },
+        None => {},
+    }
+    let mut r = with_request_id(mut app, s, body)?;
+    header_set(mut r.headers, "Access-Control-Allow-Credentials", "true");
+    header_set(mut r.headers, "Access-Control-Expose-Headers", "X-Request-Id, Location");
+    if origin_allowed(origin) {
+        header_set(mut r.headers, "Access-Control-Allow-Origin", origin);
+        add_vary_header(mut r.headers, "Origin");
+    }
+    Ok(r)
+}
+
+const ALLOWED_HOSTS: Array[Str, 4] = ["bookshop.test", "*.shop.example", "www.shop.example", "localhost"];
+
+// TrustedHostMiddleware, with its redirect to www.
+fn trusted_host(app: mut ref App, s: ref Scope, body: ref Vec[u8]) -> Result[HttpResponse, Exc] {
+    let h = header_get(s.headers, "host").unwrap_or(String.new());
+    let (hostname, _, _) = partition(h, b':');
+    let mut valid = false;
+    let mut www = false;
+    for pattern in ALLOWED_HOSTS.iter() {
+        if hostname == pattern or (starts_with(pattern, "*") and ends_with(hostname, slice_from(pattern, 1))) {
+            valid = true;
+            break;
+        } else if f"www.{hostname}" == pattern {
+            www = true;
+        }
+    }
+    if valid {
+        return cors(mut app, s, body);
+    }
+    if www {
+        let url = scope_url(s);
+        let sp = match urlsplit(url, "") {
+            Ok(sp) => sp,
+            Err(_) => return Ok(plain("Invalid host header", 400, no_headers())),
+        };
+        let moved = urlunsplit(sp.scheme, f"www.{sp.netloc}", sp.path, sp.query, sp.fragment);
+        return Ok(redirect(moved, 307));
+    }
+    Ok(plain("Invalid host header", 400, no_headers()))
+}
+
+// ServerErrorMiddleware: an exception nobody handled becomes a 500, and
+// is raised again to the server.
+fn serve(app: mut ref App, s: ref Scope, body: ref Vec[u8]) -> (HttpResponse, Option[Exc]) {
+    match trusted_host(mut app, s, body) {
+        Ok(r) => (r, None),
+        Err(e) => (plain("Internal Server Error", 500, no_headers()), Some(e)),
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.create_dir_all("data/requests".to_string()).is_err() {
+        return Err("cannot create data/requests".to_string());
+    }
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        if fs.write(p.clone(), file.body.clone()).is_err() {
+            return Err(f"cannot write {p}");
+        }
+    }
+    Ok(())
+}
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn show_compile() -> Result[(), String] {
+    println("# compile_path");
+    for path in lines_of(read("data/paths.txt")?).iter() {
+        match compile_path(path) {
+            Ok(c) => {
+                let mut cs: Vec[String] = Vec.new();
+                let mut k = 0;
+                while k < c.names.len() {
+                    cs.push(f"{c.names[k]}={conv_class(c.convs[k])}");
+                    k += 1;
+                }
+                println(f"{py_repr(path)} -> {py_repr(c.pattern)} {py_repr(c.format)} [{join(cs, ", ")}]");
+            },
+            Err(e) => println(f"{py_repr(path)} -> ! {e}"),
+        }
+    }
+    Ok(())
+}
+
+// int:3, float:nan, str:x
+fn parse_value(t: Str) -> Pv {
+    let (kind, _, v) = partition(t, b':');
+    if kind == "int" {
+        return pv_int(py_int(v).unwrap_or(0));
+    }
+    if kind == "float" {
+        return pv_float(py_float(v).unwrap_or(0.0));
+    }
+    pv_str(v)
+}
+
+fn show_urlfor(app: ref App) -> Result[(), String] {
+    println("# url_path_for");
+    for line in lines_of(read("data/urlfor.txt")?).iter() {
+        let parts = split_on(line, b'|');
+        let name = parts[0].clone();
+        let mut params: Vec[Param] = Vec.new();
+        let mut k = 1;
+        while k < parts.len() {
+            let (key, _, v) = partition(parts[k], b'=');
+            param_set(mut params, key, parse_value(v));
+            k += 1;
+        }
+        let mut shown: Vec[String] = Vec.new();
+        for p in params.iter() {
+            shown.push(f"{p.name}={pv_repr(p.value)}");
+        }
+        let call = f"{name}({join(shown, ", ")})";
+        match url_path_for(app.routes, name, params) {
+            Ok(u) => println(f"{call} -> {py_repr(u.path)} protocol={py_repr(u.protocol)} host={py_repr(u.host)}"),
+            Err(e) => println(f"{call} -> ! {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn show_routes(app: ref App) {
+    println("# routes");
+    for r in app.routes.iter() {
+        if r.kind == R_ROUTE {
+            println(route_repr(r));
+        }
+    }
+}
+
+// The server's half: the request line and headers into a scope, the path
+// percent-decoded as uvicorn does it. An X-Test-Scheme header stands in
+// for the connection's scheme.
+fn parse_request(raw: Str) -> (Scope, Vec[u8]) {
+    let at = find_str(raw, "\r\n\r\n");
+    let head = slice(raw, 0, at);
+    let body = to_bytes(slice_from(raw, at + 4));
+    let lines = split_on(head, b'\r');
+    let first = split_on(lines[0], b' ');
+    let mut headers: Vec[Header] = Vec.new();
+    let mut scheme = "http".to_string();
+    let mut k = 1;
+    while k < lines.len() {
+        // each line after the first starts with the \n of the \r\n
+        let line = slice_from(lines[k], 1);
+        let (key, _, value) = partition(line, b':');
+        if lower(key) == "x-test-scheme" {
+            scheme = strip(value);
+        } else {
+            headers.push(Header { key: lower(key), value: strip(value) });
+        }
+        k += 1;
+    }
+    let (raw_path, _, query) = partition(first[1], b'?');
+    let scope = Scope { method: first[0].clone(), scheme: scheme, path: unquote(raw_path), query: query, root_path: String.new(), app_root_path: None, headers: headers, params: Vec.new() };
+    (scope, body)
+}
+
+fn show_requests(app: mut ref App) -> Result[(), String] {
+    println("# requests");
+    let mut names = match fs.read_dir("data/requests".to_string()) {
+        Ok(v) => v,
+        Err(_) => return Err("cannot list data/requests".to_string()),
+    };
+    names = sort_strings(names);
+    for name in names.iter() {
+        let raw = read(f"data/requests/{name}")?;
+        let (scope, body) = parse_request(raw);
+        println(f"== {slice(name, 0, name.len() - 5)}");
+        let q = if scope.query.len() > 0 { f" ?{scope.query}" } else { String.new() };
+        println(f"> {scope.method} {py_repr(scope.path)}{q}");
+        let (r, error) = serve(mut app, scope, body);
+        println(f"< {r.status}");
+        for h in r.headers.iter() {
+            println(f"< {h.key}: {h.value}");
+        }
+        if r.body.len() > 0 {
+            println(f"| {py_repr(r.body)}");
+        }
+        match error {
+            Some(e) => println(f"! raised {e.name}: {e.detail}"),
+            None => {},
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut app = new_app();
+    show_compile()?;
+    show_urlfor(app)?;
+    show_routes(app);
+    show_requests(mut app)?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    data_part_5(mut v);
+    data_part_6(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("/\n");
+    t.push_str("/books\n");
+    t.push_str("/books/{book_id:int}\n");
+    t.push_str("/books/{book_id:int}/price/{currency}\n");
+    t.push_str("/users/{username}\n");
+    t.push_str("/users/{username:str}/repos/{repo}\n");
+    t.push_str("/files/{path:path}\n");
+    t.push_str("/rates/{rate:float}\n");
+    t.push_str("/orders/{order_id:uuid}\n");
+    t.push_str("/static/{path:path}\n");
+    t.push_str("/a.b/c+d/{x}\n");
+    t.push_str("/v1.0/(legacy)/{item}\n");
+    t.push_str("/price/$/{amount:float}\n");
+    t.push_str("/tilde~/{x}#frag\n");
+    t.push_str("/{a}{b}\n");
+    t.push_str("/{a}-{b:int}-{c}\n");
+    t.push_str("/{x}/{x}\n");
+    t.push_str("/{x}/{y}/{x}/{y}\n");
+    t.push_str("/{x:int}/{x:float}\n");
+    t.push_str("/{name:slug}\n");
+    t.push_str("/{name:Int}\n");
+    t.push_str("/{1bad}/{good}\n");
+    t.push_str("/{bad-name}\n");
+    t.push_str("/{:int}\n");
+    t.push_str("/{_private}/{CamelCase9}\n");
+    t.push_str("/{a:path}/{b:path}\n");
+    t.push_str("/space here/{x}\n");
+    t.push_str("/café/{x}\n");
+    t.push_str("/brace{/{x}\n");
+    t.push_str("/brace}/{x}\n");
+    t.push_str("{subdomain}.shop.example\n");
+    t.push_str("{subdomain}.shop.example:8080\n");
+    t.push_str("api.shop.example\n");
+    t.push_str("{a}.{b}.example\n");
+    t.push_str("{tenant:int}.example\n");
+    t.push_str("localhost:{port}\n");
+    t.push_str("\n");
+    t.push_str("/{x:str}\n");
+    t.push_str("/q?{x}\n");
+    t.push_str("/*.{ext}\n");
+    v.push(DataFile { path: "paths.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/000-home.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("HEAD / HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/001-home-head.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST / HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/002-home-post.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /?utm_source=mail&utm_campaign=fall HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/003-home-query.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/004-books.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/005-books-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/?author=frank%20herbert HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/006-books-slash-query.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?author=Frank+Herbert HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/007-books-author.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?author=URSULA%20K.%20LE%20GUIN HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/008-books-author-case.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?tag=classic HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/009-books-tag.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?tag=classic&tag=sci-fi HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/010-books-two-tags.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?tag=poetry HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/011-books-no-match.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=1&offset=1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/012-books-limit.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=%202%20 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/013-books-limit-spaces.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=+2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/014-books-limit-plus.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=1_0 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/015-books-limit-underscore.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=ten HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/016-books-limit-bad.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=1__0 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/017-books-limit-double-underscore.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=-1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/018-books-limit-negative.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?offset=10 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/019-books-offset-past.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?author=&tag HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/020-books-blank-param.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?author=nobody&author=Frank%20Herbert HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/021-books-last-wins.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("HEAD /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/022-books-head.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/023-books-put.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/024-books-delete.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/025-books-options.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/026-book-1.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/027-book-3.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/003 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/028-book-leading-zero.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/42 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/029-book-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/dune HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/030-book-not-int.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /books/-1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/031-book-negative.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/2/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/032-book-trailing-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("TRACE /books/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/033-book-patch-method.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/034-book-options.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 103\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\": \"  Kindred \", \"author\": \"Octavia E. Butler\", \"price\": 11.0, \"tags\": [\"sci-fi\", \"historical\"]}");
+    v.push(DataFile { path: "requests/035-create.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/4 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/036-create-then-get.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 57\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"Piranesi\",\"author\":\"Susanna Clarke\",\"price\":14}");
+    v.push(DataFile { path: "requests/037-create-int-price.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 83\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"\\u00c9tranger\",\"author\":\"Albert Camus\",\"tags\":[\"classique\"],\"price\":7.25}");
+    v.push(DataFile { path: "requests/038-create-unicode.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 92\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"Норвежский лес\",\"author\":\"Харуки Мураками\",\"price\":1e1}");
+    v.push(DataFile { path: "requests/039-create-raw-unicode.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 74\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"Tab\\there \\\"quoted\\\" back\\\\slash\\/\",\"author\":\"A\\nB\",\"price\":0.1}");
+    v.push(DataFile { path: "requests/040-create-escapes.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 60\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"First\",\"title\":\"Second\",\"author\":\"Anon\",\"price\":1}");
+    v.push(DataFile { path: "requests/041-create-duplicate-key.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 42\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"   \",\"price\":-3,\"tags\":\"poetry\"}");
+    v.push(DataFile { path: "requests/042-create-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 39\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"T\",\"author\":\"A\",\"price\":true}");
+    v.push(DataFile { path: "requests/043-create-bool-price.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 39\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"T\",\"author\":\"A\",\"price\":null}");
+    v.push(DataFile { path: "requests/044-create-null-price.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 42\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"T\",\"author\":\"A\",\"tags\":[\"ok\",3]}");
+    v.push(DataFile { path: "requests/045-create-tags-mixed.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 9\r\n");
+    t.push_str("\r\n");
+    t.push_str("[1, 2, 3]");
+    v.push(DataFile { path: "requests/046-create-not-object.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 15\r\n");
+    t.push_str("\r\n");
+    t.push_str("\"just a string\"");
+    v.push(DataFile { path: "requests/047-create-string.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 20\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\": \"Unclosed\"");
+    v.push(DataFile { path: "requests/048-create-bad-json.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 15\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\": \"T\",}");
+    v.push(DataFile { path: "requests/049-create-trailing-comma.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 0\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/050-create-empty.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 55\r\n");
+    t.push_str("\r\n");
+    t.push_str("  \n");
+    t.push_str(" {\"title\":\"Spaced\",\"author\":\"Out\",\"price\":2.5e-1} \n");
+    t.push_str(" ");
+    v.push(DataFile { path: "requests/051-create-whitespace.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 28\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"T\",\"author\":\"A\"} x");
+    v.push(DataFile { path: "requests/052-create-trailing-garbage.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 51\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"N\",\"author\":\"M\",\"price\":1.5E+2,\"tags\":[]}");
+    v.push(DataFile { path: "requests/053-create-number-forms.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 59\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"N\",\"author\":\"M\",\"price\":12345678901234567890e-10}");
+    v.push(DataFile { path: "requests/054-create-big-exp.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 37\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"N\",\"author\":\"M\",\"price\":01}");
+    v.push(DataFile { path: "requests/055-create-leading-zero.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 37\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"Z\",\"author\":\"Z\",\"price\":-0}");
+    v.push(DataFile { path: "requests/056-create-minus-zero-int.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("POST /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 80\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\":\"Deep\",\"author\":\"D\",\"tags\":[\"a\"],\"meta\":{\"x\":[1,{\"y\":null}],\"z\":false}}");
+    v.push(DataFile { path: "requests/057-create-nested.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?limit=20 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/058-list-after-creates.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 57\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"price\": 10.49, \"tags\": [\"sci-fi\", \"classic\", \"desert\"]}");
+    v.push(DataFile { path: "requests/059-update.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PATCH /books/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 29\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"title\": \"The Dispossessed\"}");
+    v.push(DataFile { path: "requests/060-update-patch.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PATCH /books/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 31\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"price\": \"free\", \"author\": \"\"}");
+    v.push(DataFile { path: "requests/061-update-bad.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /books/99 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 12\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"price\": 1}");
+    v.push(DataFile { path: "requests/062-update-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 4\r\n");
+    t.push_str("\r\n");
+    t.push_str("null");
+    v.push(DataFile { path: "requests/063-update-not-object.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/064-get-updated.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /books/3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/065-delete.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /books/3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/066-delete-again.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/067-get-deleted.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1/price/eur HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/068-price-eur.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/2/price/JPY HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/069-price-jpy.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1/price/xyz HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/070-price-unknown.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/77/price/USD HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/071-price-missing-book.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1/price/it%27s HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/072-price-quote.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/1.5 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/073-rate.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/074-rate-int.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/0.1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/075-rate-tenth.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/0.30000000000000004 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/076-rate-long.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/2. HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/077-rate-trailing-dot.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/1e5 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/078-rate-exp.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /rates/000.500 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/079-rate-zeros.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /orders/12345678-1234-5678-1234-567812345678 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/080-order.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /orders/ABCDEF0123456789ABCDEF0123456789 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/081-order-upper-nodash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /orders/abcdef01-23456789-abcd-ef0123456789 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/082-order-mixed-dashes.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /orders/1234 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/083-order-short.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /orders/12345678-1234-5678-1234-567812345678 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/084-order-delete.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /orders/12345678-1234-5678-1234-567812345678 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/085-order-put.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /orders/00000000-0000-0000-0000-000000000000 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/086-order-post.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/docs/guide/intro.md HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/087-files.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/088-files-empty.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/My%20Documents/r%C3%A9sum%C3%A9.pdf HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/089-files-encoded.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/a%2Fb HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/090-files-encoded-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/../../etc/passwd HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/091-files-dots.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/092-files-no-slash.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /files/what%3F.txt HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/093-files-question.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/notes%23draft.txt HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/094-files-hash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /files/%FF%FEx HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/095-files-bad-utf8.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search?q=dune HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/096-search-redirect.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search/?q=DUNE HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/097-search.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/098-search-empty.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /search HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/099-search-post-redirect.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /old-catalog HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/100-old-catalog.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=/books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/101-go.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=/caf%C3%A9%20menu?x=1%262 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/102-go-unicode.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=https://evil.example/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/103-go-absolute.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=//evil.example/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/104-go-scheme-relative.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/105-go-default.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=/a%22b%3Cc%3E%7Bd%7D%7Ce%5Ef%60g HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/106-go-quote-chars.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /go?next=/x:y@z!$%26%27()*%2B,;=%25zz%5B%5D HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/107-go-safe-chars.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("X-Test-Scheme: https\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/108-redirect-https-host.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test:8443\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/109-redirect-host-port.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/ HTTP/1.1\r\n");
+    t.push_str("Host: localhost:abc\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/110-redirect-bad-host.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo?a=1&b=two&a=3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("User-Agent: curl/8.5.0\r\n");
+    t.push_str("Accept: */*\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/111-echo.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo?q=a+b%2Bc&empty=&flag HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/112-echo-plus.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo?name=Jos%C3%A9&bad=%E9 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/113-echo-unicode-query.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo?a=1;b=2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/114-echo-semicolon.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: text/plain\r\n");
+    t.push_str("Content-Length: 11\r\n");
+    t.push_str("\r\n");
+    t.push_str("hello world");
+    v.push(DataFile { path: "requests/115-echo-post.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("X-Tag: one\r\n");
+    t.push_str("x-tag: two\r\n");
+    t.push_str("X-TAG: three\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/116-echo-dup-headers.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Cookie: session=alice:5; theme=dark;  lang = en ; =blank; novalue; quoted=\"a\\073b\\\"c\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/117-echo-cookies.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Cookie: a=1; b=2\r\n");
+    t.push_str("Cookie: b=3; c=4\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/118-echo-two-cookie-headers.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("X-Test-Scheme: https\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/119-echo-https.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/120-echo-no-host.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /echo?id=4 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/121-echo-delete.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /echo HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/122-echo-options.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 17\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"user\": \"alice\"}");
+    v.push(DataFile { path: "requests/123-login.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 26\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"user\": \"Zoë Ånström\"}");
+    v.push(DataFile { path: "requests/124-login-unicode.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 2\r\n");
+    t.push_str("\r\n");
+    t.push_str("{}");
+    v.push(DataFile { path: "requests/125-login-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("Content-Length: 21\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"user\": \"bob smith\"}");
+    v.push(DataFile { path: "requests/126-login-spaces.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/127-login-get.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /whoami HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Cookie: session=alice:5\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/128-whoami.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /whoami HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/129-whoami-none.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /whoami HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Cookie: session=\"carol\\0729\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/130-whoami-quoted.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /logout HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/131-logout.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /teapot HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/132-teapot.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("BREW /teapot HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/133-teapot-brew.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /teapot HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/134-teapot-delete.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /boom?n=4 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/135-boom.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /boom?n=0 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/136-boom-zero.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /boom?n=four HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/137-boom-bad.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /boom?n=-3 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/138-boom-negative.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /stock/DUNE-HB HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/139-stock.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /stock/LHOD-PB HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/140-stock-out.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /stock/NOPE HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/141-stock-unknown.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache/greeting HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/142-cache.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache/greeting HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("If-None-Match: \"greeting-v1\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/143-cache-hit.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache/greeting HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("If-None-Match: \"greeting-v0\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/144-cache-miss.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /nope HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/145-not-found.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /nope/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/146-not-found-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /n%C3%B6pe%3Fq HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/147-not-found-encoded.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET // HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/148-root-slashes.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/149-admin-home.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/150-admin-bare.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/users/7 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/151-admin-user.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/users/x HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/152-admin-user-bad.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/reports?year=2026 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/153-admin-reports-redirect.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/reports/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/154-admin-reports.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/tools/hammer HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/155-admin-tool.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/tools/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/156-admin-tools-root.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/tools/hammer/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/157-admin-tool-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /admin/users/7 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/158-admin-post.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /admin/nothing HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/159-admin-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /administrator HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/160-admin-prefix.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /static/css/site.css HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/161-static.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /static/js/app.js HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/162-static-js.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /static/img/logo.png HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/163-static-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /static/ HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/164-static-root.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /static HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/165-static-bare.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /static/css/site.css HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/166-static-post.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_5(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: acme.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/167-tenant.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: acme.shop.example:8080\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/168-tenant-port.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /stats HTTP/1.1\r\n");
+    t.push_str("Host: globex.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/169-tenant-stats.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /stats/ HTTP/1.1\r\n");
+    t.push_str("Host: globex.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/170-tenant-stats-slash.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books HTTP/1.1\r\n");
+    t.push_str("Host: acme.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/171-tenant-missing.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: ACME.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/172-tenant-upper.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: a.b.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/173-tenant-nested.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books?x=1 HTTP/1.1\r\n");
+    t.push_str("Host: shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/174-host-www-redirect.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: www.shop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/175-host-www.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: evil.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/176-host-bad.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: \r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/177-host-empty.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /echo HTTP/1.1\r\n");
+    t.push_str("Host: localhost:8000\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/178-host-localhost.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET / HTTP/1.1\r\n");
+    t.push_str("Host: evilshop.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/179-host-suffix-trick.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/180-cors-simple.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://admin.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/181-cors-simple-other.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://evil.example\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/182-cors-disallowed.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: POST\r\n");
+    t.push_str("Access-Control-Request-Headers: Content-Type, X-Request-Id\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/183-cors-preflight.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books/2 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: DELETE\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/184-cors-preflight-no-headers.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: PATCH\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/185-cors-preflight-bad-method.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: GET\r\n");
+    t.push_str("Access-Control-Request-Headers: X-Secret\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/186-cors-preflight-bad-header.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://evil.example\r\n");
+    t.push_str("Access-Control-Request-Method: PATCH\r\n");
+    t.push_str("Access-Control-Request-Headers: authorization,x-other\r\n");
+    t.push_str("Access-Control-Request-Private-Network: true\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/187-cors-preflight-bad-everything.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: GET\r\n");
+    t.push_str("Access-Control-Request-Private-Network: true\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/188-cors-preflight-private.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: get\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/189-cors-preflight-case.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /nowhere HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Access-Control-Request-Method: GET\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/190-cors-preflight-missing-route.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/191-cors-options-no-request-method.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /nope HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/192-cors-on-404.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /books HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/193-cors-on-405.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /search HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/194-cors-on-redirect.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /boom?n=0 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/195-cors-on-500.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /teapot HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/196-cors-on-teapot.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /login HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("Content-Type: application/json\r\n");
+    t.push_str("\r\n");
+    t.push_str("{\"user\":\"dave\"}");
+    v.push(DataFile { path: "requests/197-cors-on-cookies.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache/greeting HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: https://app.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/198-cors-vary-exists.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: \r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/199-cors-empty-origin.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_6(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /books/1 HTTP/1.1\r\n");
+    t.push_str("Host: bookshop.test\r\n");
+    t.push_str("Origin: null\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/200-cors-null-origin.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("homepage\n");
+    t.push_str("books\n");
+    t.push_str("book|book_id=int:3\n");
+    t.push_str("book|book_id=str:12\n");
+    t.push_str("book|book_id=int:0\n");
+    t.push_str("book|book_id=int:-1\n");
+    t.push_str("book|book_id=str:x\n");
+    t.push_str("book|book_id=str:007\n");
+    t.push_str("book\n");
+    t.push_str("book|book_id=int:3|extra=str:y\n");
+    t.push_str("book|id=int:3\n");
+    t.push_str("update_book|book_id=int:9\n");
+    t.push_str("delete_book|book_id=int:9\n");
+    t.push_str("create_book\n");
+    t.push_str("price|book_id=int:2|currency=str:EUR\n");
+    t.push_str("price|currency=str:EUR|book_id=int:2\n");
+    t.push_str("price|book_id=int:2|currency=str:a/b\n");
+    t.push_str("price|book_id=int:2|currency=str:\n");
+    t.push_str("price|book_id=int:2|currency=int:5\n");
+    t.push_str("price|book_id=int:2|currency=str:café au lait\n");
+    t.push_str("rate|rate=float:1.5\n");
+    t.push_str("rate|rate=float:0.1\n");
+    t.push_str("rate|rate=float:0.2\n");
+    t.push_str("rate|rate=float:3\n");
+    t.push_str("rate|rate=int:3\n");
+    t.push_str("rate|rate=float:0\n");
+    t.push_str("rate|rate=float:1e-7\n");
+    t.push_str("rate|rate=float:123456789.125\n");
+    t.push_str("rate|rate=float:1e22\n");
+    t.push_str("rate|rate=float:-1.0\n");
+    t.push_str("rate|rate=float:-0.0\n");
+    t.push_str("rate|rate=float:nan\n");
+    t.push_str("rate|rate=float:inf\n");
+    t.push_str("rate|rate=str:2.50\n");
+    t.push_str("rate|rate=str:abc\n");
+    t.push_str("order|order_id=str:12345678-1234-5678-1234-567812345678\n");
+    t.push_str("files|path=str:docs/guide/intro.md\n");
+    t.push_str("files|path=str:\n");
+    t.push_str("files|path=str:/etc/passwd\n");
+    t.push_str("files|path=str:a b/c?d#e\n");
+    t.push_str("echo\n");
+    t.push_str("teapot\n");
+    t.push_str("admin\n");
+    t.push_str("admin|path=str:/users/7\n");
+    t.push_str("admin|path=str:users/7\n");
+    t.push_str("admin|path=str:\n");
+    t.push_str("admin|path=str:x|extra=int:1\n");
+    t.push_str("admin:home\n");
+    t.push_str("admin:user|uid=int:7\n");
+    t.push_str("admin:user|uid=int:-7\n");
+    t.push_str("admin:user\n");
+    t.push_str("admin:reports\n");
+    t.push_str("admin:tools:tool|tool=str:hammer\n");
+    t.push_str("admin:tools|path=str:saw\n");
+    t.push_str("admin:tools:tool\n");
+    t.push_str("admin:nothing\n");
+    t.push_str("admin:\n");
+    t.push_str("home\n");
+    t.push_str("user|uid=int:7\n");
+    t.push_str("static|path=str:css/site.css\n");
+    t.push_str("static|path=str:/css/site.css\n");
+    t.push_str("static:anything|path=str:x\n");
+    t.push_str("tenant|path=str:/stats|tenant=str:acme\n");
+    t.push_str("tenant|tenant=str:acme|path=str:/\n");
+    t.push_str("tenant|path=str:/\n");
+    t.push_str("tenant:home|tenant=str:acme\n");
+    t.push_str("tenant:stats|tenant=str:globex\n");
+    t.push_str("tenant:stats\n");
+    t.push_str("tenant:home|tenant=str:a/b\n");
+    t.push_str("tenant:missing|tenant=str:acme\n");
+    t.push_str("stock|sku=str:DUNE-HB\n");
+    t.push_str("cache|key=str:greeting\n");
+    t.push_str("search\n");
+    t.push_str("missing\n");
+    t.push_str("missing|a=int:1|b=str:2\n");
+    v.push(DataFile { path: "urlfor.txt".to_string(), hex: false, body: t });
+}
