@@ -1,0 +1,1103 @@
+== hjson service.hjson
+{
+  name: billing-api
+  version: 2.4.1
+  owner: payments-team@example.com
+  listen:
+  {
+    host: 0.0.0.0
+    port: 8443
+    tls: false
+  }
+  database:
+  {
+    url: postgres://billing@db.internal:5432/billing
+    pool: 20
+    timeout: 2.50
+    replicas:
+    [
+      db-replica-1.internal
+      db-replica-2.internal
+    ]
+  }
+  retry:
+  {
+    attempts: 5
+    backoff: 150
+    jitter: 0.25
+  }
+  features:
+  {
+    new-checkout: true
+    legacy-invoices: false
+    beta-users: null
+  }
+  motd:
+    '''
+    Scheduled maintenance on Sunday.
+      Payments may be delayed.
+    '''
+  path: C:\billing\data
+  greeting: hello, world # not a comment inside a quoteless string? it is
+  rate: 1/3 of traffic
+  "quoted key with spaces": yes
+  emptyString: ""
+}
+== hjson -j service.hjson
+{
+  "name": "billing-api",
+  "version": "2.4.1",
+  "owner": "payments-team@example.com",
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 8443,
+    "tls": false
+  },
+  "database": {
+    "url": "postgres://billing@db.internal:5432/billing",
+    "pool": 20,
+    "timeout": 2.50,
+    "replicas": [
+      "db-replica-1.internal",
+      "db-replica-2.internal"
+    ]
+  },
+  "retry": {
+    "attempts": 5,
+    "backoff": 150,
+    "jitter": 0.25
+  },
+  "features": {
+    "new-checkout": true,
+    "legacy-invoices": false,
+    "beta-users": null
+  },
+  "motd": "Scheduled maintenance on Sunday.\n  Payments may be delayed.",
+  "path": "C:\\billing\\data",
+  "greeting": "hello, world # not a comment inside a quoteless string? it is",
+  "rate": "1/3 of traffic",
+  "quoted key with spaces": "yes",
+  "emptyString": ""
+}
+== hjson -c service.hjson
+{"name":"billing-api","version":"2.4.1","owner":"payments-team@example.com","listen":{"host":"0.0.0.0","port":8443,"tls":false},"database":{"url":"postgres://billing@db.internal:5432/billing","pool":20,"timeout":2.50,"replicas":["db-replica-1.internal","db-replica-2.internal"]},"retry":{"attempts":5,"backoff":150,"jitter":0.25},"features":{"new-checkout":true,"legacy-invoices":false,"beta-users":null},"motd":"Scheduled maintenance on Sunday.\n  Payments may be delayed.","path":"C:\\billing\\data","greeting":"hello, world # not a comment inside a quoteless string? it is","rate":"1/3 of traffic","quoted key with spaces":"yes","emptyString":""}
+== hjson translations.hjson
+{
+  en:
+  {
+    title: Checkout
+    total: Total: {amount}
+    note:
+      '''
+      Prices include VAT.
+      Shipping is calculated at the next step.
+      '''
+  }
+  de:
+  {
+    title: Kasse
+    total: Summe: {amount}
+    note: Preise inkl. MwSt.
+  }
+  ja:
+  {
+    title: お会計
+    total: 合計: {amount}
+  }
+  ar:
+  {
+    title: الدفع
+  }
+}
+== hjson -j translations.hjson
+{
+  "en": {
+    "title": "Checkout",
+    "total": "Total: {amount}",
+    "note": "Prices include VAT.\nShipping is calculated at the next step."
+  },
+  "de": {
+    "title": "Kasse",
+    "total": "Summe: {amount}",
+    "note": "Preise inkl. MwSt."
+  },
+  "ja": {
+    "title": "お会計",
+    "total": "合計: {amount}"
+  },
+  "ar": {
+    "title": "الدفع"
+  }
+}
+== hjson -c translations.hjson
+{"en":{"title":"Checkout","total":"Total: {amount}","note":"Prices include VAT.\nShipping is calculated at the next step."},"de":{"title":"Kasse","total":"Summe: {amount}","note":"Preise inkl. MwSt."},"ja":{"title":"お会計","total":"合計: {amount}"},"ar":{"title":"الدفع"}}
+== hjson ci.hjson
+{
+  stages:
+  [
+    build
+    test
+    deploy
+  ]
+  build:
+  {
+    image: rust:1.80
+    script:
+    [
+      cargo build --release
+      cargo test -- --nocapture
+    ]
+    cache:
+    {
+      key: cargo-$CI_COMMIT_REF_SLUG
+      paths:
+      [
+        target/
+      ]
+    }
+  }
+  deploy:
+  {
+    only:
+    [
+      main
+    ]
+    when: manual
+    environment: production
+    retries: 0
+    timeout: 3600
+  }
+}
+== hjson -j ci.hjson
+{
+  "stages": [
+    "build",
+    "test",
+    "deploy"
+  ],
+  "build": {
+    "image": "rust:1.80",
+    "script": [
+      "cargo build --release",
+      "cargo test -- --nocapture"
+    ],
+    "cache": {
+      "key": "cargo-$CI_COMMIT_REF_SLUG",
+      "paths": [
+        "target/"
+      ]
+    }
+  },
+  "deploy": {
+    "only": [
+      "main"
+    ],
+    "when": "manual",
+    "environment": "production",
+    "retries": 0,
+    "timeout": 3600
+  }
+}
+== hjson -c ci.hjson
+{"stages":["build","test","deploy"],"build":{"image":"rust:1.80","script":["cargo build --release","cargo test -- --nocapture"],"cache":{"key":"cargo-$CI_COMMIT_REF_SLUG","paths":["target/"]}},"deploy":{"only":["main"],"when":"manual","environment":"production","retries":0,"timeout":3600}}
+== hjson package.json
+{
+  name: @acme/widgets
+  version: 1.0.0-beta.3
+  private: true
+  scripts:
+  {
+    build: tsc -p .
+    test: jest --coverage
+  }
+  dependencies:
+  {
+    react: ^18.2.0
+    lodash: ~4.17.21
+  }
+  engines:
+  {
+    node: >=18
+  }
+  files: []
+  config: {}
+}
+== hjson -j package.json
+{
+  "name": "@acme/widgets",
+  "version": "1.0.0-beta.3",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "jest --coverage"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "lodash": "~4.17.21"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [],
+  "config": {}
+}
+== hjson -c package.json
+{"name":"@acme/widgets","version":"1.0.0-beta.3","private":true,"scripts":{"build":"tsc -p .","test":"jest --coverage"},"dependencies":{"react":"^18.2.0","lodash":"~4.17.21"},"engines":{"node":">=18"},"files":[],"config":{}}
+== hjson numbers.hjson
+{
+  zero: 0
+  negzero: 0
+  int: 42
+  negative: -17
+  big: 123456789012345678901234567890
+  onepointzero: 1
+  trailing: 1.50
+  exp: 100000
+  smallexp: 0.0025
+  tenbillion: 1E+10
+  justunder: 9999999999
+  overten: 12345678901.0
+  tiny: -1E-7
+  zerofrac: 0
+  negzerofrac: 0
+  huge: 1E+400
+  scaled: 300
+  decimals: 0.1
+  money: 19.99
+  spaced: 7
+  notnumber: 1.
+  alsonot: 01
+  hexish: 0x1F
+  plus: +5
+  dash: -
+  unit: 12px
+  version: 1.2.3
+  inarray:
+  [
+    1
+    2
+    3
+    -4.50
+    5
+  ]
+}
+== hjson -j numbers.hjson
+{
+  "zero": 0,
+  "negzero": 0,
+  "int": 42,
+  "negative": -17,
+  "big": 123456789012345678901234567890,
+  "onepointzero": 1,
+  "trailing": 1.50,
+  "exp": 100000,
+  "smallexp": 0.0025,
+  "tenbillion": 1E+10,
+  "justunder": 9999999999,
+  "overten": 12345678901.0,
+  "tiny": -1E-7,
+  "zerofrac": 0,
+  "negzerofrac": 0,
+  "huge": 1E+400,
+  "scaled": 300,
+  "decimals": 0.1,
+  "money": 19.99,
+  "spaced": 7,
+  "notnumber": "1.",
+  "alsonot": "01",
+  "hexish": "0x1F",
+  "plus": "+5",
+  "dash": "-",
+  "unit": "12px",
+  "version": "1.2.3",
+  "inarray": [
+    1,
+    2,
+    3,
+    -4.50,
+    5
+  ]
+}
+== hjson -c numbers.hjson
+{"zero":0,"negzero":0,"int":42,"negative":-17,"big":123456789012345678901234567890,"onepointzero":1,"trailing":1.50,"exp":100000,"smallexp":0.0025,"tenbillion":1E+10,"justunder":9999999999,"overten":12345678901.0,"tiny":-1E-7,"zerofrac":0,"negzerofrac":0,"huge":1E+400,"scaled":300,"decimals":0.1,"money":19.99,"spaced":7,"notnumber":"1.","alsonot":"01","hexish":"0x1F","plus":"+5","dash":"-","unit":"12px","version":"1.2.3","inarray":[1,2,3,-4.50,5]}
+== hjson strings.hjson
+{
+  plain: hello world
+  quoted: hello world
+  single: it's
+  singleq: say "hi"
+  doubleq: it's
+  escapes:
+    '''
+    tab	new
+    line "quote" back\slash /slash
+    '''
+  unicode: café ☺
+  pair: 😀 grin
+  raw: grüße aus köln
+  hashlike: "#not a comment"
+  slashy: "// nor this"
+  colon: a:b:c
+  bracey: "{braces}"
+  leading: "  padded  "
+  trailingspace: "tail "
+  keyword: "true"
+  keywordish: true story
+  numberish: "42"
+  numberish2: 42 apples
+  nullish: null pointer
+  empty: ""
+  quotes: '''"quoted"'''
+  ctrl: "bell\u0007"
+  ls: "line\u2028sep"
+  bom: "﻿mark"
+  apos: don't
+  url: https://example.com/a?b=c#frag
+  comma: a, b
+  "": empty key
+  "a b": spaced key
+  "x:y": colon key
+  "it's": apostrophe key
+}
+== hjson -j strings.hjson
+{
+  "plain": "hello world",
+  "quoted": "hello world",
+  "single": "it's",
+  "singleq": "say \"hi\"",
+  "doubleq": "it's",
+  "escapes": "tab\tnew\nline \"quote\" back\\slash /slash",
+  "unicode": "café ☺",
+  "pair": "😀 grin",
+  "raw": "grüße aus köln",
+  "hashlike": "#not a comment",
+  "slashy": "// nor this",
+  "colon": "a:b:c",
+  "bracey": "{braces}",
+  "leading": "  padded  ",
+  "trailingspace": "tail ",
+  "keyword": "true",
+  "keywordish": "true story",
+  "numberish": "42",
+  "numberish2": "42 apples",
+  "nullish": "null pointer",
+  "empty": "",
+  "quotes": "\"quoted\"",
+  "ctrl": "bell\u0007",
+  "ls": "line\u2028sep",
+  "bom": "﻿mark",
+  "apos": "don't",
+  "url": "https://example.com/a?b=c#frag",
+  "comma": "a, b",
+  "": "empty key",
+  "a b": "spaced key",
+  "x:y": "colon key",
+  "it's": "apostrophe key"
+}
+== hjson -c strings.hjson
+{"plain":"hello world","quoted":"hello world","single":"it's","singleq":"say \"hi\"","doubleq":"it's","escapes":"tab\tnew\nline \"quote\" back\\slash /slash","unicode":"café ☺","pair":"😀 grin","raw":"grüße aus köln","hashlike":"#not a comment","slashy":"// nor this","colon":"a:b:c","bracey":"{braces}","leading":"  padded  ","trailingspace":"tail ","keyword":"true","keywordish":"true story","numberish":"42","numberish2":"42 apples","nullish":"null pointer","empty":"","quotes":"\"quoted\"","ctrl":"bell\u0007","ls":"line\u2028sep","bom":"﻿mark","apos":"don't","url":"https://example.com/a?b=c#frag","comma":"a, b","":"empty key","a b":"spaced key","x:y":"colon key","it's":"apostrophe key"}
+== hjson multiline.hjson
+{
+  text:
+    '''
+    first line
+      indented line
+
+    after a blank line
+    '''
+  oneline: just one line
+  quoted: has 'single' quotes
+  nested:
+  {
+    poem:
+      '''
+      Roses are red,
+      Violets are blue.
+      '''
+    inlist:
+    [
+      
+        '''
+        alpha
+        beta
+        '''
+      plain
+    ]
+  }
+}
+== hjson -j multiline.hjson
+{
+  "text": "first line\n  indented line\n\nafter a blank line",
+  "oneline": "just one line",
+  "quoted": "has 'single' quotes",
+  "nested": {
+    "poem": "Roses are red,\nViolets are blue.",
+    "inlist": [
+      "alpha\nbeta",
+      "plain"
+    ]
+  }
+}
+== hjson -c multiline.hjson
+{"text":"first line\n  indented line\n\nafter a blank line","oneline":"just one line","quoted":"has 'single' quotes","nested":{"poem":"Roses are red,\nViolets are blue.","inlist":["alpha\nbeta","plain"]}}
+== hjson multiline_crlf.hjson
+{
+  text:
+    '''
+    first line
+      indented line
+
+    after a blank line
+    '''
+  oneline: just one line
+  quoted: has 'single' quotes
+  nested:
+  {
+    poem:
+      '''
+      Roses are red,
+      Violets are blue.
+      '''
+    inlist:
+    [
+      
+        '''
+        alpha
+        beta
+        '''
+      plain
+    ]
+  }
+}
+== hjson -j multiline_crlf.hjson
+{
+  "text": "first line\n  indented line\n\nafter a blank line",
+  "oneline": "just one line",
+  "quoted": "has 'single' quotes",
+  "nested": {
+    "poem": "Roses are red,\nViolets are blue.",
+    "inlist": [
+      "alpha\nbeta",
+      "plain"
+    ]
+  }
+}
+== hjson -c multiline_crlf.hjson
+{"text":"first line\n  indented line\n\nafter a blank line","oneline":"just one line","quoted":"has 'single' quotes","nested":{"poem":"Roses are red,\nViolets are blue.","inlist":["alpha\nbeta","plain"]}}
+== hjson bom.hjson
+{
+  stages:
+  [
+    build
+    test
+    deploy
+  ]
+  build:
+  {
+    image: rust:1.80
+    script:
+    [
+      cargo build --release
+      cargo test -- --nocapture
+    ]
+    cache:
+    {
+      key: cargo-$CI_COMMIT_REF_SLUG
+      paths:
+      [
+        target/
+      ]
+    }
+  }
+  deploy:
+  {
+    only:
+    [
+      main
+    ]
+    when: manual
+    environment: production
+    retries: 0
+    timeout: 3600
+  }
+}
+== hjson -j bom.hjson
+{
+  "stages": [
+    "build",
+    "test",
+    "deploy"
+  ],
+  "build": {
+    "image": "rust:1.80",
+    "script": [
+      "cargo build --release",
+      "cargo test -- --nocapture"
+    ],
+    "cache": {
+      "key": "cargo-$CI_COMMIT_REF_SLUG",
+      "paths": [
+        "target/"
+      ]
+    }
+  },
+  "deploy": {
+    "only": [
+      "main"
+    ],
+    "when": "manual",
+    "environment": "production",
+    "retries": 0,
+    "timeout": 3600
+  }
+}
+== hjson -c bom.hjson
+{"stages":["build","test","deploy"],"build":{"image":"rust:1.80","script":["cargo build --release","cargo test -- --nocapture"],"cache":{"key":"cargo-$CI_COMMIT_REF_SLUG","paths":["target/"]}},"deploy":{"only":["main"],"when":"manual","environment":"production","retries":0,"timeout":3600}}
+== hjson dupes.hjson
+{
+  color: blue
+  size: 1
+  nested:
+  {
+    a: 3
+    b: 2
+  }
+}
+== hjson -j dupes.hjson
+{
+  "color": "blue",
+  "size": 1,
+  "nested": {
+    "a": 3,
+    "b": 2
+  }
+}
+== hjson -c dupes.hjson
+{"color":"blue","size":1,"nested":{"a":3,"b":2}}
+== hjson arrays.hjson
+[
+  1
+  2
+  3
+  [
+    nested
+    [
+      deeper
+    ]
+  ]
+  {
+    a: 1
+  }
+  {}
+  []
+  ""
+  last
+]
+== hjson -j arrays.hjson
+[
+  1,
+  2,
+  3,
+  [
+    "nested",
+    [
+      "deeper"
+    ]
+  ],
+  {
+    "a": 1
+  },
+  {},
+  [],
+  "",
+  "last"
+]
+== hjson -c arrays.hjson
+[1,2,3,["nested",["deeper"]],{"a":1},{},[],"","last"]
+== hjson comments.hjson
+{}
+== hjson -j comments.hjson
+{}
+== hjson -c comments.hjson
+{}
+== hjson rootstring.hjson
+just some text
+== hjson -j rootstring.hjson
+"just some text"
+== hjson -c rootstring.hjson
+"just some text"
+== hjson rootnumber.hjson
+42
+== hjson -j rootnumber.hjson
+42
+== hjson -c rootnumber.hjson
+42
+== hjson rootquoted.hjson
+a string
+== hjson -j rootquoted.hjson
+"a string"
+== hjson -c rootquoted.hjson
+"a string"
+== hjson empty.hjson
+{}
+== hjson -j empty.hjson
+{}
+== hjson -c empty.hjson
+{}
+== hjson ws.hjson
+{}
+== hjson -j ws.hjson
+{}
+== hjson -c ws.hjson
+{}
+== hjson broken/badescape.hjson
+a: "bad \q escape"
+== hjson broken/badml.hjson
+a: '''never closed
+== hjson broken/badunicode.hjson
+a: "\u12g4"
+== hjson broken/braced_badescape.hjson
+exit: Invalid \X escape sequence 'q': line 2 column 10 (char 11)
+== hjson broken/braced_badml.hjson
+exit: Bad multiline string: line 4 column 1 (char 23)
+== hjson broken/braced_badunicode.hjson
+exit: Invalid \uXXXX escape sequence: line 2 column 5 (char 6)
+== hjson broken/braced_closebracket.hjson
+exit: Found a punctuator character when expecting a quoteless string (check your syntax): line 2 column 4 (char 5)
+== hjson broken/braced_control.hjson
+exit: Invalid control character 'h' at: line 2 column 9 (char 10)
+== hjson broken/braced_emptykey.hjson
+exit: Found ':' but no key name (for an empty key name use quotes): line 2 column 1 (char 2)
+== hjson broken/braced_eofkey.hjson
+exit: Found '}' where a key name was expected (check your syntax or use quotes if the key name includes {}[],: or whitespace): line 3 column 1 (char 7)
+== hjson broken/braced_hexunicode.hjson
+exit: Invalid \uXXXX escape sequence: line 2 column 5 (char 6)
+== hjson broken/braced_inlinelist.hjson
+exit: Found a punctuator character when expecting a quoteless string (check your syntax): line 3 column 1 (char 34)
+== hjson broken/braced_inlineobj.hjson
+exit: Bad key name (eof): line 4 column 1 (char 46)
+== hjson broken/braced_keybrace.hjson
+exit: Found '{' where a key name was expected (check your syntax or use quotes if the key name includes {}[],: or whitespace): line 2 column 1 (char 2)
+== hjson broken/braced_keyspace.hjson
+exit: Found whitespace in your key name (use quotes to include): line 2 column 3 (char 4)
+== hjson broken/braced_mlnonewline.hjson
+exit: Expecting ':' delimiter: line 2 column 3 (char 4)
+== hjson broken/braced_nocolon.hjson
+exit: Found whitespace in your key name (use quotes to include): line 2 column 2 (char 3)
+== hjson broken/braced_openblock.hjson
+crash: IndexError: string index out of range
+== hjson broken/braced_punct.hjson
+exit: Found a punctuator character when expecting a quoteless string (check your syntax): line 2 column 4 (char 5)
+== hjson broken/braced_shortunicode.hjson
+exit: Invalid \uXXXX escape sequence: line 2 column 5 (char 6)
+== hjson broken/braced_slashstar.hjson
+crash: IndexError: string index out of range
+== hjson broken/braced_triplequotes.hjson
+exit: Expecting ':' delimiter: line 2 column 31 (char 32)
+== hjson broken/braced_unterminated.hjson
+exit: Invalid control character '}' at: line 3 column 1 (char 19)
+== hjson broken/braced_valueeof.hjson
+exit: Found a punctuator character when expecting a quoteless string (check your syntax): line 2 column 3 (char 4)
+== hjson broken/closebracket.hjson
+a: ]
+== hjson broken/colonafter.hjson
+exit: Expecting ':' delimiter: line 1 column 7 (char 6)
+== hjson broken/control.hjson
+'''a: "tab	here"'''
+== hjson broken/emptykey.hjson
+exit: Found ':' but no key name (for an empty key name use quotes): line 1 column 1 (char 0)
+== hjson broken/eofkey.hjson
+exit: Extra data: line 2 column 1 - line 3 column 1 (char 5 - 7)
+== hjson broken/extra.hjson
+exit: Extra data: line 1 column 10 - line 2 column 1 (char 9 - 11)
+== hjson broken/extra2.hjson
+exit: Extra data: line 1 column 5 - line 2 column 1 (char 4 - 8)
+== hjson broken/hexunicode.hjson
+a: "\u0x41"
+== hjson broken/inlinelist.hjson
+stages: [ build, test, deploy ]
+== hjson broken/inlineobj.hjson
+cache: { key: cargo, paths: [ target/ ] }
+== hjson broken/keybrace.hjson
+a{b: 1
+== hjson broken/keyspace.hjson
+my key: 1
+== hjson broken/mlnonewline.hjson
+exit: Expecting ':' delimiter: line 1 column 3 (char 2)
+== hjson broken/nocolon.hjson
+exit: Extra data: line 2 column 1 - line 3 column 1 (char 4 - 9)
+== hjson broken/openblock.hjson
+crash: IndexError: string index out of range
+== hjson broken/punct.hjson
+a: ,
+== hjson broken/shortunicode.hjson
+a: "\u12"
+== hjson broken/slashstar.hjson
+crash: IndexError: string index out of range
+== hjson broken/triplequotes.hjson
+two_quotes: '''ends with ''''''
+== hjson broken/unclosed.hjson
+exit: Expecting value: line 2 column 1 (char 6)
+== hjson broken/unclosedobj.hjson
+exit: Bad key name (eof): line 2 column 1 (char 7)
+== hjson broken/unterminated.hjson
+a: "never closed
+== hjson broken/valueeof.hjson
+a:
+== hjson -h
+stderr: Hjson, a user interface for JSON
+stderr: 
+stderr: Usage:
+stderr:   hjson [options]
+stderr:   hjson [options] <input>
+stderr:   hjson (-h | --help)
+stderr:   hjson (-V | --version)
+stderr: 
+stderr: Options:
+stderr:   -h --help     Show this screen.
+stderr:   -j            Output as formatted JSON.
+stderr:   -c            Output as JSON.
+stderr:   -V --version  Show version.
+stderr: 
+== hjson --version
+stderr: Hjson 3.1.0
+== hjson -x ci.hjson
+stderr: Hjson, a user interface for JSON
+stderr: 
+stderr: Usage:
+stderr:   hjson [options]
+stderr:   hjson [options] <input>
+stderr:   hjson (-h | --help)
+stderr:   hjson (-V | --version)
+stderr: 
+stderr: Options:
+stderr:   -h --help     Show this screen.
+stderr:   -j            Output as formatted JSON.
+stderr:   -c            Output as JSON.
+stderr:   -V --version  Show version.
+stderr: 
+exit: unknown option -x
+== hjson ci.hjson service.hjson
+stderr: Hjson, a user interface for JSON
+stderr: 
+stderr: Usage:
+stderr:   hjson [options]
+stderr:   hjson [options] <input>
+stderr:   hjson (-h | --help)
+stderr:   hjson (-V | --version)
+stderr: 
+stderr: Options:
+stderr:   -h --help     Show this screen.
+stderr:   -j            Output as formatted JSON.
+stderr:   -c            Output as JSON.
+stderr:   -V --version  Show version.
+stderr: 
+exit: unknown options
+== dumps service.hjson sort_keys
+{
+  database:
+  {
+    pool: 20
+    replicas:
+    [
+      db-replica-1.internal
+      db-replica-2.internal
+    ]
+    timeout: 2.50
+    url: postgres://billing@db.internal:5432/billing
+  }
+  emptyString: ""
+  features:
+  {
+    beta-users: null
+    legacy-invoices: false
+    new-checkout: true
+  }
+  greeting: hello, world # not a comment inside a quoteless string? it is
+  listen:
+  {
+    host: 0.0.0.0
+    port: 8443
+    tls: false
+  }
+  motd:
+    '''
+    Scheduled maintenance on Sunday.
+      Payments may be delayed.
+    '''
+  name: billing-api
+  owner: payments-team@example.com
+  path: C:\billing\data
+  "quoted key with spaces": yes
+  rate: 1/3 of traffic
+  retry:
+  {
+    attempts: 5
+    backoff: 150
+    jitter: 0.25
+  }
+  version: 2.4.1
+}
+== dumps strings.hjson ensure_ascii
+{
+  plain: hello world
+  quoted: hello world
+  single: it's
+  singleq: say "hi"
+  doubleq: it's
+  escapes:
+    '''
+    tab	new
+    line "quote" back\slash /slash
+    '''
+  unicode: café ☺
+  pair: 😀 grin
+  raw: grüße aus köln
+  hashlike: "#not a comment"
+  slashy: "// nor this"
+  colon: a:b:c
+  bracey: "{braces}"
+  leading: "  padded  "
+  trailingspace: "tail "
+  keyword: "true"
+  keywordish: true story
+  numberish: "42"
+  numberish2: 42 apples
+  nullish: null pointer
+  empty: ""
+  quotes: '''"quoted"'''
+  ctrl: "bell\u0007"
+  ls: "line\u2028sep"
+  bom: "\ufeffmark"
+  apos: don't
+  url: https://example.com/a?b=c#frag
+  comma: a, b
+  "": empty key
+  "a b": spaced key
+  "x:y": colon key
+  "it's": apostrophe key
+}
+== dumps translations.hjson ensure_ascii
+{
+  en:
+  {
+    title: Checkout
+    total: Total: {amount}
+    note:
+      '''
+      Prices include VAT.
+      Shipping is calculated at the next step.
+      '''
+  }
+  de:
+  {
+    title: Kasse
+    total: Summe: {amount}
+    note: Preise inkl. MwSt.
+  }
+  ja:
+  {
+    title: お会計
+    total: 合計: {amount}
+  }
+  ar:
+  {
+    title: الدفع
+  }
+}
+== dumps ci.hjson indent=4
+{
+    stages:
+    [
+        build
+        test
+        deploy
+    ]
+    build:
+    {
+        image: rust:1.80
+        script:
+        [
+            cargo build --release
+            cargo test -- --nocapture
+        ]
+        cache:
+        {
+            key: cargo-$CI_COMMIT_REF_SLUG
+            paths:
+            [
+                target/
+            ]
+        }
+    }
+    deploy:
+    {
+        only:
+        [
+            main
+        ]
+        when: manual
+        environment: production
+        retries: 0
+        timeout: 3600
+    }
+}
+== dumps multiline.hjson indent=4
+{
+    text:
+        '''
+        first line
+          indented line
+
+        after a blank line
+        '''
+    oneline: just one line
+    quoted: has 'single' quotes
+    nested:
+    {
+        poem:
+            '''
+            Roses are red,
+            Violets are blue.
+            '''
+        inlist:
+        [
+            
+                '''
+                alpha
+                beta
+                '''
+            plain
+        ]
+    }
+}
+== dumps numbers.hjson json sort_keys
+{"alsonot": "01", "big": 123456789012345678901234567890, "dash": "-", "decimals": 0.1, "exp": 100000, "hexish": "0x1F", "huge": 1E+400, "inarray": [1, 2, 3, -4.50, 5], "int": 42, "justunder": 9999999999, "money": 19.99, "negative": -17, "negzero": 0, "negzerofrac": 0, "notnumber": "1.", "onepointzero": 1, "overten": 12345678901.0, "plus": "+5", "scaled": 300, "smallexp": 0.0025, "spaced": 7, "tenbillion": 1E+10, "tiny": -1E-7, "trailing": 1.50, "unit": "12px", "version": "1.2.3", "zero": 0, "zerofrac": 0}
+== dumps strings.hjson json ensure_ascii
+{"plain": "hello world", "quoted": "hello world", "single": "it's", "singleq": "say \"hi\"", "doubleq": "it's", "escapes": "tab\tnew\nline \"quote\" back\\slash /slash", "unicode": "caf\u00e9 \u263a", "pair": "\ud83d\ude00 grin", "raw": "gr\u00fc\u00dfe aus k\u00f6ln", "hashlike": "#not a comment", "slashy": "// nor this", "colon": "a:b:c", "bracey": "{braces}", "leading": "  padded  ", "trailingspace": "tail ", "keyword": "true", "keywordish": "true story", "numberish": "42", "numberish2": "42 apples", "nullish": "null pointer", "empty": "", "quotes": "\"quoted\"", "ctrl": "bell\u0007", "ls": "line\u2028sep", "bom": "\ufeffmark", "apos": "don't", "url": "https://example.com/a?b=c#frag", "comma": "a, b", "": "empty key", "a b": "spaced key", "x:y": "colon key", "it's": "apostrophe key"}
+== dumps service.hjson json indent=3
+{
+   "name": "billing-api",
+   "version": "2.4.1",
+   "owner": "payments-team@example.com",
+   "listen": {
+      "host": "0.0.0.0",
+      "port": 8443,
+      "tls": false
+   },
+   "database": {
+      "url": "postgres://billing@db.internal:5432/billing",
+      "pool": 20,
+      "timeout": 2.50,
+      "replicas": [
+         "db-replica-1.internal",
+         "db-replica-2.internal"
+      ]
+   },
+   "retry": {
+      "attempts": 5,
+      "backoff": 150,
+      "jitter": 0.25
+   },
+   "features": {
+      "new-checkout": true,
+      "legacy-invoices": false,
+      "beta-users": null
+   },
+   "motd": "Scheduled maintenance on Sunday.\n  Payments may be delayed.",
+   "path": "C:\\billing\\data",
+   "greeting": "hello, world # not a comment inside a quoteless string? it is",
+   "rate": "1/3 of traffic",
+   "quoted key with spaces": "yes",
+   "emptyString": ""
+}
+== dumps translations.hjson json indent=0
+{
+"en": {
+"title": "Checkout",
+"total": "Total: {amount}",
+"note": "Prices include VAT.\nShipping is calculated at the next step."
+},
+"de": {
+"title": "Kasse",
+"total": "Summe: {amount}",
+"note": "Preise inkl. MwSt."
+},
+"ja": {
+"title": "お会計",
+"total": "合計: {amount}"
+},
+"ar": {
+"title": "الدفع"
+}
+}
+== dumps ci.hjson json
+{"stages": ["build", "test", "deploy"], "build": {"image": "rust:1.80", "script": ["cargo build --release", "cargo test -- --nocapture"], "cache": {"key": "cargo-$CI_COMMIT_REF_SLUG", "paths": ["target/"]}}, "deploy": {"only": ["main"], "when": "manual", "environment": "production", "retries": 0, "timeout": 3600}}
+== roundtrip service.hjson
+hjson: stable
+json: stable
+{"name": "billing-api", "version": "2.4.1", "owner": "payments-team@example.com", "listen": {"host": "0.0.0.0", "port": 8443, "tls": false}, "database": {"url": "postgres://billing@db.internal:5432/billing", "pool": 20, "timeout": 2.50, "replicas": ["db-replica-1.internal", "db-replica-2.internal"]}, "retry": {"attempts": 5, "backoff": 150, "jitter": 0.25}, "features": {"new-checkout": true, "legacy-invoices": false, "beta-users": null}, "motd": "Scheduled maintenance on Sunday.\n  Payments may be delayed.", "path": "C:\\billing\\data", "greeting": "hello, world # not a comment inside a quoteless string? it is", "rate": "1/3 of traffic", "quoted key with spaces": "yes", "emptyString": ""}
+== roundtrip translations.hjson
+hjson: stable
+json: stable
+{"en": {"title": "Checkout", "total": "Total: {amount}", "note": "Prices include VAT.\nShipping is calculated at the next step."}, "de": {"title": "Kasse", "total": "Summe: {amount}", "note": "Preise inkl. MwSt."}, "ja": {"title": "\u304a\u4f1a\u8a08", "total": "\u5408\u8a08: {amount}"}, "ar": {"title": "\u0627\u0644\u062f\u0641\u0639"}}
+== roundtrip ci.hjson
+hjson: stable
+json: stable
+{"stages": ["build", "test", "deploy"], "build": {"image": "rust:1.80", "script": ["cargo build --release", "cargo test -- --nocapture"], "cache": {"key": "cargo-$CI_COMMIT_REF_SLUG", "paths": ["target/"]}}, "deploy": {"only": ["main"], "when": "manual", "environment": "production", "retries": 0, "timeout": 3600}}
+== roundtrip package.json
+hjson: stable
+json: stable
+{"name": "@acme/widgets", "version": "1.0.0-beta.3", "private": true, "scripts": {"build": "tsc -p .", "test": "jest --coverage"}, "dependencies": {"react": "^18.2.0", "lodash": "~4.17.21"}, "engines": {"node": ">=18"}, "files": [], "config": {}}
+== roundtrip numbers.hjson
+hjson: stable
+json: stable
+{"zero": 0, "negzero": 0, "int": 42, "negative": -17, "big": 123456789012345678901234567890, "onepointzero": 1, "trailing": 1.50, "exp": 100000, "smallexp": 0.0025, "tenbillion": 1E+10, "justunder": 9999999999, "overten": 12345678901.0, "tiny": -1E-7, "zerofrac": 0, "negzerofrac": 0, "huge": 1E+400, "scaled": 300, "decimals": 0.1, "money": 19.99, "spaced": 7, "notnumber": "1.", "alsonot": "01", "hexish": "0x1F", "plus": "+5", "dash": "-", "unit": "12px", "version": "1.2.3", "inarray": [1, 2, 3, -4.50, 5]}
+== roundtrip strings.hjson
+hjson: stable
+json: stable
+{"plain": "hello world", "quoted": "hello world", "single": "it's", "singleq": "say \"hi\"", "doubleq": "it's", "escapes": "tab\tnew\nline \"quote\" back\\slash /slash", "unicode": "caf\u00e9 \u263a", "pair": "\ud83d\ude00 grin", "raw": "gr\u00fc\u00dfe aus k\u00f6ln", "hashlike": "#not a comment", "slashy": "// nor this", "colon": "a:b:c", "bracey": "{braces}", "leading": "  padded  ", "trailingspace": "tail ", "keyword": "true", "keywordish": "true story", "numberish": "42", "numberish2": "42 apples", "nullish": "null pointer", "empty": "", "quotes": "\"quoted\"", "ctrl": "bell\u0007", "ls": "line\u2028sep", "bom": "\ufeffmark", "apos": "don't", "url": "https://example.com/a?b=c#frag", "comma": "a, b", "": "empty key", "a b": "spaced key", "x:y": "colon key", "it's": "apostrophe key"}
+== roundtrip multiline.hjson
+hjson: stable
+json: stable
+{"text": "first line\n  indented line\n\nafter a blank line", "oneline": "just one line", "quoted": "has 'single' quotes", "nested": {"poem": "Roses are red,\nViolets are blue.", "inlist": ["alpha\nbeta", "plain"]}}
+== roundtrip multiline_crlf.hjson
+hjson: stable
+json: stable
+{"text": "first line\n  indented line\n\nafter a blank line", "oneline": "just one line", "quoted": "has 'single' quotes", "nested": {"poem": "Roses are red,\nViolets are blue.", "inlist": ["alpha\nbeta", "plain"]}}
+== roundtrip bom.hjson
+hjson: stable
+json: stable
+{"stages": ["build", "test", "deploy"], "build": {"image": "rust:1.80", "script": ["cargo build --release", "cargo test -- --nocapture"], "cache": {"key": "cargo-$CI_COMMIT_REF_SLUG", "paths": ["target/"]}}, "deploy": {"only": ["main"], "when": "manual", "environment": "production", "retries": 0, "timeout": 3600}}
+== roundtrip dupes.hjson
+hjson: stable
+json: stable
+{"color": "blue", "size": 1, "nested": {"a": 3, "b": 2}}
+== roundtrip arrays.hjson
+hjson: stable
+json: stable
+[1, 2, 3, ["nested", ["deeper"]], {"a": 1}, {}, [], "", "last"]
+== roundtrip comments.hjson
+hjson: stable
+json: stable
+{}
+== roundtrip rootstring.hjson
+hjson: stable
+json: stable
+"just some text"
+== roundtrip rootnumber.hjson
+hjson: stable
+json: stable
+42
+== roundtrip rootquoted.hjson
+hjson: stable
+json: stable
+"a string"
+== roundtrip empty.hjson
+hjson: stable
+json: stable
+{}
+== roundtrip ws.hjson
+hjson: stable
+json: stable
+{}

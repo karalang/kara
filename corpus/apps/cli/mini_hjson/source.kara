@@ -1,0 +1,2507 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters subtitles hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ regular expressions
+//
+// The part of Python's `re` that hjson's encoder uses, as a backtracking
+// matcher with Python's leftmost,
+// priority-ordered semantics. A pattern compiles to a small program;
+// Split tries its first branch before its second, which is what makes
+// `*` greedy and `*?` lazy. It works on code points, as Python's str does.
+
+// Python's str.isspace(), which is also what `\s` matches.
+fn py_isspace(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f or n == 0x205f
+        or n == 0x3000
+}
+
+#[derive(Clone)]
+struct Cls {
+    ranges: Vec[(i64, i64)],
+    space: bool,
+    neg: bool,
+}
+
+fn cls_has(k: ref Cls, c: char) -> bool {
+    let n = c as i64;
+    let mut hit = k.space and py_isspace(c);
+    for r in k.ranges {
+        if n >= r.0 and n <= r.1 {
+            hit = true;
+        }
+    }
+    hit != k.neg
+}
+
+#[derive(Clone)]
+enum Node {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Seq(Vec[Node]),
+    Alt(Vec[Node]),
+    Group(i64, Vec[Node]),
+    Look(Vec[Node]),
+    // body (one node), min, max (-1 for none), greedy
+    Rep(Vec[Node], i64, i64, bool),
+}
+
+#[derive(Clone)]
+enum Inst {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Split(i64, i64),
+    Jmp(i64),
+    Save(i64),
+    // the lookahead's program starts at the next instruction; matching
+    // goes on at the second
+    Look(i64),
+    Match,
+}
+
+struct Re {
+    prog: Vec[Inst],
+    groups: i64,
+    dotall: bool,
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+    groups: i64,
+}
+
+fn one(c: char) -> Cls {
+    let mut r: Vec[(i64, i64)] = Vec.new();
+    r.push((c as i64, c as i64));
+    Cls { ranges: r, space: false, neg: false }
+}
+
+impl ReParser {
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.cs.len() { Some(self.cs[self.pos]) } else { None }
+    }
+
+    fn eat(mut ref self, c: char) -> bool {
+        if self.pos < self.cs.len() and self.cs[self.pos] == c {
+            self.pos += 1;
+            return true;
+        }
+        false
+    }
+
+    fn alt(mut ref self) -> Node {
+        let mut arms: Vec[Node] = Vec.new();
+        arms.push(self.seq());
+        while self.eat('|') {
+            arms.push(self.seq());
+        }
+        if arms.len() == 1 { arms.remove(0) } else { Node.Alt(arms) }
+    }
+
+    fn seq(mut ref self) -> Node {
+        let mut items: Vec[Node] = Vec.new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some(c) => {
+                    if c == '|' or c == ')' {
+                        break;
+                    }
+                }
+            }
+            let atom = self.atom();
+            items.push(self.quantified(atom));
+        }
+        Node.Seq(items)
+    }
+
+    fn quantified(mut ref self, atom: own Node) -> Node {
+        let (lo, hi) = match self.peek() {
+            Some('*') => (0, -1),
+            Some('+') => (1, -1),
+            Some('?') => (0, 1),
+            _ => return atom,
+        };
+        self.pos += 1;
+        let greedy = not self.eat('?');
+        let mut body: Vec[Node] = Vec.new();
+        body.push(atom);
+        Node.Rep(body, lo, hi, greedy)
+    }
+
+    fn escape(mut ref self) -> Cls {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == 's' {
+            Cls { ranges: Vec.new(), space: true, neg: false }
+        } else if c == 'd' {
+            let mut r: Vec[(i64, i64)] = Vec.new();
+            r.push(('0' as i64, '9' as i64));
+            Cls { ranges: r, space: false, neg: false }
+        } else if c == 'n' {
+            one('\n')
+        } else if c == 'r' {
+            one('\r')
+        } else if c == 't' {
+            one('\t')
+        } else {
+            one(c)
+        }
+    }
+
+    fn class(mut ref self) -> Cls {
+        let neg = self.eat('^');
+        let mut k = Cls { ranges: Vec.new(), space: false, neg: neg };
+        let mut first = true;
+        while first or self.cs[self.pos] != ']' {
+            first = false;
+            let lo = if self.eat('\\') {
+                let e = self.escape();
+                if e.space {
+                    k.space = true;
+                    continue;
+                }
+                e.ranges[0].0
+            } else {
+                let c = self.cs[self.pos];
+                self.pos += 1;
+                c as i64
+            };
+            if self.cs[self.pos] == '-' and self.cs[self.pos + 1] != ']' {
+                self.pos += 1;
+                let hi = if self.eat('\\') {
+                    self.escape().ranges[0].0
+                } else {
+                    let c = self.cs[self.pos];
+                    self.pos += 1;
+                    c as i64
+                };
+                k.ranges.push((lo, hi));
+            } else {
+                k.ranges.push((lo, lo));
+            }
+        }
+        self.pos += 1;
+        k
+    }
+
+    fn atom(mut ref self) -> Node {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == '(' {
+            let mut capture = true;
+            let mut look = false;
+            if self.eat('?') {
+                capture = false;
+                if self.eat('=') {
+                    look = true;
+                } else {
+                    self.eat(':');
+                }
+            }
+            let mut idx = 0;
+            if capture {
+                self.groups += 1;
+                idx = self.groups;
+            }
+            let inner = self.alt();
+            self.eat(')');
+            let mut body: Vec[Node] = Vec.new();
+            body.push(inner);
+            if look {
+                Node.Look(body)
+            } else if capture {
+                Node.Group(idx, body)
+            } else {
+                Node.Seq(body)
+            }
+        } else if c == '[' {
+            Node.Char(self.class())
+        } else if c == '.' {
+            Node.Any
+        } else if c == '^' {
+            Node.Bol
+        } else if c == '$' {
+            Node.Eol
+        } else if c == '\\' {
+            if self.eat('Z') {
+                Node.EndZ
+            } else {
+                Node.Char(self.escape())
+            }
+        } else {
+            Node.Char(one(c))
+        }
+    }
+}
+
+fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
+    match n {
+        Node.Char(k) => prog.push(Inst.Char(k.clone())),
+        Node.Any => prog.push(Inst.Any),
+        Node.Bol => prog.push(Inst.Bol),
+        Node.Eol => prog.push(Inst.Eol),
+        Node.EndZ => prog.push(Inst.EndZ),
+        Node.Seq(items) => {
+            for x in items {
+                emit_node(mut prog, x);
+            }
+        }
+        Node.Alt(arms) => {
+            let mut jumps: Vec[i64] = Vec.new();
+            for i in 0..arms.len() {
+                if i + 1 < arms.len() {
+                    let split = prog.len();
+                    prog.push(Inst.Split(split + 1, 0));
+                    emit_node(mut prog, arms[i]);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(0));
+                    prog[split] = Inst.Split(split + 1, prog.len());
+                } else {
+                    emit_node(mut prog, arms[i]);
+                }
+            }
+            let end = prog.len();
+            for j in jumps {
+                prog[j] = Inst.Jmp(end);
+            }
+        }
+        Node.Group(idx, body) => {
+            prog.push(Inst.Save(2 * idx));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Save(2 * idx + 1));
+        }
+        Node.Look(body) => {
+            let at = prog.len();
+            prog.push(Inst.Look(0));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Match);
+            prog[at] = Inst.Look(prog.len());
+        }
+        Node.Rep(body, lo, hi, greedy) => {
+            for _ in 0..*lo {
+                emit_node(mut prog, body[0]);
+            }
+            if *hi < 0 {
+                // x*: L: split(body, out); body; jmp L
+                let l = prog.len();
+                prog.push(Inst.Split(0, 0));
+                emit_node(mut prog, body[0]);
+                prog.push(Inst.Jmp(l));
+                let out = prog.len();
+                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+            } else {
+                for _ in *lo..*hi {
+                    let l = prog.len();
+                    prog.push(Inst.Split(0, 0));
+                    emit_node(mut prog, body[0]);
+                    let out = prog.len();
+                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                }
+            }
+        }
+    }
+}
+
+fn re_compile(pattern: ref String, dotall: bool) -> Re {
+    let mut p = ReParser { cs: pattern.chars().collect(), pos: 0, groups: 0 };
+    let tree = p.alt();
+    let mut prog: Vec[Inst] = Vec.new();
+    prog.push(Inst.Save(0));
+    emit_node(mut prog, tree);
+    prog.push(Inst.Save(1));
+    prog.push(Inst.Match);
+    Re { prog: prog, groups: p.groups, dotall: dotall }
+}
+
+enum Bt {
+    Try(i64, i64),
+    Restore(i64, i64),
+}
+
+// Runs the program from `pc` at `pos`; the slots hold the group bounds
+// of the first way through that reaches Match.
+fn re_run(re: ref Re, s: ref Vec[char], pc0: i64, pos0: i64, slots: mut ref Vec[i64]) -> bool {
+    let mut stack: Vec[Bt] = Vec.new();
+    stack.push(Bt.Try(pc0, pos0));
+    while stack.len() > 0 {
+        let mut (pc, pos) = match stack.pop().unwrap() {
+            Bt.Restore(k, old) => {
+                slots[k] = old;
+                continue;
+            }
+            Bt.Try(pc, pos) => (pc, pos),
+        };
+        loop {
+            match re.prog[pc] {
+                Inst.Char(k) => {
+                    if pos < s.len() and cls_has(k, s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Any => {
+                    if pos < s.len() and (re.dotall or s[pos] != '\n') {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Bol => {
+                    if pos == 0 { pc += 1; } else { break; }
+                }
+                Inst.Eol => {
+                    if pos == s.len() or (pos + 1 == s.len() and s[pos] == '\n') { pc += 1; } else { break; }
+                }
+                Inst.EndZ => {
+                    if pos == s.len() { pc += 1; } else { break; }
+                }
+                Inst.Split(a, b) => {
+                    stack.push(Bt.Try(*b, pos));
+                    pc = *a;
+                }
+                Inst.Jmp(a) => pc = *a,
+                Inst.Save(k) => {
+                    stack.push(Bt.Restore(*k, slots[*k]));
+                    slots[*k] = pos;
+                    pc += 1;
+                }
+                Inst.Look(cont) => {
+                    let mut inner = slots.clone();
+                    if re_run(re, s, pc + 1, pos, mut inner) {
+                        pc = *cont;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Match => return true,
+            }
+        }
+    }
+    false
+}
+
+// re.match at `pos`: the group bounds (-1 for a group that took no
+// part), or None.
+fn re_match_at(re: ref Re, s: ref Vec[char], pos: i64) -> Option[Vec[i64]] {
+    let mut slots: Vec[i64] = Vec.new();
+    for _ in 0..(2 * re.groups + 2) {
+        slots.push(-1);
+    }
+    if re_run(re, s, 0, pos, mut slots) { Some(slots) } else { None }
+}
+
+fn re_search(re: ref Re, s: ref Vec[char], from: i64) -> Option[Vec[i64]] {
+    let mut pos = from;
+    while pos <= s.len() {
+        if let Some(m) = re_match_at(re, s, pos) {
+            return Some(m);
+        }
+        pos += 1;
+    }
+    None
+}
+
+// re.finditer: non-overlapping matches, left to right.
+fn re_finditer(re: ref Re, s: ref Vec[char]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut pos = 0;
+    while pos <= s.len() {
+        match re_search(re, s, pos) {
+            None => break,
+            Some(m) => {
+                pos = if m[1] == m[0] { m[1] + 1 } else { m[1] };
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+fn chars_str(s: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    for i in a..b {
+        out.push(s[i]);
+    }
+    out
+}
+
+// re.sub with a literal replacement.
+fn re_sub(re: ref Re, repl: ref String, text: ref String) -> String {
+    let s: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut last = 0;
+    for m in re_finditer(re, s) {
+        out.push_str(chars_str(s, last, m[0]));
+        out.push_str(repl);
+        last = m[1];
+    }
+    out.push_str(chars_str(s, last, s.len()));
+    out
+}
+// ------------------------------------------------------------ values
+
+// A decoded Hjson value. Objects keep their keys in the order they first
+// appeared, as Python's dict does; a repeated key keeps its first place
+// and takes the last value.
+#[derive(Clone)]
+enum Hv {
+    Null,
+    Bool(bool),
+    // an int, as its decimal digits
+    Int(String),
+    Dec(Dec),
+    Str(String),
+    List(Vec[Hv]),
+    Obj(Vec[Pair]),
+}
+
+#[derive(Clone)]
+struct Pair {
+    key: String,
+    val: Hv,
+}
+
+// decimal.Decimal: sign, coefficient digits (no leading zeros, "0" for
+// zero) and exponent, so 1.50 is 150 times 10 to the -2.
+#[derive(Clone)]
+struct Dec {
+    neg: bool,
+    coeff: String,
+    exp: i64,
+}
+
+fn put_pair(pairs: mut ref Vec[Pair], key: own String, val: own Hv) {
+    for i in 0..pairs.len() {
+        if pairs[i].key == key {
+            pairs[i].val = val;
+            return;
+        }
+    }
+    pairs.push(Pair { key: key, val: val });
+}
+
+fn strip_zeros(digits: ref String) -> String {
+    let cs: Vec[char] = digits.chars().collect();
+    let mut i = 0;
+    while i + 1 < cs.len() and cs[i] == '0' {
+        i += 1;
+    }
+    chars_str(cs, i, cs.len())
+}
+
+// Decimal(integer + frac + exp), from NUMBER_RE's three groups.
+fn dec_parse(integer: ref String, frac: ref String, exp: ref String) -> Dec {
+    let mut neg = false;
+    let mut digits = integer.clone();
+    if digits.starts_with("-") {
+        neg = true;
+        let cs: Vec[char] = digits.chars().collect();
+        digits = chars_str(cs, 1, cs.len());
+    }
+    let mut e = 0;
+    if frac.len() > 0 {
+        let cs: Vec[char] = frac.chars().collect();
+        digits.push_str(chars_str(cs, 1, cs.len()));
+        e -= (cs.len() - 1) as i64;
+    }
+    if exp.len() > 0 {
+        let cs: Vec[char] = exp.chars().collect();
+        let mut k = 1;
+        let mut sign = 1;
+        if cs[k] == '-' {
+            sign = -1;
+            k += 1;
+        } else if cs[k] == '+' {
+            k += 1;
+        }
+        let mut n = 0;
+        while k < cs.len() {
+            n = n * 10 + (cs[k] as i64 - '0' as i64);
+            k += 1;
+        }
+        e += sign * n;
+    }
+    Dec { neg: neg, coeff: strip_zeros(digits), exp: e }
+}
+
+// int(d) when int(d) == d and abs(d) < 1e10, else None.
+fn dec_small_int(d: ref Dec) -> Option[String] {
+    let cs: Vec[char] = d.coeff.chars().collect();
+    let digits = if d.coeff == "0" {
+        "0".to_string()
+    } else if d.exp >= 0 {
+        if cs.len() as i64 + d.exp > 10 {
+            return None;
+        }
+        let mut s = d.coeff.clone();
+        for _ in 0..d.exp {
+            s.push('0');
+        }
+        s
+    } else {
+        let k = -d.exp;
+        if k >= cs.len() as i64 {
+            return None;
+        }
+        let keep = cs.len() as i64 - k;
+        for i in keep..cs.len() as i64 {
+            if cs[i] != '0' {
+                return None;
+            }
+        }
+        chars_str(cs, 0, keep)
+    };
+    if digits.len() > 10 {
+        return None;
+    }
+    if d.neg and digits != "0" {
+        return Some(f"-{digits}");
+    }
+    Some(digits)
+}
+
+// str(Decimal), Python's to-scientific-string.
+fn dec_str(d: ref Dec) -> String {
+    let cs: Vec[char] = d.coeff.chars().collect();
+    let n = cs.len() as i64;
+    let left = d.exp + n;
+    let dot = if d.exp <= 0 and left > -6 { left } else { 1 };
+    let mut out = String.new();
+    if d.neg {
+        out.push('-');
+    }
+    if dot <= 0 {
+        out.push_str("0.");
+        for _ in 0..(-dot) {
+            out.push('0');
+        }
+        out.push_str(d.coeff);
+    } else if dot >= n {
+        out.push_str(d.coeff);
+        for _ in 0..(dot - n) {
+            out.push('0');
+        }
+    } else {
+        out.push_str(chars_str(cs, 0, dot));
+        out.push('.');
+        out.push_str(chars_str(cs, dot, n));
+    }
+    if left != dot {
+        let x = left - dot;
+        if x >= 0 {
+            out.push_str(f"E+{x}");
+        } else {
+            out.push_str(f"E{x}");
+        }
+    }
+    out
+}
+
+// The number NUMBER_RE matched: an int unless it has a fraction or an
+// exponent, and then a Decimal unless it is a whole number under 1e10.
+fn number_value(integer: ref String, frac: ref String, exp: ref String) -> Hv {
+    if frac.len() > 0 or exp.len() > 0 {
+        let d = dec_parse(integer, frac, exp);
+        return match dec_small_int(d) {
+            Some(i) => Hv.Int(i),
+            None => Hv.Dec(d),
+        };
+    }
+    if integer == "-0" {
+        return Hv.Int("0".to_string());
+    }
+    Hv.Int(integer.clone())
+}
+// ------------------------------------------------------------ the decoder
+//
+// hjson/decoder.py, step for step. It reads code points, as Python's str
+// does. Where the Python indexes past the end of the text (s[end] rather
+// than a slice), it raises IndexError, which hjson does not catch, so the
+// decoder has that error too.
+
+enum DErr {
+    // HjsonDecodeError, with its message already formatted
+    Decode(String),
+    Index,
+}
+
+// NUMBER_RE
+fn number_re() -> Re {
+    re_compile("[\\t ]*(-?(?:0|[1-9]\\d*))(\\.\\d+)?([eE][-+]?\\d+)?[\\t ]*", false)
+}
+
+// s[i:i + 1]: the character, or None past either end.
+fn sl(s: ref Vec[char], i: i64) -> Option[char] {
+    if i >= 0 and i < s.len() { Some(s[i]) } else { None }
+}
+
+// s[i], which counts from the end when i is negative.
+fn at(s: ref Vec[char], i: i64) -> Result[char, DErr] {
+    let mut k = i;
+    if k < 0 {
+        k += s.len();
+    }
+    if k < 0 or k >= s.len() {
+        return Err(DErr.Index);
+    }
+    Ok(s[k])
+}
+
+fn is(s: ref Vec[char], i: i64, c: char) -> bool {
+    match sl(s, i) {
+        Some(x) => x == c,
+        None => false,
+    }
+}
+
+fn is_some(ch: ref Option[char], c: char) -> bool {
+    match ch {
+        Some(x) => *x == c,
+        None => false,
+    }
+}
+
+fn py_strip(t: ref String) -> String {
+    let cs: Vec[char] = t.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and py_isspace(cs[a]) {
+        a += 1;
+    }
+    while b > a and py_isspace(cs[b - 1]) {
+        b -= 1;
+    }
+    chars_str(cs, a, b)
+}
+
+fn py_rstrip(t: ref String) -> String {
+    let cs: Vec[char] = t.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and py_isspace(cs[b - 1]) {
+        b -= 1;
+    }
+    chars_str(cs, 0, b)
+}
+
+fn linecol(s: ref Vec[char], pos: i64) -> (i64, i64) {
+    let mut line = 1;
+    let mut last = -1;
+    let mut i = 0;
+    while i < pos and i < s.len() {
+        if s[i] == '\n' {
+            line += 1;
+            last = i;
+        }
+        i += 1;
+    }
+    if line == 1 { (1, pos + 1) } else { (line, pos - last) }
+}
+
+fn err_text(msg: ref String, s: ref Vec[char], pos: i64) -> String {
+    let mut one = String.new();
+    if let Some(c) = sl(s, pos) {
+        one.push(c);
+    }
+    msg.replace("%r", py_repr_str(one))
+}
+
+fn derr(s: ref Vec[char], msg: ref String, pos: i64) -> DErr {
+    let (l, c) = linecol(s, pos);
+    DErr.Decode(f"{err_text(msg, s, pos)}: line {l} column {c} (char {pos})")
+}
+
+fn derr2(s: ref Vec[char], msg: ref String, pos: i64, end: i64) -> DErr {
+    let (l, c) = linecol(s, pos);
+    let (l2, c2) = linecol(s, end);
+    DErr.Decode(f"{err_text(msg, s, pos)}: line {l} column {c} - line {l2} column {c2} (char {pos} - {end})")
+}
+
+fn get_eol(s: ref Vec[char], end0: i64) -> i64 {
+    let mut end = end0;
+    loop {
+        match sl(s, end) {
+            None => return end,
+            Some(c) => {
+                if c == '\r' or c == '\n' {
+                    return end;
+                }
+            }
+        }
+        end += 1;
+    }
+}
+
+// Skips whitespace and comments; the next character (None at the end of
+// the text) and where it is.
+fn get_next(s: ref Vec[char], end0: i64) -> Result[(Option[char], i64), DErr] {
+    let mut end = end0;
+    loop {
+        let c = match sl(s, end) {
+            None => return Ok((None, end)),
+            Some(c) => c,
+        };
+        if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+            end += 1;
+            continue;
+        }
+        if c == '#' or (c == '/' and is(s, end + 1, '/')) {
+            end = get_eol(s, end);
+        } else if c == '/' and is(s, end + 1, '*') {
+            end += 2;
+            let mut d = at(s, end)?;
+            loop {
+                if d == '*' {
+                    if at(s, end + 1)? == '/' {
+                        break;
+                    }
+                }
+                end += 1;
+                d = at(s, end)?;
+            }
+            end += 2;
+        } else {
+            return Ok((Some(c), end));
+        }
+    }
+}
+
+fn skip_indent(s: ref Vec[char], end0: i64, n0: i64) -> i64 {
+    let mut end = end0;
+    let mut n = n0;
+    loop {
+        match sl(s, end) {
+            None => return end,
+            Some(c) => {
+                if not (c == ' ' or c == '\t' or c == '\r') or n == 0 {
+                    return end;
+                }
+            }
+        }
+        end += 1;
+        n -= 1;
+    }
+}
+
+fn code_point(n: i64) -> char {
+    match char.try_from(n as u32) {
+        Ok(c) => c,
+        Err(_) => '�',
+    }
+}
+
+// int(text, 16) for the four characters of a \u escape.
+fn hex4(cs: ref Vec[char]) -> Option[i64] {
+    let t: Vec[char] = py_strip(chars_str(cs, 0, cs.len())).chars().collect();
+    let mut i = 0;
+    if i < t.len() and t[i] == '+' {
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v = 0;
+    while i < t.len() {
+        let c = t[i];
+        let d = if c >= '0' and c <= '9' {
+            c as i64 - '0' as i64
+        } else if c >= 'a' and c <= 'f' {
+            c as i64 - 'a' as i64 + 10
+        } else if c >= 'A' and c <= 'F' {
+            c as i64 - 'A' as i64 + 10
+        } else {
+            return None;
+        };
+        v = v * 16 + d;
+        i += 1;
+    }
+    Some(v)
+}
+
+fn sub_chars(s: ref Vec[char], a: i64, b: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = a;
+    while i < b and i < s.len() {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn bad_x(cs: ref Vec[char]) -> bool {
+    cs.len() != 4 or cs[1] == 'x' or cs[1] == 'X'
+}
+
+// scanstring: `end` is just after the opening quote.
+fn scan_string(s: ref Vec[char], end0: i64) -> Result[(String, i64), DErr] {
+    let begin = end0 - 1;
+    let exit = s[begin];
+    let mut out = String.new();
+    let mut end = end0;
+    loop {
+        let mut j = end;
+        while j < s.len() and not (s[j] == '\'' or s[j] == '"' or s[j] == '\\' or (s[j] as i64) < 32) {
+            j += 1;
+        }
+        if j >= s.len() {
+            return Err(derr(s, "Unterminated string starting at", begin));
+        }
+        out.push_str(chars_str(s, end, j));
+        let t = s[j];
+        end = j + 1;
+        if t == exit {
+            break;
+        }
+        if t == '"' or t == '\'' {
+            out.push(t);
+            continue;
+        }
+        if t != '\\' {
+            return Err(derr(s, "Invalid control character %r at", end));
+        }
+        if end >= s.len() {
+            return Err(derr(s, "Unterminated string starting at", begin));
+        }
+        let esc = s[end];
+        if esc != 'u' {
+            let c = if esc == '"' or esc == '\'' or esc == '\\' or esc == '/' {
+                esc
+            } else if esc == 'b' {
+                code_point(8)
+            } else if esc == 'f' {
+                code_point(12)
+            } else if esc == 'n' {
+                '\n'
+            } else if esc == 'r' {
+                '\r'
+            } else if esc == 't' {
+                '\t'
+            } else {
+                return Err(derr(s, "Invalid \\X escape sequence %r", end));
+            };
+            out.push(c);
+            end += 1;
+        } else {
+            let msg = "Invalid \\uXXXX escape sequence";
+            let e1 = sub_chars(s, end + 1, end + 5);
+            if bad_x(e1) {
+                return Err(derr(s, msg, end - 1));
+            }
+            let mut uni = match hex4(e1) {
+                Some(v) => v,
+                None => return Err(derr(s, msg, end - 1)),
+            };
+            end += 5;
+            if (uni & 0xfc00) == 0xd800 and is(s, end, '\\') and is(s, end + 1, 'u') {
+                let e2 = sub_chars(s, end + 2, end + 6);
+                if not bad_x(e2) {
+                    let uni2 = match hex4(e2) {
+                        Some(v) => v,
+                        None => return Err(derr(s, msg, end)),
+                    };
+                    if (uni2 & 0xfc00) == 0xdc00 {
+                        uni = 0x10000 + (((uni - 0xd800) << 10) | (uni2 - 0xdc00));
+                        end += 6;
+                    }
+                }
+            }
+            out.push(code_point(uni));
+        }
+    }
+    Ok((out, end))
+}
+
+// mlscanstring: `end` is at the opening '''.
+fn ml_scan_string(s: ref Vec[char], end0: i64) -> Result[(String, i64), DErr] {
+    let mut indent = 0;
+    loop {
+        if at(s, end0 - indent - 1)? == '\n' {
+            break;
+        }
+        indent += 1;
+    }
+    let mut end = skip_indent(s, end0 + 3, -1);
+    if at(s, end)? == '\n' {
+        end = skip_indent(s, end + 1, indent);
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut triple = 0;
+    loop {
+        let c = match sl(s, end) {
+            None => return Err(derr(s, "Bad multiline string", end)),
+            Some(c) => c,
+        };
+        if c == '\'' {
+            triple += 1;
+            end += 1;
+            if triple == 3 {
+                if out.len() > 0 and out[out.len() - 1] == '\n' {
+                    out.pop();
+                }
+                return Ok((chars_str(out, 0, out.len()), end));
+            }
+            continue;
+        }
+        while triple > 0 {
+            out.push('\'');
+            triple -= 1;
+        }
+        if c == '\n' {
+            out.push(c);
+            end = skip_indent(s, end + 1, indent);
+        } else {
+            if c != '\r' {
+                out.push(c);
+            }
+            end += 1;
+        }
+    }
+}
+
+fn is_punct(c: char) -> bool {
+    c == '{' or c == '}' or c == '[' or c == ']' or c == ',' or c == ':'
+}
+
+// scantfnns: a quoteless string, true, false, null or a number.
+fn scan_tfnns(s: ref Vec[char], num: ref Re, end0: i64) -> Result[(Hv, i64), DErr] {
+    let (chf, begin) = get_next(s, end0)?;
+    let c0 = match chf {
+        None => ' ',
+        Some(c) => c,
+    };
+    if chf.is_none() or is_punct(c0) {
+        return Err(derr(s, "Found a punctuator character when expecting a quoteless string (check your syntax)", begin));
+    }
+    let mut end = begin;
+    loop {
+        let ch = sl(s, end);
+        let is_eol = match ch {
+            None => true,
+            Some(c) => c == '\r' or c == '\n',
+        };
+        let stop = is_eol or is_some(ch, ',') or is_some(ch, '}') or is_some(ch, ']') or is_some(ch, '#')
+            or (is_some(ch, '/') and (is(s, end + 1, '/') or is(s, end + 1, '*')));
+        if stop {
+            let t = py_strip(chars_str(s, begin, end));
+            if c0 == 'n' and t == "null" {
+                return Ok((Hv.Null, end));
+            } else if c0 == 't' and t == "true" {
+                return Ok((Hv.Bool(true), end));
+            } else if c0 == 'f' and t == "false" {
+                return Ok((Hv.Bool(false), end));
+            } else if c0 == '-' or (c0 >= '0' and c0 <= '9') {
+                if let Some(m) = re_match_at(num, s, begin) {
+                    if m[1] == end {
+                        let integer = chars_str(s, m[2], m[3]);
+                        let frac = if m[4] >= 0 { chars_str(s, m[4], m[5]) } else { String.new() };
+                        let exp = if m[6] >= 0 { chars_str(s, m[6], m[7]) } else { String.new() };
+                        return Ok((number_value(integer, frac, exp), end));
+                    }
+                }
+            }
+            if is_eol {
+                return Ok((Hv.Str(t), end));
+            }
+        }
+        end += 1;
+    }
+}
+
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r'
+}
+
+fn scan_key_name(s: ref Vec[char], end0: i64) -> Result[(String, i64), DErr] {
+    let (ch, e) = get_next(s, end0)?;
+    if is_some(ch, '"') or is_some(ch, '\'') {
+        return scan_string(s, e + 1);
+    }
+    let begin = e;
+    let mut end = e;
+    let mut space = -1;
+    loop {
+        let c = match sl(s, end) {
+            None => return Err(derr(s, "Bad key name (eof)", end)),
+            Some(c) => c,
+        };
+        if c == ':' {
+            if begin == end {
+                return Err(derr(s, "Found ':' but no key name (for an empty key name use quotes)", begin));
+            } else if space >= 0 {
+                if space != end - 1 {
+                    return Err(derr(s, "Found whitespace in your key name (use quotes to include)", space));
+                }
+                return Ok((py_rstrip(chars_str(s, begin, end)), end));
+            }
+            return Ok((chars_str(s, begin, end), end));
+        } else if is_ws(c) {
+            if space < 0 or space == end - 1 {
+                space = end;
+            }
+        } else if c == '{' or c == '}' or c == '[' or c == ']' or c == ',' {
+            let mut msg = "Found '".to_string();
+            msg.push(c);
+            msg.push_str("' where a key name was expected (check your syntax or use quotes if the key name includes {}[],: or whitespace)");
+            return Err(derr(s, msg, begin));
+        }
+        end += 1;
+    }
+}
+
+fn parse_object(s: ref Vec[char], num: ref Re, end0: i64, braceless: bool) -> Result[(Hv, i64), DErr] {
+    let mut pairs: Vec[Pair] = Vec.new();
+    let (ch0, e0) = get_next(s, end0)?;
+    let mut end = e0;
+    if not braceless and is_some(ch0, '}') {
+        return Ok((Hv.Obj(pairs), end + 1));
+    }
+    loop {
+        let (key, e1) = scan_key_name(s, end)?;
+        let (ch1, e2) = get_next(s, e1)?;
+        if not is_some(ch1, ':') {
+            return Err(derr(s, "Expecting ':' delimiter", e2));
+        }
+        let (_, e3) = get_next(s, e2 + 1)?;
+        let (val, e4) = scan_once(s, num, e3)?;
+        put_pair(mut pairs, key, val);
+        let mut (ch, e5) = get_next(s, e4)?;
+        if is_some(ch, ',') {
+            let (c6, e6) = get_next(s, e5 + 1)?;
+            ch = c6;
+            e5 = e6;
+        }
+        end = e5;
+        if braceless {
+            if ch.is_none() {
+                break;
+            }
+        } else if is_some(ch, '}') {
+            end += 1;
+            break;
+        }
+        let (_, e7) = get_next(s, end)?;
+        end = e7;
+    }
+    Ok((Hv.Obj(pairs), end))
+}
+
+fn parse_array(s: ref Vec[char], num: ref Re, end0: i64) -> Result[(Hv, i64), DErr] {
+    let mut values: Vec[Hv] = Vec.new();
+    let (ch0, e0) = get_next(s, end0)?;
+    let mut end = e0;
+    if is_some(ch0, ']') {
+        return Ok((Hv.List(values), end + 1));
+    }
+    if ch0.is_none() {
+        return Err(derr(s, "End of input while parsing an array (did you forget a closing ']'?)", end));
+    }
+    loop {
+        let (val, e1) = scan_once(s, num, end)?;
+        values.push(val);
+        let mut (ch, e2) = get_next(s, e1)?;
+        if is_some(ch, ',') {
+            let (c3, e3) = get_next(s, e2 + 1)?;
+            ch = c3;
+            e2 = e3;
+        }
+        end = e2;
+        if is_some(ch, ']') {
+            end += 1;
+            break;
+        }
+        let (_, e4) = get_next(s, end)?;
+        end = e4;
+    }
+    Ok((Hv.List(values), end))
+}
+
+fn scan_once(s: ref Vec[char], num: ref Re, idx: i64) -> Result[(Hv, i64), DErr] {
+    if idx < 0 or idx >= s.len() {
+        return Err(derr(s, "Expecting value", idx));
+    }
+    let ch = s[idx];
+    if ch == '"' or ch == '\'' {
+        if is(s, idx, '\'') and is(s, idx + 1, '\'') and is(s, idx + 2, '\'') {
+            let (t, e) = ml_scan_string(s, idx)?;
+            return Ok((Hv.Str(t), e));
+        }
+        let (t, e) = scan_string(s, idx + 1)?;
+        return Ok((Hv.Str(t), e));
+    }
+    if ch == '{' {
+        return parse_object(s, num, idx + 1, false);
+    }
+    if ch == '[' {
+        return parse_array(s, num, idx + 1);
+    }
+    scan_tfnns(s, num, idx)
+}
+
+fn raw_decode(s: ref Vec[char], num: ref Re) -> Result[(Hv, i64), DErr] {
+    let mut idx = 0;
+    if s.len() > 0 {
+        let n = s[0] as i64;
+        if n == 0xfeff {
+            idx = 1;
+        } else if n == 0xef and s.len() >= 3 and s[1] as i64 == 0xbb and s[2] as i64 == 0xbf {
+            idx = 3;
+        }
+    }
+    let start = idx;
+    let (ch, i2) = get_next(s, idx)?;
+    if start == 0 and ch.is_none() {
+        let empty: Vec[Pair] = Vec.new();
+        return Ok((Hv.Obj(empty), 0));
+    }
+    if is_some(ch, '{') or is_some(ch, '[') {
+        return scan_once(s, num, i2);
+    }
+    // a root object without braces, or else a single value
+    match parse_object(s, num, i2, true) {
+        Ok(r) => Ok(r),
+        Err(DErr.Index) => Err(DErr.Index),
+        Err(e) => match scan_once(s, num, i2) {
+            Ok(r) => Ok(r),
+            Err(_) => Err(e),
+        },
+    }
+}
+
+fn hjson_loads(num: ref Re, text: ref String) -> Result[Hv, DErr] {
+    let s: Vec[char] = text.chars().collect();
+    let (obj, end) = raw_decode(s, num)?;
+    let (_, e2) = get_next(s, end)?;
+    if e2 != s.len() {
+        return Err(derr2(s, "Extra data", e2, s.len()));
+    }
+    Ok(obj)
+}
+// ------------------------------------------------------------ the encoders
+//
+// hjson/encoderH.py (Hjson out) and hjson/encoder.py (JSON out). The
+// character tests below are the module's regular expressions, written out.
+
+fn rep(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+// COMMONRANGE: characters that never go out unquoted or unescaped.
+fn common(c: char) -> bool {
+    let n = c as i64;
+    (n >= 0x7f and n <= 0x9f) or n == 0xad or (n >= 0x600 and n <= 0x604) or n == 0x70f
+        or n == 0x17b4 or n == 0x17b5 or (n >= 0x200c and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f)
+        or (n >= 0x2060 and n <= 0x206f) or n == 0xfeff or (n >= 0xfff0 and n <= 0xffff)
+}
+
+fn needs_escape(cs: ref Vec[char]) -> bool {
+    for c in cs {
+        if *c == '\\' or *c == '"' or (*c as i64) < 32 or common(*c) {
+            return true;
+        }
+    }
+    false
+}
+
+fn starts_with(cs: ref Vec[char], a: char, b: char) -> bool {
+    cs.len() >= 2 and cs[0] == a and cs[1] == b
+}
+
+fn contains2(cs: ref Vec[char], a: char, b: char) -> bool {
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        if cs[i] == a and cs[i + 1] == b {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn needs_quotes(cs: ref Vec[char]) -> bool {
+    let f = cs[0];
+    if py_isspace(f) or f == '"' or f == '\'' or f == '#' or f == '{' or f == '}' or f == '[' or f == ']'
+        or f == ':' or f == ',' {
+        return true;
+    }
+    if starts_with(cs, '/', '*') or starts_with(cs, '/', '/') or py_isspace(cs[cs.len() - 1]) {
+        return true;
+    }
+    for c in cs {
+        if (*c as i64) < 32 or common(*c) {
+            return true;
+        }
+    }
+    false
+}
+
+fn needs_escape_ml(cs: ref Vec[char]) -> bool {
+    let mut i = 0;
+    while i + 2 < cs.len() {
+        if cs[i] == '\'' and cs[i + 1] == '\'' and cs[i + 2] == '\'' {
+            return true;
+        }
+        i += 1;
+    }
+    let mut all_space = true;
+    for c in cs {
+        let n = *c as i64;
+        if not py_isspace(*c) {
+            all_space = false;
+        }
+        if (n < 32 and n != 9 and n != 10 and n != 13) or common(*c) {
+            return true;
+        }
+    }
+    all_space
+}
+
+fn needs_escape_name(cs: ref Vec[char]) -> bool {
+    for c in cs {
+        let x = *c;
+        if x == ',' or x == '{' or x == '[' or x == '}' or x == ']' or x == ':' or x == '#' or x == '"'
+            or x == '\'' or py_isspace(x) {
+            return true;
+        }
+    }
+    contains2(cs, '/', '/') or contains2(cs, '/', '*')
+}
+
+fn u_escape(out: mut ref String, n: i64) {
+    out.push_str("\\u");
+    out.push_str(hex_digits(n, 4));
+}
+
+// encode_basestring / encode_basestring_ascii. Hjson's version also
+// escapes U+FFFF.
+fn quote_str(s: ref String, ascii: bool, hjson: bool) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 32 {
+            u_escape(mut out, n);
+        } else if ascii {
+            if n <= 126 {
+                out.push(c);
+            } else if n < 0x10000 {
+                u_escape(mut out, n);
+            } else {
+                let m = n - 0x10000;
+                u_escape(mut out, 0xd800 | ((m >> 10) & 0x3ff));
+                u_escape(mut out, 0xdc00 | (m & 0x3ff));
+            }
+        } else if n == 0x2028 or n == 0x2029 or (hjson and n == 0xffff) {
+            u_escape(mut out, n);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn sorted_pairs(pairs: ref Vec[Pair]) -> Vec[Pair] {
+    let mut out: Vec[Pair] = Vec.new();
+    for p in pairs {
+        let mut i = out.len();
+        while i > 0 and out[i - 1].key > p.key {
+            i -= 1;
+        }
+        out.insert(i, p.clone());
+    }
+    out
+}
+
+struct HEnc {
+    ind: String,
+    sort: bool,
+    ascii: bool,
+    num: Re,
+    kw: Re,
+}
+
+fn new_henc(ind: ref String, sort: bool, ascii: bool) -> HEnc {
+    HEnc {
+        ind: ind.clone(),
+        sort: sort,
+        ascii: ascii,
+        num: re_compile("^[\\t ]*(-?(?:0|[1-9]\\d*))(\\.\\d+)?([eE][-+]?\\d+)?\\s*((,|\\]|\\}|#|\\/\\/|\\/\\*).*)?$", false),
+        kw: re_compile("^(true|false|null)\\s*((,|\\]|\\}|#|\\/\\/|\\/\\*).*)?$", false),
+    }
+}
+
+fn h_key(e: ref HEnc, name: ref String) -> String {
+    if name.len() == 0 {
+        return "\"\"".to_string();
+    }
+    let cs: Vec[char] = name.chars().collect();
+    if needs_escape_name(cs) { quote_str(name, e.ascii, true) } else { name.clone() }
+}
+
+fn h_ml(e: ref HEnc, s: ref String, level: i64) -> String {
+    let lines: Vec[String] = s.replace("\r", "").split("\n").map(|x| x.to_string()).collect();
+    if lines.len() == 1 {
+        return f"'''{lines[0]}'''";
+    }
+    let gap = rep(e.ind, level);
+    let mut res = f"\n{gap}'''";
+    for line in lines {
+        res.push('\n');
+        if line.len() > 0 {
+            res.push_str(gap);
+            res.push_str(line);
+        }
+    }
+    res.push('\n');
+    res.push_str(gap);
+    res.push_str("'''");
+    res
+}
+
+fn h_str(e: ref HEnc, s: ref String, level: i64) -> String {
+    if s.len() == 0 {
+        return "\"\"".to_string();
+    }
+    let cs: Vec[char] = s.chars().collect();
+    let first = cs[0];
+    let mut is_number = false;
+    if first == '-' or (first >= '0' and first <= '9') {
+        is_number = re_match_at(e.num, cs, 0).is_some();
+    }
+    if needs_quotes(cs) or is_number or re_match_at(e.kw, cs, 0).is_some() {
+        if not needs_escape(cs) {
+            return f"\"{s}\"";
+        } else if not needs_escape_ml(cs) {
+            return h_ml(e, s, level + 1);
+        }
+        return quote_str(s, e.ascii, true);
+    }
+    s.clone()
+}
+
+fn h_enc(e: ref HEnc, v: ref Hv, level: i64, root: bool) -> String {
+    match v {
+        Hv.Null => "null".to_string(),
+        Hv.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Hv.Int(i) => i.clone(),
+        Hv.Dec(d) => dec_str(d),
+        Hv.Str(s) => h_str(e, s, level),
+        Hv.List(items) => {
+            if items.len() == 0 {
+                return "[]".to_string();
+            }
+            let mut out = String.new();
+            if not root {
+                out.push('\n');
+                out.push_str(rep(e.ind, level));
+            }
+            let nl = f"\n{rep(e.ind, level + 1)}";
+            out.push('[');
+            for x in items {
+                out.push_str(nl);
+                out.push_str(h_enc(e, x, level + 1, true));
+            }
+            out.push('\n');
+            out.push_str(rep(e.ind, level));
+            out.push(']');
+            out
+        }
+        Hv.Obj(pairs0) => {
+            if pairs0.len() == 0 {
+                return "{}".to_string();
+            }
+            let pairs = if e.sort { sorted_pairs(pairs0) } else { pairs0.clone() };
+            let mut out = String.new();
+            if not root {
+                out.push('\n');
+                out.push_str(rep(e.ind, level));
+            }
+            let nl = f"\n{rep(e.ind, level + 1)}";
+            out.push('{');
+            for p in pairs {
+                out.push_str(nl);
+                out.push_str(h_key(e, p.key));
+                let val = h_enc(e, p.val, level + 1, false);
+                if val.starts_with("\n") {
+                    out.push(':');
+                } else {
+                    out.push_str(": ");
+                }
+                out.push_str(val);
+            }
+            out.push('\n');
+            out.push_str(rep(e.ind, level));
+            out.push('}');
+            out
+        }
+    }
+}
+
+fn hjson_dumps(v: ref Hv, ind: ref String, sort: bool, ascii: bool) -> String {
+    let e = new_henc(ind, sort, ascii);
+    h_enc(e, v, 0, true)
+}
+
+struct JEnc {
+    // None for no indent at all; Some("") still puts items on new lines
+    ind: Option[String],
+    item: String,
+    key: String,
+    sort: bool,
+    ascii: bool,
+}
+
+fn j_enc(e: ref JEnc, v: ref Hv, level: i64) -> String {
+    match v {
+        Hv.Null => "null".to_string(),
+        Hv.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Hv.Int(i) => i.clone(),
+        Hv.Dec(d) => dec_str(d),
+        Hv.Str(s) => quote_str(s, e.ascii, false),
+        Hv.List(items) => {
+            if items.len() == 0 {
+                return "[]".to_string();
+            }
+            let mut out = "[".to_string();
+            let mut sep = e.item.clone();
+            if let Some(ind) = e.ind {
+                let nl = f"\n{rep(ind, level + 1)}";
+                sep = f"{e.item}{nl}";
+                out.push_str(nl);
+            }
+            let mut first = true;
+            for x in items {
+                if not first {
+                    out.push_str(sep);
+                }
+                first = false;
+                out.push_str(j_enc(e, x, level + 1));
+            }
+            if let Some(ind) = e.ind {
+                out.push('\n');
+                out.push_str(rep(ind, level));
+            }
+            out.push(']');
+            out
+        }
+        Hv.Obj(pairs0) => {
+            if pairs0.len() == 0 {
+                return "{}".to_string();
+            }
+            let pairs = if e.sort { sorted_pairs(pairs0) } else { pairs0.clone() };
+            let mut out = "{".to_string();
+            let mut sep = e.item.clone();
+            if let Some(ind) = e.ind {
+                let nl = f"\n{rep(ind, level + 1)}";
+                sep = f"{e.item}{nl}";
+                out.push_str(nl);
+            }
+            let mut first = true;
+            for p in pairs {
+                if not first {
+                    out.push_str(sep);
+                }
+                first = false;
+                out.push_str(quote_str(p.key, e.ascii, false));
+                out.push_str(e.key);
+                out.push_str(j_enc(e, p.val, level + 1));
+            }
+            if let Some(ind) = e.ind {
+                out.push('\n');
+                out.push_str(rep(ind, level));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
+// dumpsJSON: separators default to (', ', ': '), or ',' between items
+// when there is an indent.
+fn json_dumps(v: ref Hv, ind: own Option[String], seps: own Option[(String, String)], sort: bool, ascii: bool) -> String {
+    let (item, key) = match seps {
+        Some(p) => p.clone(),
+        None => if ind.is_some() { (",".to_string(), ": ".to_string()) } else { (", ".to_string(), ": ".to_string()) },
+    };
+    let e = JEnc { ind: ind, item: item, key: key, sort: sort, ascii: ascii };
+    j_enc(e, v, 0)
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+// open(path, 'r').read(): text mode turns CRLF and CR into LF.
+fn read_hjson(rel: ref String) -> String {
+    read_text(rel).replace("\r\n", "\n").replace("\r", "\n")
+}
+
+fn derr_text(e: ref DErr) -> String {
+    match e {
+        DErr.Decode(m) => m.clone(),
+        DErr.Index => "string index out of range".to_string(),
+    }
+}
+
+fn help_text() -> String {
+    let mut h = "Hjson, a user interface for JSON\n\n".to_string();
+    h.push_str("Usage:\n");
+    h.push_str("  hjson [options]\n");
+    h.push_str("  hjson [options] <input>\n");
+    h.push_str("  hjson (-h | --help)\n");
+    h.push_str("  hjson (-V | --version)\n\n");
+    h.push_str("Options:\n");
+    h.push_str("  -h --help     Show this screen.\n");
+    h.push_str("  -j            Output as formatted JSON.\n");
+    h.push_str("  -c            Output as JSON.\n");
+    h.push_str("  -V --version  Show version.\n");
+    h
+}
+
+// hjson/tool.py's main(): what it writes to stdout, to stderr, and how it
+// stops ("" for a plain return).
+fn run_tool(num: ref Re, args: ref Vec[String], stderr: mut ref String) -> (String, String) {
+    let mut format = "hjson";
+    let mut files: Vec[String] = Vec.new();
+    for arg in args {
+        if arg == "-h" or arg == "--help" {
+            stderr.push_str(help_text());
+            stderr.push('\n');
+            return ("".to_string(), "".to_string());
+        } else if arg == "-j" {
+            format = "json";
+        } else if arg == "-c" {
+            format = "compact";
+        } else if arg == "-V" or arg == "--version" {
+            stderr.push_str("Hjson 3.1.0\n");
+            return ("".to_string(), "".to_string());
+        } else if arg.starts_with("-") {
+            stderr.push_str(help_text());
+            stderr.push('\n');
+            return ("".to_string(), f"exit: unknown option {arg}");
+        } else {
+            files.push(arg.clone());
+        }
+    }
+    if files.len() != 1 {
+        stderr.push_str(help_text());
+        stderr.push('\n');
+        return ("".to_string(), "exit: unknown options".to_string());
+    }
+    let obj = match hjson_loads(num, read_hjson(files[0])) {
+        Ok(v) => v,
+        Err(DErr.Decode(m)) => return ("".to_string(), f"exit: {m}"),
+        Err(DErr.Index) => return ("".to_string(), "crash: IndexError: string index out of range".to_string()),
+    };
+    let mut text = if format == "json" {
+        json_dumps(obj, Some("  ".to_string()), None, false, false)
+    } else if format == "compact" {
+        json_dumps(obj, None, Some((",".to_string(), ":".to_string())), false, false)
+    } else {
+        hjson_dumps(obj, "  ", false, false)
+    };
+    text.push('\n');
+    (text, "".to_string())
+}
+
+fn tool_job(num: ref Re, args: ref Vec[String], out: mut ref String) {
+    let mut stderr = String.new();
+    let (text, status) = run_tool(num, args, mut stderr);
+    out.push_str(text);
+    for line in lines_of(stderr) {
+        emit(mut out, f"stderr: {line}");
+    }
+    if status.len() > 0 {
+        emit(mut out, status);
+    }
+}
+
+fn crash_line(e: ref DErr) -> String {
+    match e {
+        DErr.Decode(m) => f"crash: HjsonDecodeError: {m}",
+        DErr.Index => "crash: IndexError: string index out of range".to_string(),
+    }
+}
+
+fn dumps_job(num: ref Re, args: ref Vec[String], out: mut ref String) {
+    let obj = match hjson_loads(num, read_hjson(args[0])) {
+        Ok(v) => v,
+        Err(e) => {
+            emit(mut out, crash_line(e));
+            return;
+        }
+    };
+    let mut ascii = false;
+    let mut sort = false;
+    let mut json = false;
+    let mut indent: Option[i64] = None;
+    for i in 1..args.len() {
+        let o = args[i].clone();
+        if o == "ensure_ascii" {
+            ascii = true;
+        } else if o == "sort_keys" {
+            sort = true;
+        } else if o == "json" {
+            json = true;
+        } else if o.starts_with("indent=") {
+            let n: Option[i64] = o.replace("indent=", "").parse();
+            indent = n;
+        }
+    }
+    let text = if json {
+        let ind = match indent {
+            Some(n) => Some(rep(" ", n)),
+            None => None,
+        };
+        json_dumps(obj, ind, None, sort, ascii)
+    } else {
+        let ind = match indent {
+            Some(n) => rep(" ", n),
+            None => "  ".to_string(),
+        };
+        hjson_dumps(obj, ind, sort, ascii)
+    };
+    emit(mut out, text);
+}
+
+fn roundtrip_job(num: ref Re, args: ref Vec[String], out: mut ref String) {
+    let obj = match hjson_loads(num, read_hjson(args[0])) {
+        Ok(v) => v,
+        Err(e) => {
+            emit(mut out, crash_line(e));
+            return;
+        }
+    };
+    let h1 = hjson_dumps(obj, "  ", false, true);
+    let h2 = match hjson_loads(num, h1) {
+        Ok(v) => hjson_dumps(v, "  ", false, true),
+        Err(e) => crash_line(e),
+    };
+    if h1 == h2 {
+        emit(mut out, "hjson: stable");
+    } else {
+        emit(mut out, "hjson: changed");
+        emit(mut out, h2);
+    }
+    let j1 = json_dumps(obj, None, None, false, true);
+    let j2 = match hjson_loads(num, j1) {
+        Ok(v) => json_dumps(v, None, None, false, true),
+        Err(e) => crash_line(e),
+    };
+    emit(mut out, if j1 == j2 { "json: stable" } else { "json: changed" });
+    emit(mut out, j1);
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let num = number_re();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..job.len() {
+            args.push(job[i].clone());
+        }
+        let kind = job[0].clone();
+        if kind == "hjson" {
+            tool_job(num, args, mut out);
+        } else if kind == "dumps" {
+            dumps_job(num, args, mut out);
+        } else {
+            roundtrip_job(num, args, mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("  1\n");
+    t.push_str("  2, 3,\n");
+    t.push_str("  [\n");
+    t.push_str("    nested\n");
+    t.push_str("    [ \"deeper\" ]\n");
+    t.push_str("  ]\n");
+    t.push_str("  { a: 1 }\n");
+    t.push_str("  {}\n");
+    t.push_str("  []\n");
+    t.push_str("  \"\",\n");
+    t.push_str("  last\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "arrays.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf7374616765733a205b20226275696c64222c202274657374222c20226465706c6f7922205d0a6275696c643a0a");
+    t.push_str("7b0a2020696d6167653a20727573743a312e38300a20207363726970743a205b0a20202020636172676f206275696c64");
+    t.push_str("202d2d72656c656173650a2020202022636172676f2074657374202d2d202d2d6e6f63617074757265220a20205d0a20");
+    t.push_str("2063616368653a0a20207b0a202020206b65793a20636172676f2d2443495f434f4d4d49545f5245465f534c55470a20");
+    t.push_str("20202070617468733a205b0a2020202020207461726765742f0a202020205d0a20207d0a7d0a6465706c6f793a0a7b0a");
+    t.push_str("20206f6e6c793a205b0a202020206d61696e0a20205d0a20207768656e3a206d616e75616c0a2020656e7669726f6e6d");
+    t.push_str("656e743a2070726f64756374696f6e0a2020726574726965733a20300a202074696d656f75743a20333630300a7d0a");
+    v.push(DataFile { path: "bom.hjson".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"bad \\q escape\"\n");
+    v.push(DataFile { path: "broken/badescape.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: '''never closed\n");
+    v.push(DataFile { path: "broken/badml.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"\\u12g4\"\n");
+    v.push(DataFile { path: "broken/badunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"bad \\q escape\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_badescape.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: '''never closed\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_badml.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"\\u12g4\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_badunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_closebracket.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"tab\there\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_control.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str(": 1\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_emptykey.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: 1\n");
+    t.push_str("b\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_eofkey.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"\\u0x41\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_hexunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("stages: [ build, test, deploy ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_inlinelist.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("cache: { key: cargo, paths: [ target/ ] }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_inlineobj.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a{b: 1\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_keybrace.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("my key: 1\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_keyspace.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("'''abc'''}\n");
+    v.push(DataFile { path: "broken/braced_mlnonewline.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a 1\n");
+    t.push_str("b: 2\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_nocolon.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: 1 /* never closed\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_openblock.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: ,\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_punct.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"\\u12\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_shortunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: 1\n");
+    t.push_str("/*}\n");
+    v.push(DataFile { path: "broken/braced_slashstar.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("two_quotes: '''ends with ''''''\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_triplequotes.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a: \"never closed\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "broken/braced_unterminated.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("a:}\n");
+    v.push(DataFile { path: "broken/braced_valueeof.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: ]\n");
+    v.push(DataFile { path: "broken/closebracket.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{ \"a\" 1 }\n");
+    v.push(DataFile { path: "broken/colonafter.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"tab\there\"\n");
+    v.push(DataFile { path: "broken/control.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(": 1\n");
+    v.push(DataFile { path: "broken/emptykey.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: 1\n");
+    t.push_str("b\n");
+    v.push(DataFile { path: "broken/eofkey.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{ a: 1 } b\n");
+    v.push(DataFile { path: "broken/extra.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1] [2]\n");
+    v.push(DataFile { path: "broken/extra2.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"\\u0x41\"\n");
+    v.push(DataFile { path: "broken/hexunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("stages: [ build, test, deploy ]\n");
+    v.push(DataFile { path: "broken/inlinelist.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("cache: { key: cargo, paths: [ target/ ] }\n");
+    v.push(DataFile { path: "broken/inlineobj.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a{b: 1\n");
+    v.push(DataFile { path: "broken/keybrace.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("my key: 1\n");
+    v.push(DataFile { path: "broken/keyspace.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("'''abc'''");
+    v.push(DataFile { path: "broken/mlnonewline.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a 1\n");
+    t.push_str("b: 2\n");
+    v.push(DataFile { path: "broken/nocolon.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: 1 /* never closed\n");
+    v.push(DataFile { path: "broken/openblock.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: ,\n");
+    v.push(DataFile { path: "broken/punct.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"\\u12\"\n");
+    v.push(DataFile { path: "broken/shortunicode.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: 1\n");
+    t.push_str("/*");
+    v.push(DataFile { path: "broken/slashstar.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("two_quotes: '''ends with ''''''\n");
+    v.push(DataFile { path: "broken/triplequotes.hjson".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[1, 2\n");
+    v.push(DataFile { path: "broken/unclosed.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{ a: 1\n");
+    v.push(DataFile { path: "broken/unclosedobj.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a: \"never closed\n");
+    v.push(DataFile { path: "broken/unterminated.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a:");
+    v.push(DataFile { path: "broken/valueeof.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("stages: [ \"build\", \"test\", \"deploy\" ]\n");
+    t.push_str("build:\n");
+    t.push_str("{\n");
+    t.push_str("  image: rust:1.80\n");
+    t.push_str("  script: [\n");
+    t.push_str("    cargo build --release\n");
+    t.push_str("    \"cargo test -- --nocapture\"\n");
+    t.push_str("  ]\n");
+    t.push_str("  cache:\n");
+    t.push_str("  {\n");
+    t.push_str("    key: cargo-$CI_COMMIT_REF_SLUG\n");
+    t.push_str("    paths: [\n");
+    t.push_str("      target/\n");
+    t.push_str("    ]\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    t.push_str("deploy:\n");
+    t.push_str("{\n");
+    t.push_str("  only: [\n");
+    t.push_str("    main\n");
+    t.push_str("  ]\n");
+    t.push_str("  when: manual\n");
+    t.push_str("  environment: production\n");
+    t.push_str("  retries: 0\n");
+    t.push_str("  timeout: 3600\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "ci.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# just a comment\n");
+    t.push_str("// and another\n");
+    t.push_str("/* and a block */\n");
+    v.push(DataFile { path: "comments.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("color: red\n");
+    t.push_str("size: 1\n");
+    t.push_str("color: blue\n");
+    t.push_str("nested: { a: 1, b: 2, a: 3 }\n");
+    v.push(DataFile { path: "dupes.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "empty.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("hjson\tservice.hjson\n");
+    t.push_str("hjson\t-j\tservice.hjson\n");
+    t.push_str("hjson\t-c\tservice.hjson\n");
+    t.push_str("hjson\ttranslations.hjson\n");
+    t.push_str("hjson\t-j\ttranslations.hjson\n");
+    t.push_str("hjson\t-c\ttranslations.hjson\n");
+    t.push_str("hjson\tci.hjson\n");
+    t.push_str("hjson\t-j\tci.hjson\n");
+    t.push_str("hjson\t-c\tci.hjson\n");
+    t.push_str("hjson\tpackage.json\n");
+    t.push_str("hjson\t-j\tpackage.json\n");
+    t.push_str("hjson\t-c\tpackage.json\n");
+    t.push_str("hjson\tnumbers.hjson\n");
+    t.push_str("hjson\t-j\tnumbers.hjson\n");
+    t.push_str("hjson\t-c\tnumbers.hjson\n");
+    t.push_str("hjson\tstrings.hjson\n");
+    t.push_str("hjson\t-j\tstrings.hjson\n");
+    t.push_str("hjson\t-c\tstrings.hjson\n");
+    t.push_str("hjson\tmultiline.hjson\n");
+    t.push_str("hjson\t-j\tmultiline.hjson\n");
+    t.push_str("hjson\t-c\tmultiline.hjson\n");
+    t.push_str("hjson\tmultiline_crlf.hjson\n");
+    t.push_str("hjson\t-j\tmultiline_crlf.hjson\n");
+    t.push_str("hjson\t-c\tmultiline_crlf.hjson\n");
+    t.push_str("hjson\tbom.hjson\n");
+    t.push_str("hjson\t-j\tbom.hjson\n");
+    t.push_str("hjson\t-c\tbom.hjson\n");
+    t.push_str("hjson\tdupes.hjson\n");
+    t.push_str("hjson\t-j\tdupes.hjson\n");
+    t.push_str("hjson\t-c\tdupes.hjson\n");
+    t.push_str("hjson\tarrays.hjson\n");
+    t.push_str("hjson\t-j\tarrays.hjson\n");
+    t.push_str("hjson\t-c\tarrays.hjson\n");
+    t.push_str("hjson\tcomments.hjson\n");
+    t.push_str("hjson\t-j\tcomments.hjson\n");
+    t.push_str("hjson\t-c\tcomments.hjson\n");
+    t.push_str("hjson\trootstring.hjson\n");
+    t.push_str("hjson\t-j\trootstring.hjson\n");
+    t.push_str("hjson\t-c\trootstring.hjson\n");
+    t.push_str("hjson\trootnumber.hjson\n");
+    t.push_str("hjson\t-j\trootnumber.hjson\n");
+    t.push_str("hjson\t-c\trootnumber.hjson\n");
+    t.push_str("hjson\trootquoted.hjson\n");
+    t.push_str("hjson\t-j\trootquoted.hjson\n");
+    t.push_str("hjson\t-c\trootquoted.hjson\n");
+    t.push_str("hjson\tempty.hjson\n");
+    t.push_str("hjson\t-j\tempty.hjson\n");
+    t.push_str("hjson\t-c\tempty.hjson\n");
+    t.push_str("hjson\tws.hjson\n");
+    t.push_str("hjson\t-j\tws.hjson\n");
+    t.push_str("hjson\t-c\tws.hjson\n");
+    t.push_str("hjson\tbroken/badescape.hjson\n");
+    t.push_str("hjson\tbroken/badml.hjson\n");
+    t.push_str("hjson\tbroken/badunicode.hjson\n");
+    t.push_str("hjson\tbroken/braced_badescape.hjson\n");
+    t.push_str("hjson\tbroken/braced_badml.hjson\n");
+    t.push_str("hjson\tbroken/braced_badunicode.hjson\n");
+    t.push_str("hjson\tbroken/braced_closebracket.hjson\n");
+    t.push_str("hjson\tbroken/braced_control.hjson\n");
+    t.push_str("hjson\tbroken/braced_emptykey.hjson\n");
+    t.push_str("hjson\tbroken/braced_eofkey.hjson\n");
+    t.push_str("hjson\tbroken/braced_hexunicode.hjson\n");
+    t.push_str("hjson\tbroken/braced_inlinelist.hjson\n");
+    t.push_str("hjson\tbroken/braced_inlineobj.hjson\n");
+    t.push_str("hjson\tbroken/braced_keybrace.hjson\n");
+    t.push_str("hjson\tbroken/braced_keyspace.hjson\n");
+    t.push_str("hjson\tbroken/braced_mlnonewline.hjson\n");
+    t.push_str("hjson\tbroken/braced_nocolon.hjson\n");
+    t.push_str("hjson\tbroken/braced_openblock.hjson\n");
+    t.push_str("hjson\tbroken/braced_punct.hjson\n");
+    t.push_str("hjson\tbroken/braced_shortunicode.hjson\n");
+    t.push_str("hjson\tbroken/braced_slashstar.hjson\n");
+    t.push_str("hjson\tbroken/braced_triplequotes.hjson\n");
+    t.push_str("hjson\tbroken/braced_unterminated.hjson\n");
+    t.push_str("hjson\tbroken/braced_valueeof.hjson\n");
+    t.push_str("hjson\tbroken/closebracket.hjson\n");
+    t.push_str("hjson\tbroken/colonafter.hjson\n");
+    t.push_str("hjson\tbroken/control.hjson\n");
+    t.push_str("hjson\tbroken/emptykey.hjson\n");
+    t.push_str("hjson\tbroken/eofkey.hjson\n");
+    t.push_str("hjson\tbroken/extra.hjson\n");
+    t.push_str("hjson\tbroken/extra2.hjson\n");
+    t.push_str("hjson\tbroken/hexunicode.hjson\n");
+    t.push_str("hjson\tbroken/inlinelist.hjson\n");
+    t.push_str("hjson\tbroken/inlineobj.hjson\n");
+    t.push_str("hjson\tbroken/keybrace.hjson\n");
+    t.push_str("hjson\tbroken/keyspace.hjson\n");
+    t.push_str("hjson\tbroken/mlnonewline.hjson\n");
+    t.push_str("hjson\tbroken/nocolon.hjson\n");
+    t.push_str("hjson\tbroken/openblock.hjson\n");
+    t.push_str("hjson\tbroken/punct.hjson\n");
+    t.push_str("hjson\tbroken/shortunicode.hjson\n");
+    t.push_str("hjson\tbroken/slashstar.hjson\n");
+    t.push_str("hjson\tbroken/triplequotes.hjson\n");
+    t.push_str("hjson\tbroken/unclosed.hjson\n");
+    t.push_str("hjson\tbroken/unclosedobj.hjson\n");
+    t.push_str("hjson\tbroken/unterminated.hjson\n");
+    t.push_str("hjson\tbroken/valueeof.hjson\n");
+    t.push_str("hjson\t-h\n");
+    t.push_str("hjson\t--version\n");
+    t.push_str("hjson\t-x\tci.hjson\n");
+    t.push_str("hjson\tci.hjson\tservice.hjson\n");
+    t.push_str("dumps\tservice.hjson\tsort_keys\n");
+    t.push_str("dumps\tstrings.hjson\tensure_ascii\n");
+    t.push_str("dumps\ttranslations.hjson\tensure_ascii\n");
+    t.push_str("dumps\tci.hjson\tindent=4\n");
+    t.push_str("dumps\tmultiline.hjson\tindent=4\n");
+    t.push_str("dumps\tnumbers.hjson\tjson\tsort_keys\n");
+    t.push_str("dumps\tstrings.hjson\tjson\tensure_ascii\n");
+    t.push_str("dumps\tservice.hjson\tjson\tindent=3\n");
+    t.push_str("dumps\ttranslations.hjson\tjson\tindent=0\n");
+    t.push_str("dumps\tci.hjson\tjson\n");
+    t.push_str("roundtrip\tservice.hjson\n");
+    t.push_str("roundtrip\ttranslations.hjson\n");
+    t.push_str("roundtrip\tci.hjson\n");
+    t.push_str("roundtrip\tpackage.json\n");
+    t.push_str("roundtrip\tnumbers.hjson\n");
+    t.push_str("roundtrip\tstrings.hjson\n");
+    t.push_str("roundtrip\tmultiline.hjson\n");
+    t.push_str("roundtrip\tmultiline_crlf.hjson\n");
+    t.push_str("roundtrip\tbom.hjson\n");
+    t.push_str("roundtrip\tdupes.hjson\n");
+    t.push_str("roundtrip\tarrays.hjson\n");
+    t.push_str("roundtrip\tcomments.hjson\n");
+    t.push_str("roundtrip\trootstring.hjson\n");
+    t.push_str("roundtrip\trootnumber.hjson\n");
+    t.push_str("roundtrip\trootquoted.hjson\n");
+    t.push_str("roundtrip\tempty.hjson\n");
+    t.push_str("roundtrip\tws.hjson\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("text:\n");
+    t.push_str("  '''\n");
+    t.push_str("  first line\n");
+    t.push_str("    indented line\n");
+    t.push_str("\n");
+    t.push_str("  after a blank line\n");
+    t.push_str("  '''\n");
+    t.push_str("oneline: '''just one line'''\n");
+    t.push_str("quoted: '''has 'single' quotes'''\n");
+    t.push_str("nested:\n");
+    t.push_str("{\n");
+    t.push_str("  poem:\n");
+    t.push_str("    '''\n");
+    t.push_str("    Roses are red,\n");
+    t.push_str("    Violets are blue.\n");
+    t.push_str("    '''\n");
+    t.push_str("  inlist: [\n");
+    t.push_str("    '''\n");
+    t.push_str("    alpha\n");
+    t.push_str("    beta\n");
+    t.push_str("    '''\n");
+    t.push_str("    plain\n");
+    t.push_str("  ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "multiline.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("text:\r\n");
+    t.push_str("  '''\r\n");
+    t.push_str("  first line\r\n");
+    t.push_str("    indented line\r\n");
+    t.push_str("\r\n");
+    t.push_str("  after a blank line\r\n");
+    t.push_str("  '''\r\n");
+    t.push_str("oneline: '''just one line'''\r\n");
+    t.push_str("quoted: '''has 'single' quotes'''\r\n");
+    t.push_str("nested:\r\n");
+    t.push_str("{\r\n");
+    t.push_str("  poem:\r\n");
+    t.push_str("    '''\r\n");
+    t.push_str("    Roses are red,\r\n");
+    t.push_str("    Violets are blue.\r\n");
+    t.push_str("    '''\r\n");
+    t.push_str("  inlist: [\r\n");
+    t.push_str("    '''\r\n");
+    t.push_str("    alpha\r\n");
+    t.push_str("    beta\r\n");
+    t.push_str("    '''\r\n");
+    t.push_str("    plain\r\n");
+    t.push_str("  ]\r\n");
+    t.push_str("}\r\n");
+    v.push(DataFile { path: "multiline_crlf.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  zero: 0\n");
+    t.push_str("  negzero: -0\n");
+    t.push_str("  int: 42\n");
+    t.push_str("  negative: -17\n");
+    t.push_str("  big: 123456789012345678901234567890\n");
+    t.push_str("  onepointzero: 1.0\n");
+    t.push_str("  trailing: 1.50\n");
+    t.push_str("  exp: 1e5\n");
+    t.push_str("  smallexp: 2.5E-3\n");
+    t.push_str("  tenbillion: 1e10\n");
+    t.push_str("  justunder: 9999999999.0\n");
+    t.push_str("  overten: 12345678901.0\n");
+    t.push_str("  tiny: -1e-7\n");
+    t.push_str("  zerofrac: 0.000\n");
+    t.push_str("  negzerofrac: -0.0\n");
+    t.push_str("  huge: 1e400\n");
+    t.push_str("  scaled: 3.0e2\n");
+    t.push_str("  decimals: 0.1\n");
+    t.push_str("  money: 19.99\n");
+    t.push_str("  spaced: 7\n");
+    t.push_str("  notnumber: 1.\n");
+    t.push_str("  alsonot: 01\n");
+    t.push_str("  hexish: 0x1F\n");
+    t.push_str("  plus: +5\n");
+    t.push_str("  dash: -\n");
+    t.push_str("  unit: 12px\n");
+    t.push_str("  version: 1.2.3\n");
+    t.push_str("  inarray: [1, 2.0, 3e0, -4.50, 5]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "numbers.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"@acme/widgets\",\n");
+    t.push_str("  \"version\": \"1.0.0-beta.3\",\n");
+    t.push_str("  \"private\": true,\n");
+    t.push_str("  \"scripts\": {\n");
+    t.push_str("    \"build\": \"tsc -p .\",\n");
+    t.push_str("    \"test\": \"jest --coverage\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"dependencies\": {\n");
+    t.push_str("    \"react\": \"^18.2.0\",\n");
+    t.push_str("    \"lodash\": \"~4.17.21\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"engines\": {\"node\": \">=18\"},\n");
+    t.push_str("  \"files\": [],\n");
+    t.push_str("  \"config\": {}\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "package.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("42\n");
+    v.push(DataFile { path: "rootnumber.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"a string\"\n");
+    v.push(DataFile { path: "rootquoted.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("just some text\n");
+    v.push(DataFile { path: "rootstring.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# billing-api: settings for every environment\n");
+    t.push_str("// edit with care; the deploy job reads this file\n");
+    t.push_str("\n");
+    t.push_str("name: billing-api\n");
+    t.push_str("version: 2.4.1\n");
+    t.push_str("owner: payments-team@example.com\n");
+    t.push_str("listen:\n");
+    t.push_str("{\n");
+    t.push_str("  host: 0.0.0.0\n");
+    t.push_str("  port: 8443\n");
+    t.push_str("  # TLS terminates at the load balancer\n");
+    t.push_str("  tls: false\n");
+    t.push_str("}\n");
+    t.push_str("database:\n");
+    t.push_str("{\n");
+    t.push_str("  url: postgres://billing@db.internal:5432/billing\n");
+    t.push_str("  pool: 20\n");
+    t.push_str("  timeout: 2.50\n");
+    t.push_str("  replicas: [\n");
+    t.push_str("    db-replica-1.internal\n");
+    t.push_str("    db-replica-2.internal\n");
+    t.push_str("  ]\n");
+    t.push_str("}\n");
+    t.push_str("/* retry policy, shared with the\n");
+    t.push_str("   invoice worker */\n");
+    t.push_str("retry: { attempts: 5, backoff: 1.5e2, jitter: 0.25 }\n");
+    t.push_str("features:\n");
+    t.push_str("{\n");
+    t.push_str("  new-checkout: true\n");
+    t.push_str("  legacy-invoices: false\n");
+    t.push_str("  beta-users: null\n");
+    t.push_str("}\n");
+    t.push_str("motd:\n");
+    t.push_str("  '''\n");
+    t.push_str("  Scheduled maintenance on Sunday.\n");
+    t.push_str("    Payments may be delayed.\n");
+    t.push_str("  '''\n");
+    t.push_str("path: C:\\billing\\data\n");
+    t.push_str("greeting: hello, world # not a comment inside a quoteless string? it is\n");
+    t.push_str("rate: 1/3 of traffic\n");
+    t.push_str("\"quoted key with spaces\": yes\n");
+    t.push_str("emptyString: \"\"\n");
+    v.push(DataFile { path: "service.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  plain: hello world\n");
+    t.push_str("  quoted: \"hello world\"\n");
+    t.push_str("  single: 'it\\'s'\n");
+    t.push_str("  singleq: 'say \"hi\"'\n");
+    t.push_str("  doubleq: \"it's\"\n");
+    t.push_str("  escapes: \"tab\\tnew\\nline \\\"quote\\\" back\\\\slash \\/slash\"\n");
+    t.push_str("  unicode: \"caf\\u00e9 \\u263a\"\n");
+    t.push_str("  pair: \"\\ud83d\\ude00 grin\"\n");
+    t.push_str("  raw: grüße aus köln\n");
+    t.push_str("  hashlike: \"#not a comment\"\n");
+    t.push_str("  slashy: \"// nor this\"\n");
+    t.push_str("  colon: a:b:c\n");
+    t.push_str("  bracey: \"{braces}\"\n");
+    t.push_str("  leading: \"  padded  \"\n");
+    t.push_str("  trailingspace: \"tail \"\n");
+    t.push_str("  keyword: \"true\"\n");
+    t.push_str("  keywordish: true story\n");
+    t.push_str("  numberish: \"42\"\n");
+    t.push_str("  numberish2: 42 apples\n");
+    t.push_str("  nullish: null pointer\n");
+    t.push_str("  empty: \"\"\n");
+    t.push_str("  quotes: \"\\\"quoted\\\"\"\n");
+    t.push_str("  ctrl: \"bell\\u0007\"\n");
+    t.push_str("  ls: \"line\\u2028sep\"\n");
+    t.push_str("  bom: \"\\ufeffmark\"\n");
+    t.push_str("  apos: don't\n");
+    t.push_str("  url: https://example.com/a?b=c#frag\n");
+    t.push_str("  comma: \"a, b\"\n");
+    t.push_str("  \"\": empty key\n");
+    t.push_str("  \"a b\": spaced key\n");
+    t.push_str("  \"x:y\": colon key\n");
+    t.push_str("  \"it's\": apostrophe key\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "strings.hjson".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  // UI strings for the checkout page\n");
+    t.push_str("  \"en\": {\n");
+    t.push_str("    title: Checkout\n");
+    t.push_str("    total: Total: {amount}\n");
+    t.push_str("    note: '''\n");
+    t.push_str("      Prices include VAT.\n");
+    t.push_str("      Shipping is calculated at the next step.\n");
+    t.push_str("      '''\n");
+    t.push_str("  },\n");
+    t.push_str("  \"de\": {\n");
+    t.push_str("    title: Kasse\n");
+    t.push_str("    total: \"Summe: {amount}\"\n");
+    t.push_str("    note: Preise inkl. MwSt.\n");
+    t.push_str("  },\n");
+    t.push_str("  \"ja\": {\n");
+    t.push_str("    title: お会計\n");
+    t.push_str("    total: 合計: {amount}\n");
+    t.push_str("  },\n");
+    t.push_str("  \"ar\": {\n");
+    t.push_str("    title: \"الدفع\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "translations.hjson".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("   \n");
+    t.push_str("\t\n");
+    v.push(DataFile { path: "ws.hjson".to_string(), hex: false, body: t });
+}
