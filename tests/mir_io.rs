@@ -1794,3 +1794,118 @@ fn default_providers_and_panicking_trait_defaults_match_on_both_backends() {
         assert!(err.contains(want), "{mode}: {err}");
     }
 }
+
+/// An HTTPS origin on loopback with a fresh self-signed certificate for
+/// `localhost`, answering each request with `200` and `body` until the test
+/// ends. Returns its port and the certificate's PEM, for
+/// `KARAC_HTTP_EXTRA_CA`.
+fn https_origin(body: &'static str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let pem = cert.cert.pem();
+    let der = cert.cert.der().clone();
+    let key = rustls::pki_types::PrivateKeyDer::try_from(cert.signing_key.serialize_der()).unwrap();
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let config = std::sync::Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![der], key)
+            .unwrap(),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for tcp in listener.incoming() {
+            let Ok(tcp) = tcp else { return };
+            let conn = rustls::ServerConnection::new(config.clone()).unwrap();
+            let mut tls = rustls::StreamOwned::new(conn, tcp);
+            let (mut got, mut chunk) = (Vec::new(), [0u8; 1024]);
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                match tls.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nx-origin: tls\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = tls.write_all(reply.as_bytes());
+            tls.conn.send_close_notify();
+            let _ = tls.flush();
+        }
+    });
+    (port, pem)
+}
+
+const HTTPS_GET: &str = r#"
+fn main() {
+    let c = Client.new();
+    match c.get("URL") {
+        Ok(r) => {
+            println(r.status());
+            println(r.body());
+            match r.header("X-Origin") {
+                Some(v) => println(v),
+                None => println("no header"),
+            }
+        }
+        Err(e) => println(f"error: {e.message()}"),
+    }
+}
+"#;
+
+/// The HTTP client speaks HTTPS on both MIR backends, trusting the bundled
+/// roots plus `KARAC_HTTP_EXTRA_CA` (docs/library/io.md § HTTP client).
+#[test]
+fn https_client_matches_on_both_backends() {
+    let dir = Scratch::new("https");
+    let (port, pem) = https_origin("over tls");
+    let ca = dir.path().join("ca.pem");
+    std::fs::write(&ca, pem).unwrap();
+    let file = dir.path().join("main.kara");
+    let src = HTTPS_GET.replace("URL", &format!("https://localhost:{port}/x"));
+    std::fs::write(&file, src).unwrap();
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let run = |cmd: &mut Command| {
+        let out = cmd
+            .env("KARAC_HTTP_EXTRA_CA", &ca)
+            .env("NO_PROXY", "localhost,127.0.0.1")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("https_proxy")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let want = "200\nover tls\ntls\n";
+    assert_eq!(
+        run(Command::new(karac).args(["__mir-run", file.to_str().unwrap()])),
+        want
+    );
+    let exe = dir.path().join("main");
+    let built = Command::new(karac)
+        .args([
+            "build",
+            "--mir",
+            file.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let linked = common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&built.stderr).to_string())
+    });
+    if linked.is_some() {
+        assert_eq!(run(&mut Command::new(&exe)), want);
+    }
+}

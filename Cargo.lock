@@ -1281,6 +1281,7 @@ dependencies = [
  "regex",
  "rustc-hash 2.1.3",
  "rustls",
+ "rustls-pemfile",
  "rustyline",
  "semver",
  "serde_json",
@@ -1291,6 +1292,7 @@ dependencies = [
  "toml",
  "ureq",
  "wasi-preview1-component-adapter-provider",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

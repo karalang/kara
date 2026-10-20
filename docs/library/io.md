@@ -190,7 +190,7 @@ Both are prelude types. `IoError` covers the standard streams and files; `VarErr
 
 ## Networking
 
-v1 networking is blocking TCP and UDP, in `std.net`. HTTP clients and servers, TLS and WebSocket come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+v1 networking is blocking TCP and UDP, in `std.net`, and the HTTP client, which speaks HTTPS (below). HTTP servers, TLS servers and WebSocket come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 
 ```kara
 impl TcpListener {
@@ -244,6 +244,40 @@ type TcpError = NetError;
 **Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a `TcpStream.read` waits for data without the timeout for now ([deferred.md](../deferred.md#networking-beyond-v1)).
 
 **Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, or a timeout below 1 ms. `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
+
+### HTTP client
+
+```kara
+impl Client {
+    fn new() -> Client
+    fn get(self, url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
+    fn post(self, url: String, body: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
+    fn request(self, method: String, url: String) -> RequestBuilder
+}
+
+impl RequestBuilder {
+    fn header(own self, name: String, value: String) -> RequestBuilder
+    fn body(own self, b: String) -> RequestBuilder
+    fn timeout(own self, ms: i64) -> RequestBuilder
+    fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks
+}
+
+impl Response {
+    fn status(self) -> i64
+    fn body(self) -> String
+    fn bytes(self) -> Vec[u8]
+    fn header(self, name: String) -> Option[String]
+    fn headers(self) -> Vec[(String, String)]
+}
+
+impl HttpError {
+    fn message(self) -> String
+}
+```
+
+A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. `header` compares names without case.
+
+**HTTPS.** An `https://` URL is fetched over TLS, and the server's certificate must chain to a trusted root. The trusted roots are the Mozilla bundle, built into every program so it needs no system CA store, plus the PEM certificates in the file that the environment variable `KARAC_HTTP_EXTRA_CA` names, for a private CA or a test's own. A certificate that does not verify is an `Err` naming the failure; there is no way to turn verification off.
 
 ## Processes
 

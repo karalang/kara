@@ -11026,7 +11026,11 @@ impl<'a> Interp<'a> {
                 return self.http_error(format!("{}: connect failed: {e}", req.url), ret);
             }
         }
-        let mut r = ureq::request(&req.method, &req.url);
+        let agent = match http_agent() {
+            Ok(a) => a,
+            Err(msg) => return self.http_error(msg.clone(), ret),
+        };
+        let mut r = agent.request(&req.method, &req.url);
         for (k, v) in &req.headers {
             r = r.set(k, v);
         }
@@ -12697,6 +12701,42 @@ fn regex_find_from(
         }
         return Some(slots);
     }
+}
+
+/// The HTTP client's agent, trusting what the compiled program's client
+/// trusts (runtime/src/lib.rs `http_client_tls_config`): the bundled Mozilla
+/// roots plus the PEM certificates at `KARAC_HTTP_EXTRA_CA`, over rustls
+/// with `ring`. Only HTTP/1.1 is offered, the one protocol `ureq` speaks.
+/// Built once; the variable is read on first use, as the runtime reads it.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_agent() -> &'static Result<ureq::Agent, String> {
+    static AGENT: std::sync::OnceLock<Result<ureq::Agent, String>> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let mut roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
+            let pem = std::fs::read(&path)
+                .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
+            for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+                let cert =
+                    cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
+                roots
+                    .add(cert)
+                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}"))?;
+            }
+        }
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| e.to_string())?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Ok(ureq::AgentBuilder::new()
+            .tls_config(std::sync::Arc::new(config))
+            .build())
+    })
 }
 
 #[cfg(test)]

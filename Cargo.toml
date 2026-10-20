@@ -319,6 +319,15 @@ wasi-preview1-component-adapter-provider = "45.0.1"
 # cfg-gated off on wasm32).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
+# The MIR interpreter's HTTPS client trusts what the compiled program's
+# does: the bundled Mozilla roots plus `KARAC_HTTP_EXTRA_CA`, through a
+# rustls `ClientConfig` handed to `ureq` (runtime/src/lib.rs
+# `http_client_tls_config`). No new crate: `ureq` already pulls `rustls` and
+# `webpki-roots` 0.26, and the runtime pulls `rustls-pemfile`; naming them
+# pins the versions to the runtime's.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
 # Unicode normalization for the interpreter's `String.normalize(form)`
 # (B-2026-08-20-41). NOT a new crate in this graph: `icu_normalizer` is already
 # here transitively via `ureq -> url -> idna -> idna_adapter`, so naming it
