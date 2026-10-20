@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 300 |
+| missing-feature | 301 |
 | codegen-gap | 278 |
-| false-positive | 253 |
+| false-positive | 254 |
 | other | 185 |
 | perf | 180 |
-| diagnostics | 178 |
+| diagnostics | 179 |
 | crash | 126 |
 | soundness | 125 |
 | use-after-free | 92 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2975 |
-| interp | 993 |
-| typecheck | 515 |
+| codegen | 2976 |
+| interp | 994 |
+| typecheck | 516 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
 | cli | 81 |
-| parser | 74 |
+| parser | 75 |
 | autopar | 59 |
 | resolver | 48 |
 | effect | 38 |
@@ -181,7 +181,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-19 | 2026-10-20 | interp+codegen | low | MIR builder: a function item stored in a generic struct's `Fn(V) -> K` field at V = i64 is erased twice, to `Fn(i64) -> i64` and then to `Fn(ref i64) -> i64`, and the validator refuses the second cast (`invalid MIR: Erase cast from Fn(i64) -> i64 to Fn(ref i64) -> i64`) | — |
 | B-2026-10-20-20 | 2026-10-20 | typecheck+interp+codegen | low | Floats have no `is_nan`, `is_infinite`, `is_finite` or `is_sign_negative`, so data-cleaning code has to write `x != x` and compare against `1.0 / 0.0` | — |
 | B-2026-10-20-21 | 2026-10-20 | interp+codegen | medium | MIR builder: `*key` inside a closure, where `key` is a captured `ref String` (a parameter or a `for` item), passes `karac check` but fails MIR validation with "deref of non-reference String", so `v.iter().any(|t| t.0 == *key)` cannot run on v2 | — |
-| B-2026-10-20-22 | 2026-10-20 | typecheck | low | `String.find` takes a `char` (design.md's own example is `s.find(' ')`), but `contains` and `starts_with` refuse one with a type error, and `split` refuses one with a fix-it to the string literal; so `"02468".contains(c)`, the usual digit or class test, has to be written `contains(f"{c}")` | — |
+| B-2026-10-20-22 | 2026-10-20 | typecheck | low | `String.find` takes a `char` (design.md's own example is `s.find(' ')`), but `rfind`, `contains` and `starts_with` refuse one (CORRECTION 2026-10-20: `rfind` too, so `s.rfind('/')` fails while `s.find('/')` works) with a type error, and `split` refuses one with a fix-it to the string literal; so `"02468".contains(c)`, the usual digit or class test, has to be written `contains(f"{c}")` | — |
+| B-2026-10-20-23 | 2026-10-20 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` stop with "a type that failed to check is not lowered yet"; and floats have no `PI`, `TAU` or `E` at all | — |
+| B-2026-10-20-24 | 2026-10-20 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) = t; *a + *b` are refused with "unary '*' requires 'ref T' .. found 'String'/'i64'" while `karac check` accepts them | — |
+| B-2026-10-20-25 | 2026-10-20 | parser | low | The struct-pattern field shorthand `P { ref name, ref n }` does not parse ("'ref' is a reserved keyword and cannot be used as an identifier"), though design.md's own example is `Foo { ref name, score, .. }`; `name: ref name` works | — |
 
 ### Relocated
 
