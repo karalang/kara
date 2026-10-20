@@ -1,0 +1,3 @@
+# The request tests/mir_io.rs sends: one, which closes the connection.
+[[connection]]
+send = "GET /x HTTP/1.1\r\nHost: h\r\nX-Test-Echo: hi\r\nConnection: close\r\n\r\n"

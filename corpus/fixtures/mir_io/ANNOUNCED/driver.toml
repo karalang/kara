@@ -1,0 +1,7 @@
+# tests/mir_io.rs connects, sends five bytes and closes; the program
+# prints how many it read and ends by itself.
+wait = true
+stdout = true
+
+[[connection]]
+send = "ping\n"
