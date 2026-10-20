@@ -720,6 +720,32 @@ impl super::Parser {
                 continue;
             }
             let fs = self.current_span();
+            // `ref name`, `mut ref name` (and the refused-but-recovered
+            // `mut name`) before a shorthand field (design.md § Binding
+            // modes in patterns, `Foo { ref name, score, .. }`): the
+            // field is the binding's name, and the pattern is the binding
+            // with its mode (B-2026-10-20-25).
+            if self.check(&Token::Ref) || self.check(&Token::Mut) {
+                let pattern = self.parse_single_pattern()?;
+                let name = match &pattern.kind {
+                    PatternKind::Binding(name) | PatternKind::AtBinding { name, .. } => {
+                        name.clone()
+                    }
+                    _ => {
+                        self.error("expected a field name after `ref` in a struct pattern");
+                        String::new()
+                    }
+                };
+                fields.push(FieldPattern {
+                    name,
+                    pattern: Some(pattern),
+                    span: self.span_from(&fs),
+                });
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
+            }
             let field_name = self.expect_identifier()?;
             let pattern = if self.eat(&Token::Colon) {
                 Some(self.parse_pattern()?)

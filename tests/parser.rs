@@ -16748,3 +16748,47 @@ fn test_question_then_tuple_index() {
     assert_eq!(text(&b.span), "f()?.1.0");
     assert!(matches!(value(2).kind, ExprKind::OptionalChain { .. }));
 }
+
+/// `ref`, `mut ref` before a shorthand field (design.md § Binding modes in
+/// patterns, `Foo { ref name, score, .. }`) is the long form `name: ref name`
+/// (B-2026-10-20-25).
+#[test]
+fn ref_before_a_shorthand_struct_field_parses_as_the_long_form() {
+    let short = "struct P { name: String, n: i64, k: i64 }\n\
+                 fn main() { let mut p = P { name: \"a\".to_string(), n: 1, k: 2 };\n\
+                 let P { ref name, mut ref n, .. } = p; }";
+    let long = "struct P { name: String, n: i64, k: i64 }\n\
+                fn main() { let mut p = P { name: \"a\".to_string(), n: 1, k: 2 };\n\
+                let P { name: ref name, n: mut ref n, .. } = p; }";
+    let (a, b) = (karac::parse(short), karac::parse(long));
+    assert!(a.errors.is_empty(), "{:?}", a.errors);
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    let fields = |prog: &karac::ast::Program| -> Vec<(String, String)> {
+        let Item::Function(f) = &prog.items[1] else {
+            panic!("expected main")
+        };
+        let StmtKind::Let { pattern, .. } = &f.body.stmts[1].kind else {
+            panic!("expected a let")
+        };
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            panic!("expected a struct pattern")
+        };
+        fields
+            .iter()
+            .map(|f| match f.pattern.as_ref().map(|p| &p.kind) {
+                Some(PatternKind::Binding(n)) => (f.name.clone(), n.clone()),
+                other => panic!("field {} is {other:?}", f.name),
+            })
+            .collect()
+    };
+    let want = vec![
+        ("name".to_string(), "name".to_string()),
+        ("n".to_string(), "n".to_string()),
+    ];
+    assert_eq!(fields(&a.program), want);
+    assert_eq!(fields(&b.program), want);
+    // The binding modes are the long form's too.
+    assert_eq!(a.program.ref_binding_spans.len(), 2);
+    assert_eq!(a.program.mut_ref_binding_spans.len(), 1);
+    assert_eq!(b.program.mut_ref_binding_spans.len(), 1);
+}
