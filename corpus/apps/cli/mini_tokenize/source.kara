@@ -1,0 +1,2478 @@
+// mini_tokenize: Python 3.13's tokenizer, ported from the C code that
+// the tokenize module runs (Parser/lexer/lexer.c, with the tokenize
+// module's extra tokens) and the token building in
+// Python/Python-tokenize.c, then the tools people build on its tokens:
+// `python -m tokenize -e`, line counts, TODO comments, a few flake8
+// checks, a rename and a comment stripper. See README.md.
+// ------------------------------------------------------------ text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn cp(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cps(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+// Text with no surrogates in it, as a String.
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s {
+        if c < 0x80 {
+            out.push(c as u8);
+        } else if c < 0x800 {
+            out.push((0xC0 | (c >> 6)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        } else if c < 0x10000 {
+            out.push((0xE0 | (c >> 12)) as u8);
+            out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (c >> 18)) as u8);
+            out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn starts_with(s: ref Vec[i64], p: ref Vec[i64]) -> bool {
+    if p.len() > s.len() {
+        return false;
+    }
+    for i in 0..p.len() {
+        if s[i] != p[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn hex_n(c: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(c >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 and c <= 102 {
+        return c - 87;
+    }
+    if c >= 65 and c <= 70 {
+        return c - 55;
+    }
+    -1
+}
+
+fn split_cp(s: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in s {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_tabs(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\t' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// the lines of a file, without their \n, as Python's iteration gives
+// them
+fn text_lines(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and v[j] < v[j - 1] {
+            let t = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn is_surrogate(c: i64) -> bool {
+    c >= 0xD800 and c <= 0xDFFF
+}
+
+// ------------------------------------------------------------ reprs
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+// repr() of a str
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    let mut out: Vec[i64] = Vec.new();
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+    to_string(out)
+}
+
+fn pr(s: ref String) -> String {
+    repr_of(cps(s))
+}
+
+// ------------------------------------------------------------ literals
+
+// ast.literal_eval of a str or bytes literal: the prefix, the quotes and
+// the escapes Python knows; \N{...} is not supported.
+fn literal(s: ref String) -> Vec[i64] {
+    let v = cps(s);
+    let mut i = 0;
+    let mut is_bytes = false;
+    if v[0] == 98 {
+        is_bytes = true;
+        i = 1;
+    }
+    let quote = v[i];
+    i += 1;
+    let end = v.len() - 1;
+    let mut out: Vec[i64] = Vec.new();
+    while i < end {
+        let c = v[i];
+        if c != 92 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let e = v[i + 1];
+        i += 2;
+        if e == 110 {
+            out.push(10);
+        } else if e == 116 {
+            out.push(9);
+        } else if e == 114 {
+            out.push(13);
+        } else if e == 97 {
+            out.push(7);
+        } else if e == 98 {
+            out.push(8);
+        } else if e == 102 {
+            out.push(12);
+        } else if e == 118 {
+            out.push(11);
+        } else if e >= 48 and e <= 55 {
+            let mut x = e - 48;
+            let mut k = 0;
+            while k < 2 and i < end and v[i] >= 48 and v[i] <= 55 {
+                x = x * 8 + v[i] - 48;
+                i += 1;
+                k += 1;
+            }
+            out.push(x);
+        } else if e == 120 or (not is_bytes and (e == 117 or e == 85)) {
+            let count = if e == 120 { 2 } else if e == 117 { 4 } else { 8 };
+            let mut x = 0;
+            for _ in 0..count {
+                x = x * 16 + hex_val(v[i]);
+                i += 1;
+            }
+            out.push(x);
+        } else if e == 92 or e == 39 or e == 34 or e == 10 {
+            if e != 10 {
+                out.push(e);
+            }
+        } else {
+            out.push(92);
+            out.push(e);
+        }
+    }
+    let _ = quote;
+    out
+}
+
+
+// ------------------------------------------------------------ the tokenizer
+//
+// A port of Parser/lexer/lexer.c as Python 3.13 runs it for the tokenize
+// module (extra tokens on), and of the token building in
+// Python/Python-tokenize.c. The source is held whole; `inp` is the end
+// of the last line read, as the C readline buffer has it, so line
+// numbers and columns come out where the C code puts them.
+
+const EOF: i64 = -1;
+const BAD: i64 = -2;
+
+const E_OK: i64 = 0;
+const E_EOF: i64 = 1;
+const E_DEDENT: i64 = 2;
+const E_TABSPACE: i64 = 3;
+const E_LINECONT: i64 = 4;
+const E_ERROR: i64 = 5;
+
+const T_ERROR: i64 = 0;
+const T_NAME: i64 = 1;
+const T_NUMBER: i64 = 2;
+const T_STRING: i64 = 3;
+const T_OP: i64 = 4;
+const T_NEWLINE: i64 = 5;
+const T_NL: i64 = 6;
+const T_COMMENT: i64 = 7;
+const T_INDENT: i64 = 8;
+const T_DEDENT: i64 = 9;
+const T_ENDMARKER: i64 = 10;
+const T_FSTART: i64 = 11;
+const T_FMIDDLE: i64 = 12;
+const T_FEND: i64 = 13;
+const T_ENCODING: i64 = 14;
+
+fn type_name(t: i64) -> String {
+    let names = vec!["ERRORTOKEN", "NAME", "NUMBER", "STRING", "OP", "NEWLINE", "NL", "COMMENT", "INDENT", "DEDENT", "ENDMARKER", "FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END", "ENCODING"];
+    names[t].to_string()
+}
+
+// token.EXACT_TOKEN_TYPES
+fn exact_name(s: ref String) -> String {
+    let table = vec![
+        ("!", "EXCLAMATION"), ("!=", "NOTEQUAL"), ("%", "PERCENT"), ("%=", "PERCENTEQUAL"),
+        ("&", "AMPER"), ("&=", "AMPEREQUAL"), ("(", "LPAR"), (")", "RPAR"), ("*", "STAR"),
+        ("**", "DOUBLESTAR"), ("**=", "DOUBLESTAREQUAL"), ("*=", "STAREQUAL"), ("+", "PLUS"),
+        ("+=", "PLUSEQUAL"), (",", "COMMA"), ("-", "MINUS"), ("-=", "MINEQUAL"), ("->", "RARROW"),
+        (".", "DOT"), ("...", "ELLIPSIS"), ("/", "SLASH"), ("//", "DOUBLESLASH"),
+        ("//=", "DOUBLESLASHEQUAL"), ("/=", "SLASHEQUAL"), (":", "COLON"), (":=", "COLONEQUAL"),
+        (";", "SEMI"), ("<", "LESS"), ("<<", "LEFTSHIFT"), ("<<=", "LEFTSHIFTEQUAL"),
+        ("<=", "LESSEQUAL"), ("=", "EQUAL"), ("==", "EQEQUAL"), (">", "GREATER"),
+        (">=", "GREATEREQUAL"), (">>", "RIGHTSHIFT"), (">>=", "RIGHTSHIFTEQUAL"), ("@", "AT"),
+        ("@=", "ATEQUAL"), ("[", "LSQB"), ("]", "RSQB"), ("^", "CIRCUMFLEX"),
+        ("^=", "CIRCUMFLEXEQUAL"), ("{", "LBRACE"), ("|", "VBAR"), ("|=", "VBAREQUAL"),
+        ("}", "RBRACE"), ("~", "TILDE"),
+    ];
+    for (k, v) in table {
+        if s == k {
+            return v.to_string();
+        }
+    }
+    "OP".to_string()
+}
+
+fn is_two(a: i64, b: i64) -> bool {
+    let s = to_string(vec![a, b]);
+    let pairs = vec!["!=", "%=", "&=", "**", "*=", "+=", "-=", "->", "//", "/=", ":=", "<<", "<=", "==", ">=", ">>", "@=", "^=", "|="];
+    for p in pairs {
+        if s == p {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_three(a: i64, b: i64, c: i64) -> bool {
+    let s = to_string(vec![a, b, c]);
+    s == "**=" or s == "//=" or s == "<<=" or s == ">>="
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn is_xdigit(c: i64) -> bool {
+    is_digit(c) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+}
+
+fn is_id_start(c: i64) -> bool {
+    (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95 or c >= 128
+}
+
+fn is_id_char(c: i64) -> bool {
+    is_id_start(c) or is_digit(c)
+}
+
+fn lower(c: i64) -> i64 {
+    if c >= 65 and c <= 90 { c + 32 } else { c }
+}
+
+// One entry of the C tokenizer's mode stack. The bottom entry is the
+// regular mode; each f-string pushes one, which flips between reading
+// its literal text (`fstring`) and reading an expression.
+#[derive(Clone)]
+struct Mode {
+    fstring: bool,
+    quote: i64,
+    quote_size: i64,
+    raw: bool,
+    start: i64,
+    multi_line_start: i64,
+    line_no: i64,
+    depth: i64,
+    expr_depth: i64,
+    in_spec: bool,
+    debug: bool,
+}
+
+fn regular_mode() -> Mode {
+    Mode { fstring: false, quote: 0, quote_size: 0, raw: false, start: 0, multi_line_start: 0, line_no: 0, depth: 0, expr_depth: 0, in_spec: false, debug: false }
+}
+
+#[derive(Clone)]
+struct Tok {
+    ty: i64,
+    text: Vec[i64],
+    sr: i64,
+    sc: i64,
+    er: i64,
+    ec: i64,
+}
+
+#[derive(Clone)]
+struct TokErr {
+    kind: String,
+    msg: String,
+    line: i64,
+    col: i64,
+}
+
+struct Lexed {
+    toks: Vec[Tok],
+    failed: bool,
+    err: TokErr,
+}
+
+struct Lx {
+    s: Vec[i64],
+    n: i64,
+    line_ends: Vec[i64],
+    implicit: bool,
+    implicit_now: bool,
+    cur: i64,
+    inp: i64,
+    buf: i64,
+    start: i64,
+    lineno: i64,
+    line_start: i64,
+    first_lineno: i64,
+    multi_line_start: i64,
+    done: i64,
+    atbol: bool,
+    level: i64,
+    indstack: Vec[i64],
+    altindstack: Vec[i64],
+    pendin: i64,
+    comment_newline: bool,
+    modes: Vec[Mode],
+    ps: i64,
+    pe: i64,
+    err: TokErr,
+}
+
+fn new_lexer(text: ref Vec[i64]) -> Lx {
+    let mut s = text.clone();
+    let mut implicit = false;
+    if s.len() > 0 and s[s.len() - 1] != 10 {
+        s.push(10);
+        implicit = true;
+    }
+    let mut ends: Vec[i64] = Vec.new();
+    for i in 0..s.len() {
+        if s[i] == 10 {
+            ends.push(i + 1);
+        }
+    }
+    let n = s.len();
+    Lx {
+        s: s, n: n, line_ends: ends, implicit: implicit, implicit_now: false,
+        cur: 0, inp: 0, buf: 0, start: -1, lineno: 0, line_start: 0,
+        first_lineno: 0, multi_line_start: 0, done: E_OK, atbol: true, level: 0,
+        indstack: vec![0], altindstack: vec![0], pendin: 0, comment_newline: false,
+        modes: vec![regular_mode()], ps: -1, pe: -1,
+        err: TokErr { kind: String.new(), msg: String.new(), line: 0, col: 0 },
+    }
+}
+
+// tok_nextc: the next character, reading the next line when the current
+// one is used up.
+fn nextc(lx: mut ref Lx) -> i64 {
+    if lx.cur != lx.inp {
+        lx.cur += 1;
+        return lx.s[lx.cur - 1];
+    }
+    if lx.done != E_OK {
+        return EOF;
+    }
+    if lx.start < 0 and lx.modes.len() == 1 {
+        lx.buf = lx.inp;
+    }
+    if lx.inp >= lx.n {
+        lx.done = E_EOF;
+        lx.cur = lx.inp;
+        return EOF;
+    }
+    lx.lineno += 1;
+    lx.line_start = lx.cur;
+    lx.inp = lx.line_ends[lx.lineno - 1];
+    if lx.implicit and lx.lineno == lx.line_ends.len() {
+        lx.implicit_now = true;
+    }
+    lx.cur += 1;
+    lx.s[lx.cur - 1]
+}
+
+fn backup(lx: mut ref Lx, c: i64) {
+    if c != EOF {
+        lx.cur -= 1;
+    }
+}
+
+fn syntax_error(lx: mut ref Lx, msg: own String) -> i64 {
+    let m = if msg.starts_with("unterminated triple-quoted string literal") { "EOF in multi-line string".to_string() } else { msg };
+    lx.err = TokErr { kind: "TokenError".to_string(), msg: m, line: lx.lineno, col: lx.cur - lx.line_start };
+    lx.done = E_ERROR;
+    T_ERROR
+}
+
+fn indent_error(lx: mut ref Lx) -> i64 {
+    lx.done = E_TABSPACE;
+    lx.cur = lx.inp;
+    T_ERROR
+}
+
+// tok_continuation_line: a backslash must end its line, and a line must
+// follow it.
+fn continuation_line(lx: mut ref Lx) -> i64 {
+    let mut c = nextc(mut lx);
+    if c == 13 {
+        c = nextc(mut lx);
+    }
+    if c != 10 {
+        lx.done = E_LINECONT;
+        return BAD;
+    }
+    c = nextc(mut lx);
+    if c == EOF {
+        lx.done = E_EOF;
+        lx.cur = lx.inp;
+        return BAD;
+    }
+    backup(mut lx, c);
+    c
+}
+
+fn tok_out(lx: mut ref Lx, ty: i64) -> i64 {
+    lx.ps = lx.start;
+    lx.pe = lx.cur;
+    ty
+}
+
+// ------------------------------------------------------------ numbers
+
+fn decimal_tail(lx: mut ref Lx) -> i64 {
+    loop {
+        let mut c = nextc(mut lx);
+        while is_digit(c) {
+            c = nextc(mut lx);
+        }
+        if c != 95 {
+            return c;
+        }
+        c = nextc(mut lx);
+        if not is_digit(c) {
+            backup(mut lx, c);
+            syntax_error(mut lx, "invalid decimal literal".to_string());
+            return BAD;
+        }
+    }
+}
+
+fn finish_number(lx: mut ref Lx, c: i64) -> i64 {
+    backup(mut lx, c);
+    tok_out(mut lx, T_NUMBER)
+}
+
+fn num_imaginary(lx: mut ref Lx, c: i64) -> i64 {
+    if c == 106 or c == 74 {
+        let d = nextc(mut lx);
+        return finish_number(mut lx, d);
+    }
+    finish_number(mut lx, c)
+}
+
+fn num_exponent(lx: mut ref Lx, e: i64) -> i64 {
+    let mut c = nextc(mut lx);
+    if c == 43 or c == 45 {
+        c = nextc(mut lx);
+        if not is_digit(c) {
+            backup(mut lx, c);
+            return syntax_error(mut lx, "invalid decimal literal".to_string());
+        }
+    } else if not is_digit(c) {
+        backup(mut lx, c);
+        backup(mut lx, e);
+        return tok_out(mut lx, T_NUMBER);
+    }
+    c = decimal_tail(mut lx);
+    if c == BAD {
+        return T_ERROR;
+    }
+    num_imaginary(mut lx, c)
+}
+
+fn num_exp_part(lx: mut ref Lx, c: i64) -> i64 {
+    if c == 101 or c == 69 {
+        return num_exponent(mut lx, c);
+    }
+    num_imaginary(mut lx, c)
+}
+
+fn num_fraction(lx: mut ref Lx, c0: i64) -> i64 {
+    let mut c = c0;
+    if is_digit(c) {
+        c = decimal_tail(mut lx);
+        if c == BAD {
+            return T_ERROR;
+        }
+    }
+    num_exp_part(mut lx, c)
+}
+
+fn num_after_int(lx: mut ref Lx, c: i64) -> i64 {
+    if c == 46 {
+        let d = nextc(mut lx);
+        return num_fraction(mut lx, d);
+    }
+    num_exp_part(mut lx, c)
+}
+
+fn digit_text(c: i64) -> String {
+    to_string(vec![c])
+}
+
+// Hex, octal and binary: `bits` names the kind, `ok` says which digits
+// it takes.
+fn based_number(lx: mut ref Lx, kind: Str, base: i64) -> i64 {
+    let mut c = nextc(mut lx);
+    loop {
+        if c == 95 {
+            c = nextc(mut lx);
+        }
+        if not digit_in(c, base) {
+            if base != 16 and is_digit(c) {
+                return syntax_error(mut lx, f"invalid digit '{digit_text(c)}' in {kind} literal");
+            }
+            backup(mut lx, c);
+            return syntax_error(mut lx, f"invalid {kind} literal");
+        }
+        c = nextc(mut lx);
+        while digit_in(c, base) {
+            c = nextc(mut lx);
+        }
+        if c != 95 {
+            break;
+        }
+    }
+    if base != 16 and is_digit(c) {
+        return syntax_error(mut lx, f"invalid digit '{digit_text(c)}' in {kind} literal");
+    }
+    finish_number(mut lx, c)
+}
+
+fn digit_in(c: i64, base: i64) -> bool {
+    if base == 16 {
+        is_xdigit(c)
+    } else {
+        c >= 48 and c < 48 + base
+    }
+}
+
+fn lex_number(lx: mut ref Lx, c0: i64) -> i64 {
+    let mut c = c0;
+    if c == 48 {
+        c = nextc(mut lx);
+        if c == 120 or c == 88 {
+            return based_number(mut lx, "hexadecimal", 16);
+        }
+        if c == 111 or c == 79 {
+            return based_number(mut lx, "octal", 8);
+        }
+        if c == 98 or c == 66 {
+            return based_number(mut lx, "binary", 2);
+        }
+        loop {
+            if c == 95 {
+                c = nextc(mut lx);
+                if not is_digit(c) {
+                    backup(mut lx, c);
+                    return syntax_error(mut lx, "invalid decimal literal".to_string());
+                }
+            }
+            if c != 48 {
+                break;
+            }
+            c = nextc(mut lx);
+        }
+        if is_digit(c) {
+            c = decimal_tail(mut lx);
+            if c == BAD {
+                return T_ERROR;
+            }
+        }
+        return num_after_int(mut lx, c);
+    }
+    c = decimal_tail(mut lx);
+    if c == BAD {
+        return T_ERROR;
+    }
+    num_after_int(mut lx, c)
+}
+
+// ------------------------------------------------------------ regular mode
+
+fn get_normal(lx: mut ref Lx) -> i64 {
+    // nextline
+    lx.start = -1;
+    let mut blankline = false;
+    if lx.atbol {
+        let mut col = 0;
+        let mut altcol = 0;
+        lx.atbol = false;
+        let mut cont_line_col = 0;
+        let mut c = 0;
+        loop {
+            c = nextc(mut lx);
+            if c == 32 {
+                col += 1;
+                altcol += 1;
+            } else if c == 9 {
+                col = (col / 8 + 1) * 8;
+                altcol += 1;
+            } else if c == 12 {
+                col = 0;
+                altcol = 0;
+            } else if c == 92 {
+                if cont_line_col == 0 {
+                    cont_line_col = col;
+                }
+                if continuation_line(mut lx) == BAD {
+                    return T_ERROR;
+                }
+            } else {
+                break;
+            }
+        }
+        backup(mut lx, c);
+        if c == 35 or c == 10 or c == 13 {
+            blankline = true;
+        }
+        if not blankline and lx.level == 0 {
+            if cont_line_col != 0 {
+                col = cont_line_col;
+                altcol = cont_line_col;
+            }
+            let k = lx.indstack.len() - 1;
+            if col == lx.indstack[k] {
+                if altcol != lx.altindstack[k] {
+                    return indent_error(mut lx);
+                }
+            } else if col > lx.indstack[k] {
+                if altcol <= lx.altindstack[k] {
+                    return indent_error(mut lx);
+                }
+                lx.pendin += 1;
+                lx.indstack.push(col);
+                lx.altindstack.push(altcol);
+            } else {
+                while lx.indstack.len() > 1 and col < lx.indstack[lx.indstack.len() - 1] {
+                    lx.pendin -= 1;
+                    lx.indstack.pop();
+                    lx.altindstack.pop();
+                }
+                let j = lx.indstack.len() - 1;
+                if col != lx.indstack[j] {
+                    lx.done = E_DEDENT;
+                    lx.cur = lx.inp;
+                    return T_ERROR;
+                }
+                if altcol != lx.altindstack[j] {
+                    return indent_error(mut lx);
+                }
+            }
+        }
+    }
+
+    lx.start = lx.cur;
+    if lx.pendin != 0 {
+        if lx.pendin < 0 {
+            lx.pendin += 1;
+            lx.ps = lx.cur;
+            lx.pe = lx.cur;
+            return T_DEDENT;
+        }
+        lx.pendin -= 1;
+        lx.ps = lx.buf;
+        lx.pe = lx.cur;
+        return T_INDENT;
+    }
+
+    let peek = nextc(mut lx);
+    backup(mut lx, peek);
+
+    loop {
+        // again
+        lx.start = -1;
+        let mut c = nextc(mut lx);
+        while c == 32 or c == 9 or c == 12 {
+            c = nextc(mut lx);
+        }
+        lx.start = lx.cur - 1;
+
+        if c == 35 {
+            while c != EOF and c != 10 and c != 13 {
+                c = nextc(mut lx);
+            }
+            let p = lx.start;
+            backup(mut lx, c);
+            lx.ps = p;
+            lx.pe = lx.cur;
+            lx.comment_newline = blankline;
+            return T_COMMENT;
+        }
+
+        if c == EOF {
+            if lx.level > 0 {
+                return T_ERROR;
+            }
+            lx.ps = -1;
+            lx.pe = -1;
+            return if lx.done == E_EOF { T_ENDMARKER } else { T_ERROR };
+        }
+
+        // identifiers, and the prefixes of string literals
+        let mut go = 0;
+        if is_id_start(c) {
+            let mut saw_b = false;
+            let mut saw_r = false;
+            let mut saw_u = false;
+            let mut saw_f = false;
+            loop {
+                if not (saw_b or saw_u or saw_f) and (c == 98 or c == 66) {
+                    saw_b = true;
+                } else if not (saw_b or saw_u or saw_r or saw_f) and (c == 117 or c == 85) {
+                    saw_u = true;
+                } else if not (saw_r or saw_u) and (c == 114 or c == 82) {
+                    saw_r = true;
+                } else if not (saw_f or saw_b or saw_u) and (c == 102 or c == 70) {
+                    saw_f = true;
+                } else {
+                    break;
+                }
+                c = nextc(mut lx);
+                if c == 34 or c == 39 {
+                    go = if saw_f { 1 } else { 2 };
+                    break;
+                }
+            }
+            if go == 0 {
+                while is_id_char(c) {
+                    c = nextc(mut lx);
+                }
+                backup(mut lx, c);
+                return tok_out(mut lx, T_NAME);
+            }
+        }
+
+        if go == 0 {
+            if c == 13 {
+                c = nextc(mut lx);
+            }
+            if c == 10 {
+                lx.atbol = true;
+                if blankline or lx.level > 0 {
+                    lx.comment_newline = false;
+                    return tok_out(mut lx, T_NL);
+                }
+                if lx.comment_newline {
+                    lx.comment_newline = false;
+                    return tok_out(mut lx, T_NL);
+                }
+                lx.ps = lx.start;
+                lx.pe = lx.cur - 1;
+                return T_NEWLINE;
+            }
+
+            if c == 46 {
+                c = nextc(mut lx);
+                if is_digit(c) {
+                    return num_fraction(mut lx, c);
+                }
+                if c == 46 {
+                    c = nextc(mut lx);
+                    if c == 46 {
+                        return tok_out(mut lx, T_OP);
+                    }
+                    backup(mut lx, c);
+                    backup(mut lx, 46);
+                } else {
+                    backup(mut lx, c);
+                }
+                return tok_out(mut lx, T_OP);
+            }
+
+            if is_digit(c) {
+                return lex_number(mut lx, c);
+            }
+        }
+
+        if go == 1 {
+            return fstring_start(mut lx, c);
+        }
+
+        if c == 39 or c == 34 {
+            return lex_string(mut lx, c);
+        }
+
+        if c == 92 {
+            if continuation_line(mut lx) == BAD {
+                return T_ERROR;
+            }
+            continue;
+        }
+
+        return punctuation(mut lx, c);
+    }
+}
+
+fn fstring_start(lx: mut ref Lx, quote: i64) -> i64 {
+    let mut quote_size = 1;
+    lx.first_lineno = lx.lineno;
+    lx.multi_line_start = lx.line_start;
+    let after = nextc(mut lx);
+    if after == quote {
+        let after2 = nextc(mut lx);
+        if after2 == quote {
+            quote_size = 3;
+        } else {
+            backup(mut lx, after2);
+            backup(mut lx, after);
+        }
+    }
+    if after != quote {
+        backup(mut lx, after);
+    }
+    lx.ps = lx.start;
+    lx.pe = lx.cur;
+    let first = lower(lx.s[lx.start]);
+    let raw = if first == 102 { lower(lx.s[lx.start + 1]) == 114 } else { true };
+    lx.modes.push(Mode {
+        fstring: true, quote: quote, quote_size: quote_size, raw: raw, start: lx.start,
+        multi_line_start: lx.line_start, line_no: lx.lineno, depth: 0, expr_depth: -1,
+        in_spec: false, debug: false,
+    });
+    T_FSTART
+}
+
+fn lex_string(lx: mut ref Lx, quote: i64) -> i64 {
+    let mut quote_size = 1;
+    let mut end_quote_size = 0;
+    let mut has_escaped_quote = false;
+    lx.first_lineno = lx.lineno;
+    lx.multi_line_start = lx.line_start;
+    let mut c = nextc(mut lx);
+    if c == quote {
+        c = nextc(mut lx);
+        if c == quote {
+            quote_size = 3;
+        } else {
+            end_quote_size = 1;
+        }
+    }
+    if c != quote {
+        backup(mut lx, c);
+    }
+    while end_quote_size != quote_size {
+        c = nextc(mut lx);
+        if c == EOF or (quote_size == 1 and c == 10) {
+            lx.cur = lx.start + 1;
+            lx.line_start = lx.multi_line_start;
+            let at = lx.lineno;
+            lx.lineno = lx.first_lineno;
+            let top = lx.modes.len() - 1;
+            if top > 0 and lx.modes[top].quote == quote and lx.modes[top].quote_size == quote_size {
+                return syntax_error(mut lx, "f-string: expecting '}'".to_string());
+            }
+            if quote_size == 3 {
+                return syntax_error(mut lx, f"unterminated triple-quoted string literal (detected at line {at})");
+            }
+            if has_escaped_quote {
+                return syntax_error(mut lx, f"unterminated string literal (detected at line {at}); perhaps you escaped the end quote?");
+            }
+            return syntax_error(mut lx, f"unterminated string literal (detected at line {at})");
+        }
+        if c == quote {
+            end_quote_size += 1;
+        } else {
+            end_quote_size = 0;
+            if c == 92 {
+                c = nextc(mut lx);
+                if c == quote {
+                    has_escaped_quote = true;
+                }
+                if c == 13 {
+                    c = nextc(mut lx);
+                }
+            }
+        }
+    }
+    tok_out(mut lx, T_STRING)
+}
+
+fn punctuation(lx: mut ref Lx, c: i64) -> i64 {
+    let top = lx.modes.len() - 1;
+    let inside = top > 0;
+    if inside and (c == 58 or c == 125 or c == 33 or c == 123) and lx.modes[top].expr_depth >= 0 {
+        let cursor = lx.modes[top].depth - (if c != 123 { 1 } else { 0 });
+        if c == 58 and cursor == lx.modes[top].expr_depth {
+            lx.modes[top].fstring = true;
+            lx.modes[top].in_spec = true;
+            return tok_out(mut lx, T_OP);
+        }
+    }
+
+    let c2 = nextc(mut lx);
+    if is_two(c, c2) {
+        let c3 = nextc(mut lx);
+        if not is_three(c, c2, c3) {
+            backup(mut lx, c3);
+        }
+        return tok_out(mut lx, T_OP);
+    }
+    backup(mut lx, c2);
+
+    if c == 40 or c == 91 or c == 123 {
+        lx.level += 1;
+        if inside {
+            lx.modes[top].depth += 1;
+        }
+    } else if c == 41 or c == 93 or c == 125 {
+        if inside and lx.modes[top].depth == 0 and c == 125 {
+            return syntax_error(mut lx, "f-string: single '}' is not allowed".to_string());
+        }
+        if lx.level > 0 {
+            lx.level -= 1;
+        }
+        if inside {
+            lx.modes[top].depth -= 1;
+            if lx.modes[top].depth < 0 {
+                return syntax_error(mut lx, f"f-string: unmatched '{digit_text(c)}'");
+            }
+            if c == 125 and lx.modes[top].depth == lx.modes[top].expr_depth {
+                lx.modes[top].expr_depth -= 1;
+                lx.modes[top].fstring = true;
+                lx.modes[top].in_spec = false;
+                lx.modes[top].debug = false;
+            }
+        }
+    }
+
+    if not is_printable(c) {
+        return syntax_error(mut lx, f"invalid non-printable character U+{hex_n(c, 4).to_uppercase()}");
+    }
+    if c == 61 and inside and lx.modes[top].expr_depth >= 0 {
+        lx.modes[top].debug = true;
+    }
+    tok_out(mut lx, T_OP)
+}
+
+// ------------------------------------------------------------ f-string mode
+
+fn get_fstring(lx: mut ref Lx) -> i64 {
+    let top = lx.modes.len() - 1;
+    lx.start = lx.cur;
+    lx.first_lineno = lx.lineno;
+
+    let start_char = nextc(mut lx);
+    if start_char == 123 {
+        let peek1 = nextc(mut lx);
+        backup(mut lx, peek1);
+        backup(mut lx, start_char);
+        if peek1 != 123 {
+            lx.modes[top].expr_depth += 1;
+            lx.modes[top].fstring = false;
+            return get_normal(mut lx);
+        }
+    } else {
+        backup(mut lx, start_char);
+    }
+
+    let q = lx.modes[top].quote;
+    let qs = lx.modes[top].quote_size;
+    let mut at_end = true;
+    for _ in 0..qs {
+        let c = nextc(mut lx);
+        if c != q {
+            backup(mut lx, c);
+            at_end = false;
+            break;
+        }
+    }
+    if at_end {
+        lx.ps = lx.start;
+        lx.pe = lx.cur;
+        lx.modes.pop();
+        return T_FEND;
+    }
+
+    lx.multi_line_start = lx.line_start;
+    let mut end_quote_size = 0;
+    let mut unicode_escape = false;
+    while end_quote_size != qs {
+        let c = nextc(mut lx);
+        let in_spec = lx.modes[top].in_spec and lx.modes[top].expr_depth >= 0;
+        if c == EOF or (qs == 1 and c == 10) {
+            if in_spec and c == 10 {
+                if qs == 1 {
+                    return syntax_error(mut lx, "f-string: newlines are not allowed in format specifiers for single quoted f-strings".to_string());
+                }
+                backup(mut lx, c);
+                lx.modes[top].fstring = false;
+                lx.modes[top].in_spec = false;
+                return tok_out(mut lx, T_FMIDDLE);
+            }
+            lx.cur = lx.modes[top].start + 1;
+            lx.line_start = lx.modes[top].multi_line_start;
+            let at = lx.lineno;
+            lx.lineno = lx.modes[top].line_no;
+            if qs == 3 {
+                return syntax_error(mut lx, f"unterminated triple-quoted f-string literal (detected at line {at})");
+            }
+            return syntax_error(mut lx, f"unterminated f-string literal (detected at line {at})");
+        }
+        if c == q {
+            end_quote_size += 1;
+            continue;
+        }
+        end_quote_size = 0;
+        if c == 123 {
+            let peek = nextc(mut lx);
+            if peek != 123 or in_spec {
+                backup(mut lx, peek);
+                backup(mut lx, c);
+                lx.modes[top].expr_depth += 1;
+                lx.modes[top].fstring = false;
+                lx.modes[top].in_spec = false;
+                return tok_out(mut lx, T_FMIDDLE);
+            }
+            lx.ps = lx.start;
+            lx.pe = lx.cur - 1;
+            return T_FMIDDLE;
+        } else if c == 125 {
+            if unicode_escape {
+                return tok_out(mut lx, T_FMIDDLE);
+            }
+            let peek = nextc(mut lx);
+            if peek == 125 and not in_spec and lx.modes[top].depth == 0 {
+                lx.ps = lx.start;
+                lx.pe = lx.cur - 1;
+                return T_FMIDDLE;
+            }
+            backup(mut lx, peek);
+            backup(mut lx, c);
+            lx.modes[top].fstring = false;
+            lx.modes[top].in_spec = false;
+            return tok_out(mut lx, T_FMIDDLE);
+        } else if c == 92 {
+            let mut peek = nextc(mut lx);
+            if peek == 13 {
+                peek = nextc(mut lx);
+            }
+            if peek == 123 or peek == 125 {
+                backup(mut lx, peek);
+                continue;
+            }
+            if not lx.modes[top].raw and peek == 78 {
+                peek = nextc(mut lx);
+                if peek == 123 {
+                    unicode_escape = true;
+                } else {
+                    backup(mut lx, peek);
+                }
+            }
+        }
+    }
+    for _ in 0..qs {
+        backup(mut lx, q);
+    }
+    tok_out(mut lx, T_FMIDDLE)
+}
+
+fn tok_get(lx: mut ref Lx) -> i64 {
+    let top = lx.modes.len() - 1;
+    if lx.modes[top].fstring {
+        get_fstring(mut lx)
+    } else {
+        get_normal(mut lx)
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// The token as Python-tokenize.c builds it: string literals take their
+// start line from where they began, the end is on the last line read,
+// and the tokens at the end of the file go on the line after it.
+fn make_tok(lx: ref Lx, ty: i64) -> Tok {
+    let trailing = ty == T_ENDMARKER or (ty == T_DEDENT and lx.done == E_EOF);
+    let mut text: Vec[i64] = if lx.ps < 0 { Vec.new() } else { slice(lx.s, lx.ps, lx.pe) };
+    let strlit = ty == T_STRING or ty == T_FMIDDLE;
+    let ls = if strlit { lx.multi_line_start } else { lx.line_start };
+    let mut sr = if strlit { lx.first_lineno } else { lx.lineno };
+    let mut er = lx.lineno;
+    let mut sc = if lx.ps >= 0 and lx.ps >= ls { lx.ps - ls } else { -1 };
+    let mut ec = if lx.pe >= 0 and lx.pe >= lx.line_start { lx.pe - lx.line_start } else { -1 };
+    if trailing {
+        sr += 1;
+        er = sr;
+        sc = 0;
+        ec = 0;
+    }
+    if ty == T_NEWLINE {
+        if not lx.implicit_now {
+            text = if lx.s[lx.start] == 13 { cp("\r\n") } else { cp("\n") };
+        }
+        ec += 1;
+    } else if ty == T_NL and lx.implicit_now {
+        text = Vec.new();
+    }
+    Tok { ty: ty, text: text, sr: sr, sc: sc, er: er, ec: ec }
+}
+
+// _tokenizer_error, for the errors that are not syntax errors
+fn state_error(lx: ref Lx) -> TokErr {
+    if lx.done == E_ERROR {
+        return lx.err.clone();
+    }
+    let col = if lx.inp - lx.buf < 0 { 0 } else { lx.inp - lx.buf };
+    if lx.done == E_EOF {
+        return TokErr { kind: "TokenError".to_string(), msg: "unexpected EOF in multi-line statement".to_string(), line: lx.lineno, col: col };
+    }
+    if lx.done == E_DEDENT {
+        return TokErr { kind: "IndentationError".to_string(), msg: "unindent does not match any outer indentation level".to_string(), line: lx.lineno, col: col };
+    }
+    if lx.done == E_TABSPACE {
+        return TokErr { kind: "TabError".to_string(), msg: "inconsistent use of tabs and spaces in indentation".to_string(), line: lx.lineno, col: col };
+    }
+    if lx.done == E_LINECONT {
+        return TokErr { kind: "TokenError".to_string(), msg: "unexpected character after line continuation character".to_string(), line: lx.lineno, col: col };
+    }
+    TokErr { kind: "TokenError".to_string(), msg: "unknown tokenization error".to_string(), line: lx.lineno, col: col }
+}
+
+// tokenize.generate_tokens over a str: every token up to ENDMARKER or
+// to the error that stops it.
+fn lex(text: ref Vec[i64]) -> Lexed {
+    let mut lx = new_lexer(text);
+    let mut toks: Vec[Tok] = Vec.new();
+    loop {
+        let ty = tok_get(mut lx);
+        if ty == T_ERROR {
+            return Lexed { toks: toks, failed: true, err: state_error(lx) };
+        }
+        toks.push(make_tok(lx, ty));
+        if ty == T_ENDMARKER {
+            break;
+        }
+    }
+    Lexed { toks: toks, failed: false, err: TokErr { kind: String.new(), msg: String.new(), line: 0, col: 0 } }
+}
+
+fn exact_of(t: ref Tok) -> String {
+    if t.ty == T_OP {
+        exact_name(to_string(t.text))
+    } else {
+        type_name(t.ty)
+    }
+}
+
+// ------------------------------------------------------------ files
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let d = cps(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < d.len() {
+        out.push((hex_val(d[i]) * 16 + hex_val(d[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    for dir in vec!["data/project/inventory", "data/project/legacy", "data/broken"] {
+        if fs.create_dir_all(dir.to_string()).is_err() {
+            return Err(f"cannot create {dir}");
+        }
+    }
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        let r = if file.hex { fs.write_bytes(p.clone(), unhex(file.body)) } else { fs.write(p.clone(), file.body.clone()) };
+        if r.is_err() {
+            return Err(f"cannot write {p}");
+        }
+    }
+    Ok(())
+}
+
+fn read_raw(path: ref String) -> Result[Vec[i64], String] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => {
+            let mut out: Vec[i64] = Vec.new();
+            for x in b.iter() {
+                out.push(*x as i64);
+            }
+            Ok(out)
+        }
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn utf8_cps(b: ref Vec[i64]) -> Vec[i64] {
+    let mut raw: Vec[u8] = Vec.new();
+    for x in b {
+        raw.push(x as u8);
+    }
+    codepoints(raw)
+}
+
+// The lines of raw bytes, as readline gives them: each keeps its \n.
+fn raw_lines(b: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in b {
+        cur.push(c);
+        if c == 10 {
+            out.push(cur);
+            cur = Vec.new();
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// tokenize's blank_re: only spaces, tabs and form feeds before a #, a
+// line end or the end.
+fn is_blank_line(line: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < line.len() and (line[i] == 32 or line[i] == 9 or line[i] == 12) {
+        i += 1;
+    }
+    i == line.len() or line[i] == 35 or line[i] == 13 or line[i] == 10
+}
+
+fn is_cookie_char(c: i64) -> bool {
+    is_id_char(c) and c < 128 or c == 45 or c == 46
+}
+
+// tokenize's cookie_re, `^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)`: the
+// first match of `coding` that a name follows.
+fn find_cookie(line: ref Vec[i64]) -> Option[String] {
+    let mut i = 0;
+    while i < line.len() and (line[i] == 32 or line[i] == 9 or line[i] == 12) {
+        i += 1;
+    }
+    if i >= line.len() or line[i] != 35 {
+        return None;
+    }
+    let word = cp("coding");
+    let mut j = i + 1;
+    while j + 6 < line.len() {
+        if line[j] == 10 {
+            return None;
+        }
+        if same(slice(line, j, j + 6), word) and (line[j + 6] == 58 or line[j + 6] == 61) {
+            let mut k = j + 7;
+            while k < line.len() and (line[k] == 32 or line[k] == 9) {
+                k += 1;
+            }
+            let from = k;
+            while k < line.len() and is_cookie_char(line[k]) {
+                k += 1;
+            }
+            if k > from {
+                return Some(normal_name(to_string(slice(line, from, k))));
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
+// tokenize._get_normal_name
+fn normal_name(orig: ref String) -> String {
+    let mut short: Vec[i64] = Vec.new();
+    for c in cps(orig) {
+        if short.len() < 12 {
+            short.push(if c == 95 { 45 } else { lower(c) });
+        }
+    }
+    let enc = to_string(short);
+    if enc == "utf-8" or enc.starts_with("utf-8-") {
+        return "utf-8".to_string();
+    }
+    if enc == "latin-1" or enc == "iso-8859-1" or enc == "iso-latin-1" or enc.starts_with("latin-1-") or enc.starts_with("iso-8859-1-") or enc.starts_with("iso-latin-1-") {
+        return "iso-8859-1".to_string();
+    }
+    orig.clone()
+}
+
+struct Source {
+    encoding: String,
+    text: Vec[i64],
+}
+
+// tokenize.detect_encoding, then the decoding the tokenizer does with
+// what it found.
+fn open_source(path: ref String) -> Result[Source, String] {
+    let mut raw = read_raw(path)?;
+    let mut bom = false;
+    if raw.len() >= 3 and raw[0] == 0xEF and raw[1] == 0xBB and raw[2] == 0xBF {
+        bom = true;
+        raw = slice(raw, 3, raw.len());
+    }
+    let lines = raw_lines(raw);
+    let mut enc = "utf-8".to_string();
+    if lines.len() > 0 {
+        match find_cookie(lines[0]) {
+            Some(e) => enc = e,
+            None => {
+                if lines.len() > 1 and is_blank_line(lines[0]) {
+                    if let Some(e) = find_cookie(lines[1]) {
+                        enc = e;
+                    }
+                }
+            }
+        }
+    }
+    let _ = bom;
+    let text = if enc == "iso-8859-1" { raw } else { utf8_cps(raw) };
+    Ok(Source { encoding: enc, text: text })
+}
+
+fn file_lex(path: ref String) -> Result[Lexed, String] {
+    let src = open_source(path)?;
+    let mut r = lex(src.text);
+    let mut toks: Vec[Tok] = vec![Tok { ty: T_ENCODING, text: cps(src.encoding), sr: 0, sc: 0, er: 0, ec: 0 }];
+    for t in r.toks.into_iter() {
+        toks.push(t);
+    }
+    r.toks = toks;
+    Ok(r)
+}
+
+fn list_dir(dir: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let Ok(names) = fs.read_dir(dir.to_string()) {
+        for n in names.into_iter() {
+            out.push(n);
+        }
+    }
+    sort_strings(mut out);
+    out
+}
+
+fn project_files() -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for d in list_dir("data/project") {
+        for f in list_dir(f"data/project/{d}") {
+            out.push(f"data/project/{d}/{f}");
+        }
+    }
+    out
+}
+
+fn broken_files() -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for f in list_dir("data/broken") {
+        out.push(f"data/broken/{f}");
+    }
+    out
+}
+
+fn pad(s: ref String, width: i64) -> String {
+    let mut out = s.clone();
+    let mut n = cps(s).len();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn rpad(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = cps(s).len();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn rstrip(s: ref String) -> String {
+    let mut v = cps(s);
+    while v.len() > 0 and v[v.len() - 1] == 32 {
+        v.pop();
+    }
+    to_string(v)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn run_jobs() -> Result[(), String] {
+    println("== snippets");
+    let text = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(_) => return Err("cannot read data/jobs.tsv".to_string()),
+    };
+    for line in text_lines(text) {
+        let parts = split_tabs(line);
+        let src = literal(parts[1]);
+        println(f"snippet {parts[1]}");
+        let r = lex(src);
+        for t in r.toks.iter() {
+            println(f"  {t.sr},{t.sc}-{t.er},{t.ec} {exact_of(t)} {repr_of(t.text)}");
+        }
+        if r.failed {
+            println(f"  ! {r.err.kind}: {r.err.msg} at {r.err.line},{r.err.col}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ programs
+
+// python -m tokenize -e FILE
+fn dump(path: ref String) -> Result[(), String] {
+    println(f"== python -m tokenize -e {path}");
+    let r = file_lex(path)?;
+    for t in r.toks.iter() {
+        let range = f"{t.sr},{t.sc}-{t.er},{t.ec}:";
+        println(rstrip(pad(range, 20) + pad(exact_of(t), 15) + pad(repr_of(t.text), 15)));
+    }
+    if r.failed {
+        println(f"{path}:{r.err.line}:{r.err.col}: error: {r.err.msg}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    if fs.exists("data") {
+        if fs.remove_dir_all("data").is_err() {
+            return Err("cannot remove data".to_string());
+        }
+    }
+    write_data()?;
+    run_jobs()?;
+    let files = project_files();
+    for p in files.iter() {
+        dump(p)?;
+    }
+    let broken = broken_files();
+    for p in broken.iter() {
+        dump(p)?;
+    }
+    let mut all = files.clone();
+    for p in broken.iter() {
+        all.push(p.clone());
+    }
+    stats(all)?;
+    todos(files)?;
+    lint(files)?;
+    rename(files, "fetch_rows", "load_rows")?;
+    strip_comments("data/project/inventory/report.py".to_string())?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ helpers for the programs
+
+fn is_space(c: i64) -> bool {
+    c == 32 or (c >= 9 and c <= 13) or (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn strip_v(s: ref Vec[i64], left: bool, right: bool) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    if left {
+        while a < b and is_space(s[a]) {
+            a += 1;
+        }
+    }
+    if right {
+        while b > a and is_space(s[b - 1]) {
+            b -= 1;
+        }
+    }
+    slice(s, a, b)
+}
+
+fn is_line_break(c: i64) -> bool {
+    c == 10 or c == 13 or c == 11 or c == 12 or (c >= 0x1C and c <= 0x1E) or c == 0x85 or c == 0x2028 or c == 0x2029
+}
+
+// str.splitlines()
+fn splitlines(s: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if is_line_break(c) {
+            out.push(cur);
+            cur = Vec.new();
+            if c == 13 and i + 1 < s.len() and s[i + 1] == 10 {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn source_lines(path: ref String) -> Result[Vec[Vec[i64]], String] {
+    let src = open_source(path)?;
+    Ok(splitlines(src.text))
+}
+
+fn is_skip(ty: i64) -> bool {
+    ty == T_COMMENT or ty == T_NL or ty == T_NEWLINE or ty == T_INDENT or ty == T_DEDENT or ty == T_ENDMARKER or ty == T_ENCODING
+}
+
+fn text_is(t: ref Tok, s: Str) -> bool {
+    to_string(t.text) == s
+}
+
+fn find_from(s: ref Vec[i64], p: ref Vec[i64], from: i64) -> i64 {
+    let mut i = from;
+    while i + p.len() <= s.len() {
+        if same(slice(s, i, i + p.len()), p) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn mark(rows: mut ref Vec[bool], row: i64) {
+    while rows.len() <= row {
+        rows.push(false);
+    }
+    rows[row] = true;
+}
+
+fn marked(rows: ref Vec[bool], row: i64) -> bool {
+    row < rows.len() and rows[row]
+}
+
+fn count_marked(rows: ref Vec[bool]) -> i64 {
+    let mut n = 0;
+    for b in rows {
+        if b {
+            n += 1;
+        }
+    }
+    n
+}
+
+// ------------------------------------------------------------ stats
+
+// Line counts in the manner of `radon raw`: a line is code if a token
+// other than a comment or layout token covers it, doc if a string that
+// is a statement by itself does, comment if it holds a comment, and
+// blank otherwise.
+fn stats(paths: ref Vec[String]) -> Result[(), String] {
+    println("== stats");
+    println(pad("file", 34) + " " + rpad("lines", 5) + " " + rpad("code", 5) + " " + rpad("doc", 5) + " " + rpad("cmnt", 5) + " " + rpad("blank", 5) + " " + rpad("logical", 7) + " " + rpad("tokens", 6) + " " + rpad("paren", 5) + " " + rpad("depth", 5));
+    for path in paths.iter() {
+        let r = file_lex(path)?;
+        let toks = ref r.toks;
+        let nlines = source_lines(path)?.len();
+        let mut code: Vec[bool] = Vec.new();
+        let mut doc: Vec[bool] = Vec.new();
+        let mut comment: Vec[bool] = Vec.new();
+        let n = toks.len();
+        for i in 0..n {
+            let t = ref toks[i];
+            if t.ty == T_COMMENT {
+                mark(mut comment, t.sr);
+            }
+            if is_skip(t.ty) {
+                continue;
+            }
+            let mut j = i - 1;
+            while j >= 0 and (toks[j].ty == T_COMMENT or toks[j].ty == T_NL) {
+                j -= 1;
+            }
+            let mut k = i + 1;
+            while k < n and toks[k].ty == T_COMMENT {
+                k += 1;
+            }
+            let before_ok = j < 0 or toks[j].ty == T_NEWLINE or toks[j].ty == T_INDENT or toks[j].ty == T_DEDENT or toks[j].ty == T_ENCODING;
+            let alone = t.ty == T_STRING and before_ok and k < n and toks[k].ty == T_NEWLINE;
+            for row in t.sr..t.er + 1 {
+                if alone {
+                    mark(mut doc, row);
+                } else {
+                    mark(mut code, row);
+                }
+            }
+        }
+        let mut ndoc = 0;
+        for row in 0..doc.len() {
+            if doc[row] and not marked(code, row) {
+                ndoc += 1;
+            }
+        }
+        let mut ncomment = 0;
+        for row in 0..comment.len() {
+            if comment[row] and not marked(code, row) and not marked(doc, row) {
+                ncomment += 1;
+            }
+        }
+        let ncode = count_marked(code);
+        let blank = nlines - ncode - ndoc - ncomment;
+        let mut logical = 0;
+        let mut paren = 0;
+        let mut depth = 0;
+        let mut maxp = 0;
+        let mut maxd = 0;
+        for t in toks.iter() {
+            if t.ty == T_NEWLINE {
+                logical += 1;
+            }
+            if t.ty == T_OP and (text_is(t, "(") or text_is(t, "[") or text_is(t, "{")) {
+                paren += 1;
+                if paren > maxp {
+                    maxp = paren;
+                }
+            } else if t.ty == T_OP and (text_is(t, ")") or text_is(t, "]") or text_is(t, "}")) {
+                paren -= 1;
+            } else if t.ty == T_INDENT {
+                depth += 1;
+                if depth > maxd {
+                    maxd = depth;
+                }
+            } else if t.ty == T_DEDENT {
+                depth -= 1;
+            }
+        }
+        let name = to_string(slice(cps(path), 5, cps(path).len()));
+        println(pad(name, 34) + " " + rpad(f"{nlines}", 5) + " " + rpad(f"{ncode}", 5) + " " + rpad(f"{ndoc}", 5) + " " + rpad(f"{ncomment}", 5) + " " + rpad(f"{blank}", 5) + " " + rpad(f"{logical}", 7) + " " + rpad(f"{n}", 6) + " " + rpad(f"{maxp}", 5) + " " + rpad(f"{maxd}", 5));
+        if r.failed {
+            println(f"  stopped at {r.err.line},{r.err.col}: {r.err.kind}: {r.err.msg}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ todo comments
+
+fn word_char(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c >= 0xAA
+}
+
+fn todos(paths: ref Vec[String]) -> Result[(), String] {
+    println("== todo comments");
+    let tags = vec!["TODO", "FIXME", "XXX"];
+    for path in paths.iter() {
+        let r = file_lex(path)?;
+        for t in r.toks.iter() {
+            if t.ty != T_COMMENT {
+                continue;
+            }
+            let text = ref t.text;
+            let mut best = -1;
+            let mut best_tag = String.new();
+            for tag in tags.iter() {
+                let tv = cp(*tag);
+                let mut i = find_from(text, tv, 0);
+                while i >= 0 {
+                    let before = if i > 0 { text[i - 1] } else { 32 };
+                    let after = if i + tv.len() < text.len() { text[i + tv.len()] } else { 32 };
+                    if not word_char(before) and not word_char(after) {
+                        if best < 0 or i < best {
+                            best = i;
+                            best_tag = tag.to_string();
+                        }
+                        break;
+                    }
+                    i = find_from(text, tv, i + 1);
+                }
+            }
+            if best < 0 {
+                continue;
+            }
+            let mut rest = slice(text, best + cps(best_tag).len(), text.len());
+            while rest.len() > 0 and rest[0] == 58 {
+                rest = slice(rest, 1, rest.len());
+            }
+            let rest = strip_v(rest, true, true);
+            println(f"{path}:{t.sr}:{t.sc + best}: {best_tag} {to_string(rest)}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ lint
+
+#[derive(Clone)]
+struct Finding {
+    row: i64,
+    col: i64,
+    msg: String,
+}
+
+fn finding_less(a: ref Finding, b: ref Finding) -> bool {
+    if a.row != b.row {
+        return a.row < b.row;
+    }
+    if a.col != b.col {
+        return a.col < b.col;
+    }
+    a.msg < b.msg
+}
+
+fn sort_findings(v: mut ref Vec[Finding]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and finding_less(v[j], v[j - 1]) {
+            let t = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn add(found: mut ref Vec[Finding], row: i64, col: i64, msg: own String) {
+    found.push(Finding { row: row, col: col, msg: msg });
+}
+
+// A few flake8 checks that need only tokens.
+fn lint(paths: ref Vec[String]) -> Result[(), String] {
+    println("== lint");
+    for path in paths.iter() {
+        let r = file_lex(path)?;
+        let lines = source_lines(path)?;
+        let mut found: Vec[Finding] = Vec.new();
+        for n in 0..lines.len() {
+            let line = ref lines[n];
+            if line.len() > 79 {
+                add(mut found, n + 1, 80, f"E501 line too long ({line.len()} > 79 characters)");
+            }
+            let mut lead = 0;
+            while lead < line.len() and (line[lead] == 32 or line[lead] == 9) {
+                lead += 1;
+            }
+            let mut tab = false;
+            for k in 0..lead {
+                if line[k] == 9 {
+                    tab = true;
+                }
+            }
+            if tab and strip_v(line, true, true).len() > 0 {
+                add(mut found, n + 1, 1, "W191 indentation contains tabs".to_string());
+            }
+        }
+        let mut sig: Vec[Tok] = Vec.new();
+        for t in r.toks.iter() {
+            if not is_skip(t.ty) or t.ty == T_COMMENT {
+                sig.push(t.clone());
+            }
+        }
+        // the open f-strings, and whether each has had a {
+        let mut fstack: Vec[(Tok, bool)] = Vec.new();
+        for i in 0..sig.len() {
+            let t = ref sig[i];
+            let has_prev = i > 0;
+            let has_next = i + 1 < sig.len();
+            let row = t.sr;
+            let col = t.sc;
+            if t.ty == T_OP and (text_is(t, "==") or text_is(t, "!=")) {
+                if (has_next and text_is(sig[i + 1], "None")) or (has_prev and text_is(sig[i - 1], "None")) {
+                    let msg = if text_is(t, "==") { "E711 comparison to None should be 'if cond is None:'" } else { "E711 comparison to None should be 'if cond is not None:'" };
+                    add(mut found, row, col + 1, msg.to_string());
+                }
+            }
+            if t.ty == T_NAME and text_is(t, "except") and has_next and text_is(sig[i + 1], ":") {
+                add(mut found, row, col + 1, "E722 do not use bare 'except'".to_string());
+            }
+            if t.ty == T_NAME and text_is(t, "print") and has_next and text_is(sig[i + 1], "(") and not (has_prev and (text_is(sig[i - 1], ".") or text_is(sig[i - 1], "def"))) {
+                add(mut found, row, col + 1, "T201 print found".to_string());
+            }
+            if t.ty == T_FSTART {
+                fstack.push((t.clone(), false));
+            } else if t.ty == T_OP and text_is(t, "{") and fstack.len() > 0 {
+                let k = fstack.len() - 1;
+                fstack[k].1 = true;
+            } else if t.ty == T_FEND {
+                if let Some((start, used)) = fstack.pop() {
+                    if not used {
+                        add(mut found, start.sr, start.sc + 1, "F541 f-string is missing placeholders".to_string());
+                    }
+                }
+            }
+            if t.ty == T_COMMENT {
+                let before = slice(lines[row - 1], 0, col);
+                if strip_v(before, true, true).len() > 0 {
+                    if before.len() - strip_v(before, false, true).len() < 2 {
+                        add(mut found, row, col + 1, "E261 at least two spaces before inline comment".to_string());
+                    }
+                    if not starts_with(t.text, cp("# ")) {
+                        add(mut found, row, col + 1, "E262 inline comment should start with '# '".to_string());
+                    }
+                }
+            }
+        }
+        sort_findings(mut found);
+        for f in found.iter() {
+            println(f"{path}:{f.row}:{f.col}: {f.msg}");
+        }
+        if r.failed {
+            println(f"{path}:{r.err.line}:{r.err.col}: E902 {r.err.kind}: {r.err.msg}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ rename
+
+// Renames a function: every NAME token spelled `old` that is not an
+// attribute, in every file, shown as the lines that change.
+fn rename(paths: ref Vec[String], old: Str, new: Str) -> Result[(), String] {
+    println(f"== rename {old} -> {new}");
+    let oldv = cp(old);
+    let newv = cp(new);
+    for path in paths.iter() {
+        let r = file_lex(path)?;
+        let lines = source_lines(path)?;
+        let mut sig: Vec[Tok] = Vec.new();
+        for t in r.toks.iter() {
+            if not is_skip(t.ty) {
+                sig.push(t.clone());
+            }
+        }
+        // (row, columns on it), rows in order
+        let mut rows: Vec[i64] = Vec.new();
+        let mut cols: Vec[Vec[i64]] = Vec.new();
+        for i in 0..sig.len() {
+            let t = ref sig[i];
+            if t.ty == T_NAME and same(t.text, oldv) and not (i > 0 and text_is(sig[i - 1], ".")) {
+                let mut found = false;
+                for k in 0..rows.len() {
+                    if rows[k] == t.sr {
+                        cols[k].push(t.sc);
+                        found = true;
+                    }
+                }
+                if not found {
+                    rows.push(t.sr);
+                    cols.push(vec![t.sc]);
+                }
+            }
+        }
+        // rows in order
+        let mut order: Vec[i64] = Vec.new();
+        for k in 0..rows.len() {
+            order.push(k);
+        }
+        let mut a = 1;
+        while a < order.len() {
+            let mut b = a;
+            while b > 0 and rows[order[b]] < rows[order[b - 1]] {
+                let tmp = order[b];
+                order[b] = order[b - 1];
+                order[b - 1] = tmp;
+                b -= 1;
+            }
+            a += 1;
+        }
+        for k in order {
+            let row = rows[k];
+            let orig = ref lines[row - 1];
+            let mut line = orig.clone();
+            let mut cs = cols[k].clone();
+            // right to left
+            let mut x = 1;
+            while x < cs.len() {
+                let mut y = x;
+                while y > 0 and cs[y] > cs[y - 1] {
+                    let tmp = cs[y];
+                    cs[y] = cs[y - 1];
+                    cs[y - 1] = tmp;
+                    y -= 1;
+                }
+                x += 1;
+            }
+            for c in cs {
+                let mut next = slice(line, 0, c);
+                push_all(mut next, newv);
+                push_all(mut next, slice(line, c + oldv.len(), line.len()));
+                line = next;
+            }
+            println(f"{path}:{row}: -{to_string(orig)}");
+            println(f"{path}:{row}: +{to_string(line)}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ strip comments
+
+// Drops the comments from a file: a line that held only a comment goes,
+// and a line with code keeps the code, without the spaces before the
+// comment.
+fn strip_comments(path: ref String) -> Result[(), String] {
+    println(f"== strip comments {path}");
+    let r = file_lex(path)?;
+    let lines = source_lines(path)?;
+    let mut cut: Vec[i64] = Vec.new();
+    let mut has_code: Vec[bool] = Vec.new();
+    for t in r.toks.iter() {
+        if t.ty == T_COMMENT {
+            while cut.len() <= t.sr {
+                cut.push(-1);
+            }
+            cut[t.sr] = t.sc;
+        } else if not is_skip(t.ty) {
+            for row in t.sr..t.er + 1 {
+                mark(mut has_code, row);
+            }
+        }
+    }
+    for n in 0..lines.len() {
+        let row = n + 1;
+        let mut line = lines[n].clone();
+        if row < cut.len() and cut[row] >= 0 {
+            if not marked(has_code, row) {
+                continue;
+            }
+            line = strip_v(slice(line, 0, cut[row]), false, true);
+        }
+        println("| " + to_string(line));
+    }
+    Ok(())
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("total = a + \\ b\n");
+    v.push(DataFile { path: "broken/backslash.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("msg = f'{x}}'\n");
+    v.push(DataFile { path: "broken/brace.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("def f():\n");
+    t.push_str("        x = 1\n");
+    t.push_str("    return x\n");
+    v.push(DataFile { path: "broken/dedent.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("msg = f'{user.name'\n");
+    v.push(DataFile { path: "broken/fstring.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("MASK = 0b1012\n");
+    v.push(DataFile { path: "broken/number.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("items = [\n");
+    t.push_str("    'a',\n");
+    t.push_str("    'b',\n");
+    v.push(DataFile { path: "broken/paren.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("def f():\n");
+    t.push_str("\tif x:\n");
+    t.push_str("\t\treturn 1\n");
+    t.push_str("        return 0\n");
+    v.push(DataFile { path: "broken/tabs.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("def f():\n");
+    t.push_str("    \"\"\"Never closed.\n");
+    t.push_str("    return 1\n");
+    v.push(DataFile { path: "broken/triple.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("name = 'inventory\n");
+    t.push_str("print(name)\n");
+    v.push(DataFile { path: "broken/unterminated.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("snippet\t'def f(a, b=2):\\n    \"\"\"doc\"\"\"\\n    # comment\\n    x = a + b  # trailing\\n\\n    if x:\\n        return x\\n    return 0\\n'\n");
+    t.push_str("snippet\t'if a:\\n    b\\n# c\\n  # d\\nc\\n'\n");
+    t.push_str("snippet\t'def f():\\n    pass\\n  # x\\n'\n");
+    t.push_str("snippet\t'x = 1 # c\\n   # c2\\ny\\n'\n");
+    t.push_str("snippet\t'x = 1\\n    \\n  \\ny\\n'\n");
+    t.push_str("snippet\t'if x:\\n  y = (1,\\n2)\\n  z\\n'\n");
+    t.push_str("snippet\t'x = [\\n  1, # one\\n  2,\\n]\\n'\n");
+    t.push_str("snippet\t'a = 1\\\\\\n  + 2\\n'\n");
+    t.push_str("snippet\t'x = 1 \\\\\\n\\n'\n");
+    t.push_str("snippet\t'x = 0\\n\\x0c\\ny = 1\\n'\n");
+    t.push_str("snippet\t'if a:\\n    b\\n\\n\\n'\n");
+    t.push_str("snippet\t'\\n  x\\n'\n");
+    t.push_str("snippet\t'  x = 1\\n'\n");
+    t.push_str("snippet\t'  # c\\nx\\n'\n");
+    t.push_str("snippet\t'def f():\\n  pass\\n\\n# end'\n");
+    t.push_str("snippet\t'x = 1'\n");
+    t.push_str("snippet\t'x = 1\\n\\n\\n# c'\n");
+    t.push_str("snippet\t'x = 1\\r\\ny = 2\\r\\n'\n");
+    t.push_str("snippet\t'x = 1\\r\\n# c\\r\\n'\n");
+    t.push_str("snippet\t'\\n\\n'\n");
+    t.push_str("snippet\t''\n");
+    t.push_str("snippet\t'# only\\n'\n");
+    t.push_str("snippet\t'#!/usr/bin/env python\\n# -*- coding: utf-8 -*-\\n'\n");
+    t.push_str("snippet\t'def f():\\n\\tif x:\\n\\t\\ty\\n\\tz\\n'\n");
+    t.push_str("snippet\t\"class C:\\n    def m(self):\\n        return f'{self!r}'\\n\"\n");
+    t.push_str("snippet\t'async def f():\\n    await x\\n'\n");
+    t.push_str("snippet\t'match x:\\n    case [a, *_]: pass\\n'\n");
+    t.push_str("snippet\t'x = 1if y else 2\\n'\n");
+    t.push_str("snippet\t'x = .5 + 5. + 1j + 0o17 + 0xfg\\n'\n");
+    t.push_str("snippet\t'x = 0xFF_FF + 0o7_7 + 0b1_0 + 1_0.0_1e1_0\\n'\n");
+    t.push_str("snippet\t'x = 0x_1 + 1.e5 + 1e+5j + 1.5_2 + 1._5 + 00 + 007 + 0_0 + 01\\n'\n");
+    t.push_str("snippet\t'x = 1j2 + 0x1for + 1or 2\\n'\n");
+    t.push_str("snippet\t'x = 0b1and 1.0e5if 12abc\\n'\n");
+    t.push_str("snippet\t'x = 3.14.15 + ..5 + 1..2 + 1. .2\\n'\n");
+    t.push_str("snippet\t'x = 0e0 + 0E-0_1 + 1_2.3_4e5_6J + 0j + 09.5 + 09j + 09e1 + 0_9\\n'\n");
+    t.push_str("snippet\t'x = 0B1 + 0XFF + 1L + 1e_5 + 1e\\n'\n");
+    t.push_str("snippet\t'x = a->b; c @= d ** e // f != g <> h\\n'\n");
+    t.push_str("snippet\t'x = 1 $ 2 ? 3 ! 4\\n'\n");
+    t.push_str("snippet\t'x = a<<=b>>=c//=d**=e...f:=g\\n'\n");
+    t.push_str("snippet\t'@dec\\nclass A(B, metaclass=M): ...\\n'\n");
+    t.push_str("snippet\t'x: int = 5\\nif (n := 10) > 5: pass\\n'\n");
+    t.push_str("snippet\t'lambda *a, **k: a\\n'\n");
+    t.push_str("snippet\t\"x = {'a': [1, (2, 3)]}\\n\"\n");
+    t.push_str("snippet\t'x = )\\n'\n");
+    t.push_str("snippet\t'x = (]\\n'\n");
+    t.push_str("snippet\t\"é = 'ü'\\n\"\n");
+    t.push_str("snippet\t'π = 3.14 # é\\n'\n");
+    t.push_str("snippet\t\"x = 'a' 'b'\\n\"\n");
+    t.push_str("snippet\t'x = rb\\'\\\\d\\' + Rb\"x\" + br\\'\\' + U\\'u\\'\\n'\n");
+    t.push_str("snippet\t'x = \\'a\\\\\\'b\\' \"c\\\\\"d\"\\n'\n");
+    t.push_str("snippet\t\"x = '\\\\N{BULLET}'\\n\"\n");
+    t.push_str("snippet\t\"s = '''a\\nb''' + 'c'\\n\"\n");
+    t.push_str("snippet\t\"x = '\\\\\\n'\\n\"\n");
+    t.push_str("snippet\t\"'''\\n'''\\n\"\n");
+    t.push_str("snippet\t'return f\"v={x!r:>{b}} {{lit}}\"\\n'\n");
+    t.push_str("snippet\t'f\\'{x!r}\\' f\"{\\'a\\'}\" rf\\'\\\\{x}\\' F\\'{{}}\\' f\\'{x:>10}\\' f\\'{3.5:.2f}\\'\\n'\n");
+    t.push_str("snippet\t\"print(f'{x=}', f'{x = !r}', f'{x:{w}.{p}f}', f'''a\\n{b}''')\\n\"\n");
+    t.push_str("snippet\t\"f'''{\\nx\\n}'''\\n\"\n");
+    t.push_str("snippet\t\"f'{x:{y}}'\\n\"\n");
+    t.push_str("snippet\t\"f'a{b}c{d:e}f'\\n\"\n");
+    t.push_str("snippet\t\"f'{}'\\n\"\n");
+    t.push_str("snippet\t'f\\'{\"a\" if x else \"b\"}\\'\\n'\n");
+    t.push_str("snippet\t\"f'{x}' 'y' f'z{w}'\\n\"\n");
+    t.push_str("snippet\t\"f'\\\\N{BULLET} {x}'\\n\"\n");
+    t.push_str("snippet\t\"f'{x!r:^{w}}'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{a}' f''\\n\"\n");
+    t.push_str("snippet\t\"x = f'{a!}' f'{a!r x}' f'{a b}'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{lambda x: 1}'\\n\"\n");
+    t.push_str("snippet\t'x = f\"{d[\\'k\\']}\" f\\'{d[\"k\"]}\\'\\n'\n");
+    t.push_str("snippet\t\"x = f'{f'{1}'}'\\n\"\n");
+    t.push_str("snippet\t\"x = f'''{x\\n}'''\\n\"\n");
+    t.push_str("snippet\t\"x = f'{x:%H:%M}' f'{x:{y}d}' f'{x:a{{b}}c}'\\n\"\n");
+    t.push_str("snippet\t\"x = 'abc\\n\"\n");
+    t.push_str("snippet\t\"x = '''abc\\n\"\n");
+    t.push_str("snippet\t\"s = 1\\nt = '''ab\\ncd\\n\"\n");
+    t.push_str("snippet\t\"s = 1\\nt = f'''ab\\ncd\\n\"\n");
+    t.push_str("snippet\t\"x = 'abc\\\\'\\n\"\n");
+    t.push_str("snippet\t\"x = b'\\\\xff' rb'\\\\'\\n\"\n");
+    t.push_str("snippet\t\"x = f'ab\\n\"\n");
+    t.push_str("snippet\t'if x:\\n    y\\n  z\\n'\n");
+    t.push_str("snippet\t'if x:\\n\\ty\\n        z\\n'\n");
+    t.push_str("snippet\t'if x:\\n        y\\n\\tz\\n'\n");
+    t.push_str("snippet\t'x = (1,\\n'\n");
+    t.push_str("snippet\t'x = (1,'\n");
+    t.push_str("snippet\t'x = (1,\\n\\n'\n");
+    t.push_str("snippet\t'x = (1,\\n  2,\\n'\n");
+    t.push_str("snippet\t'x = 5 if a else\\\\\\n'\n");
+    t.push_str("snippet\t'y = 1\\nx = 1 \\\\'\n");
+    t.push_str("snippet\t'x = 1 \\\\ y\\n'\n");
+    t.push_str("snippet\t'x = 1 \\\\ \\n'\n");
+    t.push_str("snippet\t'x = 0b102\\n'\n");
+    t.push_str("snippet\t'x = 0o8\\n'\n");
+    t.push_str("snippet\t'x = 1__0\\n'\n");
+    t.push_str("snippet\t'x = 1_000_\\n'\n");
+    t.push_str("snippet\t'x = 0x\\n'\n");
+    t.push_str("snippet\t'x = 0b\\n'\n");
+    t.push_str("snippet\t'x = 0o\\n'\n");
+    t.push_str("snippet\t'x = 0b1_\\n'\n");
+    t.push_str("snippet\t'x = 1e+\\n'\n");
+    t.push_str("snippet\t'x = 1_a\\n'\n");
+    t.push_str("snippet\t'x = 0xg\\n'\n");
+    t.push_str("snippet\t'x = 1e5_\\n'\n");
+    t.push_str("snippet\t'x = 0x1_\\n'\n");
+    t.push_str("snippet\t'x = 0__1\\n'\n");
+    t.push_str("snippet\t\"x = f'{a'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{x}}'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{x:'\\n\"\n");
+    t.push_str("snippet\t\"x = f'{a:\\n\"\n");
+    t.push_str("snippet\t\"f'''{x:a\\nb}'''\\n\"\n");
+    t.push_str("snippet\t\"f'''ab\\ncd{x}\\nef'''\\n\"\n");
+    t.push_str("snippet\t\"f'{{{x}}}' f'{x!r:{y}}'\\n\"\n");
+    t.push_str("snippet\t\"f'''a''b'''\\n\"\n");
+    t.push_str("snippet\t\"f'{x:{y:{z}}}'\\n\"\n");
+    t.push_str("snippet\t\"f'{a:=^10}' f'{(a:=1)}'\\n\"\n");
+    t.push_str("snippet\t'f\\'{x}\\' rf\"\\\\N{{y}}\"\\n'\n");
+    t.push_str("snippet\t'if x:\\n  \\\\\\n    y\\n'\n");
+    t.push_str("snippet\t'x = a`b\\n'\n");
+    t.push_str("snippet\t'x = 1;\\n'\n");
+    t.push_str("snippet\t'class A:\\n  def f(): pass\\n\\n\\n  def g(): pass\\n'\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("#!/usr/bin/env python3\n");
+    t.push_str("\"\"\"Command line for the inventory service.\"\"\"\n");
+    t.push_str("import argparse\n");
+    t.push_str("import logging\n");
+    t.push_str("\n");
+    t.push_str("from .db import connect, fetch_rows\n");
+    t.push_str("from .report import report\n");
+    t.push_str("\n");
+    t.push_str("log = logging.getLogger(__name__)\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("def build_parser():\n");
+    t.push_str("    p = argparse.ArgumentParser(prog=\"inv\")\n");
+    t.push_str("    p.add_argument(\"db\", nargs=\"?\", default=\"inventory.sqlite3\")\n");
+    t.push_str("    p.add_argument(\"-v\", \"--verbose\", action=\"count\", default=0)\n");
+    t.push_str("    p.add_argument(\"--format\", choices=(\"text\", \"json\", \"csv\"), default=\"text\", help=\"report format\")\n");
+    t.push_str("    sub = p.add_subparsers(dest=\"cmd\", required=True)\n");
+    t.push_str("    sub.add_parser(\"report\").add_argument(\"--low\", action=\"store_true\")\n");
+    t.push_str("    s = sub.add_parser(\"show\")\n");
+    t.push_str("    s.add_argument(\"sku\")\n");
+    t.push_str("    return p\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("def main(argv=None):\n");
+    t.push_str("    args = build_parser().parse_args(argv)\n");
+    t.push_str("    logging.basicConfig(level=logging.WARNING - 10 * args.verbose)\n");
+    t.push_str("    if args.cmd == \"report\":\n");
+    t.push_str("        report(args.db, low_only=args.low)\n");
+    t.push_str("    elif args.cmd == \"show\":\n");
+    t.push_str("        with connect(args.db) as conn:\n");
+    t.push_str("            for row in fetch_rows(conn):\n");
+    t.push_str("                if row[\"sku\"] == args.sku:\n");
+    t.push_str("                    print(f\"{row}\")\n");
+    t.push_str("                    break\n");
+    t.push_str("            else:\n");
+    t.push_str("                log.error(\"no such sku: %s\", args.sku)\n");
+    t.push_str("                return 1\n");
+    t.push_str("    return 0\n");
+    v.push(DataFile { path: "project/inventory/cli.py".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("import sqlite3\n");
+    t.push_str("import contextlib\n");
+    t.push_str("\n");
+    t.push_str("SCHEMA = \"\"\"\n");
+    t.push_str("CREATE TABLE IF NOT EXISTS items (\n");
+    t.push_str("    sku   TEXT PRIMARY KEY,\n");
+    t.push_str("    name  TEXT NOT NULL,\n");
+    t.push_str("    price TEXT NOT NULL,\n");
+    t.push_str("    qty   INTEGER DEFAULT 0\n");
+    t.push_str(");\n");
+    t.push_str("\"\"\"\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("@contextlib.contextmanager\n");
+    t.push_str("def connect(path=\":memory:\"):\n");
+    t.push_str("    conn = sqlite3.connect(path)\n");
+    t.push_str("    try:\n");
+    t.push_str("        conn.executescript(SCHEMA)\n");
+    t.push_str("        yield conn\n");
+    t.push_str("    finally:\n");
+    t.push_str("        conn.close()\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("def fetch_rows(conn, low_only=False):\n");
+    t.push_str("    sql = \"SELECT sku, name, price, qty FROM items\"\n");
+    t.push_str("    if low_only:\n");
+    t.push_str("        sql += \" WHERE qty < ?\"  # FIXME: use the LOW_STOCK constant\n");
+    t.push_str("    rows = conn.execute(sql, (5,) if low_only else ()).fetchall()\n");
+    t.push_str("    return [dict(zip((\"sku\", \"name\", \"price\", \"qty\"), r)) for r in rows]\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("def count(conn):\n");
+    t.push_str("    (n,), = conn.execute(\"SELECT count(*) FROM items\")\n");
+    t.push_str("    return n\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("async def fetch_rows_async(pool, low_only=False):\n");
+    t.push_str("    async with pool.acquire() as conn:\n");
+    t.push_str("        return await conn.run_sync(lambda c: fetch_rows(c, low_only))\n");
+    v.push(DataFile { path: "project/inventory/db.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"\"\"Data model for the inventory service.\"\"\"\n");
+    t.push_str("from __future__ import annotations\n");
+    t.push_str("\n");
+    t.push_str("import dataclasses\n");
+    t.push_str("from decimal import Decimal\n");
+    t.push_str("from typing import Optional\n");
+    t.push_str("\n");
+    t.push_str("LOW_STOCK = 5  # reorder below this\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("@dataclasses.dataclass(frozen=True)\n");
+    t.push_str("class Item:\n");
+    t.push_str("    \"\"\"One stock-keeping unit.\"\"\"\n");
+    t.push_str("\n");
+    t.push_str("    sku: str\n");
+    t.push_str("    name: str\n");
+    t.push_str("    price: Decimal\n");
+    t.push_str("    qty: int = 0\n");
+    t.push_str("    tags: tuple[str, ...] = ()\n");
+    t.push_str("\n");
+    t.push_str("    @property\n");
+    t.push_str("    def low(self) -> bool:\n");
+    t.push_str("        return self.qty < LOW_STOCK\n");
+    t.push_str("\n");
+    t.push_str("    def label(self, width: int = 30) -> str:\n");
+    t.push_str("        # TODO: truncate long names with an ellipsis\n");
+    t.push_str("        return f\"{self.sku:<8} {self.name:{width}.{width}} {self.price:>8.2f}\"\n");
+    t.push_str("\n");
+    t.push_str("    def __repr__(self) -> str:\n");
+    t.push_str("        return f\"Item({self.sku!r}, qty={self.qty})\"\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("class Store:\n");
+    t.push_str("    def __init__(self, items: Optional[list[Item]] = None):\n");
+    t.push_str("        self.items = {i.sku: i for i in items or []}\n");
+    t.push_str("\n");
+    t.push_str("    def total(self) -> Decimal:\n");
+    t.push_str("        return sum((i.price * i.qty for i in self.items.values()),\n");
+    t.push_str("                   Decimal(\"0\"))\n");
+    t.push_str("\n");
+    t.push_str("    def restock(self, sku: str, n: int) -> Item:\n");
+    t.push_str("        item = self.items[sku]\n");
+    t.push_str("        if n <= 0:\n");
+    t.push_str("            raise ValueError(f\"bad quantity {n} for {sku}\")\n");
+    t.push_str("        self.items[sku] = dataclasses.replace(item, qty=item.qty + n)\n");
+    t.push_str("        return self.items[sku]\n");
+    v.push(DataFile { path: "project/inventory/models.py".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf23205072696e7473207468652073746f636b207265706f72742e0a696d706f7274207379730a66726f6d202e64");
+    t.push_str("6220696d706f727420636f6e6e6563742c2066657463685f726f77732c20636f756e740a0a5749445448203d2037320a");
+    t.push_str("484541444552203d2066227b27534b55273a3c387d207b274e616d65273a3c33307d207b275072696365273a3e387d20");
+    t.push_str("7b27517479273a3e357d220a0a0a646566206d6f6e657928783a20666c6f617429202d3e207374723a0a202020207265");
+    t.push_str("7475726e206622247b783a2c2e32667d222069662078203e3d203020656c73652066222d247b2d783a2c2e32667d220a");
+    t.push_str("0a0a64656620626172286e2c207363616c653d302e35293a0a2020202072657475726e20222322202a20696e74286e20");
+    t.push_str("2a207363616c6529202b2028222b22206966206e2025203220656c7365202222290a0a0a646566207265706f72742870");
+    t.push_str("6174682c206f75743d7379732e7374646f75742c202a2c206c6f775f6f6e6c793d46616c7365293a0a20202020776974");
+    t.push_str("6820636f6e6e65637428706174682920617320636f6e6e3a0a2020202020202020726f7773203d2066657463685f726f");
+    t.push_str("777328636f6e6e2c206c6f775f6f6e6c793d6c6f775f6f6e6c79290a20202020202020207072696e7428484541444552");
+    t.push_str("2c2066696c653d6f7574290a20202020202020207072696e7428222d22202a2057494454482c2066696c653d6f757429");
+    t.push_str("0a2020202020202020666f7220726f7720696e20726f77733a0a2020202020202020202020206d6174636820726f773a");
+    t.push_str("0a2020202020202020202020202020202063617365207b22717479223a20307d3a0a2020202020202020202020202020");
+    t.push_str("202020202020737461747573203d20226f7574220a2020202020202020202020202020202063617365207b2271747922");
+    t.push_str("3a20717d2069662071203c20353a0a2020202020202020202020202020202020202020737461747573203d20226c6f77");
+    t.push_str("220a2020202020202020202020202020202063617365205f3a0a20202020202020202020202020202020202020207374");
+    t.push_str("61747573203d20226f6b220a2020202020202020202020207072696365203d20666c6f617428726f775b227072696365");
+    t.push_str("225d290a2020202020202020202020207072696e742866227b726f775b27736b75275d3a3c387d207b726f775b276e61");
+    t.push_str("6d65275d5b3a33305d3a3c33307d20220a20202020202020202020202020202020202066227b6d6f6e65792870726963");
+    t.push_str("65293a3e387d207b726f775b27717479275d3a3e357d207b7374617475737d20220a2020202020202020202020202020");
+    t.push_str("2020202066227b62617228726f775b27717479275d297d222c2066696c653d6f7574290a2020202020202020746f7461");
+    t.push_str("6c203d2073756d28666c6f617428725b227072696365225d29202a20725b22717479225d20666f72207220696e20726f");
+    t.push_str("7773290a20202020202020207072696e7428662222220a7b636f756e7428636f6e6e297d206974656d732c207b6c656e");
+    t.push_str("28726f7773297d2073686f776e0a746f74616c2076616c7565207b6d6f6e657928746f74616c297d2222222c2066696c");
+    t.push_str("653d6f7574290a2020202020202020696620286e203a3d206c656e28726f77732929203e20307831303a0a2020202020");
+    t.push_str("202020202020207072696e742866226e6f74653a207b6e7d20726f77733b20757365202d2d6c6f7720666f7220612073");
+    t.push_str("686f7274206c697374222c2066696c653d6f7574290a0a0a6966205f5f6e616d655f5f203d3d20225f5f6d61696e5f5f");
+    t.push_str("223a0a202020207265706f7274287379732e617267765b315d206966206c656e287379732e6172677629203e20312065");
+    t.push_str("6c736520223a6d656d6f72793a222c0a20202020202020202020206c6f775f6f6e6c793d222d2d6c6f772220696e2073");
+    t.push_str("79732e617267765b323a5d290a");
+    v.push(DataFile { path: "project/inventory/report.py".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("23202d2a2d20636f64696e673a206c6174696e2d31202d2a2d0a23204f6c6420707269636520636f6e7665727465723b");
+    t.push_str("206b65707420666f7220746865206e696768746c79206a6f622e20205858582072656d6f766520616674657220323032");
+    t.push_str("370a696d706f727420737472696e670a0a52415445203d20312e3038323520234555522d3e4742500a53594d424f4c20");
+    t.push_str("3d2022a3222020202320706f756e64207369676e2c2073746f726564206173204c6174696e2d310a0a0a64656620636f");
+    t.push_str("6e7665727428726f7773293a0a096f7574203d205b5d0a09666f72207220696e20726f77733a0a09097472793a0a0909");
+    t.push_str("0970203d20666c6f617428725b325d29202a20524154450a09096578636570743a0a09090970203d204e6f6e650a0909");
+    t.push_str("69662070203d3d204e6f6e653a0a0909097072696e742822736b697020257322202520725b305d290a090909636f6e74");
+    t.push_str("696e75650a09096f75742e617070656e64282225733b25733b2573252e32662220252028725b305d2c20725b315d2c20");
+    t.push_str("53594d424f4c2c207029290a0972657475726e206f75740a0a0a64656620636166e9286e616d65293a0a097265747572");
+    t.push_str("6e206622636166e9207b6e616d657d22202b2066226e6f20706c616365686f6c646572732068657265220a");
+    v.push(DataFile { path: "project/legacy/convert.py".to_string(), hex: true, body: t });
+}
