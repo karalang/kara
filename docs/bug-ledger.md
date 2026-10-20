@@ -175,7 +175,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-9 | 2026-10-20 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per provider type, `with_provider` owning and dropping `p`, `providers {} in {}` evaluate-then-nest, `#[with_provider]` on tests | — |
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
 | B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
-| B-2026-10-20-14 | 2026-10-20 | codegen | low | mir-llvm takes no §6.2 borrow flag inside a coroutine's resume body, so a conflicting access through another handle while a coroutine holds a loan across a yield runs on mir-llvm and panics on mir-interp | — |
 | B-2026-10-20-15 | 2026-10-20 | typecheck | medium | `karac check` accepts storing an owned `String` into a `let mut` copy of a `for` item (`for s in v { let mut t = s; t = "z".to_string(); }`), and both MIR backends then stop with "invalid MIR: assigning String to _N of type ref String"; the same shape through a bare parameter gets the right diagnostic | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
 | B-2026-10-20-17 | 2026-10-20 | typecheck+interp+codegen | low | `karac check` accepts the statement form `par { let a = f(); let b = g(); }` with `a` and `b` used after the block, which core semantics §11.1 does not have (branches are comma-separated expressions); both MIR backends then refuse it in the move check because the bindings drop at the statement's `;` | — |
@@ -4273,6 +4272,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-7 | effect | medium | Providers (§14.3, §14.6): effect inference must decide exactly which functions take a hidden provider parameter for each provider-rooted resource, re… | 393f6f8862 |
 | B-2026-10-20-12 | typecheck+interp | low | A local made by an `if`/`match` with a branch that leaves (`return`) is not seen as owning its value, so storing it by value into a local bound to a… | 61a9b3a27f |
 | B-2026-10-20-13 | typecheck | medium | A generic `Fn(V) -> K` instantiated at V = i64 becomes `Fn(ref i64) -> K` and refuses `fn neg(x: i64)`, which the same type written as `Fn(i64) -> i6… | e73bc08bd4 |
+| B-2026-10-20-14 | codegen | low | mir-llvm takes no §6.2 borrow flag inside a coroutine's resume body, so a conflicting access through another handle while a coroutine holds a loan ac… | 3577f9ed01 |
 
 </details>
 
