@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 302 |
 | codegen-gap | 278 |
-| false-positive | 254 |
+| false-positive | 255 |
 | other | 185 |
 | diagnostics | 181 |
 | perf | 180 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2977 |
 | interp | 996 |
-| typecheck | 516 |
+| typecheck | 517 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -162,7 +162,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-46 | 2026-10-19 | ownership+effect+interp+codegen | medium | SOUNDNESS: a plain `shared` handle enters `par` branches with no E_NOT_CROSS_TASK on `karac check` or either MIR backend, including a branch that counts it into an `own` parameter while a sibling writes its `mut` field | — |
 | B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
-| B-2026-10-20-2 | 2026-10-20 | parser+typecheck | low | `par struct` and `par enum` are still accepted although Amendment 6 renamed them `sync struct` and `sync enum`, and E0257 about a `sync struct` still calls it a `par struct` (the remainder of B-2026-10-19-50 once its `with _` half was fixed) | — |
 | B-2026-10-20-8 | 2026-10-20 | typecheck+ownership | medium | Providers (§14.1, §14.2, §14.4, §14.5, §14.9) in `karac check`: resource declarations and bounds, `R.m()` resolved against the bounds only, receiver-to-verb rule, `with_provider` / `providers {} in {}` / `#[with_provider]` typing, escape through the view rules naming `R`, `CrossTask` on shared providers; migrate the 8 trait-less corpus provider programs | — |
 | B-2026-10-20-9 | 2026-10-20 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per provider type, `with_provider` owning and dropping `p`, `providers {} in {}` evaluate-then-nest, `#[with_provider]` on tests | — |
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
@@ -173,6 +172,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-22 | 2026-10-20 | typecheck | low | `String.find` takes a `char` (design.md's own example is `s.find(' ')`), but `rfind`, `contains` and `starts_with` refuse one (CORRECTION 2026-10-20: `rfind` too, so `s.rfind('/')` fails while `s.find('/')` works) with a type error, and `split` refuses one with a fix-it to the string literal; so `"02468".contains(c)`, the usual digit or class test, has to be written `contains(f"{c}")` | — |
 | B-2026-10-20-23 | 2026-10-20 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` stop with "a type that failed to check is not lowered yet"; and floats have no `PI`, `TAU` or `E` at all | — |
 | B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
+| B-2026-10-20-30 | 2026-10-20 | typecheck | low | A `sync struct` field may still be declared `mut` when its type is `Atomic[T]` or `Mutex[T]`, though core-semantics §6.3 and Amendment 7 say a `sync` type's fields are never `mut` | — |
 
 ### Relocated
 
@@ -4266,6 +4266,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-70 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64… | 25e4c66881 |
 | B-2026-10-19-71 | typecheck | medium | `cmp` and `partial_cmp` on an `i128` or `u128` are refused ("no method 'cmp' on type 'u128'"), and a 128-bit value does not meet an `Ord`, `Eq` or `A… | da5f25cf67 |
 | B-2026-10-20-1 | typecheck | low | A tuple literal that holds a string literal, passed to a method or generic-function parameter whose type is a tuple with a `Str` slot, is still typed… | 4a36cb3727 |
+| B-2026-10-20-2 | parser+typecheck | low | `par struct` and `par enum` are still accepted although Amendment 6 renamed them `sync struct` and `sync enum`, and E0257 about a `sync struct` still… | c120cafada |
 | B-2026-10-20-5 | parser | medium | The `matches!(x, P)` diagnostic's machine-applicable fix rewrites it to `matches(x, P)`, a name that does not exist: `karac fix` applies it and the f… | 56c1207422 |
 | B-2026-10-20-6 | typecheck | low | A `Vec` literal of string literals passed to a method whose slot is `Vec[Str]` is typed `Vec[String]`: `v.extend(vec!["c", "d"])` on a `Vec[Str]` is… | e73bc08bd4 |
 | B-2026-10-20-7 | effect | medium | Providers (§14.3, §14.6): effect inference must decide exactly which functions take a hidden provider parameter for each provider-rooted resource, re… | 393f6f8862 |
