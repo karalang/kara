@@ -1,0 +1,2717 @@
+== 001-add-ints.xml
+loads 'math.add' (2, 3)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>5</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 002-add-floats.xml
+loads 'math.add' (0.1, 0.2)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>0.30000000000000004</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 003-add-int-float.xml
+loads 'math.add' (1, 2.5)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>3.5</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 004-add-bools.xml
+loads 'math.add' (True, True)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>2</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 005-add-strings.xml
+loads 'math.add' ('foo', 'bar')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>foobar</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 006-add-lists.xml
+loads 'math.add' ([1, 'x'], [2.0])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>1</int></value>
+| <value><string>x</string></value>
+| <value><double>2.0</double></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 007-add-bytes.xml
+loads 'math.add' (b'hel', b'lo')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| aGVsbG8=
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 008-add-int-str.xml
+loads 'math.add' (1, 'x')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'int' and 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 009-add-str-int.xml
+loads 'math.add' ('x', 1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can only concatenate str (not "int") to str</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 010-add-list-int.xml
+loads 'math.add' ([], 1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can only concatenate list (not "int") to list</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 011-add-bytes-str.xml
+loads 'math.add' (b'\x00', 'x')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can't concat str to bytes</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 012-add-dicts.xml
+loads 'math.add' ({}, {})
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'dict' and 'dict'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 013-add-date-int.xml
+loads 'math.add' (datetime.datetime(2026, 1, 1, 0, 0), 1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'datetime.datetime' and 'int'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 014-add-overflow.xml
+loads 'math.add' (2147483647, 1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'OverflowError'&gt;:int exceeds XML-RPC limits</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 015-add-negative-edge.xml
+loads 'math.add' (-2147483647, -1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>-2147483648</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 016-add-arity-low.xml
+loads 'math.add' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:add() missing 1 required positional argument: 'b'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 017-add-arity-none.xml
+loads 'math.add' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:add() missing 2 required positional arguments: 'a' and 'b'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 018-add-arity-high.xml
+loads 'math.add' (1, 2, 3)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:add() takes 2 positional arguments but 3 were given</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 019-div-ints.xml
+loads 'math.div' (7, 2)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>3.5</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 020-div-thirds.xml
+loads 'math.div' (1, 3)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>0.3333333333333333</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 021-div-zero.xml
+loads 'math.div' (1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ZeroDivisionError'&gt;:division by zero</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 022-div-float-zero.xml
+loads 'math.div' (1.5, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ZeroDivisionError'&gt;:float division by zero</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 023-div-by-float-zero.xml
+loads 'math.div' (1, -0.0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ZeroDivisionError'&gt;:float division by zero</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 024-div-strings.xml
+loads 'math.div' ('6', 3)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for /: 'str' and 'int'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 025-div-inf.xml
+loads 'math.div' (inf, 2.0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>inf</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 026-sum-ints.xml
+loads 'math.sum' ([1, 2, 3, True],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>7</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 027-sum-floats.xml
+loads 'math.sum' ([0.1, 0.2, 0.3, 1e+16, 1.0, -1e+16],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>1.6</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 028-sum-mixed.xml
+loads 'math.sum' ([1, 0.1, 2, True, 0.7],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><double>4.8</double></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 029-sum-empty.xml
+loads 'math.sum' ([],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>0</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 030-sum-bytes.xml
+loads 'math.sum' (b'\x01\x02\x03',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>6</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 031-sum-strings.xml
+loads 'math.sum' (['a', 'b'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'int' and 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 032-sum-float-then-str.xml
+loads 'math.sum' ([1.5, 'a'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'float' and 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 033-sum-int-then-list.xml
+loads 'math.sum' ([1, []],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'int' and 'list'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 034-sum-not-iterable.xml
+loads 'math.sum' (5,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:'int' object is not iterable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 035-sum-dict.xml
+loads 'math.sum' ({'a': 1},)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'int' and 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 036-join-list.xml
+loads 'text.join' (', ', ['a', 'b', 'c'])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>a, b, c</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 037-join-string.xml
+loads 'text.join' ('-', 'abc')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>a-b-c</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 038-join-dict-keys.xml
+loads 'text.join' ('+', {'x': 1, 'y': 2})
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>x+y</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 039-join-bad-item.xml
+loads 'text.join' (',', ['a', 2])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:sequence item 1: expected str instance, int found</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 040-join-not-iterable.xml
+loads 'text.join' (',', 1.5)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can only join an iterable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 041-join-int-sep.xml
+loads 'text.join' (1, [])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'AttributeError'&gt;:'int' object has no attribute 'join'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 042-join-bytes-sep.xml
+loads 'text.join' (b'-', [b'a', b'b'])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| YS1i
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 043-join-bytes-sep-str.xml
+loads 'text.join' (b'-', ['a'])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:sequence item 0: expected a bytes-like object, str found</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 044-split-comma.xml
+loads 'text.split' ('a,b,,c', ',')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>a</string></value>
+| <value><string>b</string></value>
+| <value><string></string></value>
+| <value><string>c</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 045-split-whitespace.xml
+loads 'text.split' ('  a b\tc\n', None)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>a</string></value>
+| <value><string>b</string></value>
+| <value><string>c</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 046-split-empty-sep.xml
+loads 'text.split' ('abc', '')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:empty separator</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 047-split-int-sep.xml
+loads 'text.split' ('abc', 1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:must be str or None, not int</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 048-split-bytes.xml
+loads 'text.split' (b'a b', b' ')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><base64>
+| YQ==
+| </base64></value>
+| <value><base64>
+| Yg==
+| </base64></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 049-split-bytes-str.xml
+loads 'text.split' (b'a b', ' ')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:a bytes-like object is required, not 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 050-split-int.xml
+loads 'text.split' (5, ',')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'AttributeError'&gt;:'int' object has no attribute 'split'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 051-kv-put-config.xml
+loads 'kv.put' ('config', {'retries': 3, 'timeout': 2.5, 'hosts': ['a.example', 'b.example']})
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><boolean>1</boolean></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 052-kv-put-blob.xml
+loads 'kv.put' ('logo', b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd\xf8\xcfP\x0f\x00\x03\x86\x01\x80Z4}k\x00\x00\x00\x00IEND\xaeB`\x82')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><boolean>1</boolean></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 053-kv-put-when.xml
+loads 'kv.put' ('deployed', datetime.datetime(2026, 3, 15, 9, 30))
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><boolean>1</boolean></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 054-kv-put-int-key.xml
+loads 'kv.put' (7, 'seven')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>400</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>key must be a string</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 055-kv-get.xml
+loads 'kv.get' ('config',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><struct>
+| <member>
+| <name>retries</name>
+| <value><int>3</int></value>
+| </member>
+| <member>
+| <name>timeout</name>
+| <value><double>2.5</double></value>
+| </member>
+| <member>
+| <name>hosts</name>
+| <value><array><data>
+| <value><string>a.example</string></value>
+| <value><string>b.example</string></value>
+| </data></array></value>
+| </member>
+| </struct></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 056-kv-get-blob.xml
+loads 'kv.get' ('logo',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9
+| awAAAABJRU5ErkJggg==
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 057-kv-get-missing.xml
+loads 'kv.get' ('nope',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>404</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>no such key: 'nope'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 058-kv-keys.xml
+loads 'kv.keys' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>config</string></value>
+| <value><string>deployed</string></value>
+| <value><string>logo</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 059-kv-keys-arg.xml
+loads 'kv.keys' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:keys() takes 0 positional arguments but 1 was given</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 060-kv-pop.xml
+loads 'kv.pop' ('deployed',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>20260315T09:30:00</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 061-kv-pop-again.xml
+loads 'kv.pop' ('deployed',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>404</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>no such key: 'deployed'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 062-kv-keys-after.xml
+loads 'kv.keys' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>config</string></value>
+| <value><string>logo</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 063-concat.xml
+loads 'blob.concat' ([b'Hello,', b' world', b'!'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| SGVsbG8sIHdvcmxkIQ==
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 064-concat-long.xml
+loads 'blob.concat' ([b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f', b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f', b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f', b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8AAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcY
+| GRobHB0eHwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAECAwQFBgcICQoLDA0ODxAR
+| EhMUFRYXGBkaGxwdHh8=
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 065-concat-empty.xml
+loads 'blob.concat' ([],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><base64>
+| </base64></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 066-concat-str.xml
+loads 'blob.concat' ([b'a', 'b'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:sequence item 1: expected a bytes-like object, str found</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 067-concat-string.xml
+loads 'blob.concat' ('ab',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:sequence item 0: expected a bytes-like object, str found</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 068-size-str.xml
+loads 'blob.size' ('héllo',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>5</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 069-size-bytes.xml
+loads 'blob.size' (b'\x00\x01\x02\x03\x04\x05',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>6</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 070-size-list.xml
+loads 'blob.size' ([1, 2],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><int>2</int></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 071-size-int.xml
+loads 'blob.size' (12,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:object of type 'int' has no len()</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 072-size-date.xml
+loads 'blob.size' (datetime.datetime(2026, 1, 1, 0, 0),)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:object of type 'datetime.datetime' has no len()</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 073-shift-day.xml
+loads 'time.shift' (datetime.datetime(2026, 12, 31, 23, 59, 30), 1, 45)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>20270102T00:00:15</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 074-shift-back.xml
+loads 'time.shift' (datetime.datetime(2024, 3, 1, 0, 0), -1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>20240229T00:00:00</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 075-shift-leap.xml
+loads 'time.shift' (datetime.datetime(1900, 2, 28, 12, 0), 1, -43200)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>19000301T00:00:00</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 076-shift-far.xml
+loads 'time.shift' (datetime.datetime(2026, 1, 15, 8, 0), 36500, 86399)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>21251223T07:59:59</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 077-shift-bool-days.xml
+loads 'time.shift' (datetime.datetime(2026, 1, 15, 8, 0), True, False)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><dateTime.iso8601>20260116T08:00:00</dateTime.iso8601></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 078-shift-overflow.xml
+loads 'time.shift' (datetime.datetime(9999, 12, 31, 12, 0), 1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'OverflowError'&gt;:date value out of range</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 079-shift-underflow.xml
+loads 'time.shift' (datetime.datetime(1, 1, 1, 0, 0), 0, -1)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'OverflowError'&gt;:date value out of range</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 080-shift-str-days.xml
+loads 'time.shift' (datetime.datetime(2026, 1, 15, 8, 0), '1', 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported type for timedelta days component: str</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 081-shift-int-when.xml
+loads 'time.shift' (5, 1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unsupported operand type(s) for +: 'int' and 'datetime.timedelta'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 082-shift-str-when.xml
+loads 'time.shift' ('x', 1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can only concatenate str (not "datetime.timedelta") to str</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 083-shift-bytes-when.xml
+loads 'time.shift' (b'', 1, 0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:can't concat datetime.timedelta to bytes</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 084-date-short-fields.xml
+loads 'echo' (datetime.datetime(2026, 1, 2, 3, 4, 5),)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><dateTime.iso8601>20260102T03:04:05</dateTime.iso8601></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 085-date-lowercase-t.xml
+loads 'echo' (datetime.datetime(2026, 1, 2, 3, 4, 5),)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><dateTime.iso8601>20260102T03:04:05</dateTime.iso8601></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 086-date-feb-30.xml
+loads ! ValueError: day is out of range for month
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:day is out of range for month</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 087-date-leap-day.xml
+loads ! ValueError: day is out of range for month
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:day is out of range for month</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 088-date-second-60.xml
+loads ! ValueError: second must be in 0..59
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:second must be in 0..59</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 089-date-leading-space.xml
+loads ! ValueError: time data ' 20260102T03:04:05' does not match format '%Y%m%dT%H:%M:%S'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:time data ' 20260102T03:04:05' does not match format '%Y%m%dT%H:%M:%S'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 090-date-trailing-space.xml
+loads ! ValueError: unconverted data remains:  
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:unconverted data remains:  </string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 091-date-dashes.xml
+loads ! ValueError: time data '2026-01-02T03:04:05' does not match format '%Y%m%dT%H:%M:%S'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:time data '2026-01-02T03:04:05' does not match format '%Y%m%dT%H:%M:%S'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 092-date-year-zero.xml
+loads ! ValueError: year 0 is out of range
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:year 0 is out of range</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 093-date-hour-24.xml
+loads ! ValueError: time data '20260102T24:00:00' does not match format '%Y%m%dT%H:%M:%S'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:time data '20260102T24:00:00' does not match format '%Y%m%dT%H:%M:%S'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 094-echo-mixed.xml
+loads 'echo' (42, 'tab\there & <there>', -0.0, 1e+300, 1.5e-07, False, [], {})
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>42</int></value>
+| <value><string>tab	here &amp; &lt;there&gt;</string></value>
+| <value><double>-0.0</double></value>
+| <value><double>1e+300</double></value>
+| <value><double>1.5e-07</double></value>
+| <value><boolean>0</boolean></value>
+| <value><array><data>
+| </data></array></value>
+| <value><struct>
+| </struct></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 095-echo-nested.xml
+loads 'echo' ({'user': {'name': 'Ana', 'roles': ['admin', 'ops']}, 'tags': [[1], []]},)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><struct>
+| <member>
+| <name>user</name>
+| <value><struct>
+| <member>
+| <name>name</name>
+| <value><string>Ana</string></value>
+| </member>
+| <member>
+| <name>roles</name>
+| <value><array><data>
+| <value><string>admin</string></value>
+| <value><string>ops</string></value>
+| </data></array></value>
+| </member>
+| </struct></value>
+| </member>
+| <member>
+| <name>tags</name>
+| <value><array><data>
+| <value><array><data>
+| <value><int>1</int></value>
+| </data></array></value>
+| <value><array><data>
+| </data></array></value>
+| </data></array></value>
+| </member>
+| </struct></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 096-echo-nil.xml
+loads 'echo' (1, None)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:cannot marshal None unless allow_none is enabled</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 097-echo-nil-nested.xml
+loads 'echo' ([None],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:cannot marshal None unless allow_none is enabled</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 098-echo-i8.xml
+loads 'echo' (5000000000,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'OverflowError'&gt;:int exceeds XML-RPC limits</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 099-echo-i8-small.xml
+loads 'echo' (-17, 9, 1000)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>-17</int></value>
+| <value><int>9</int></value>
+| <value><int>1000</int></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 100-echo-untyped.xml
+loads 'echo' ('  plain text ', '', '')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>  plain text </string></value>
+| <value><string></string></value>
+| <value><string></string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 101-echo-entities.xml
+loads 'echo' ('<AB&>"\'', '<raw> & stuff', 'ab')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>&lt;AB&amp;&gt;"'</string></value>
+| <value><string>&lt;raw&gt; &amp; stuff</string></value>
+| <value><string>ab</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 102-echo-namespaced.xml
+loads 'echo' (5, [True])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>5</int></value>
+| <value><array><data>
+| <value><boolean>1</boolean></value>
+| </data></array></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 103-echo-dup-keys.xml
+loads 'echo' ({'a': 3, 'b': 2},)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><struct>
+| <member>
+| <name>a</name>
+| <value><int>3</int></value>
+| </member>
+| <member>
+| <name>b</name>
+| <value><int>2</int></value>
+| </member>
+| </struct></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 104-echo-member-no-name.xml
+loads 'echo' ({1: 2},)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:dictionary key must be string</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 105-echo-member-no-value.xml
+loads ! IndexError: list index out of range
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'IndexError'&gt;:list index out of range</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 106-echo-member-list-key.xml
+loads ! TypeError: unhashable type: 'list'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unhashable type: 'list'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 107-echo-whitespace.xml
+loads 'echo' (1, [2, 'x'])
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>1</int></value>
+| <value><array><data>
+| <value><int>2</int></value>
+| <value><string>x</string></value>
+| </data></array></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 108-echo-unknown-tag.xml
+loads ! ResponseError: ResponseError("unknown tag 'decimal'")
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xmlrpc.client.ResponseError'&gt;:ResponseError("unknown tag 'decimal'")</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 109-echo-ignored-tag.xml
+loads 'echo' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>1</int></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 110-echo-bad-bool.xml
+loads ! TypeError: bad boolean value
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:bad boolean value</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 111-echo-bad-int.xml
+loads ! ValueError: invalid literal for int() with base 10: '12px'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:invalid literal for int() with base 10: '12px'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 112-echo-bad-double.xml
+loads ! ValueError: could not convert string to float: '1.5e'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ValueError'&gt;:could not convert string to float: '1.5e'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 113-echo-double-forms.xml
+loads 'echo' (10.25, -inf, nan, inf, 0.5, 7.0)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><double>10.25</double></value>
+| <value><double>-inf</double></value>
+| <value><double>nan</double></value>
+| <value><double>inf</double></value>
+| <value><double>0.5</double></value>
+| <value><double>7.0</double></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 114-echo-base64-padding.xml
+loads ! Error: Incorrect padding
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'binascii.Error'&gt;:Incorrect padding</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 115-echo-base64-short.xml
+loads ! Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'binascii.Error'&gt;:Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 116-echo-float-text.xml
+loads 'echo' (2.0, 1.2345678901234568e+17)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><double>2.0</double></value>
+| <value><double>1.2345678901234568e+17</double></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 117-echo-long-string.xml
+loads 'echo' ('xxxé中😀',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>xxxé中😀</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 118-echo-many-params.xml
+loads 'echo' (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><int>1</int></value>
+| <value><int>2</int></value>
+| <value><int>3</int></value>
+| <value><int>4</int></value>
+| <value><int>5</int></value>
+| <value><int>6</int></value>
+| <value><int>7</int></value>
+| <value><int>8</int></value>
+| <value><int>9</int></value>
+| <value><int>10</int></value>
+| <value><int>11</int></value>
+| <value><int>12</int></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 119-list-methods.xml
+loads 'system.listMethods' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>blob.concat</string></value>
+| <value><string>blob.size</string></value>
+| <value><string>echo</string></value>
+| <value><string>kv.get</string></value>
+| <value><string>kv.keys</string></value>
+| <value><string>kv.pop</string></value>
+| <value><string>kv.put</string></value>
+| <value><string>math.add</string></value>
+| <value><string>math.div</string></value>
+| <value><string>math.sum</string></value>
+| <value><string>sys.void</string></value>
+| <value><string>system.listMethods</string></value>
+| <value><string>system.methodHelp</string></value>
+| <value><string>system.methodSignature</string></value>
+| <value><string>system.multicall</string></value>
+| <value><string>text.join</string></value>
+| <value><string>text.split</string></value>
+| <value><string>time.shift</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 120-method-help.xml
+loads 'system.methodHelp' ('math.add',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>Return a + b.</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 121-method-help-system.xml
+loads 'system.methodHelp' ('system.multicall',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>system.multicall([{'methodName': 'add', 'params': [2, 2]}, ...]) =&gt; [[4], ...]
+| 
+| Allows the caller to package multiple XML-RPC calls into a single
+| request.
+| 
+| See http://www.xmlrpc.com/discuss/msgReader$1208</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 122-method-help-unknown.xml
+loads 'system.methodHelp' ('nope',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string></string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 123-method-help-int.xml
+loads 'system.methodHelp' (3,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string></string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 124-method-help-list.xml
+loads 'system.methodHelp' ([],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unhashable type: 'list'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 125-method-help-arity.xml
+loads 'system.methodHelp' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:SimpleXMLRPCDispatcher.system_methodHelp() missing 1 required positional argument: 'method_name'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 126-method-signature.xml
+loads 'system.methodSignature' ('math.add',)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><string>signatures not supported</string></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 127-list-methods-arity.xml
+loads 'system.listMethods' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:SimpleXMLRPCDispatcher.system_listMethods() takes 1 positional argument but 2 were given</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 128-multicall.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 2]}, {'methodName': 'kv.get', 'params': ['config']}, {'methodName': 'kv.get', 'params': ['gone']}, {'methodName': 'math.div', 'params': [1, 0]}, {'methodName': 'nope', 'params': []}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><array><data>
+| <value><int>3</int></value>
+| </data></array></value>
+| <value><array><data>
+| <value><struct>
+| <member>
+| <name>retries</name>
+| <value><int>3</int></value>
+| </member>
+| <member>
+| <name>timeout</name>
+| <value><double>2.5</double></value>
+| </member>
+| <member>
+| <name>hosts</name>
+| <value><array><data>
+| <value><string>a.example</string></value>
+| <value><string>b.example</string></value>
+| </data></array></value>
+| </member>
+| </struct></value>
+| </data></array></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>404</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>no such key: 'gone'</string></value>
+| </member>
+| </struct></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'ZeroDivisionError'&gt;:division by zero</string></value>
+| </member>
+| </struct></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "nope" is not supported</string></value>
+| </member>
+| </struct></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 129-multicall-shape-no-params.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, {'methodName': 'math.add'}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'KeyError'&gt;:'params'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 130-multicall-shape-no-name.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, {'params': []}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'KeyError'&gt;:'methodName'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 131-multicall-shape-list.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, []],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:list indices must be integers or slices, not str</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 132-multicall-shape-string.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, 'x'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:string indices must be integers, not 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 133-multicall-shape-int.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, 4],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:'int' object is not subscriptable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 134-multicall-shape-nil.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, None],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:'NoneType' object is not subscriptable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 135-multicall-shape-bytes.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, b'a'],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:byte indices must be integers or slices, not str</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 136-multicall-shape-double.xml
+loads 'system.multicall' ([{'methodName': 'math.add', 'params': [1, 1]}, 1.0],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:'float' object is not subscriptable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 137-multicall-params.xml
+loads 'system.multicall' ([{'methodName': 'echo', 'params': 'ab'}, {'methodName': 'echo', 'params': {'k': 1}}, {'methodName': 'echo', 'params': 5}, {'methodName': 5, 'params': []}, {'methodName': [], 'params': []}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><array><data>
+| <value><array><data>
+| <value><string>a</string></value>
+| <value><string>b</string></value>
+| </data></array></value>
+| </data></array></value>
+| <value><array><data>
+| <value><array><data>
+| <value><string>k</string></value>
+| </data></array></value>
+| </data></array></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:__main__.echo() argument after * must be an iterable, not int</string></value>
+| </member>
+| </struct></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "5" is not supported</string></value>
+| </member>
+| </struct></value>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:unhashable type: 'list'</string></value>
+| </member>
+| </struct></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 138-multicall-nested.xml
+loads 'system.multicall' ([{'methodName': 'system.multicall', 'params': [[{'methodName': 'math.add', 'params': [2, 2]}]]}, {'methodName': 'kv.keys', 'params': []}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><array><data>
+| <value><array><data>
+| <value><array><data>
+| <value><int>4</int></value>
+| </data></array></value>
+| </data></array></value>
+| </data></array></value>
+| <value><array><data>
+| <value><array><data>
+| <value><string>config</string></value>
+| <value><string>logo</string></value>
+| </data></array></value>
+| </data></array></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 139-multicall-void.xml
+loads 'system.multicall' ([{'methodName': 'sys.void', 'params': []}, {'methodName': 'echo', 'params': [None]}],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:cannot marshal None unless allow_none is enabled</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 140-multicall-dict.xml
+loads 'system.multicall' ({'methodName': 'x'},)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:string indices must be integers, not 'str'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 141-multicall-not-list.xml
+loads 'system.multicall' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:'int' object is not iterable</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 142-multicall-empty.xml
+loads 'system.multicall' ([],)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 143-unknown-method.xml
+loads 'math.pow' (2, 8)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "math.pow" is not supported</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 144-method-spaces.xml
+loads ' math.add ' (1, 2)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method " math.add " is not supported</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 145-method-escaped.xml
+loads 'math&add' (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "math&amp;add" is not supported</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 146-void.xml
+loads 'sys.void' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:cannot marshal None unless allow_none is enabled</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 147-no-method-name.xml
+loads None (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "None" is not supported</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 148-no-params.xml
+loads 'kv.keys' ()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>config</string></value>
+| <value><string>logo</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
+== 149-response-params.xml
+loads None (1,)
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'Exception'&gt;:method "None" is not supported</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 150-response-fault.xml
+loads ! Fault 7 'upstream said no'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>7</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>upstream said no</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 151-response-fault-extra.xml
+loads ! Fault 'E42' 'odd'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><string>E42</string></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>odd</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 152-response-fault-short.xml
+loads ! TypeError: Fault.__init__() missing 1 required positional argument: 'faultString'
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:Fault.__init__() missing 1 required positional argument: 'faultString'</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 153-response-fault-int.xml
+loads ! TypeError: xmlrpc.client.Fault() argument after ** must be a mapping, not int
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'TypeError'&gt;:xmlrpc.client.Fault() argument after ** must be a mapping, not int</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 154-response-fault-empty.xml
+loads ! IndexError: list index out of range
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'IndexError'&gt;:list index out of range</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 155-bare-value.xml
+loads ! ResponseError: ResponseError()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xmlrpc.client.ResponseError'&gt;:ResponseError()</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 156-other-root.xml
+loads ! ResponseError: ResponseError()
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xmlrpc.client.ResponseError'&gt;:ResponseError()</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 157-xml-mismatched.xml
+loads ! ExpatError: mismatched tag: line 1, column 48
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xml.parsers.expat.ExpatError'&gt;:mismatched tag: line 1, column 48</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 158-xml-unclosed.xml
+loads ! ExpatError: no element found: line 3, column 0
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xml.parsers.expat.ExpatError'&gt;:no element found: line 3, column 0</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 159-xml-junk.xml
+loads ! ExpatError: junk after document element: line 3, column 0
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xml.parsers.expat.ExpatError'&gt;:junk after document element: line 3, column 0</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 160-xml-empty.xml
+loads ! ExpatError: no element found: line 1, column 0
+| <?xml version='1.0'?>
+| <methodResponse>
+| <fault>
+| <value><struct>
+| <member>
+| <name>faultCode</name>
+| <value><int>1</int></value>
+| </member>
+| <member>
+| <name>faultString</name>
+| <value><string>&lt;class 'xml.parsers.expat.ExpatError'&gt;:no element found: line 1, column 0</string></value>
+| </member>
+| </struct></value>
+| </fault>
+| </methodResponse>
+| 
+== 161-crlf.xml
+loads 'text.split' ('a b', ' ')
+| <?xml version='1.0'?>
+| <methodResponse>
+| <params>
+| <param>
+| <value><array><data>
+| <value><string>a</string></value>
+| <value><string>b</string></value>
+| </data></array></value>
+| </param>
+| </params>
+| </methodResponse>
+| 
