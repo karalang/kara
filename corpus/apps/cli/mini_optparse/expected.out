@@ -1,0 +1,712 @@
+== basics
+> env COLUMNS
+> parser prog=backup-tool
+> option -v,--verbose action=store_true help=print each file
+  -v/--verbose: action=store_true type=None dest=verbose nargs=None
+> option -q,--quiet action=store_false dest=verbose
+  -q/--quiet: action=store_false type=None dest=verbose nargs=None
+> option -f,--file dest=filename metavar=FILE
+  -f/--file: action=store type=string dest=filename nargs=1
+> option -n,--count type=int default=i:1
+  -n/--count: action=store type=int dest=count nargs=1
+> parse []
+  | values: {'verbose': None, 'filename': None, 'count': 1}
+  | args: []
+> parse ['-v', '-f', 'out.txt', 'a', 'b']
+  | values: {'verbose': True, 'filename': 'out.txt', 'count': 1}
+  | args: ['a', 'b']
+> parse ['-vf', 'x.tar', '-q']
+  | values: {'verbose': False, 'filename': 'x.tar', 'count': 1}
+  | args: []
+> parse ['-fv']
+  | values: {'verbose': None, 'filename': 'v', 'count': 1}
+  | args: []
+> parse ['--file=y.tar', '--verb', '--qu']
+  | values: {'verbose': False, 'filename': 'y.tar', 'count': 1}
+  | args: []
+> parse ['--file=', '--count=3']
+  | values: {'verbose': None, 'filename': '', 'count': 3}
+  | args: []
+> parse ['-n', '0x1f']
+  | values: {'verbose': None, 'filename': None, 'count': 31}
+  | args: []
+> parse ['-n', '017']
+  | values: {'verbose': None, 'filename': None, 'count': 15}
+  | args: []
+> parse ['-n0o17']
+  | values: {'verbose': None, 'filename': None, 'count': 15}
+  | args: []
+> parse ['-n', '0b']
+  | values: {'verbose': None, 'filename': None, 'count': 0}
+  | args: []
+> parse ['-n', '0b101']
+  | values: {'verbose': None, 'filename': None, 'count': 5}
+  | args: []
+> parse ['-n', '09']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: option -n: invalid integer value: '09'
+  [exit 2]
+> parse ['-n', ' 1_000 ']
+  | values: {'verbose': None, 'filename': None, 'count': 1000}
+  | args: []
+> parse ['-n', '-12']
+  | values: {'verbose': None, 'filename': None, 'count': -12}
+  | args: []
+> parse ['-n', '+0x10']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: option -n: invalid integer value: '+0x10'
+  [exit 2]
+> parse ['-n', '1__0']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: option -n: invalid integer value: '1__0'
+  [exit 2]
+> parse ['-x']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: no such option: -x
+  [exit 2]
+> parse ['-vx']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: no such option: -x
+  [exit 2]
+> parse ['--fi']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: --file option requires 1 argument
+  [exit 2]
+> parse ['--c', '2']
+  | values: {'verbose': None, 'filename': None, 'count': 2}
+  | args: []
+> parse ['--zip']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: no such option: --zip
+  [exit 2]
+> parse ['--verbose=yes']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: --verbose option does not take a value
+  [exit 2]
+> parse ['-f']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: -f option requires 1 argument
+  [exit 2]
+> parse ['--file']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: --file option requires 1 argument
+  [exit 2]
+> parse ['a', '--', '-v']
+  | values: {'verbose': None, 'filename': None, 'count': 1}
+  | args: ['a', '-v']
+> parse ['-', '-v', '']
+  | values: {'verbose': True, 'filename': None, 'count': 1}
+  | args: ['-', '']
+> parse ['--=a.tar']
+  err| Usage: backup-tool [options]
+  err|
+  err| backup-tool: error: ambiguous option: -- (--count, --file, --help, --quiet, --verbose?)
+  [exit 2]
+> parse ['--', '--']
+  | values: {'verbose': None, 'filename': None, 'count': 1}
+  | args: ['--']
+== actions
+> parser prog=build
+> option -I,--include action=append dest=paths
+  -I/--include: action=append type=string dest=paths nargs=1
+> option --debug action=append_const const=s:debug dest=tags
+  --debug: action=append_const type=None dest=tags nargs=None
+> option --trace action=append_const const=s:trace dest=tags
+  --trace: action=append_const type=None dest=tags nargs=None
+> option -v action=count dest=verbosity
+  -v: action=count type=None dest=verbosity nargs=None
+> option --fast action=store_const const=i:3 dest=level
+  --fast: action=store_const type=None dest=level nargs=None
+> option --slow action=store_const const=i:1 dest=level
+  --slow: action=store_const type=None dest=level nargs=None
+> option --plain action=store_const dest=level
+  --plain: action=store_const type=None dest=level nargs=None
+> option --point type=float nargs=2
+  --point: action=store type=float dest=point nargs=2
+> option -D,--define action=append nargs=2 metavar=KEY VALUE
+  -D/--define: action=append type=string dest=define nargs=2
+> option --mode choices=l:fast,safe
+  --mode: action=store type=choice dest=mode nargs=1
+> option --size type=long
+  --size: action=store type=long dest=size nargs=1
+> option -j type=int dest=jobs
+  -j: action=store type=int dest=jobs nargs=1
+> parse ['-I', 'a', '-Ib', '--include=c', '-vvv', '--debug', '--trace', '--debug']
+  | values: {'paths': ['a', 'b', 'c'], 'tags': ['debug', 'trace', 'debug'], 'verbosity': 3, 'level': None, 'point': None, 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['-v', '--fast', '-v', '--slow']
+  | values: {'paths': None, 'tags': None, 'verbosity': 2, 'level': 1, 'point': None, 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--fast', '--plain']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': None, 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', '1.5', '2e3']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (1.5, 2000.0), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', 'inf', '-1_0.5']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (inf, -10.5), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', ' .5', '7.']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (0.5, 7.0), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', 'nan', '-Infinity']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (nan, -inf), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', '1e400', '1e-400']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (inf, 0.0), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', '0.1', '1_000.000_1']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (0.1, 1000.0001), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['--point', '1']
+  err| Usage: build [options]
+  err|
+  err| build: error: --point option requires 2 arguments
+  [exit 2]
+> parse ['--point', '1', 'x']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --point: invalid floating-point value: 'x'
+  [exit 2]
+> parse ['--point', '1_', '2']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --point: invalid floating-point value: '1_'
+  [exit 2]
+> parse ['--point', '1e', '2']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --point: invalid floating-point value: '1e'
+  [exit 2]
+> parse ['--point', 'infinit', '2']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --point: invalid floating-point value: 'infinit'
+  [exit 2]
+> parse ['--point=3', '4']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': (3.0, 4.0), 'define': None, 'mode': None, 'size': None, 'jobs': None}
+  | args: []
+> parse ['-D', 'cc', 'clang', '-Dld', 'lld', '-D', 'x']
+  err| Usage: build [options]
+  err|
+  err| build: error: -D option requires 2 arguments
+  [exit 2]
+> parse ['--mode', 'slow']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --mode: invalid choice: 'slow' (choose from 'fast', 'safe')
+  [exit 2]
+> parse ['--mo', 'safe']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': None, 'define': None, 'mode': 'safe', 'size': None, 'jobs': None}
+  | args: []
+> parse ['--mode=Safe']
+  err| Usage: build [options]
+  err|
+  err| build: error: option --mode: invalid choice: 'Safe' (choose from 'fast', 'safe')
+  [exit 2]
+> parse ['--size', '-7', '-j', '08']
+  err| Usage: build [options]
+  err|
+  err| build: error: option -j: invalid integer value: '08'
+  [exit 2]
+> parse ['-j', '0x']
+  err| Usage: build [options]
+  err|
+  err| build: error: option -j: invalid integer value: '0x'
+  [exit 2]
+> parse ['-j', '0_7']
+  | values: {'paths': None, 'tags': None, 'verbosity': None, 'level': None, 'point': None, 'define': None, 'mode': None, 'size': None, 'jobs': 7}
+  | args: []
+> help
+  | Usage: build [options]
+  |
+  | Options:
+  |   -h, --help            show this help message and exit
+  |   -I PATHS, --include=PATHS
+  |   --debug               
+  |   --trace               
+  |   -v                    
+  |   --fast                
+  |   --slow                
+  |   --plain               
+  |   --point=POINT         
+  |   -D KEY VALUE, --define=KEY VALUE
+  |   --mode=MODE           
+  |   --size=SIZE           
+  |   -j JOBS               
+== option errors
+> parser prog=lint
+> option -
+  ! OptionError: invalid option string '-': must be at least two characters long
+> option --
+  ! OptionError: invalid short option string '--': must be of the form -x, (x any non-dash char)
+> option -ab
+  ! OptionError: invalid long option string '-ab': must start with --, followed by non-dash
+> option -a,---b
+  ! OptionError: option -a: invalid long option string '---b': must start with --, followed by non-dash
+> option -a,--b,c
+  ! OptionError: option -a/--b: invalid option string 'c': must be at least two characters long
+> option -a,--b action=storee
+  ! OptionError: option -a/--b: invalid action: 'storee'
+> option -c type=bogus
+  ! OptionError: option -c: invalid option type: 'bogus'
+> option -c type=str
+  -c: action=store type=string dest=c nargs=1
+> option -d action=store_true type=int
+  ! OptionError: option -d: must not supply a type for action 'store_true'
+> option -e type=choice
+  ! OptionError: option -e: must supply a list of choices for type 'choice'
+> option -e type=choice choices=s:abc
+  ! OptionError: option -e: choices must be a list of strings ('str' supplied)
+> option -e type=int choices=l:a
+  ! OptionError: option -e: must not supply choices for type 'int'
+> option -e choices=l:a,b action=count
+  ! OptionError: option -e: must not supply choices for type None
+> option -g action=store_true const=i:1
+  ! OptionError: option -g: 'const' must not be supplied for action 'store_true'
+> option -g action=count nargs=2
+  ! OptionError: option -g: 'nargs' must not be supplied for action 'count'
+> option -g action=help type=int
+  ! OptionError: option -g: must not supply a type for action 'help'
+> option -k action=callback callback=nosuch
+  ! OptionError: option -k: callback not callable: 'nosuch'
+> option -k callback=nosuch
+  ! OptionError: option -k: callback supplied ('nosuch') for non-callback option
+> option -m colour=red size=2 action=store_true
+  ! OptionError: option -m: invalid keyword arguments: colour, size
+> option -m action=store_const
+  -m: action=store_const type=None dest=m nargs=None
+> option -p,--pid-file
+  -p/--pid-file: action=store type=string dest=pid_file nargs=1
+> option -P,--pid-file
+  ! OptionConflictError: option -P/--pid-file: conflicting option string(s): --pid-file
+> option -h,--host
+  ! OptionConflictError: option -h/--host: conflicting option string(s): -h
+> option --x-y-z action=callback callback=csv type=string
+  --x-y-z: action=callback type=string dest=x_y_z nargs=1
+> option --w action=callback callback=csv
+  --w: action=callback type=None dest=None nargs=1
+> option -r action=version
+  -r: action=version type=None dest=None nargs=None
+> parse ['-r']
+  [exit 0]
+> defaults
+  {'c': None, 'm': None, 'pid_file': None, 'x_y_z': None}
+== conflict resolve
+> parser prog=deploy conflict=resolve version=%prog 1.0
+> option -f,--file help=file to deploy
+  -f/--file: action=store type=string dest=file nargs=1
+> option -f,--force action=store_true help=skip the checks
+  -f/--force: action=store_true type=None dest=force nargs=None
+> option --file action=store_true dest=file2 help=never shown
+  --file: action=store_true type=None dest=file2 nargs=None
+> option -h,--host default=s:localhost help=target host [default: %default]
+  -h/--host: action=store type=string dest=host nargs=1
+> option --version action=store_true help=print the release
+  --version: action=store_true type=None dest=version nargs=None
+> help
+  | Usage: deploy [options]
+  |
+  | Options:
+  |   --help                show this help message and exit
+  |   -f, --force           skip the checks
+  |   --file                never shown
+  |   -h HOST, --host=HOST  target host [default: localhost]
+  |   --version             print the release
+> defaults
+  {'file': None, 'force': None, 'file2': None, 'host': 'localhost', 'version': None}
+> parse ['-f', '--file', '-h', 'web1']
+  | values: {'file': None, 'force': True, 'file2': True, 'host': 'web1', 'version': None}
+  | args: []
+> parse ['--help']
+  | Usage: deploy [options]
+  |
+  | Options:
+  |   --help                show this help message and exit
+  |   -f, --force           skip the checks
+  |   --file                never shown
+  |   -h HOST, --host=HOST  target host [default: localhost]
+  |   --version             print the release
+  [exit 0]
+> has --force
+  True
+> remove --force
+  removed --force
+> has --force
+  False
+> has -f
+  False
+> remove --nope
+  ! ValueError: no such option '--nope'
+> parse ['-f']
+  err| Usage: deploy [options]
+  err|
+  err| deploy: error: no such option: -f
+  [exit 2]
+> usage
+  | Usage: deploy [options]
+  |
+> version
+  | deploy 1.0
+== callbacks
+> parser prog=etl
+> option --tags action=callback type=string callback=csv help=comma separated
+  --tags: action=callback type=string dest=tags nargs=1
+> option -V,--values action=callback callback=vararg dest=vals
+  -V/--values: action=callback type=None dest=vals nargs=1
+> option -a action=callback callback=check_order
+  -a: action=callback type=None dest=None nargs=1
+> option -b action=store_true
+  -b: action=store_true type=None dest=b nargs=None
+> option --note action=callback callback=record type=string
+  --note: action=callback type=string dest=note nargs=1
+> option --pair action=callback callback=record type=int nargs=2
+  --pair: action=callback type=int dest=pair nargs=2
+> option --flag action=callback callback=record
+  --flag: action=callback type=None dest=None nargs=1
+> parse ['--tags', 'a,b,,c', '-V', '1', '-2', '3.5', 'x', '-b', 'y']
+  | values: {'tags': ['a', 'b', '', 'c'], 'vals': ['1', '-2', '3.5', 'x'], 'b': True, 'note': None, 'pair': None}
+  | args: ['y']
+> parse ['-V', '--tags', 'q']
+  | values: {'tags': ['q'], 'vals': [], 'b': None, 'note': None, 'pair': None}
+  | args: []
+> parse ['-V', '1e3', '-inf', '-nan', '--', '-x']
+  | values: {'tags': None, 'vals': ['1e3', '-inf', '-nan'], 'b': None, 'note': None, 'pair': None}
+  | args: ['-x']
+> parse ['-V', '-1_0', '-x']
+  err| Usage: etl [options]
+  err|
+  err| etl: error: no such option: -x
+  [exit 2]
+> parse ['-a', '-b']
+  | values: {'tags': None, 'vals': None, 'b': True, 'note': None, 'pair': None, 'a': 1}
+  | args: []
+> parse ['-b', '-a']
+  err| Usage: etl [options]
+  err|
+  err| etl: error: can't use -a after -b
+  [exit 2]
+> parse ['--note', 'hi', 'pos', '--note=there', '--flag', '--', 'z']
+  | callback --note value='hi' rargs=['pos', '--note=there', '--flag', '--', 'z'] largs=[]
+  | callback --note value='there' rargs=['--flag', '--', 'z'] largs=['pos']
+  | callback --flag value=None rargs=['--', 'z'] largs=['pos']
+  | values: {'tags': None, 'vals': None, 'b': None, 'note': None, 'pair': None, 'seen': ['--note', '--note', '--flag']}
+  | args: ['pos', 'z']
+> parse ['--pair', '1', '2', '--pair', '3', 'x']
+  | callback --pair value=(1, 2) rargs=['--pair', '3', 'x'] largs=[]
+  err| Usage: etl [options]
+  err|
+  err| etl: error: option --pair: invalid integer value: 'x'
+  [exit 2]
+> parse ['--flag=1']
+  err| Usage: etl [options]
+  err|
+  err| etl: error: --flag option does not take a value
+  [exit 2]
+== help screens
+> env COLUMNS
+> parser prog=backup-tool usage=usage: %prog [options] SRC DEST version=%prog 2.4.1 description=%prog copies a source tree to a destination, keeping a rotating set of dated snapshots and pruning the oldest ones once the set is full. epilog=Exit status is 0 on success and 2 on a usage error. Report bugs to the operations team.
+> option -v,--verbose action=count help=print more detail; repeat for even more
+  -v/--verbose: action=count type=None dest=verbose nargs=None
+> option -n,--dry-run action=store_true help=show what would be copied, but copy nothing
+  -n/--dry-run: action=store_true type=None dest=dry_run nargs=None
+> option --keep type=int default=i:7 metavar=N help=keep N snapshots [default: %default]
+  --keep: action=store type=int dest=keep nargs=1
+> option --compress choices=l:none,gzip,zstd default=s:zstd help=compression (%default by default; none, gzip or zstd)
+  --compress: action=store type=choice dest=compress nargs=1
+> option --secret-debug action=store_true help=@SUPPRESS
+  --secret-debug: action=store_true type=None dest=secret_debug nargs=None
+> group Filtering These options decide which files are copied. They are applied in the order given.
+> option -x,--exclude action=append metavar=GLOB help=skip files that match GLOB
+  -x/--exclude: action=append type=string dest=exclude nargs=1
+> option --max-size-in-bytes-per-file type=int metavar=BYTES help=skip larger files
+  --max-size-in-bytes-per-file: action=store type=int dest=max_size_in_bytes_per_file nargs=1
+> option --since help=only files changed since %default default=n:
+  --since: action=store type=string dest=since nargs=1
+> endgroup
+> group Expert
+> option --io-threads type=int default=s:4
+  --io-threads: action=store type=int dest=io_threads nargs=1
+> endgroup
+> help
+  | Usage: backup-tool [options] SRC DEST
+  |
+  | backup-tool copies a source tree to a destination, keeping a rotating set of
+  | dated snapshots and pruning the oldest ones once the set is full.
+  |
+  | Options:
+  |   --version             show program's version number and exit
+  |   -h, --help            show this help message and exit
+  |   -v, --verbose         print more detail; repeat for even more
+  |   -n, --dry-run         show what would be copied, but copy nothing
+  |   --keep=N              keep N snapshots [default: 7]
+  |   --compress=COMPRESS   compression (zstd by default; none, gzip or zstd)
+  |
+  |   Filtering:
+  |     These options decide which files are copied. They are applied in the
+  |     order given.
+  |
+  |     -x GLOB, --exclude=GLOB
+  |                         skip files that match GLOB
+  |     --max-size-in-bytes-per-file=BYTES
+  |                         skip larger files
+  |     --since=SINCE       only files changed since none
+  |
+  |   Expert:
+  |     --io-threads=IO_THREADS
+  |
+  | Exit status is 0 on success and 2 on a usage error. Report bugs to the
+  | operations team.
+> parse ['--version']
+  | backup-tool 2.4.1
+  [exit 0]
+> parse ['--ver']
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: ambiguous option: --ver (--verbose, --version?)
+  [exit 2]
+> parse ['--compress', 'lz4']
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: option --compress: invalid choice: 'lz4' (choose from 'none', 'gzip', 'zstd')
+  [exit 2]
+> group_of --since
+  Filtering
+> group_of -v
+  None
+> env COLUMNS=60
+> parser prog=backup-tool usage=Usage: %prog SRC DEST formatter=titled description=Copies SRC to DEST.
+> option -v,--verbose action=count help=print more detail; repeat for even more
+  -v/--verbose: action=count type=None dest=verbose nargs=None
+> option -o,--output metavar=PATH help=write the log to PATH instead of standard output
+  -o/--output: action=store type=string dest=output nargs=1
+> group Filtering
+> option -x,--exclude action=append metavar=GLOB help=skip files that match GLOB
+  -x/--exclude: action=append type=string dest=exclude nargs=1
+> endgroup
+> help
+  | Usage
+  | =====
+  |   backup-tool SRC DEST
+  |
+  | Copies SRC to DEST.
+  |
+  | Options
+  | =======
+  | --help, -h              show this help message and exit
+  | --verbose, -v           print more detail; repeat for even
+  |                         more
+  | --output=PATH, -o PATH  write the log to PATH instead of
+  |                         standard output
+  |
+  | Filtering
+  | ---------
+  | --exclude=GLOB, -x GLOB
+  |                         skip files that match GLOB
+> parse ['-o']
+  err| Usage
+  err| =====
+  err|   backup-tool SRC DEST
+  err|
+  err| backup-tool: error: -o option requires 1 argument
+  [exit 2]
+> env COLUMNS=abc
+> parser usage=@SUPPRESS prog=quiet width=40 max_help_position=10 indent=4 short_first=0
+> option -o,--output metavar=PATH help=write the log to PATH instead of standard output
+  -o/--output: action=store type=string dest=output nargs=1
+> option -l help=list
+  -l: action=store type=string dest=l nargs=1
+> help
+  | Options:
+  |     --help, -h
+  |           show this help message and
+  |           exit
+  |     --output=PATH, -o PATH
+  |           write the log to PATH instead
+  |           of standard output
+  |     -l L  list
+> parse ['--bad']
+  err| quiet: error: no such option: --bad
+  [exit 2]
+> usage
+> parser prog=bare add_help=0 description=   Leading  spaces   and trailing.   
+> help
+  | Usage: bare [options]
+  |
+  |    Leading  spaces   and trailing.
+  |
+> parse ['-h']
+  err| Usage: bare [options]
+  err|
+  err| bare: error: no such option: -h
+  [exit 2]
+== defaults
+> parser prog=sync usage=%prog [options] [REMOTE]
+> option -l,--level type=int
+  -l/--level: action=store type=int dest=level nargs=1
+> option -r,--rate type=float default=s:1.5
+  -r/--rate: action=store type=float dest=rate nargs=1
+> option -v action=store_true dest=verbose
+  -v: action=store_true type=None dest=verbose nargs=None
+> set_defaults verbose=b:1 level=s:3 extra=s:42
+> option -q action=store_false dest=verbose
+  -q: action=store_false type=None dest=verbose nargs=None
+> option --label default=i:5
+  --label: action=store type=string dest=label nargs=1
+> defaults
+  {'level': '3', 'rate': '1.5', 'verbose': True, 'extra': '42', 'label': 5}
+> parse []
+  | values: {'level': 3, 'rate': 1.5, 'verbose': True, 'extra': '42', 'label': 5}
+  | args: []
+> parse ['-l', '9', '-q']
+  | values: {'level': 9, 'rate': 1.5, 'verbose': False, 'extra': '42', 'label': 5}
+  | args: []
+> set_defaults level=s:ten
+> parse ['-l', '2']
+  ! OptionValueError: option --level: invalid integer value: 'ten'
+> set_defaults level=n: rate=f:2.0
+> parse []
+  | values: {'level': None, 'rate': 2.0, 'verbose': True, 'extra': '42', 'label': 5}
+  | args: []
+> interspersed 0
+> parse ['-v', 'commit', '-m', 'msg']
+  | values: {'level': None, 'rate': 2.0, 'verbose': True, 'extra': '42', 'label': 5}
+  | args: ['commit', '-m', 'msg']
+> parse ['--', '-v']
+  | values: {'level': None, 'rate': 2.0, 'verbose': True, 'extra': '42', 'label': 5}
+  | args: ['-v']
+> interspersed 1
+> parse ['-v', 'commit', '-q', 'msg']
+  | values: {'level': None, 'rate': 2.0, 'verbose': False, 'extra': '42', 'label': 5}
+  | args: ['commit', 'msg']
+== program: backup-tool with backup.conf
+> config {'keep': '14', 'compress': 'gzip', 'exclude_from': '/etc/backup/excludes', 'dry_run': 'no', 'bandwidth': '2.5'}
+$ backup-tool 
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: expected SRC and DEST, got 0 argument(s)
+  [exit 2]
+$ backup-tool -vv /srv/www /mnt/backup/www
+  | dry run /srv/www -> /mnt/backup/www
+  |   keep 14, compress gzip, verbosity 2
+  |   bandwidth 2.5 MB/s, 256 KB a tick
+  |   excludes ['@/etc/backup/excludes']
+  |   options {'verbose': 2, 'dry_run': 'no', 'keep': 14, 'compress': 'gzip', 'exclude': None, 'exclude_from': '/etc/backup/excludes', 'bandwidth': 2.5}
+$ backup-tool --keep 3 --compress=none -x *.log -x*.tmp /home /mnt/backup/home
+  | dry run /home -> /mnt/backup/home
+  |   keep 3, compress none, verbosity 0
+  |   bandwidth 2.5 MB/s, 256 KB a tick
+  |   excludes ['*.log', '*.tmp', '@/etc/backup/excludes']
+$ backup-tool -nq --bandwidth 0x10 /srv/db /mnt/backup/db
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: option --bandwidth: invalid floating-point value: '0x10'
+  [exit 2]
+$ backup-tool --keep two /srv /mnt
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: option --keep: invalid integer value: 'two'
+  [exit 2]
+$ backup-tool /srv/www
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: expected SRC and DEST, got 1 argument(s)
+  [exit 2]
+$ backup-tool --compress xz /srv /mnt
+  err| Usage: backup-tool [options] SRC DEST
+  err|
+  err| backup-tool: error: option --compress: invalid choice: 'xz' (choose from 'none', 'gzip', 'zstd')
+  [exit 2]
+$ backup-tool --ke 5 --bw 10 /a /b
+  | dry run /a -> /b
+  |   keep 5, compress gzip, verbosity 0
+  |   bandwidth 10.0 MB/s, 1024 KB a tick
+  |   excludes ['@/etc/backup/excludes']
+$ backup-tool --help
+  | Usage: backup-tool [options] SRC DEST
+  |
+  | Options:
+  |   --version             show program's version number and exit
+  |   -h, --help            show this help message and exit
+  |   -v, --verbose         print more detail; repeat for even more
+  |   -q, --quiet           print only errors
+  |   -n, --dry-run         show what would be copied, but copy nothing
+  |   --keep=N              keep N snapshots [default: 14]
+  |   --compress=COMPRESS   none, gzip or zstd [default: gzip]
+  |   -x GLOB, --exclude=GLOB
+  |                         skip files that match GLOB
+  |   --exclude-from=FILE   read more globs from FILE
+  |   --bandwidth=MBPS, --bw=MBPS
+  |                         limit the copy to MBPS megabytes a second
+  [exit 0]
+== program: vcs, a git-like dispatcher
+$ vcs status
+  | status of .
+$ vcs -C /repo status -s
+  | status of /repo (short)
+$ vcs --verbose commit -m fix the build -a
+  | [.] commit {'message': 'fix the build', 'all': True, 'amend': None} []
+  | commit 'fix the build' from all changed files
+$ vcs commit -am two words -- -notes.txt
+  | commit 'two words' from all changed files
+$ vcs commit
+  err| Usage: vcs commit -m MSG [-a] [FILE...]
+  err|
+  err| vcs commit: error: a commit message is required (use -m)
+  [exit 2]
+$ vcs log -n 3 --oneline main..topic
+  | log main..topic, 3 commits, one line each
+$ vcs log -n three
+  err| Usage: vcs log [-n N] [--oneline] [RANGE]
+  err|
+  err| vcs log: error: option -n: invalid integer value: 'three'
+  [exit 2]
+$ vcs -v push --force origin main -v
+  err| Usage: vcs push [-f] [-u] REMOTE [BRANCH]
+  err|
+  err| vcs push: error: no such option: -v
+  [exit 2]
+$ vcs push --set-upstream origin
+  | push the current branch to origin, tracking it
+$ vcs checkout -b feature/x --track
+  | checkout new branch feature/x tracking upstream
+$ vcs frobnicate
+  err| Usage: vcs [-C DIR] [-v] COMMAND [ARGS...]
+  err|
+  err| vcs: error: unknown command 'frobnicate' (choose from status, commit, log, push, checkout)
+  [exit 2]
+$ vcs --bogus status
+  err| Usage: vcs [-C DIR] [-v] COMMAND [ARGS...]
+  err|
+  err| vcs: error: no such option: --bogus
+  [exit 2]
+$ vcs 
+  err| Usage: vcs [-C DIR] [-v] COMMAND [ARGS...]
+  err|
+  err| vcs: error: no command given
+  [exit 2]
+$ vcs commit --help
+  | Usage: vcs commit -m MSG [-a] [FILE...]
+  |
+  | Options:
+  |   -h, --help            show this help message and exit
+  |   -m MSG, --message=MSG
+  |                         the commit message
+  |   -a, --all             commit every changed file
+  |   --amend               replace the last commit
+  [exit 0]
+$ vcs -C
+  err| Usage: vcs [-C DIR] [-v] COMMAND [ARGS...]
+  err|
+  err| vcs: error: -C option requires 1 argument
+  [exit 2]
