@@ -43,7 +43,17 @@ pub struct MirMap {
     /// A Fenwick tree over `cap` slots counting the live ones, kept only
     /// while there are holes: index to slot and back in `O(log n)`.
     live: Vec<i64>,
+    /// The last index and slot paired while there were holes, as
+    /// `index << 32 | slot` ([`NO_PAIR`] for none): a lookup's index is
+    /// most often handed straight back to `at`, `remove` or the next
+    /// lookup of the same key, which then skip the tree. A removal or a
+    /// compaction moves indices, so it forgets the pair; appending a slot
+    /// moves none. One word, so a reader racing another reader of the same
+    /// table sees a whole pair or none.
+    pair: std::sync::atomic::AtomicU64,
 }
+
+const NO_PAIR: u64 = u64::MAX;
 
 /// An `index` cell that never held a slot: a probe stops here.
 const EMPTY: u64 = u32::MAX as u64;
@@ -168,6 +178,10 @@ impl MirMap {
         if self.holes == 0 {
             return i;
         }
+        let p = self.pair.load(std::sync::atomic::Ordering::Relaxed);
+        if p != NO_PAIR && (p >> 32) as usize == i {
+            return (p & 0xFFFF_FFFF) as usize;
+        }
         // The least slot with `i + 1` live slots up to it.
         let n = self.live.len();
         let (mut pos, mut rem) = (0usize, i as i64 + 1);
@@ -180,7 +194,20 @@ impl MirMap {
             }
             step /= 2;
         }
+        self.remember(i, pos);
         pos
+    }
+
+    fn remember(&self, i: usize, s: usize) {
+        self.pair.store(
+            ((i as u64) << 32) | s as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    fn forget(&self) {
+        self.pair
+            .store(NO_PAIR, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The index of the live entry in slot `s`.
@@ -188,12 +215,17 @@ impl MirMap {
         if self.holes == 0 {
             return s;
         }
+        let p = self.pair.load(std::sync::atomic::Ordering::Relaxed);
+        if p != NO_PAIR && (p & 0xFFFF_FFFF) as usize == s {
+            return (p >> 32) as usize;
+        }
         // The live slots before `s`.
         let (mut k, mut n) = (s, 0i64);
         while k > 0 {
             n += self.live[k - 1];
             k &= k - 1;
         }
+        self.remember(n as usize, s);
         n as usize
     }
 
@@ -224,6 +256,7 @@ impl MirMap {
 
     /// Closes every hole, keeping the order of the live entries.
     fn compact(&mut self) {
+        self.forget();
         let es = self.entry_size;
         let mut w = 0;
         for r in 0..self.slots {
@@ -402,6 +435,7 @@ unsafe fn insert(
                 dead: Vec::new(),
                 holes: 0,
                 live: Vec::new(),
+                pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
             }));
         }
         &mut **hp
@@ -550,6 +584,7 @@ pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut 
     let m = unsafe { &mut *h };
     let es = m.entry_size;
     let s = m.slot_of(i as usize);
+    m.forget();
     // SAFETY: as above.
     unsafe { std::ptr::copy_nonoverlapping(m.slot_ptr(s), out, es) };
     if m.hashes.is_empty() {
@@ -603,6 +638,7 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     m.dead.clear();
     m.holes = 0;
     m.live.clear();
+    m.forget();
 }
 
 /// Frees the table (its entries' drops are the caller's, first).
@@ -648,6 +684,15 @@ mod tests {
         let mut next = 0i64;
         let mut rng = 12345u64;
         let (mut holed, mut compacted) = (false, false);
+        // Start with a few hundred entries, so the walk removes from a
+        // large table as well as a small one.
+        for _ in 0..200 {
+            let k = next;
+            next += 1;
+            // SAFETY: a live (or null) table of `i64` entries.
+            unsafe { karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(hash), None) };
+            model.push(k);
+        }
         for step in 0..4000 {
             rng ^= rng << 13;
             rng ^= rng >> 7;
