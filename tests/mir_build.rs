@@ -6222,7 +6222,7 @@ fn main() {
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}{self.s}"); } }
 fn make(id: i64) -> R { R { id: id, s: f"s{id}" } }
 fn find(r: R) -> Option[String] { if r.id > 5 { Some(r.s.clone()) } else { None } }
-fn pick(v: ref Vec[String], i: i64) -> Option[ref String] { if i < v.len() { Some(v[i]) } else { None } }
+fn pick(v: ref Vec[String], i: i64) -> Option[String] { if i < v.len() { Some(v[i].clone()) } else { None } }
 fn main() {
     let names: Vec[String] = ["a".to_string(), "b".to_string()];
     for i in 0..4 {
@@ -6502,5 +6502,59 @@ fn main() {
         };
         let run = Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
+/// B-2026-10-19-57: an error `karac check` reports fails `karac build --mir`
+/// too (core semantics §0), here a generic call that moves its argument
+/// twice and a removed `own ||` capture prefix, which the MIR builder alone
+/// accepted.
+#[cfg(feature = "llvm")]
+#[test]
+fn karac_build_mir_refuses_what_check_refuses() {
+    for (tag, src) in [
+        (
+            "generic-moves",
+            r#"trait Show { fn show(own self) -> String; }
+struct N { s: String }
+impl Show for N { fn show(self) -> String { self.s.clone() } }
+fn twice[T: Show](x: own T) -> String {
+    let a = x.show();
+    let b = x.show();
+    a + b
+}
+fn main() {
+    println(twice(N { s: "a".to_string() }));
+}
+"#,
+        ),
+        (
+            "own-capture",
+            r#"fn main() {
+    let s = "a".to_string();
+    let f = own || s.len();
+    println(f"{f()}");
+}
+"#,
+        ),
+    ] {
+        let dir = Scratch::new();
+        let file = dir.path().join("main.kara");
+        std::fs::write(&file, src).unwrap();
+        let exe = dir.path().join("main");
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{tag}: {stderr}");
+        assert!(stderr.contains("1 error(s) found."), "{tag}: {stderr}");
+        assert!(!exe.exists(), "{tag}: no executable is written");
     }
 }

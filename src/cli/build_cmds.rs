@@ -4258,6 +4258,23 @@ pub(super) fn cmd_build_mir(
         );
         let src = std::fs::read_to_string(filename)
             .unwrap_or_else(|e| fail(format!("error: {filename}: {e}")));
+        // An error `karac check` reports fails the build too (core semantics
+        // §0; B-2026-10-19-57): the MIR builder does not repeat every rule.
+        {
+            let mut pipeline = Pipeline::new(filename, &src).strict_core().with_library();
+            pipeline.run_all_checks();
+            let total = pipeline.total_errors();
+            if total > 0 {
+                match output {
+                    OutputMode::Text => {
+                        print_text_diagnostics(&pipeline);
+                        eprintln!("\n{total} error(s) found.");
+                    }
+                    _ => emit_json_output(&pipeline),
+                }
+                process::exit(1);
+            }
+        }
         crate::mir::interp::set_source_name(filename);
         let opt = match std::env::var("KARAC_MIR_OPT") {
             Ok(v) => v
