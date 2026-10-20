@@ -1,0 +1,756 @@
+== address book entries
+-- load AddressSchema {} {}
+> {"street": "  1 Main St ", "city": "Springfield", "postcode": "12345"}
+ok {'city': 'Springfield', 'country': 'US', 'postcode': '12345', 'street': '1 Main St'}
+> {"street": "9 Elm", "city": "Austin", "postcode": "73301-1234", "country": "us"}
+ok {'city': 'Austin', 'country': 'US', 'postcode': '73301-1234', 'street': '9 Elm'}
+> {"street": "   ", "city": "Paris", "country": "fr", "postcode": "75001"}
+errors {'street': ['Shorter than minimum length 1.']}
+valid {'city': 'Paris', 'country': 'FR', 'postcode': '75001'}
+> {"city": "Bonn", "country": "Germany", "postcode": "ABCDE"}
+errors {'country': ['Length must be 2.', 'Must be one of: US, CA, GB, DE, FR.'], 'postcode': ['Not a US ZIP code: ABCDE.'], 'street': ['Missing data for required field.']}
+valid {'city': 'Bonn'}
+> {"street": 12, "city": null, "postcode": "1234", "zip": "1234"}
+errors {'city': ['Field may not be null.'], 'postcode': ['Not a US ZIP code: 1234.'], 'street': ['Not a valid string.'], 'zip': ['Unknown field.']}
+valid {'country': 'US'}
+> ["not", "a", "dict"]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> "just a string"
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {}
+errors {'city': ['Missing data for required field.'], 'street': ['Missing data for required field.']}
+valid {'country': 'US'}
+== addresses loaded partially
+-- load AddressSchema {} {"partial":true}
+> {"street": "  1 Main St ", "city": "Springfield", "postcode": "12345"}
+ok {'city': 'Springfield', 'postcode': '12345', 'street': '1 Main St'}
+> {"street": "9 Elm", "city": "Austin", "postcode": "73301-1234", "country": "us"}
+ok {'city': 'Austin', 'country': 'US', 'postcode': '73301-1234', 'street': '9 Elm'}
+> {"street": "   ", "city": "Paris", "country": "fr", "postcode": "75001"}
+errors {'street': ['Shorter than minimum length 1.']}
+valid {'city': 'Paris', 'country': 'FR', 'postcode': '75001'}
+> {"city": "Bonn", "country": "Germany", "postcode": "ABCDE"}
+errors {'country': ['Length must be 2.', 'Must be one of: US, CA, GB, DE, FR.'], 'postcode': ['Not a US ZIP code: ABCDE.']}
+valid {'city': 'Bonn'}
+> {"street": 12, "city": null, "postcode": "1234", "zip": "1234"}
+errors {'city': ['Field may not be null.'], 'postcode': ['Not a US ZIP code: 1234.'], 'street': ['Not a valid string.'], 'zip': ['Unknown field.']}
+valid {}
+> ["not", "a", "dict"]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> "just a string"
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {}
+ok {}
+== addresses, street and city optional
+-- load AddressSchema {"partial":["street"]} {"partial":["city"]}
+> {"street": "  1 Main St ", "city": "Springfield", "postcode": "12345"}
+ok {'city': 'Springfield', 'country': 'US', 'postcode': '12345', 'street': '1 Main St'}
+> {"street": "9 Elm", "city": "Austin", "postcode": "73301-1234", "country": "us"}
+ok {'city': 'Austin', 'country': 'US', 'postcode': '73301-1234', 'street': '9 Elm'}
+> {"street": "   ", "city": "Paris", "country": "fr", "postcode": "75001"}
+errors {'street': ['Shorter than minimum length 1.']}
+valid {'city': 'Paris', 'country': 'FR', 'postcode': '75001'}
+> {"city": "Bonn", "country": "Germany", "postcode": "ABCDE"}
+errors {'country': ['Length must be 2.', 'Must be one of: US, CA, GB, DE, FR.'], 'postcode': ['Not a US ZIP code: ABCDE.'], 'street': ['Missing data for required field.']}
+valid {'city': 'Bonn'}
+> {"street": 12, "city": null, "postcode": "1234", "zip": "1234"}
+errors {'city': ['Field may not be null.'], 'postcode': ['Not a US ZIP code: 1234.'], 'street': ['Not a valid string.'], 'zip': ['Unknown field.']}
+valid {'country': 'US'}
+> ["not", "a", "dict"]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> "just a string"
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {}
+errors {'street': ['Missing data for required field.']}
+valid {'country': 'US'}
+== addresses, validate only
+-- validate AddressSchema {} {}
+> {"street": "  1 Main St ", "city": "Springfield", "postcode": "12345"}
+validate {}
+> {"street": "9 Elm", "city": "Austin", "postcode": "73301-1234", "country": "us"}
+validate {}
+> {"street": "   ", "city": "Paris", "country": "fr", "postcode": "75001"}
+validate {'street': ['Shorter than minimum length 1.']}
+> {"city": "Bonn", "country": "Germany", "postcode": "ABCDE"}
+validate {'country': ['Length must be 2.', 'Must be one of: US, CA, GB, DE, FR.'], 'postcode': ['Not a US ZIP code: ABCDE.'], 'street': ['Missing data for required field.']}
+> {"street": 12, "city": null, "postcode": "1234", "zip": "1234"}
+validate {'city': ['Field may not be null.'], 'postcode': ['Not a US ZIP code: 1234.'], 'street': ['Not a valid string.'], 'zip': ['Unknown field.']}
+> ["not", "a", "dict"]
+validate {'_schema': ['Invalid input type.']}
+> "just a string"
+validate {'_schema': ['Invalid input type.']}
+> {}
+validate {'city': ['Missing data for required field.'], 'street': ['Missing data for required field.']}
+== user accounts
+-- load UserSchema {} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+ok {'address': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'age': 34, 'email': 'alice@example.com', 'password': 'correct horse', 'role': 'member', 'signup': datetime.datetime(2024, 3, 1, 12, 30, tzinfo=datetime.timezone.utc), 'tags': ['staff', 'beta'], 'username': 'alice_01', 'website': 'https://alice.example.com/blog'}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+ok {'age': None, 'email': 'bob@mail.example.org', 'role': 'guest', 'tags': [], 'username': 'bob'}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+valid {'tags': []}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+errors {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+valid {'email': 'root@localhost', 'role': 'admin', 'tags': []}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+errors {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+valid {'email': 'carol@example.co.uk', 'role': 'member', 'tags': ['a'], 'username': 'carol'}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+errors {'address': {'street': ['Missing data for required field.']}, 'another': ['Unknown field.'], 'extra': ['Unknown field.'], 'signedUpAt': ['Not a valid datetime.']}
+valid {'address': {'city': 'X', 'country': 'US'}, 'email': 'dave@[192.168.0.1]', 'role': 'member', 'tags': [], 'username': 'dave'}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+errors {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+valid {'age': 41, 'role': 'member', 'tags': [], 'username': 'eve', 'website': None}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+valid {'role': 'member', 'username': 'frank'}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'gina@münchen.de', 'role': 'member', 'tags': [], 'username': 'gina', 'website': 'http://localhost:8000/x'}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+valid {'role': 'member', 'tags': [], 'username': 'hank', 'website': 'https://192.168.1.1/admin'}
+> {"email": "ivy@example.com"}
+errors {'username': ['Missing data for required field.']}
+valid {'email': 'ivy@example.com', 'role': 'member', 'tags': []}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'jo@example.com', 'role': 'member', 'tags': [], 'username': 'jo_jo'}
+> [{"username": "kim", "email": "kim@example.com"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> null
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"username": "ünï", "email": "u@example.com"}
+errors {'username': ['Only lowercase letters, digits and underscores.']}
+valid {'email': 'u@example.com', 'role': 'member', 'tags': []}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+ok {'email': 'd@example.com', 'role': 'member', 'tags': [], 'username': 'dupe2'}
+== user accounts, unknown fields excluded
+-- load UserSchema {"unknown":"exclude"} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+ok {'address': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'age': 34, 'email': 'alice@example.com', 'password': 'correct horse', 'role': 'member', 'signup': datetime.datetime(2024, 3, 1, 12, 30, tzinfo=datetime.timezone.utc), 'tags': ['staff', 'beta'], 'username': 'alice_01', 'website': 'https://alice.example.com/blog'}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+ok {'age': None, 'email': 'bob@mail.example.org', 'role': 'guest', 'tags': [], 'username': 'bob'}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+valid {'tags': []}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+errors {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+valid {'email': 'root@localhost', 'role': 'admin', 'tags': []}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+errors {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+valid {'email': 'carol@example.co.uk', 'role': 'member', 'tags': ['a'], 'username': 'carol'}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+errors {'address': {'street': ['Missing data for required field.']}, 'signedUpAt': ['Not a valid datetime.']}
+valid {'address': {'city': 'X', 'country': 'US'}, 'email': 'dave@[192.168.0.1]', 'role': 'member', 'tags': [], 'username': 'dave'}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+errors {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+valid {'age': 41, 'role': 'member', 'tags': [], 'username': 'eve', 'website': None}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+valid {'role': 'member', 'username': 'frank'}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'gina@münchen.de', 'role': 'member', 'tags': [], 'username': 'gina', 'website': 'http://localhost:8000/x'}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+valid {'role': 'member', 'tags': [], 'username': 'hank', 'website': 'https://192.168.1.1/admin'}
+> {"email": "ivy@example.com"}
+errors {'username': ['Missing data for required field.']}
+valid {'email': 'ivy@example.com', 'role': 'member', 'tags': []}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'jo@example.com', 'role': 'member', 'tags': [], 'username': 'jo_jo'}
+> [{"username": "kim", "email": "kim@example.com"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> null
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"username": "ünï", "email": "u@example.com"}
+errors {'username': ['Only lowercase letters, digits and underscores.']}
+valid {'email': 'u@example.com', 'role': 'member', 'tags': []}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+ok {'email': 'd@example.com', 'role': 'member', 'tags': [], 'username': 'dupe2'}
+== user accounts, unknown fields kept
+-- load UserSchema {} {"unknown":"include"}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+ok {'address': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'age': 34, 'email': 'alice@example.com', 'password': 'correct horse', 'role': 'member', 'signup': datetime.datetime(2024, 3, 1, 12, 30, tzinfo=datetime.timezone.utc), 'tags': ['staff', 'beta'], 'username': 'alice_01', 'website': 'https://alice.example.com/blog'}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+ok {'age': None, 'email': 'bob@mail.example.org', 'role': 'guest', 'tags': [], 'username': 'bob'}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+valid {'tags': []}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+errors {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+valid {'email': 'root@localhost', 'role': 'admin', 'tags': []}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+errors {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+valid {'email': 'carol@example.co.uk', 'role': 'member', 'tags': ['a'], 'username': 'carol'}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+errors {'address': {'street': ['Missing data for required field.']}, 'signedUpAt': ['Not a valid datetime.']}
+valid {'address': {'city': 'X', 'country': 'US'}, 'another': True, 'email': 'dave@[192.168.0.1]', 'extra': 1, 'role': 'member', 'tags': [], 'username': 'dave'}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+errors {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+valid {'age': 41, 'role': 'member', 'tags': [], 'username': 'eve', 'website': None}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+valid {'role': 'member', 'username': 'frank'}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'gina@münchen.de', 'role': 'member', 'tags': [], 'username': 'gina', 'website': 'http://localhost:8000/x'}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+valid {'role': 'member', 'tags': [], 'username': 'hank', 'website': 'https://192.168.1.1/admin'}
+> {"email": "ivy@example.com"}
+errors {'username': ['Missing data for required field.']}
+valid {'email': 'ivy@example.com', 'role': 'member', 'tags': []}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'jo@example.com', 'role': 'member', 'tags': [], 'username': 'jo_jo'}
+> [{"username": "kim", "email": "kim@example.com"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> null
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"username": "ünï", "email": "u@example.com"}
+errors {'username': ['Only lowercase letters, digits and underscores.']}
+valid {'email': 'u@example.com', 'role': 'member', 'tags': []}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+ok {'email': 'd@example.com', 'role': 'member', 'tags': [], 'username': 'dupe2'}
+== user accounts as a list
+-- load UserSchema {"many":true} {}
+> [{"username": "kim", "email": "kim@example.com"}, {"data": {"username": "lee", "email": "lee@example.com"}}]
+ok [{'email': 'kim@example.com', 'role': 'member', 'tags': [], 'username': 'kim'}, {'email': 'lee@example.com', 'role': 'member', 'tags': [], 'username': 'lee'}]
+> [{"username": "kim", "email": "kim@example"}, "lee", {"username": "x"}]
+errors {0: {'email': ['Not a valid email address.']}, 1: {'_schema': ['Invalid input type.']}, 2: {'email': ['An email address is required.'], 'username': ['Length must be between 3 and 20.']}}
+valid [{'role': 'member', 'tags': [], 'username': 'kim'}, {}, {'role': 'member', 'tags': []}]
+> []
+ok []
+> {"username": "kim", "email": "kim@example.com"}
+errors {0: {'_schema': ['Invalid input type.']}, 1: {'_schema': ['Invalid input type.']}}
+valid [{}, {}]
+== user profiles, dumped
+-- dump UserSchema {} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+= {"username": "alice_01", "email": "alice@example.com", "age": 34, "role": "member", "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield", "country": "US"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog", "display": "alice_01 <alice@example.com>"}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+= {"username": "bob", "email": "bob@mail.example.org", "role": "guest", "tags": [], "display": "bob <bob@mail.example.org>"}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+skipped {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+skipped {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+skipped {'address': {'street': ['Missing data for required field.']}, 'signedUpAt': ['Not a valid datetime.']}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+skipped {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+skipped {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+skipped {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+> {"email": "ivy@example.com"}
+skipped {'username': ['Missing data for required field.']}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+> [{"username": "kim", "email": "kim@example.com"}]
+skipped {'_schema': ['Invalid input type.']}
+> null
+skipped {'_schema': ['Invalid input type.']}
+> {"username": "ünï", "email": "u@example.com"}
+skipped {'username': ['Only lowercase letters, digits and underscores.']}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+= {"username": "dupe2", "email": "d@example.com", "role": "member", "tags": [], "display": "dupe2 <d@example.com>"}
+== user profiles, only some fields
+-- dump UserSchema {"only":["username","address.city","address.country","tags"]} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+= {"username": "alice_01", "address": {"city": "Springfield", "country": "US"}, "tags": ["staff", "beta"]}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+= {"username": "bob", "tags": []}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+skipped {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+skipped {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+skipped {'address': {'street': ['Missing data for required field.']}, 'signedUpAt': ['Not a valid datetime.']}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+skipped {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+skipped {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+skipped {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+> {"email": "ivy@example.com"}
+skipped {'username': ['Missing data for required field.']}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+skipped {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+> [{"username": "kim", "email": "kim@example.com"}]
+skipped {'_schema': ['Invalid input type.']}
+> null
+skipped {'_schema': ['Invalid input type.']}
+> {"username": "ünï", "email": "u@example.com"}
+skipped {'username': ['Only lowercase letters, digits and underscores.']}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+= {"username": "dupe2", "tags": []}
+== user profiles without the address street
+-- roundtrip UserSchema {"exclude":["address.street","signup"],"unknown":"exclude"} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+errors {'address': {'street': ['Unknown field.']}}
+valid {'address': {'city': 'Springfield', 'country': 'US'}, 'age': 34, 'email': 'alice@example.com', 'password': 'correct horse', 'role': 'member', 'tags': ['staff', 'beta'], 'username': 'alice_01', 'website': 'https://alice.example.com/blog'}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+ok {'age': None, 'email': 'bob@mail.example.org', 'role': 'guest', 'tags': [], 'username': 'bob'}
+= {"username": "bob", "email": "bob@mail.example.org", "role": "guest", "tags": [], "display": "bob <bob@mail.example.org>"}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'role': ['owner is not one of admin, member, guest (Administrator, Member, Guest).'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+valid {'tags': []}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+errors {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+valid {'email': 'root@localhost', 'role': 'admin', 'tags': []}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+errors {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+valid {'email': 'carol@example.co.uk', 'role': 'member', 'tags': ['a'], 'username': 'carol'}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+ok {'address': {'city': 'X', 'country': 'US'}, 'email': 'dave@[192.168.0.1]', 'role': 'member', 'tags': [], 'username': 'dave'}
+= {"username": "dave", "email": "dave@[192.168.0.1]", "role": "member", "address": {"city": "X", "country": "US"}, "tags": [], "display": "dave <dave@[192.168.0.1]>"}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+errors {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+valid {'age': 41, 'role': 'member', 'tags': [], 'username': 'eve', 'website': None}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+valid {'role': 'member', 'username': 'frank'}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'gina@münchen.de', 'role': 'member', 'tags': [], 'username': 'gina', 'website': 'http://localhost:8000/x'}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+valid {'role': 'member', 'tags': [], 'username': 'hank', 'website': 'https://192.168.1.1/admin'}
+> {"email": "ivy@example.com"}
+errors {'username': ['Missing data for required field.']}
+valid {'email': 'ivy@example.com', 'role': 'member', 'tags': []}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'jo@example.com', 'role': 'member', 'tags': [], 'username': 'jo_jo'}
+> [{"username": "kim", "email": "kim@example.com"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> null
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"username": "ünï", "email": "u@example.com"}
+errors {'username': ['Only lowercase letters, digits and underscores.']}
+valid {'email': 'u@example.com', 'role': 'member', 'tags': []}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+ok {'email': 'd@example.com', 'role': 'member', 'tags': [], 'username': 'dupe2'}
+= {"username": "dupe2", "email": "d@example.com", "role": "member", "tags": [], "display": "dupe2 <d@example.com>"}
+== user profiles, address fields load-only
+-- roundtrip UserSchema {"load_only":["address.postcode","age"],"dump_only":["role"],"unknown":"exclude"} {}
+> {"username": " Alice_01 ", "email": "alice@example.com", "password": "correct horse", "age": 34, "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog"}
+ok {'address': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'age': 34, 'email': 'alice@example.com', 'password': 'correct horse', 'signup': datetime.datetime(2024, 3, 1, 12, 30, tzinfo=datetime.timezone.utc), 'tags': ['staff', 'beta'], 'username': 'alice_01', 'website': 'https://alice.example.com/blog'}
+= {"username": "alice_01", "email": "alice@example.com", "role": "member", "signedUpAt": "2024-03-01T12:30:00+00:00", "address": {"street": "1 Main St", "city": "Springfield", "country": "US"}, "tags": ["staff", "beta"], "website": "https://alice.example.com/blog", "display": "alice_01 <alice@example.com>"}
+> {"username": "bob", "email": "bob@mail.example.org", "age": null, "role": "guest"}
+ok {'age': None, 'email': 'bob@mail.example.org', 'tags': [], 'username': 'bob'}
+= {"username": "bob", "email": "bob@mail.example.org", "role": "member", "tags": [], "display": "bob <bob@mail.example.org>"}
+> {"username": "ab", "email": "not-an-email", "age": 12, "role": "owner", "website": "ftp//nowhere"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.'], 'email': ['Not a valid email address.'], 'username': ['Length must be between 3 and 20.'], 'website': ['Not a valid URL.']}
+valid {'tags': []}
+> {"username": "Root", "email": "root@localhost", "password": "short", "role": "admin"}
+errors {'password': ['Shorter than minimum length 8.'], 'username': ['root is reserved.']}
+valid {'email': 'root@localhost', 'tags': []}
+> {"data": {"username": "carol", "email": "carol@example.co.uk", "tags": ["a", "this-tag-is-long", 5]}}
+errors {'tags': {1: ['Longer than maximum length 10.'], 2: ['Not a valid string.']}}
+valid {'email': 'carol@example.co.uk', 'tags': ['a'], 'username': 'carol'}
+> {"username": "dave", "email": "dave@[192.168.0.1]", "signedUpAt": "yesterday", "address": {"city": "X"}, "extra": 1, "another": true}
+errors {'address': {'street': ['Missing data for required field.']}, 'signedUpAt': ['Not a valid datetime.']}
+valid {'address': {'city': 'X', 'country': 'US'}, 'email': 'dave@[192.168.0.1]', 'tags': [], 'username': 'dave'}
+> {"username": "eve", "email": "\"eve smith\"@example.com", "age": "41", "website": null, "address": null}
+errors {'address': ['Field may not be null.'], 'email': ['Not a valid email address.']}
+valid {'age': 41, 'tags': [], 'username': 'eve', 'website': None}
+> {"username": "frank", "email": "frank@exa_mple.com", "age": true, "tags": "a,b"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.'], 'tags': ['Not a valid list.']}
+valid {'username': 'frank'}
+> {"username": "gina", "email": "gina@münchen.de", "age": 3.9, "website": "http://localhost:8000/x"}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'gina@münchen.de', 'tags': [], 'username': 'gina', 'website': 'http://localhost:8000/x'}
+> {"username": "hank", "email": "hank..h@example.com", "age": "1e3", "website": "https://192.168.1.1/admin"}
+errors {'age': ['Not a valid integer.'], 'email': ['Not a valid email address.']}
+valid {'tags': [], 'username': 'hank', 'website': 'https://192.168.1.1/admin'}
+> {"email": "ivy@example.com"}
+errors {'username': ['Missing data for required field.']}
+valid {'email': 'ivy@example.com', 'tags': []}
+> {"username": "jo_jo", "email": "jo@example.com", "age": 4611686018427387904}
+errors {'age': ['Must be greater than or equal to 13 and less than or equal to 130.']}
+valid {'email': 'jo@example.com', 'tags': [], 'username': 'jo_jo'}
+> [{"username": "kim", "email": "kim@example.com"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> null
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"username": "ünï", "email": "u@example.com"}
+errors {'username': ['Only lowercase letters, digits and underscores.']}
+valid {'email': 'u@example.com', 'tags': []}
+> {"username": "dup", "username": "dupe2", "email": "d@example.com"}
+ok {'email': 'd@example.com', 'tags': [], 'username': 'dupe2'}
+= {"username": "dupe2", "email": "d@example.com", "role": "member", "tags": [], "display": "dupe2 <d@example.com>"}
+== signups
+-- load SignupSchema {} {}
+> {"username": "lena", "email": "lena@example.com", "password": "s3cret-pass", "confirmPassword": "s3cret-pass", "terms": true}
+ok {'confirm': 's3cret-pass', 'email': 'lena@example.com', 'password': 's3cret-pass', 'role': 'member', 'tags': [], 'terms': True, 'username': 'lena'}
+> {"username": "max", "email": "max@example.com", "password": "s3cret-pass", "confirmPassword": "other-pass", "terms": "yes"}
+errors {'confirmPassword': ['Passwords do not match.']}
+valid {'confirm': 'other-pass', 'email': 'max@example.com', 'password': 's3cret-pass', 'role': 'member', 'tags': [], 'terms': True, 'username': 'max'}
+> {"username": "nora", "email": "nora@example.com", "password": "s3cret-pass", "confirmPassword": "s3cret-pass", "terms": false, "role": "admin", "age": 15}
+errors {'age': ['Too young for admin.'], 'role': ['Admins must be adults.'], 'terms': ['You must accept the terms.']}
+valid {'age': 15, 'confirm': 's3cret-pass', 'email': 'nora@example.com', 'password': 's3cret-pass', 'role': 'admin', 'tags': [], 'username': 'nora'}
+> {"username": "o", "email": "bad", "role": "admin", "age": 14, "terms": "maybe"}
+errors {'age': ['Too young for admin.'], 'confirmPassword': ['Missing data for required field.'], 'email': ['Not a valid email address.'], 'role': ['Admins must be adults.'], 'terms': ['Not a valid boolean.'], 'username': ['Length must be between 3 and 20.']}
+valid {'age': 14, 'role': 'admin', 'tags': []}
+> {"username": "pat", "email": "pat@example.com", "role": "admin", "confirmPassword": "x", "terms": 1}
+errors {'age': ['Too young for admin.'], 'confirmPassword': ['Passwords do not match.'], 'role': ['Admins must be adults.']}
+valid {'confirm': 'x', 'email': 'pat@example.com', 'role': 'admin', 'tags': [], 'terms': True, 'username': 'pat'}
+== signups, fields
+-- init SignupSchema {}
+fields id, username, email, password, age, role, signup, address, tags, website, display, confirm, terms
+load username, email, password, age, role, signup, address, tags, website, confirm, terms
+dump id, username, email, age, role, signup, address, tags, website, display
+== orders
+-- load OrderSchema {} {}
+> {"id": "12345678-1234-5678-1234-567812345678", "customer": "alice", "placed": "2024-05-01T09:00:00Z", "ship_by": "2024-05-03", "watchers": ["bob", "carol"], "billing": {"street": "1 Main St", "city": "Springfield", "phone": "555"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}, {"sku": "XYZ-0001", "price": 0.5, "gift": "yes"}]}
+ok {'billing': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'customer': {'username': 'alice'}, 'id': UUID('12345678-1234-5678-1234-567812345678'), 'items': [{'gift': False, 'price': 9.99, 'qty': 2, 'sku': 'ABC-1234'}, {'gift': True, 'price': 0.5, 'qty': 1, 'sku': 'XYZ-0001'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, tzinfo=datetime.timezone.utc), 'ship_by': datetime.date(2024, 5, 3), 'status': 'PENDING', 'total': 20.48, 'watchers': [{'username': 'bob'}, {'username': 'carol'}]}
+> {"id": "{12345678-1234-5678-1234-567812345679}", "customer": "bob", "placed": "2024-05-01T09:00:00+02:00", "ship_by": "2024-04-30", "status": "PAID", "items": [{"sku": "ABC-1234", "price": 20}], "coupon": "TEST", "watchers": "bob", "billing": {"city": "Rome"}}
+errors {'billing': {'street': ['Missing data for required field.']}, 'coupon': ['Coupon TEST cannot be used.'], 'watchers': ['Invalid type.']}
+valid {'billing': {'city': 'Rome', 'country': 'US'}, 'customer': {'username': 'bob'}, 'id': UUID('12345678-1234-5678-1234-567812345679'), 'items': [{'gift': False, 'price': 20.0, 'qty': 1, 'sku': 'ABC-1234'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=7200))), 'ship_by': datetime.date(2024, 4, 30), 'status': <OrderStatus.PAID: 'paid'>}
+> {"id": "urn:uuid:12345678123456781234567812345670", "placed": "2024-05-01", "items": [], "status": "paid", "watchers": [5, "ok", "a"]}
+errors {'items': ['Length must be between 1 and 5.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.'], 'watchers': {0: {'username': ['Not a valid string.']}, 1: {'username': ['Length must be between 3 and 20.']}, 2: {'username': ['Length must be between 3 and 20.']}}}
+valid {'id': UUID('12345678-1234-5678-1234-567812345670'), 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 0, 0), 'watchers': [{}, {}, {}]}
+> {"id": "not-a-uuid", "placed": "2024-13-01T00:00:00", "items": [{"sku": "abc-12", "qty": "2", "price": -1}, {"qty": 0, "price": "free"}, "x"]}
+errors {'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Must be greater than 0.'], 'qty': ['Not a valid integer.'], 'sku': ['String does not match expected pattern.']}, 1: {'price': ['Not a valid number.'], 'qty': ['Must be greater than or equal to 1 and less than or equal to 99.'], 'sku': ['Missing data for required field.']}, 2: {'_schema': ['Invalid input type.']}}, 'placed': ['Not a valid datetime.']}
+valid {'items': [{'gift': False}, {'gift': False}, {}], 'notes': None, 'status': 'PENDING'}
+> {"id": "1234567812345678123456781234567", "placed": 20240501, "items": {"sku": "ABC-1234"}, "status": "LOST", "notes": null}
+errors {'id': ['Not a valid UUID.'], 'items': ['Not a valid list.'], 'placed': ['Not a valid datetime.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.']}
+valid {'notes': None}
+> {"id": "0x345678123456781234567812345678", "placed": "2024-05-01T09:00:00.250Z", "items": [{"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}], "ship_by": "2024-W18-5"}
+errors {'items': {0: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 1: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 2: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 3: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 4: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 5: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}}}
+valid {'id': UUID('00345678-1234-5678-1234-567812345678'), 'items': [{'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, 0, 250000, tzinfo=datetime.timezone.utc), 'ship_by': datetime.date(2024, 5, 3), 'status': 'PENDING'}
+> {"id": 1234, "items": [{"sku": "ABC-1234", "qty": 1.0, "price": Infinity}], "customer": 5, "placed": null}
+errors {'customer': {'username': ['Not a valid string.']}, 'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Special numeric values (nan or infinity) are not permitted.'], 'qty': ['Not a valid integer.']}}, 'placed': ['Field may not be null.']}
+valid {'items': [{'gift': False, 'sku': 'ABC-1234'}], 'notes': None, 'status': 'PENDING'}
+> {"id": "  12345678-1234-5678-1234-56781234567a  ", "placed": "2024-05-01T09:00:00", "items": [{"sku": "ZZZ-9999", "price": 3}]}
+errors {'id': ['Not a valid UUID.']}
+valid {'items': [{'gift': False, 'price': 3.0, 'qty': 1, 'sku': 'ZZZ-9999'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0), 'status': 'PENDING'}
+== orders, items partial
+-- load OrderSchema {"partial":["items.price","placed"]} {}
+> {"id": "12345678-1234-5678-1234-567812345678", "customer": "alice", "placed": "2024-05-01T09:00:00Z", "ship_by": "2024-05-03", "watchers": ["bob", "carol"], "billing": {"street": "1 Main St", "city": "Springfield", "phone": "555"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}, {"sku": "XYZ-0001", "price": 0.5, "gift": "yes"}]}
+ok {'billing': {'city': 'Springfield', 'country': 'US', 'street': '1 Main St'}, 'customer': {'username': 'alice'}, 'id': UUID('12345678-1234-5678-1234-567812345678'), 'items': [{'gift': False, 'price': 9.99, 'qty': 2, 'sku': 'ABC-1234'}, {'gift': True, 'price': 0.5, 'qty': 1, 'sku': 'XYZ-0001'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, tzinfo=datetime.timezone.utc), 'ship_by': datetime.date(2024, 5, 3), 'status': 'PENDING', 'total': 20.48, 'watchers': [{'username': 'bob'}, {'username': 'carol'}]}
+> {"id": "{12345678-1234-5678-1234-567812345679}", "customer": "bob", "placed": "2024-05-01T09:00:00+02:00", "ship_by": "2024-04-30", "status": "PAID", "items": [{"sku": "ABC-1234", "price": 20}], "coupon": "TEST", "watchers": "bob", "billing": {"city": "Rome"}}
+errors {'billing': {'street': ['Missing data for required field.']}, 'coupon': ['Coupon TEST cannot be used.'], 'watchers': ['Invalid type.']}
+valid {'billing': {'city': 'Rome', 'country': 'US'}, 'customer': {'username': 'bob'}, 'id': UUID('12345678-1234-5678-1234-567812345679'), 'items': [{'gift': False, 'price': 20.0, 'qty': 1, 'sku': 'ABC-1234'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=7200))), 'ship_by': datetime.date(2024, 4, 30), 'status': <OrderStatus.PAID: 'paid'>}
+> {"id": "urn:uuid:12345678123456781234567812345670", "placed": "2024-05-01", "items": [], "status": "paid", "watchers": [5, "ok", "a"]}
+errors {'items': ['Length must be between 1 and 5.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.'], 'watchers': {0: {'username': ['Not a valid string.']}, 1: {'username': ['Length must be between 3 and 20.']}, 2: {'username': ['Length must be between 3 and 20.']}}}
+valid {'id': UUID('12345678-1234-5678-1234-567812345670'), 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 0, 0), 'watchers': [{}, {}, {}]}
+> {"id": "not-a-uuid", "placed": "2024-13-01T00:00:00", "items": [{"sku": "abc-12", "qty": "2", "price": -1}, {"qty": 0, "price": "free"}, "x"]}
+errors {'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Must be greater than 0.'], 'qty': ['Not a valid integer.'], 'sku': ['String does not match expected pattern.']}, 1: {'price': ['Not a valid number.'], 'qty': ['Must be greater than or equal to 1 and less than or equal to 99.'], 'sku': ['Missing data for required field.']}, 2: {'_schema': ['Invalid input type.']}}, 'placed': ['Not a valid datetime.']}
+valid {'items': [{'gift': False}, {'gift': False}, {}], 'notes': None, 'status': 'PENDING'}
+> {"id": "1234567812345678123456781234567", "placed": 20240501, "items": {"sku": "ABC-1234"}, "status": "LOST", "notes": null}
+errors {'id': ['Not a valid UUID.'], 'items': ['Not a valid list.'], 'placed': ['Not a valid datetime.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.']}
+valid {'notes': None}
+> {"id": "0x345678123456781234567812345678", "placed": "2024-05-01T09:00:00.250Z", "items": [{"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}], "ship_by": "2024-W18-5"}
+errors {'items': {0: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 1: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 2: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 3: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 4: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 5: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}}}
+valid {'id': UUID('00345678-1234-5678-1234-567812345678'), 'items': [{'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}, {'gift': False, 'price': 1.0, 'sku': 'ABC-1234'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0, 0, 250000, tzinfo=datetime.timezone.utc), 'ship_by': datetime.date(2024, 5, 3), 'status': 'PENDING'}
+> {"id": 1234, "items": [{"sku": "ABC-1234", "qty": 1.0, "price": Infinity}], "customer": 5, "placed": null}
+errors {'customer': {'username': ['Not a valid string.']}, 'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Special numeric values (nan or infinity) are not permitted.'], 'qty': ['Not a valid integer.']}}, 'placed': ['Field may not be null.']}
+valid {'items': [{'gift': False, 'sku': 'ABC-1234'}], 'notes': None, 'status': 'PENDING'}
+> {"id": "  12345678-1234-5678-1234-56781234567a  ", "placed": "2024-05-01T09:00:00", "items": [{"sku": "ZZZ-9999", "price": 3}]}
+errors {'id': ['Not a valid UUID.']}
+valid {'items': [{'gift': False, 'price': 3.0, 'qty': 1, 'sku': 'ZZZ-9999'}], 'notes': None, 'placed': datetime.datetime(2024, 5, 1, 9, 0), 'status': 'PENDING'}
+== order confirmations
+-- dump OrderSchema {} {}
+> {"id": "12345678-1234-5678-1234-567812345678", "customer": "alice", "placed": "2024-05-01T09:00:00Z", "ship_by": "2024-05-03", "watchers": ["bob", "carol"], "billing": {"street": "1 Main St", "city": "Springfield", "phone": "555"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}, {"sku": "XYZ-0001", "price": 0.5, "gift": "yes"}]}
+= {"id": "12345678-1234-5678-1234-567812345678", "customer": "alice", "watchers": ["bob", "carol"], "billing": {"street": "1 Main St", "city": "Springfield"}, "items": [{"sku": "ABC-1234", "qty": 2, "price": 9.99}, {"sku": "XYZ-0001", "price": 0.5, "gift": true}], "placed": "2024-05-01T09:00:00+00:00", "ship_by": "2024-05-03", "total": 20.48, "href": "/orders/12345678-1234-5678-1234-567812345678"}
+> {"id": "{12345678-1234-5678-1234-567812345679}", "customer": "bob", "placed": "2024-05-01T09:00:00+02:00", "ship_by": "2024-04-30", "status": "PAID", "items": [{"sku": "ABC-1234", "price": 20}], "coupon": "TEST", "watchers": "bob", "billing": {"city": "Rome"}}
+skipped {'coupon': ['Coupon TEST cannot be used.'], 'watchers': ['Invalid type.']}
+> {"id": "urn:uuid:12345678123456781234567812345670", "placed": "2024-05-01", "items": [], "status": "paid", "watchers": [5, "ok", "a"]}
+skipped {'items': ['Length must be between 1 and 5.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.'], 'watchers': {0: {'username': ['Not a valid string.']}, 1: {'username': ['Length must be between 3 and 20.']}, 2: {'username': ['Length must be between 3 and 20.']}}}
+> {"id": "not-a-uuid", "placed": "2024-13-01T00:00:00", "items": [{"sku": "abc-12", "qty": "2", "price": -1}, {"qty": 0, "price": "free"}, "x"]}
+skipped {'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Must be greater than 0.'], 'qty': ['Not a valid integer.'], 'sku': ['String does not match expected pattern.']}, 1: {'price': ['Not a valid number.'], 'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 2: {'_schema': ['Invalid input type.']}}, 'placed': ['Not a valid datetime.']}
+> {"id": "1234567812345678123456781234567", "placed": 20240501, "items": {"sku": "ABC-1234"}, "status": "LOST", "notes": null}
+skipped {'id': ['Not a valid UUID.'], 'items': ['Not a valid list.'], 'placed': ['Not a valid datetime.'], 'status': ['Must be one of: PENDING, PAID, SHIPPED, CANCELLED.']}
+> {"id": "0x345678123456781234567812345678", "placed": "2024-05-01T09:00:00.250Z", "items": [{"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}, {"sku": "ABC-1234", "qty": 100, "price": 1}], "ship_by": "2024-W18-5"}
+skipped {'items': {0: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 1: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 2: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 3: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 4: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}, 5: {'qty': ['Must be greater than or equal to 1 and less than or equal to 99.']}}}
+> {"id": 1234, "items": [{"sku": "ABC-1234", "qty": 1.0, "price": Infinity}], "customer": 5, "placed": null}
+skipped {'customer': {'username': ['Not a valid string.']}, 'id': ['Not a valid UUID.'], 'items': {0: {'price': ['Special numeric values (nan or infinity) are not permitted.'], 'qty': ['Not a valid integer.']}}, 'placed': ['Field may not be null.']}
+> {"id": "  12345678-1234-5678-1234-56781234567a  ", "placed": "2024-05-01T09:00:00", "items": [{"sku": "ZZZ-9999", "price": 3}]}
+skipped {'id': ['Not a valid UUID.']}
+== events
+-- roundtrip EventSchema {} {}
+> {"name": "launch", "starts": "2024-06-01T10:00:00", "ends": "2024-06-01T12:00:00+02:00", "local": "2024-06-01T10:00:00+05:30", "alarm": "09:45", "day": "2024-06-01", "length": 90, "timeout": "2500", "every": 1.5, "level": 30}
+errors {'ends': ['ends must be after starts.']}
+valid {'alarm': datetime.time(9, 45), 'day': datetime.date(2024, 6, 1), 'ends': datetime.datetime(2024, 6, 1, 12, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=7200))), 'every': datetime.timedelta(days=10, seconds=43200), 'length': datetime.timedelta(seconds=5400), 'level': <Level.WARNING: 30>, 'local': datetime.datetime(2024, 6, 1, 4, 30), 'name': 'launch', 'starts': datetime.datetime(2024, 6, 1, 10, 0, tzinfo=datetime.timezone.utc), 'timeout': datetime.timedelta(seconds=2, microseconds=500000)}
+> {"name": "standup", "starts": "2024-06-03T09:00:00-04:00", "ends": "2024-06-03T08:00:00-04:00", "alarm": "09:00:00.5", "length": "15.5", "level": "40"}
+errors {'ends': ['ends must be after starts.']}
+valid {'alarm': datetime.time(9, 0, 0, 500000), 'ends': datetime.datetime(2024, 6, 3, 8, 0, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=72000))), 'length': datetime.timedelta(seconds=930), 'level': <Level.ERROR: 40>, 'name': 'standup', 'starts': datetime.datetime(2024, 6, 3, 9, 0, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=72000)))}
+> {"name": "bad", "starts": "soon", "ends": "2024-06-03T08:00:00", "local": "2024-06-03 08:00", "alarm": "25:00", "day": "2024/06/03", "length": "ten", "timeout": true, "every": [1], "level": 50}
+errors {'alarm': ['Not a valid time.'], 'day': ['Not a valid date.'], 'ends': ['Not a valid aware datetime.'], 'every': ['Not a valid period of time.'], 'length': ['Not a valid period of time.'], 'level': ['Must be one of: 10, 20, 30, 40.'], 'starts': ['Not a valid datetime.']}
+valid {'local': datetime.datetime(2024, 6, 3, 8, 0), 'name': 'bad', 'timeout': datetime.timedelta(microseconds=1000)}
+> {"name": "edge", "starts": "2024-02-29T23:59:59.999999+14:00", "alarm": "23:59:59.123456+01:00", "day": "20240229", "length": -30, "timeout": 0.0004, "every": "0.25", "level": "DEBUG"}
+errors {'level': ['Not a valid integer.']}
+valid {'alarm': datetime.time(23, 59, 59, 123456, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600))), 'day': datetime.date(2024, 2, 29), 'every': datetime.timedelta(days=1, seconds=64800), 'length': datetime.timedelta(days=-1, seconds=84600), 'name': 'edge', 'starts': datetime.datetime(2024, 2, 29, 23, 59, 59, 999999, tzinfo=datetime.timezone(datetime.timedelta(seconds=50400))), 'timeout': datetime.timedelta(0)}
+> {"name": "far", "starts": "9999-12-31T23:59:59Z", "length": 1e+20, "level": 10.0}
+errors {'length': ['Not a valid period of time.']}
+valid {'level': <Level.DEBUG: 10>, 'name': 'far', 'starts': datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc)}
+> {"starts": "2024-06-01T10:00:00Z", "local": "2024-06-01T10:00:00", "ends": "2024-06-01T09:00:00Z", "level": null}
+errors {'ends': ['ends must be after starts.'], 'level': ['Field may not be null.'], 'name': ['Missing data for required field.']}
+valid {'ends': datetime.datetime(2024, 6, 1, 9, 0, tzinfo=datetime.timezone.utc), 'local': datetime.datetime(2024, 6, 1, 10, 0), 'starts': datetime.datetime(2024, 6, 1, 10, 0, tzinfo=datetime.timezone.utc)}
+== metrics
+-- roundtrip MetricSchema {} {}
+> {"name": "http.requests", "value": 12.5, "count": 7, "ratio": 0.25, "ts": 1717236000, "ts_ms": 1717236000123, "labels": {"method": "get", "path_group": "api"}, "enabled": "on", "flags": {"cache": "enabled", "trace": "off"}, "host": {"a": [1, 2.5, null]}, "buckets": {"10": 3, "20": 5, "30": 9}}
+ok {'buckets': {10: 3, 20: 5, 30: 9}, 'count': 7, 'enabled': True, 'flags': {'cache': True, 'trace': False}, 'host': {'a': [1, 2.5, None]}, 'labels': {'method': 'get', 'path_group': 'api'}, 'name': 'http.requests', 'ratio': 0.25, 'ts': datetime.datetime(2024, 6, 1, 10, 0), 'ts_ms': datetime.datetime(2024, 6, 1, 10, 0, 0, 123000), 'value': 12.5}
+= {"name": "http.requests", "value": 12.5, "count": "7", "ratio": "0.25", "ts": 1717236000.0, "ts_ms": 1717236000123.0, "labels": {"method": "get", "path_group": "api"}, "enabled": true, "flags": {"cache": true, "trace": false}, "host": {"a": [1, 2.5, null]}, "buckets": {"10": 3, "20": 5, "30": 9}}
+> {"name": "Disk.Free", "value": "nan", "count": "12", "ratio": "1.5", "ts": "1717236000.5", "ts_ms": -5, "enabled": "maybe", "labels": {"Bad-Key": "x", "ok": "a value that is long"}, "flags": {"cache": true}}
+errors {'enabled': ['Not a valid boolean.'], 'flags': {'cache': {'value': ['Not a valid boolean.']}}, 'labels': {'Bad-Key': {'key': ['String does not match expected pattern.']}, 'ok': {'value': ['Longer than maximum length 12.']}}, 'name': ['String does not match expected pattern.'], 'ratio': ['Must be greater than or equal to 0 and less than or equal to 1.'], 'ts_ms': ['Not a valid datetime.']}
+valid {'count': 12, 'ts': datetime.datetime(2024, 6, 1, 10, 0, 0, 500000), 'value': nan}
+> {"name": "cpu", "value": "inf", "count": 3.7, "ratio": 1, "ts": -1, "ts_ms": "abc", "enabled": 1, "labels": [], "flags": {"x": "yes"}}
+errors {'flags': {'x': {'value': ['Not a valid boolean.']}}, 'labels': ['Not a valid mapping type.'], 'ts': ['Not a valid datetime.'], 'ts_ms': ['Not a valid datetime.']}
+valid {'count': 3, 'enabled': True, 'name': 'cpu', 'ratio': 1.0, 'value': inf}
+> {"name": "mem", "value": "  -1.5e3  ", "count": " 42 ", "ts": 1.5e-06, "ts_ms": 1.5, "enabled": "F", "labels": {"zone": 5}, "buckets": {"010": 1, " 10 ": 2, "1_0": 3, "+inf": 4}}
+errors {'buckets': {'+inf': {'key': ['Not a valid integer.']}}, 'labels': {'zone': {'value': ['Not a valid string.']}}}
+valid {'buckets': {10: 3}, 'count': 42, 'enabled': False, 'name': 'mem', 'ts': datetime.datetime(1970, 1, 1, 0, 0, 0, 2), 'ts_ms': datetime.datetime(1970, 1, 1, 0, 0, 0, 1500), 'value': -1500.0}
+> {"name": "net", "value": "1_000.5", "count": "1_000", "ts": true, "enabled": 0, "ratio": "0.333333333333333314829616256247390992939472198486328125"}
+errors {'ts': ['Not a valid datetime.']}
+valid {'count': 1000, 'enabled': False, 'name': 'net', 'ratio': 0.3333333333333333, 'value': 1000.5}
+> {"name": "x", "value": ".5", "count": "-0", "ts": 253402300800, "enabled": [true], "host": "db-1"}
+errors {'enabled': ['Not a valid boolean.'], 'ts': ['Not a valid datetime.']}
+valid {'count': 0, 'host': 'db-1', 'name': 'x', 'value': 0.5}
+> {"name": "nan.ok", "value": NaN, "count": Infinity}
+errors {'count': ['Number too large.']}
+valid {'name': 'nan.ok', 'value': nan}
+> {"name": "inf", "value": -Infinity, "ratio": NaN}
+errors {'ratio': ['Special numeric values (nan or infinity) are not permitted.']}
+valid {'name': 'inf', 'value': -inf}
+== service configs
+-- roundtrip ConfigSchema {} {}
+> {"host": "api.internal", "port": 443, "debug": "true", "servers": [["a.internal", 8000], ["b.internal", "8001"]], "limits": {"cpu": 2, "mem": 512}, "retry": {"times": 5}, "root_dir": "/srv/app", "log_dir": "/var/log/app", "workers": 4, "region": "eu-west-1", "replicas": 3}
+ok {'debug': True, 'host': 'api.internal', 'limits': {'cpu': 2, 'mem': 512}, 'mode': 'production', 'paths': {'logs': '/var/log/app', 'root': '/srv/app'}, 'port': 443, 'region': 'eu-west-1', 'replicas': 3, 'retry': {'backoff': 0.5, 'times': 5}, 'servers': [('a.internal', 8000), ('b.internal', 8001)], 'workers': 4}
+= {"host": "api.internal", "port": 443, "debug": true, "mode": "production", "servers": [["a.internal", 8000], ["b.internal", 8001]], "limits": {"cpu": 2, "mem": 512}, "retry": {"times": 5, "backoff": 0.5}, "root_dir": "/srv/app", "log_dir": "/var/log/app", "workers": 4}
+> {"port": 0, "mode": "dev", "servers": [["c", 1, 2], ["d"], "e", ["f", -1]], "limits": {"gpu": 1, "cpu": -1}, "retry": {"times": 11, "backoff": "x"}, "workers": 3}
+errors {'limits': {'cpu': {'value': ['Must be greater than or equal to 0.']}, 'gpu': {'key': ['Must be one of: cpu, mem, disk.']}}, 'port': ['Port 0 is outside 1..65535.'], 'retry': {'backoff': ['Not a valid number.'], 'times': ['Must be greater than or equal to 0 and less than or equal to 10.']}, 'servers': {0: ['Length must be 2.'], 1: ['Length must be 2.'], 2: ['Not a valid tuple.'], 3: {1: ['Must be greater than or equal to 1.']}}, 'workers': ['Must be even.']}
+valid {'debug': False, 'host': 'localhost', 'mode': 'production', 'servers': [['f']]}
+> {"port": 70000, "debug": "maybe", "servers": "none", "limits": [], "retry": [], "root_dir": null, "mode": null}
+errors {'debug': ['Not a valid boolean.'], 'limits': ['Not a valid mapping type.'], 'mode': ['Field may not be null.'], 'port': ['Port 70000 is outside 1..65535.'], 'retry': {'_schema': ['Invalid input type.']}, 'root_dir': ['Field may not be null.'], 'servers': ['Not a valid list.']}
+valid {'host': 'localhost'}
+> {}
+ok {'debug': False, 'host': 'localhost', 'mode': 'production', 'port': 8080}
+= {"host": "localhost", "port": 8080, "debug": false, "mode": "production"}
+> {"root_dir": "/a", "workers": "6", "port": "8443", "retry": {"backoff": 2, "jitter": true}}
+errors {'retry': {'jitter': ['Unknown field.']}}
+valid {'debug': False, 'host': 'localhost', 'mode': 'production', 'paths': {'root': '/a'}, 'port': 8443, 'retry': {'backoff': 2.0, 'times': 3}, 'workers': 6}
+== service configs, unknown raises
+-- load ConfigSchema {"unknown":"raise"} {}
+> {"host": "api.internal", "port": 443, "debug": "true", "servers": [["a.internal", 8000], ["b.internal", "8001"]], "limits": {"cpu": 2, "mem": 512}, "retry": {"times": 5}, "root_dir": "/srv/app", "log_dir": "/var/log/app", "workers": 4, "region": "eu-west-1", "replicas": 3}
+errors {'region': ['Unknown field.'], 'replicas': ['Unknown field.']}
+valid {'debug': True, 'host': 'api.internal', 'limits': {'cpu': 2, 'mem': 512}, 'mode': 'production', 'paths': {'logs': '/var/log/app', 'root': '/srv/app'}, 'port': 443, 'retry': {'backoff': 0.5, 'times': 5}, 'servers': [('a.internal', 8000), ('b.internal', 8001)], 'workers': 4}
+> {"port": 0, "mode": "dev", "servers": [["c", 1, 2], ["d"], "e", ["f", -1]], "limits": {"gpu": 1, "cpu": -1}, "retry": {"times": 11, "backoff": "x"}, "workers": 3}
+errors {'limits': {'cpu': {'value': ['Must be greater than or equal to 0.']}, 'gpu': {'key': ['Must be one of: cpu, mem, disk.']}}, 'port': ['Port 0 is outside 1..65535.'], 'retry': {'backoff': ['Not a valid number.'], 'times': ['Must be greater than or equal to 0 and less than or equal to 10.']}, 'servers': {0: ['Length must be 2.'], 1: ['Length must be 2.'], 2: ['Not a valid tuple.'], 3: {1: ['Must be greater than or equal to 1.']}}, 'workers': ['Must be even.']}
+valid {'debug': False, 'host': 'localhost', 'mode': 'production', 'servers': [['f']]}
+> {"port": 70000, "debug": "maybe", "servers": "none", "limits": [], "retry": [], "root_dir": null, "mode": null}
+errors {'debug': ['Not a valid boolean.'], 'limits': ['Not a valid mapping type.'], 'mode': ['Field may not be null.'], 'port': ['Port 70000 is outside 1..65535.'], 'retry': {'_schema': ['Invalid input type.']}, 'root_dir': ['Field may not be null.'], 'servers': ['Not a valid list.']}
+valid {'host': 'localhost'}
+> {}
+ok {'debug': False, 'host': 'localhost', 'mode': 'production', 'port': 8080}
+> {"root_dir": "/a", "workers": "6", "port": "8443", "retry": {"backoff": 2, "jitter": true}}
+errors {'retry': {'jitter': ['Unknown field.']}}
+valid {'debug': False, 'host': 'localhost', 'mode': 'production', 'paths': {'root': '/a'}, 'port': 8443, 'retry': {'backoff': 2.0, 'times': 3}, 'workers': 6}
+== articles
+-- roundtrip ArticleSchema {} {}
+> {"title": "Hello world", "body": "First post here.", "author": {"username": "alice", "email": "alice@example.com"}, "coauthors": [{"username": "bob"}, {"username": "carol"}], "published": "02/01/2024", "updated": "2024-01-02 03:04", "category": 2, "visibility": "public", "comments": [{"id": 1, "text": "Nice!", "author": "bob", "replies": [{"text": "Thanks", "author": "alice"}]}], "extra": {"pinned": true}}
+ok {'author': {'email': 'alice@example.com', 'username': 'alice'}, 'body': 'First post here.', 'category': <Category.TECH: 2>, 'coauthors': [{'username': 'bob'}, {'username': 'carol'}], 'comments': [{'author': {'username': 'bob'}, 'id': 1, 'replies': [{'author': {'username': 'alice'}, 'text': 'Thanks'}], 'text': 'Nice!'}], 'extra': {'pinned': True}, 'published': datetime.date(2024, 1, 2), 'slug': 'hello-world', 'title': 'Hello world', 'updated': datetime.datetime(2024, 1, 2, 3, 4), 'visibility': <Visibility.PUBLIC: 'public'>}
+= {"title": "Hello world", "body": "First post here.", "author": {"username": "alice", "email": "alice@example.com"}, "published": "02/01/2024", "updated": "2024-01-02 03:04", "category": 2, "visibility": "public", "coauthors": [{"username": "bob"}, {"username": "carol"}], "comments": [{"id": 1, "text": "Nice!", "author": "bob", "replies": [{"text": "Thanks", "author": "alice"}]}], "extra": {"pinned": true}, "slug": "hello-world", "words": 3}
+> {"title": "Hi", "author": {"username": "x", "email": "y", "password": "z"}, "coauthors": {"username": "bob"}, "published": "2024-01-02", "updated": "2024-01-02T03:04", "category": 9, "visibility": 0, "comments": [{"text": "   ", "author": "bo"}, {"id": "two", "text": "ok", "author": "carl", "replies": [{"id": 3, "text": "x"}]}]}
+errors {'author': {'email': ['Not a valid email address.'], 'password': ['Unknown field.'], 'username': ['Length must be between 3 and 20.']}, 'category': ['Must be one of: 1, 2, 3.'], 'coauthors': ['Invalid type.'], 'comments': {0: {'author': {'username': ['Length must be between 3 and 20.']}, 'text': ['Must not be blank.']}, 1: {'id': ['Not a valid integer.'], 'replies': {0: {'author': ['Missing data for required field.'], 'id': ['Unknown field.']}}}}, 'published': ['Not a valid date.'], 'title': ['Length must be between 3 and 60.'], 'updated': ['Not a valid datetime.']}
+valid {'body': '', 'comments': [{}, {'author': {'username': 'carl'}, 'replies': [{'text': 'x'}], 'text': 'ok'}], 'visibility': <Visibility.DRAFT: 0>}
+> {"title": "Banned words here", "author": {"username": "dana", "email": "dana@example.com"}, "published": "31/02/2024", "category": "2", "visibility": "secret"}
+errors {'category': ['Must be one of: 1, 2, 3.'], 'published': ['Not a valid date.'], 'title': ['Title contains a banned word.'], 'visibility': ['Must be one of: public, private, 0.']}
+valid {'author': {'email': 'dana@example.com', 'username': 'dana'}, 'body': ''}
+> {"title": "Unicode — café ünïcode", "author": {"username": "émile", "email": "emile@example.fr"}, "category": 1.0, "visibility": false, "comments": [{"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "author": "fred"}], "slug": "ignored", "words": 3}
+errors {'author': {'username': ['Only lowercase letters, digits and underscores.']}, 'comments': {0: {'text': ['Longer than maximum length 40.']}}, 'slug': ['Unknown field.'], 'words': ['Unknown field.']}
+valid {'author': {'email': 'emile@example.fr'}, 'body': '', 'category': <Category.NEWS: 1>, 'comments': [{'author': {'username': 'fred'}}], 'title': 'Unicode — café ünïcode', 'visibility': <Visibility.DRAFT: 0>}
+> {"title": "Done", "author": "alice", "comments": {"text": "x"}, "coauthors": [{"username": "bob", "email": "b@example.com"}, "carol"]}
+errors {'author': {'_schema': ['Invalid input type.']}, 'coauthors': {0: {'email': ['Unknown field.']}, 1: {'_schema': ['Invalid input type.']}}, 'comments': ['Not a valid list.']}
+valid {'body': '', 'coauthors': [{'username': 'bob'}, {}], 'title': 'Done', 'visibility': 'public'}
+== articles, comment text only
+-- dump ArticleSchema {"only":["title","comments.text","comments.replies","author"],"exclude":["comments.replies"]} {}
+> {"title": "Hello world", "body": "First post here.", "author": {"username": "alice", "email": "alice@example.com"}, "coauthors": [{"username": "bob"}, {"username": "carol"}], "published": "02/01/2024", "updated": "2024-01-02 03:04", "category": 2, "visibility": "public", "comments": [{"id": 1, "text": "Nice!", "author": "bob", "replies": [{"text": "Thanks", "author": "alice"}]}], "extra": {"pinned": true}}
+= {"title": "Hello world", "comments": [{"text": "Nice!"}], "author": {"username": "alice", "email": "alice@example.com"}}
+> {"title": "Hi", "author": {"username": "x", "email": "y", "password": "z"}, "coauthors": {"username": "bob"}, "published": "2024-01-02", "updated": "2024-01-02T03:04", "category": 9, "visibility": 0, "comments": [{"text": "   ", "author": "bo"}, {"id": "two", "text": "ok", "author": "carl", "replies": [{"id": 3, "text": "x"}]}]}
+skipped {'author': {'email': ['Not a valid email address.'], 'password': ['Unknown field.'], 'username': ['Length must be between 3 and 20.']}, 'category': ['Must be one of: 1, 2, 3.'], 'coauthors': ['Invalid type.'], 'comments': {0: {'author': {'username': ['Length must be between 3 and 20.']}, 'text': ['Must not be blank.']}, 1: {'id': ['Not a valid integer.'], 'replies': {0: {'author': ['Missing data for required field.'], 'id': ['Unknown field.']}}}}, 'published': ['Not a valid date.'], 'title': ['Length must be between 3 and 60.'], 'updated': ['Not a valid datetime.']}
+> {"title": "Banned words here", "author": {"username": "dana", "email": "dana@example.com"}, "published": "31/02/2024", "category": "2", "visibility": "secret"}
+skipped {'category': ['Must be one of: 1, 2, 3.'], 'published': ['Not a valid date.'], 'title': ['Title contains a banned word.'], 'visibility': ['Must be one of: public, private, 0.']}
+> {"title": "Unicode — café ünïcode", "author": {"username": "émile", "email": "emile@example.fr"}, "category": 1.0, "visibility": false, "comments": [{"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "author": "fred"}], "slug": "ignored", "words": 3}
+skipped {'author': {'username': ['Only lowercase letters, digits and underscores.']}, 'comments': {0: {'text': ['Longer than maximum length 40.']}}}
+> {"title": "Done", "author": "alice", "comments": {"text": "x"}, "coauthors": [{"username": "bob", "email": "b@example.com"}, "carol"]}
+skipped {'author': {'_schema': ['Invalid input type.']}, 'coauthors': {0: {'email': ['Unknown field.']}, 1: {'_schema': ['Invalid input type.']}}, 'comments': ['Not a valid list.']}
+== trees
+-- roundtrip TreeSchema {} {}
+> {"name": "root", "size": 1, "children": [{"name": "a", "size": 2, "children": [{"name": "a1", "size": 3}]}, {"name": "b"}]}
+ok {'children': [{'children': [{'children': [], 'name': 'a1', 'size': 3}], 'name': 'a', 'size': 2}, {'children': [], 'name': 'b', 'size': 0}], 'name': 'root', 'size': 1}
+= {"name": "root", "size": 1, "children": [{"name": "a", "size": 2, "children": [{"name": "a1", "size": 3, "children": [], "total": 3}], "total": 5}, {"name": "b", "size": 0, "children": [], "total": 0}], "total": 6}
+> {"name": "solo"}
+ok {'children': [], 'name': 'solo', 'size': 0}
+= {"name": "solo", "size": 0, "children": [], "total": 0}
+> {"name": "bad", "children": [{"size": "big"}, {"name": "ok", "children": [{"name": 5}]}]}
+errors {'children': {0: {'name': ['Missing data for required field.'], 'size': ['Not a valid integer.']}, 1: {'children': {0: {'name': ['Not a valid string.']}}}}}
+valid {'children': [{'children': []}, {'children': [{'children': [], 'size': 0}], 'name': 'ok', 'size': 0}], 'name': 'bad', 'size': 0}
+== product feeds
+-- roundtrip ProductSchema {} {}
+> [{"sku": "P-1", "name": "Kettle", "price": 25.0, "stock": 3, "tags": ["new", "eco"], "cents": 2500}, {"sku": "P-2", "name": "Mug", "price": 7.5, "tags": ["sale"], "cents": "750", "color": "red"}]
+errors {1: {'stock': ['Items on sale must be in stock.']}}
+valid [{'name': 'Kettle', 'price': 25.0, 'price_cents': 2500, 'sku': 'P-1', 'stock': 3, 'tags': ['new', 'eco']}, {'name': 'Mug', 'price': 7.5, 'price_cents': 750, 'sku': 'P-2', 'stock': 0, 'tags': ['sale']}]
+> [{"sku": "P-1", "name": "test", "price": -1, "tags": ["new", "hot"], "avoid": ["lead"]}, {"sku": "P-1", "name": "Spoon", "price": 1, "stock": 0, "tags": ["sale"]}]
+errors {0: {'avoid': ['One or more of the choices you made was in: lead, bpa.'], 'name': ['Invalid input.'], 'price': ['Must be greater than or equal to 0.'], 'tags': ['One or more of the choices you made was not in: new, sale, eco, limited.']}}
+valid [{'sku': 'P-1', 'stock': 0}, {'name': 'Spoon', 'price': 1.0, 'sku': 'P-1', 'stock': 0, 'tags': ['sale']}]
+> []
+ok []
+= {"data": [], "count": 0}
+> {"sku": "P-9"}
+errors {'_schema': ['Invalid input type.']}
+valid []
+> [{"sku": "P-3", "name": "Bowl", "price": 12, "cents": "x"}, "nope", null]
+errors {0: {'cents': ['Not a whole number of cents.']}, 1: {'_schema': ['Invalid input type.']}, 2: {'_schema': ['Invalid input type.']}}
+valid [{'name': 'Bowl', 'price': 12.0, 'sku': 'P-3', 'stock': 0}, {}, {}]
+== product feeds, one at a time
+-- load ProductSchema {"many":false} {}
+> [{"sku": "P-1", "name": "Kettle", "price": 25.0, "stock": 3, "tags": ["new", "eco"], "cents": 2500}, {"sku": "P-2", "name": "Mug", "price": 7.5, "tags": ["sale"], "cents": "750", "color": "red"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> [{"sku": "P-1", "name": "test", "price": -1, "tags": ["new", "hot"], "avoid": ["lead"]}, {"sku": "P-1", "name": "Spoon", "price": 1, "stock": 0, "tags": ["sale"]}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> []
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"sku": "P-9"}
+errors {'name': ['Missing data for required field.'], 'price': ['Missing data for required field.']}
+valid {'sku': 'P-9', 'stock': 0}
+> [{"sku": "P-3", "name": "Bowl", "price": 12, "cents": "x"}, "nope", null]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+== contacts
+-- roundtrip ContactSchema {} {}
+> {"email": "a.b+tag@sub.example.com", "homepage": "https://example.com", "avatar": "/img/me.png", "mirror": "ftp://files.example.com/pub", "intranet": "http://wiki/", "path": "/docs/index.html", "phone": "+1 (555) 123-4567", "code": "XYZ", "id": "12345678123456781234567812345678", "kind": "person"}
+ok {'avatar': '/img/me.png', 'code': 'XYZ', 'email': 'a.b+tag@sub.example.com', 'homepage': 'https://example.com', 'id': UUID('12345678-1234-5678-1234-567812345678'), 'intranet': 'http://wiki/', 'kind': 'person', 'mirror': 'ftp://files.example.com/pub', 'path': '/docs/index.html', 'phone': '+1 (555) 123-4567'}
+= {"email": "a.b+tag@sub.example.com", "homepage": "https://example.com", "avatar": "/img/me.png", "mirror": "ftp://files.example.com/pub", "intranet": "http://wiki/", "path": "/docs/index.html", "phone": "+1 (555) 123-4567", "code": "XYZ", "id": "12345678-1234-5678-1234-567812345678", "kind": "person"}
+> {"email": "@example.com", "homepage": "example.com", "avatar": "img me.png", "mirror": "http://files.example.com", "intranet": "http://wiki", "path": "https://example.com/docs", "phone": "123", "code": "xyz", "id": "12345678-1234-5678-1234-56781234567", "kind": "robot"}
+errors {'avatar': ['Not a valid URL.'], 'code': ['Must be equal to XYZ.'], 'email': ['Not a valid email address.'], 'homepage': ['Not a valid URL.'], 'id': ['Not a valid UUID.'], 'kind': ['Must be one of: person, company, 3.'], 'mirror': ['Not a valid URL.'], 'path': ['Not a valid URL.'], 'phone': ['String does not match expected pattern.']}
+valid {'intranet': 'http://wiki'}
+> {"email": "user@sub.-bad.com", "homepage": "HTTPS://EXAMPLE.COM:8080/a?b=c#d", "avatar": "https://cdn.example.com/a.png", "mirror": "sftp://host.example.org", "intranet": "https://localhost", "path": "?q=1", "phone": "555 1234 ext", "kind": 3}
+errors {'email': ['Not a valid email address.'], 'kind': ['Not a valid string.']}
+valid {'avatar': 'https://cdn.example.com/a.png', 'homepage': 'HTTPS://EXAMPLE.COM:8080/a?b=c#d', 'intranet': 'https://localhost', 'mirror': 'sftp://host.example.org', 'path': '?q=1', 'phone': '555 1234 ext'}
+> {"email": "x@y.z", "homepage": "http://user:pass@example.com/", "avatar": "", "mirror": "ftp://[::1]/x", "intranet": "http://10.0.0.1:99999/", "path": "", "kind": 3.0}
+errors {'avatar': ['Not a valid URL.'], 'email': ['Not a valid email address.'], 'kind': ['Not a valid string.'], 'path': ['Not a valid URL.']}
+valid {'homepage': 'http://user:pass@example.com/', 'intranet': 'http://10.0.0.1:99999/', 'mirror': 'ftp://[::1]/x'}
+> {"email": "first.last@x.example", "homepage": "file:///etc/passwd", "avatar": "#frag", "intranet": "http://my-host/a b", "kind": true}
+errors {'homepage': ['Not a valid URL.'], 'intranet': ['Not a valid URL.'], 'kind': ['Not a valid string.']}
+valid {'avatar': '#frag', 'email': 'first.last@x.example'}
+> {"email": "üser@example.com", "homepage": "http://xn--mnchen-3ya.de/", "avatar": "//cdn.example.com/x.png", "intranet": "http://a.b.c.d.e/", "phone": "+44 20 7946 0958 999 999 99", "kind": null}
+errors {'intranet': ['Not a valid URL.'], 'kind': ['Field may not be null.']}
+valid {'avatar': '//cdn.example.com/x.png', 'email': 'üser@example.com', 'homepage': 'http://xn--mnchen-3ya.de/', 'phone': '+44 20 7946 0958 999 999 99'}
+== legacy records
+-- roundtrip LegacySchema {} {}
+> {"FirstName": "Ada", "LastName": "Lovelace", "fullName": "Ada King Lovelace", "born": "18151210", "CODE": "ab-1", "tagList": "math, poetry ,engines", "price": 19.99}
+ok {'born': datetime.date(1815, 12, 10), 'first': 'Ada', 'full': {'family': 'Lovelace', 'given': 'Ada'}, 'last': 'Lovelace', 'legacy_code': 'AB-1', 'price_cents': 1999, 'source_keys': ['CODE', 'FirstName', 'LastName', 'born', 'fullName', 'price', 'tagList'], 'tags': ['math', 'poetry', 'engines']}
+= {"firstName": "Ada", "lastName": "Lovelace", "fullName": "Ada Lovelace", "born": "18151210", "shout": "ADA", "CODE": "AB-1", "tagList": "['math', 'poetry', 'engines']", "price": 1999.0, "note": "(none)"}
+> {"firstname": "Alan", "fullname": "Turing", "price": "4.125", "code": "x"}
+ok {'first': 'Alan', 'full': {'family': 'Turing', 'given': 'Turing'}, 'legacy_code': 'X', 'price_cents': 412, 'source_keys': ['code', 'firstname', 'fullname', 'price']}
+= {"firstName": "Alan", "fullName": "Alan", "shout": "ALAN", "CODE": "X", "price": 412.0, "note": "(none)"}
+> {"lastName": "Hopper", "born": "1906-12-09", "price": true}
+errors {'born': ['Not a valid date.'], 'firstName': ['Missing data for required field.'], 'price': ['Not a valid number.']}
+valid {'last': 'Hopper'}
+== strict records
+-- roundtrip StrictSchema {} {}
+> {"a": 1, "b": "x", "secret": "s", "when": "01.02.2024"}
+ok {'a': 1, 'b': 'x', 'secret': 's', 'when': datetime.datetime(2024, 2, 1, 0, 0)}
+= {"a": 1, "b": "x", "when": "01.02.2024"}
+> {"a": "x", "c": 1.5, "d": 4, "when": "2024-02-01", "nums": [1, "two", 3, "four"]}
+errors {'a': ['Not a valid integer.'], 'c': ['Field {0} is not allowed.'], 'd': ['Field {0} is not allowed.'], 'nums': {1: ['Not a valid integer.'], 3: ['Not a valid integer.']}, 'when': ['Not a valid datetime.']}
+valid {'nums': [1, 3]}
+> "scalar"
+errors {'_schema': ['Expected an object.']}
+valid {}
+== strict records, fields
+-- init StrictSchema {}
+fields a, b, secret, when, nums
+load a, b, secret, when, nums
+dump a, b, when, nums
+-- init StrictSchema {"only":["a","z"]}
+! ValueError: Invalid fields for <StrictSchema(many=False)>: OrderedSet(['z']).
+-- init StrictSchema {"exclude":["b","q"]}
+! ValueError: Invalid fields for <StrictSchema(many=False)>: OrderedSet(['q']).
+-- init StrictSchema {"only":["b","a","c"]}
+fields b, a
+load b, a
+dump b, a
+== envelopes
+-- load EnvelopeSchema {} {}
+> {"data": {"id": 1}}
+ok {'id': 1, 'kind': 'note'}
+> {"id": 2, "kind": "banned"}
+errors {'kind': ['Banned kind.']}
+valid {'id': 2, 'kind': 'banned'}
+> {"data": [{"id": 3}, {"id": 4, "kind": "task"}]}
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> [{"id": 5}, {"data": {"id": 6}}, {"kind": "x"}]
+errors {'_schema': ['Invalid input type.']}
+valid {}
+> {"items": [{"id": 7}, {"id": 8, "kind": "banned"}]}
+errors {'_schema': ['Invalid input type.']}
+valid {}
+-- load EnvelopeSchema {} {"many":true}
+> {"data": {"id": 1}}
+errors {0: {'_schema': ['Invalid input type.']}}
+valid [{}]
+> {"id": 2, "kind": "banned"}
+errors {0: {'_schema': ['Invalid input type.']}, 1: {'_schema': ['Invalid input type.']}}
+valid [{}, {}]
+> {"data": [{"id": 3}, {"id": 4, "kind": "task"}]}
+errors {0: {'_schema': ['Invalid input type.']}}
+valid [{}]
+> [{"id": 5}, {"data": {"id": 6}}, {"kind": "x"}]
+errors {2: {'id': ['Missing data for required field.']}}
+valid [{'id': 5, 'kind': 'note'}, {'id': 6, 'kind': 'note'}, {'kind': 'x'}]
+> {"items": [{"id": 7}, {"id": 8, "kind": "banned"}]}
+errors {'kind': ['Banned kind.']}
+valid [{'id': 7, 'kind': 'note', 'n': 0}, {'id': 8, 'kind': 'banned', 'n': 1}]
+== schemas that cannot be built
+-- init CollidingKeys {}
+! ValueError: The data_key argument for one or more fields collides with another field's name or data_key argument. Check the following field names and data_key arguments: ['x']
+-- init CollidingAttrs {}
+! ValueError: The attribute argument for one or more fields collides with another field's name or attribute argument. Check the following field names and attribute arguments: ['z']
+-- init RequiredDefault {}
+! ValueError: 'load_default' must not be set for required fields.
+-- init BadPrecision {}
+! ValueError: The precision must be one of: weeks, days, hours, minutes, seconds, milliseconds, microseconds.
+-- init UserSchema {"only":["username","address.city"],"exclude":["email"]}
+fields username, address
+load username, address
+dump username, address
+-- init OrderSchema {"exclude":["items.qty"],"dump_only":["id"]}
+fields id, customer, watchers, billing, items, status, placed, ship_by, notes, total, coupon
+load customer, watchers, billing, items, status, placed, ship_by, notes, coupon
+dump id, customer, watchers, billing, items, status, placed, ship_by, notes, total, coupon
