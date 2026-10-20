@@ -16596,6 +16596,11 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
     }
+    // `KARAC_MIR_LITERAL_TABLES=0` builds a table of literals on every call
+    // (`literal_tables`).
+    if std::env::var("KARAC_MIR_LITERAL_TABLES").as_deref() != Ok("0") {
+        crate::mir::literal_tables::promote_literal_tables(&mut lowered.program, &coroutines);
+    }
     // `KARAC_MIR_RC_BORROW=0` counts every handle read out of a borrowed
     // parameter (`rc_borrow`).
     if std::env::var("KARAC_MIR_RC_BORROW").as_deref() != Ok("0") {

@@ -154,6 +154,40 @@ fn karac_build_mir_in_codegen_units_matches_one_unit() {
     }
 }
 
+/// A table of literals only borrowed is a static, built once
+/// (`mir::literal_tables`); one pushed to or returned stays a local `Vec`.
+/// Compiled, both print what the interpreter prints.
+#[test]
+fn mir_build_literal_tables_match_the_interpreter() {
+    const SRC: &str = r#"
+fn morse(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-.."];
+    let mut out = String.new();
+    for b in word.bytes() { out.push_str(codes[(b - 97) as i64]); }
+    out
+}
+fn step(k: i64) -> i64 {
+    let d = [1, 0, -1, 0];
+    d[k] + d.len() as i64
+}
+fn grown() -> Vec[String] {
+    let mut t = ["x", "y"];
+    t.push("z".to_string());
+    t
+}
+fn main() {
+    let mut n = 0;
+    for i in 0..1000 { n = n + morse("abcd".to_string()).len() + step(i % 4); }
+    println(f"{n} {morse("dcba".to_string())} {grown().len()}");
+}
+"#;
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, "17000 -..-.-.-....- 3\n", "at -O{opt}");
+        }
+    }
+}
+
 /// `#[derive(Serialize, Deserialize)]` and `Json` compiled: the same text
 /// as on the MIR interpreter (`tests/mir_serde.rs`), at -O0 and -O2.
 const SERDE_PROGRAM: &str = r#"

@@ -19,6 +19,7 @@ pub mod fs;
 pub mod interp;
 pub mod layout;
 pub mod library_prune;
+pub mod literal_tables;
 pub mod lower;
 pub mod movecheck;
 pub mod parse;
