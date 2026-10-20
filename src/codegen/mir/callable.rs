@@ -733,6 +733,96 @@ impl<'ctx> Cx<'ctx, '_> {
         b.build_store(v_src, buf).map_err(e)?;
         b.build_store(v_dst, scratch).map_err(e)?;
         b.build_store(v_w, width).map_err(e)?;
+        // A start at width 1 insertion-sorts runs of INSERTION_RUN in
+        // place instead of the narrowest passes (interp.rs
+        // `insertion_runs`): an element moves left past each it is
+        // strictly less than.
+        let run = i64t.const_int(crate::mir::interp::INSERTION_RUN as u64, false);
+        let x = b
+            .build_alloca(i8t.array_type(size as u32), "elem")
+            .map_err(e)?;
+        let (ins, r_head, r_body, k_head, k_body, s_head, s_test, s_body, s_done) = (
+            bb("ins"),
+            bb("ins.run"),
+            bb("ins.run.body"),
+            bb("ins.k"),
+            bb("ins.k.body"),
+            bb("ins.shift"),
+            bb("ins.shift.cmp"),
+            bb("ins.shift.body"),
+            bb("ins.put"),
+        );
+        let first = b
+            .build_int_compare(IntPredicate::EQ, width, one, "")
+            .map_err(e)?;
+        b.build_conditional_branch(first, ins, w_head).map_err(e)?;
+        b.position_at_end(ins);
+        b.build_store(v_lo, zero).map_err(e)?;
+        b.build_unconditional_branch(r_head).map_err(e)?;
+        // for lo in (0..n).step_by(RUN)
+        b.position_at_end(r_head);
+        let lo = ld(v_lo)?;
+        let ins_done = bb("ins.done");
+        b.build_conditional_branch(lt(lo, n)?, r_body, ins_done)
+            .map_err(e)?;
+        b.position_at_end(r_body);
+        let lo = ld(v_lo)?;
+        b.build_store(v_k, b.build_int_add(lo, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(k_head).map_err(e)?;
+        // for k in lo + 1 .. min(lo + RUN, n)
+        b.position_at_end(k_head);
+        let (lo, k) = (ld(v_lo)?, ld(v_k)?);
+        let hi = umin(b.build_int_add(lo, run, "").map_err(e)?, n)?;
+        let r_next = bb("ins.run.next");
+        b.build_conditional_branch(lt(k, hi)?, k_body, r_next)
+            .map_err(e)?;
+        b.position_at_end(r_next);
+        b.build_store(v_lo, b.build_int_add(lo, run, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(r_head).map_err(e)?;
+        b.position_at_end(k_body);
+        let k = ld(v_k)?;
+        b.build_memcpy(x, 1, at(buf, k)?, 1, sz).map_err(e)?;
+        b.build_store(v_j, k).map_err(e)?;
+        b.build_unconditional_branch(s_head).map_err(e)?;
+        // while j > lo && cmp(x, buf[j - 1]) < 0
+        b.position_at_end(s_head);
+        let (lo, j) = (ld(v_lo)?, ld(v_j)?);
+        b.build_conditional_branch(lt(lo, j)?, s_test, s_done)
+            .map_err(e)?;
+        b.position_at_end(s_test);
+        let j = ld(v_j)?;
+        let j1 = b.build_int_sub(j, one, "").map_err(e)?;
+        let pj1 = at(buf, j1)?;
+        let o = b
+            .build_call(cmp, &[ctx.into(), x.into(), pj1.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let less = b
+            .build_int_compare(IntPredicate::SLT, o, o.get_type().const_zero(), "")
+            .map_err(e)?;
+        b.build_conditional_branch(less, s_body, s_done)
+            .map_err(e)?;
+        b.position_at_end(s_body);
+        let j = ld(v_j)?;
+        let j1 = b.build_int_sub(j, one, "").map_err(e)?;
+        b.build_memcpy(at(buf, j)?, 1, at(buf, j1)?, 1, sz)
+            .map_err(e)?;
+        b.build_store(v_j, j1).map_err(e)?;
+        b.build_unconditional_branch(s_head).map_err(e)?;
+        b.position_at_end(s_done);
+        let j = ld(v_j)?;
+        b.build_memcpy(at(buf, j)?, 1, x, 1, sz).map_err(e)?;
+        let k = ld(v_k)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(k_head).map_err(e)?;
+        // The merges start past the sorted runs.
+        b.position_at_end(ins_done);
+        b.build_store(v_w, run).map_err(e)?;
         b.build_unconditional_branch(w_head).map_err(e)?;
         // while width < limit
         b.position_at_end(w_head);
@@ -779,30 +869,51 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(e)?;
         let k1 = b.build_int_add(k, one, "").map_err(e)?;
         b.build_store(v_k, k1).map_err(e)?;
-        b.build_conditional_branch(less, take_j, take_i)
+        // Branch free: which side is taken is as random as the data, so
+        // a branch on it mispredicts about half the time. LLVM turns a
+        // `select` here back into a branch, so the choice is arithmetic on
+        // a mask it cannot see through.
+        let took_j = b.build_int_z_extend(less, i64t, "").map_err(e)?;
+        let took_j = opaque_i64(self.llcx, b, took_j)?;
+        let mask = b.build_int_sub(zero, took_j, "").map_err(e)?;
+        let gap = b.build_int_sub(j, i, "").map_err(e)?;
+        let off = b.build_and(gap, mask, "").map_err(e)?;
+        let x = b.build_int_add(i, off, "").map_err(e)?;
+        b.build_memcpy(pk, 1, at(src, x)?, 1, sz).map_err(e)?;
+        let took_i = b.build_int_sub(one, took_j, "").map_err(e)?;
+        b.build_store(v_j, b.build_int_add(j, took_j, "").map_err(e)?)
             .map_err(e)?;
-        for (blk, from, v, x) in [(take_j, pj, v_j, j), (take_i, pi, v_i, i)] {
-            b.position_at_end(blk);
-            b.build_memcpy(pk, 1, from, 1, sz).map_err(e)?;
-            let x1 = b.build_int_add(x, one, "").map_err(e)?;
-            b.build_store(v, x1).map_err(e)?;
-            b.build_unconditional_branch(m_head).map_err(e)?;
-        }
-        // The rest of each run.
+        b.build_store(v_i, b.build_int_add(i, took_i, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(m_head).map_err(e)?;
+        // The rest of each run, an element at a time: a merge of random
+        // runs leaves a few, too few for a call to `memcpy`.
         b.position_at_end(tail);
+        b.build_unconditional_branch(take_i).map_err(e)?;
+        b.position_at_end(take_i);
         let (src, dst) = (ldp(v_src)?, ldp(v_dst)?);
         let (i, j, k) = (ld(v_i)?, ld(v_j)?, ld(v_k)?);
-        let left = b.build_int_sub(mid, i, "").map_err(e)?;
-        let bytes = b.build_int_mul(left, sz, "").map_err(e)?;
-        b.build_memcpy(at(dst, k)?, 1, at(src, i)?, 1, bytes)
+        let from_i = lt(i, mid)?;
+        let more = b.build_or(from_i, lt(j, hi)?, "").map_err(e)?;
+        let rest = bb("run.rest");
+        b.build_conditional_branch(more, take_j, rest).map_err(e)?;
+        b.position_at_end(take_j);
+        let x = b
+            .build_select(from_i, i, j, "")
+            .map_err(e)?
+            .into_int_value();
+        b.build_memcpy(at(dst, k)?, 1, at(src, x)?, 1, sz)
             .map_err(e)?;
-        let k = b.build_int_add(k, left, "").map_err(e)?;
-        let right = b.build_int_sub(hi, j, "").map_err(e)?;
-        let bytes = b.build_int_mul(right, sz, "").map_err(e)?;
-        b.build_memcpy(at(dst, k)?, 1, at(src, j)?, 1, bytes)
+        let step_i = b.build_int_z_extend(from_i, i64t, "").map_err(e)?;
+        let step_j = b.build_int_sub(one, step_i, "").map_err(e)?;
+        b.build_store(v_i, b.build_int_add(i, step_i, "").map_err(e)?)
             .map_err(e)?;
-        let k = b.build_int_add(k, right, "").map_err(e)?;
-        b.build_store(v_k, k).map_err(e)?;
+        b.build_store(v_j, b.build_int_add(j, step_j, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(take_i).map_err(e)?;
+        b.position_at_end(rest);
         let lo = ld(v_lo)?;
         b.build_store(v_lo, b.build_int_add(lo, w2, "").map_err(e)?)
             .map_err(e)?;
@@ -939,4 +1050,29 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.position_at_end(done);
         Ok(())
     }
+}
+
+/// `v`, through an empty `asm` the optimizer cannot look into, so
+/// arithmetic on it is not folded back into a `select` or a branch.
+fn opaque_i64<'ctx>(
+    llcx: &'ctx inkwell::context::Context,
+    b: &inkwell::builder::Builder<'ctx>,
+    v: IntValue<'ctx>,
+) -> R<IntValue<'ctx>> {
+    let i64t = llcx.i64_type();
+    let ft = i64t.fn_type(&[i64t.into()], false);
+    let asm = llcx.create_inline_asm(
+        ft,
+        String::new(),
+        "=r,0".to_string(),
+        false,
+        false,
+        None,
+        false,
+    );
+    Ok(b.build_indirect_call(ft, asm, &[v.into()], "")
+        .map_err(e)?
+        .try_as_basic_value()
+        .unwrap_basic()
+        .into_int_value())
 }

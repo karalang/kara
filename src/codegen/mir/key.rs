@@ -601,14 +601,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 let x = self.float_of(x, ty)?;
                 let y = self.load(b, ty)?;
                 let y = self.float_of(y, ty)?;
-                let lt = self
-                    .builder
-                    .build_float_compare(inkwell::FloatPredicate::OLT, x, y, "")
-                    .map_err(e)?;
-                let gt = self
-                    .builder
-                    .build_float_compare(inkwell::FloatPredicate::OGT, x, y, "")
-                    .map_err(e)?;
+                // NaN after every number, as the interpreter's `cmp_key`.
+                use inkwell::FloatPredicate as P;
+                let b = &self.builder;
+                let lt = b.build_float_compare(P::OLT, x, y, "").map_err(e)?;
+                let gt = b.build_float_compare(P::OGT, x, y, "").map_err(e)?;
+                let x_nan = b.build_float_compare(P::UNO, x, x, "").map_err(e)?;
+                let y_nan = b.build_float_compare(P::UNO, y, y, "").map_err(e)?;
+                let x_num = b.build_not(x_nan, "").map_err(e)?;
+                let y_num = b.build_not(y_nan, "").map_err(e)?;
+                let to_nan = b.build_and(x_num, y_nan, "").map_err(e)?;
+                let from_nan = b.build_and(x_nan, y_num, "").map_err(e)?;
+                let lt = b.build_or(lt, to_nan, "").map_err(e)?;
+                let gt = b.build_or(gt, from_nan, "").map_err(e)?;
                 return self.ord_of(lt, gt);
             }
             TyKind::Float(_) => {

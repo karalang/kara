@@ -546,12 +546,28 @@ pub unsafe extern "C" fn karac_mir_str_test(
 pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const u8, n: usize) {
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
+    // The trims and an ASCII sort build the result in place, with no
+    // string in between.
+    let view = match op {
+        0 => Some(s.trim()),
+        3 => Some(s.trim_start()),
+        4 => Some(s.trim_end()),
+        5 if s.is_ascii() => Some(s),
+        _ => None,
+    };
+    if let Some(v) = view {
+        // SAFETY: as above.
+        unsafe {
+            string_of(out, v.as_bytes());
+            if op == 5 && !(*out).ptr.is_null() {
+                std::slice::from_raw_parts_mut((*out).ptr, (*out).len).sort_unstable();
+            }
+        }
+        return;
+    }
     let t = match op {
-        0 => s.trim().to_string(),
         1 => s.to_uppercase(),
         2 => s.to_lowercase(),
-        3 => s.trim_start().to_string(),
-        4 => s.trim_end().to_string(),
         _ => {
             let mut cs: Vec<char> = s.chars().collect();
             cs.sort_unstable();
@@ -1941,6 +1957,10 @@ unsafe fn merge_sort(
 /// every backend (B-2026-10-13-18).
 const MERGE_BLOCK: usize = 1024;
 
+/// The runs [`merge_widths`] insertion-sorts when it starts at width 1,
+/// as the interpreter's `INSERTION_RUN` and the emitted sort do.
+const INSERTION_RUN: usize = 16;
+
 /// The bottom-up merge of [`merge_sort`], between `buf` and one scratch
 /// buffer: widths 1, 2, 4, ..., the right element first only when
 /// strictly less. Past [`MERGE_BLOCK`] elements, every width below it runs
@@ -1983,7 +2003,10 @@ unsafe fn merge_passes<const N: usize>(
 }
 
 /// The passes of widths `width`, `2 * width`, ... below `limit` over the
-/// `n` elements at `buf`, using `tmp` (room for `n`), ending in `buf`.
+/// `n` elements at `buf`, using `tmp` (room for `n`), ending in `buf`. A
+/// start at width 1 insertion-sorts runs of [`INSERTION_RUN`] in place
+/// instead of the narrowest passes (an element moves left past each it is
+/// strictly less than).
 ///
 /// # Safety
 /// `buf` and `tmp` hold `n` elements of `size` bytes and do not overlap.
@@ -2009,6 +2032,25 @@ unsafe fn merge_widths<const N: usize>(
             }
         }
     };
+    if width == 1 {
+        let mut x = vec![0u8; size];
+        for lo in (0..n).step_by(INSERTION_RUN) {
+            let hi = (lo + INSERTION_RUN).min(n);
+            for k in lo + 1..hi {
+                // SAFETY: indices below `n`; `x` holds one element.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(at(buf, k), x.as_mut_ptr(), size);
+                    let mut j = k;
+                    while j > lo && cmp(x.as_ptr(), at(buf, j - 1)) < 0 {
+                        std::ptr::copy_nonoverlapping(at(buf, j - 1), at(buf, j), size);
+                        j -= 1;
+                    }
+                    std::ptr::copy_nonoverlapping(x.as_ptr(), at(buf, j), size);
+                }
+            }
+        }
+        width = INSERTION_RUN;
+    }
     while width < limit {
         let mut k = 0;
         for lo in (0..n).step_by(2 * width) {

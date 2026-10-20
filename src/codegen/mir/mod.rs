@@ -66,8 +66,8 @@ use crate::mir::{Body, Place, TerminatorKind, Ty, TyInterner};
 
 /// The largest body, in blocks and in statements, that is hinted for
 /// inlining ([`Cx::lower_body`]).
-const INLINE_HINT_MAX_BLOCKS: usize = 16;
-const INLINE_HINT_MAX_STATEMENTS: usize = 24;
+const INLINE_HINT_MAX_BLOCKS: usize = 32;
+const INLINE_HINT_MAX_STATEMENTS: usize = 32;
 
 pub(crate) type R<T> = Result<T, String>;
 
@@ -161,6 +161,14 @@ pub struct Cx<'ctx, 'p> {
     ret_by_value: Option<Option<BasicTypeEnum<'ctx>>>,
     /// The borrow flags the body being lowered can hold (`flag.rs`).
     flags: Vec<flag::FlagSlot<'ctx>>,
+    /// The function's one abort block per message, with the phis that
+    /// bring it each site (`abort_with`).
+    abort_blocks: Vec<(
+        String,
+        inkwell::basic_block::BasicBlock<'ctx>,
+        inkwell::values::PhiValue<'ctx>,
+        inkwell::values::PhiValue<'ctx>,
+    )>,
     /// `KARAC_MIR_FLAGS=0` emits no borrow flags.
     flags_on: bool,
     /// The global holding each static, by index.
@@ -197,6 +205,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             wrap_todo: Vec::new(),
             ret_by_value: None,
             flags: Vec::new(),
+            abort_blocks: Vec::new(),
             flags_on: std::env::var("KARAC_MIR_FLAGS").as_deref() != Ok("0"),
             statics: HashMap::new(),
             debug: None,
@@ -287,6 +296,21 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.module.get_function(name).unwrap_or_else(|| {
             let f = self.module.add_function(name, ty, Some(Linkage::External));
             self.bool_abi(f, true);
+            // The runtime's `-> !` functions: a call to one is a path the
+            // optimizer may treat as rare, so a check that aborts does not
+            // weigh against inlining the function it is in.
+            if matches!(
+                name,
+                "karac_mir_abort_at" | "karac_mir_abort" | "karac_mir_exit"
+            ) {
+                for a in ["noreturn", "cold", "nounwind"] {
+                    let k = Attribute::get_named_enum_kind_id(a);
+                    f.add_attribute(
+                        AttributeLoc::Function,
+                        self.llcx.create_enum_attribute(k, 0),
+                    );
+                }
+            }
             f
         })
     }
@@ -669,8 +693,34 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         // with every value passed by pointer, a body this size can cost
         // just over 225 and stay a call in the loop that runs it.
         // `KARAC_MIR_INLINEHINT=0` leaves the hint out.
-        let statements: usize = body.blocks.iter().map(|b| b.statements.len()).sum();
-        if body.blocks.len() <= INLINE_HINT_MAX_BLOCKS
+        // Storage markers and `()` stores emit nothing, so only the rest
+        // count.
+        let statements: usize = body
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter(|st| match &st.kind {
+                crate::mir::syntax::StatementKind::StorageLive(_)
+                | crate::mir::syntax::StatementKind::StorageDead(_)
+                | crate::mir::syntax::StatementKind::Nop => false,
+                crate::mir::syntax::StatementKind::Assign(p, _) => {
+                    !matches!(self.layout(crate::mir::place_ty::place_ty(body, self.tys, p).map(|t| t.ty).unwrap_or(self.tys.unit())), Ok(l) if l.size == 0)
+                }
+                _ => true,
+            })
+            .count();
+        // An overflow check's abort, and a block that only jumps on, cost
+        // nothing on the path that runs, so they do not count against it.
+        let blocks = body
+            .blocks
+            .iter()
+            .filter(|b| match b.terminator.kind {
+                TerminatorKind::Abort { .. } | TerminatorKind::Unreachable => false,
+                TerminatorKind::Goto { .. } => !b.statements.is_empty(),
+                _ => true,
+            })
+            .count();
+        if blocks <= INLINE_HINT_MAX_BLOCKS
             && statements <= INLINE_HINT_MAX_STATEMENTS
             && std::env::var("KARAC_MIR_INLINEHINT").as_deref() != Ok("0")
         {
@@ -685,6 +735,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.debug_enter(name, &fn_symbol(name), start, f);
         self.body = Some(body);
         self.locals.clear();
+        self.abort_blocks.clear();
         // A by-value body's parameters, in order, skipping those passed as
         // nothing.
         let mut incoming = f.get_param_iter();

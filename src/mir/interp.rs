@@ -822,6 +822,11 @@ const SWEEP_FLOOR: usize = 1 << 20;
 /// shares (runtime/src/mir.rs `MERGE_BLOCK`).
 pub const MERGE_BLOCK: usize = 1024;
 
+/// The runs a merge sort's first width insertion-sorts before its first
+/// merge, in the same schedule on every backend (runtime/src/mir.rs
+/// `INSERTION_RUN`). A power of two dividing [`MERGE_BLOCK`].
+pub const INSERTION_RUN: usize = 16;
+
 /// A table's removed-entry slots ([`Interp::table_holes`]).
 #[derive(Default)]
 struct Holes {
@@ -2835,8 +2840,10 @@ impl<'a> Interp<'a> {
     /// A stable merge sort of `0..n` under `cmp`, which may call into the
     /// program; the result lists the old index of each new position.
     ///
-    /// Bottom-up: widths 1, 2, 4, ..., the right element first only when
-    /// strictly less. Past [`MERGE_BLOCK`] elements, every width below it
+    /// Bottom-up: runs of [`INSERTION_RUN`] are insertion-sorted (an
+    /// element moves left past each it is strictly less than), then merged
+    /// at widths 16, 32, ..., the right element first only when strictly
+    /// less. Past [`MERGE_BLOCK`] elements, every width below it
     /// runs one block at a time before the wider passes. Those merges are
     /// the same as a full pass would make, taken block by block so a
     /// compiled sort stays in cache. The compiled backend runs this
@@ -2849,11 +2856,12 @@ impl<'a> Interp<'a> {
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<Vec<usize>> {
         let mut order: Vec<usize> = (0..n).collect();
-        let mut width = 1;
+        let mut width;
         if n > MERGE_BLOCK {
             for b in (0..n).step_by(MERGE_BLOCK) {
                 let end = (b + MERGE_BLOCK).min(n);
-                let mut w = 1;
+                self.insertion_runs(&mut order, b, end, cmp)?;
+                let mut w = INSERTION_RUN;
                 while w < MERGE_BLOCK {
                     let out = self.merge_pass(&order, b, end, w, cmp)?;
                     order[b..end].copy_from_slice(&out);
@@ -2861,12 +2869,38 @@ impl<'a> Interp<'a> {
                 }
             }
             width = MERGE_BLOCK;
+        } else {
+            self.insertion_runs(&mut order, 0, n, cmp)?;
+            width = INSERTION_RUN;
         }
         while width < n {
             order = self.merge_pass(&order, 0, n, width, cmp)?;
             width *= 2;
         }
         Ok(order)
+    }
+
+    /// Insertion-sorts each [`INSERTION_RUN`] of `order[from..to]`.
+    fn insertion_runs(
+        &mut self,
+        order: &mut [usize],
+        from: usize,
+        to: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<()> {
+        for lo in (from..to).step_by(INSERTION_RUN) {
+            let hi = (lo + INSERTION_RUN).min(to);
+            for k in lo + 1..hi {
+                let x = order[k];
+                let mut j = k;
+                while j > lo && cmp(self, x, order[j - 1])?.is_lt() {
+                    order[j] = order[j - 1];
+                    j -= 1;
+                }
+                order[j] = x;
+            }
+        }
+        Ok(())
     }
 
     /// One merge pass of width `width` over `order[from..to]`.
@@ -12474,7 +12508,11 @@ fn cmp_key(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering::Equal;
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(Equal),
+        // NaN sorts after every number, as `F64`'s order does (design.md
+        // § total-order floats), so a sort has a consistent order to keep.
+        (Value::Float(x), Value::Float(y)) => x
+            .partial_cmp(y)
+            .unwrap_or_else(|| x.is_nan().cmp(&y.is_nan())),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Char(x), Value::Char(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),

@@ -116,22 +116,51 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `karac_mir_abort_at(msg, at)`, which does not return: `msg` (or a
-    /// `panic`'s own message), at the place `debug.rs` names.
+    /// `panic`'s own message), at the place `debug.rs` names. The function
+    /// has one such call per message, which each site jumps to with its
+    /// place, so an overflow check costs a branch where it is rather than
+    /// a call (and a function full of them stays small enough to inline).
     pub(super) fn abort_with(&mut self, msg: &str) -> R<()> {
-        let (s, n) = self.str_const(msg)?;
         let (at, at_n) = self.abort_site()?;
-        let pt = self.ptr_ty();
-        let i64t = self.llcx.i64_type();
-        let f = self.extern_fn(
-            "karac_mir_abort_at",
-            self.llcx
-                .void_type()
-                .fn_type(&[pt.into(), i64t.into(), pt.into(), i64t.into()], false),
-        );
-        self.builder
-            .build_call(f, &[s.into(), n.into(), at.into(), at_n.into()], "")
-            .map_err(e)?;
-        self.builder.build_unreachable().map_err(e)?;
+        let here = self.builder.get_insert_block().ok_or("no block")?;
+        // Shims and helpers are built outside `lower_body`, so a block is
+        // shared only within the function it was made in.
+        let func = here.get_parent();
+        let i = match self
+            .abort_blocks
+            .iter()
+            .position(|a| a.0 == msg && a.1.get_parent() == func)
+        {
+            Some(i) => i,
+            None => {
+                let (s, n) = self.str_const(msg)?;
+                let pt = self.ptr_ty();
+                let i64t = self.llcx.i64_type();
+                let f = self.extern_fn(
+                    "karac_mir_abort_at",
+                    self.llcx
+                        .void_type()
+                        .fn_type(&[pt.into(), i64t.into(), pt.into(), i64t.into()], false),
+                );
+                let block = self.llcx.append_basic_block(self.cur_fn()?, "abort");
+                self.builder.position_at_end(block);
+                let p = self.builder.build_phi(pt, "at").map_err(e)?;
+                let l = self.builder.build_phi(i64t, "at.len").map_err(e)?;
+                let (pv, lv) = (p.as_basic_value(), l.as_basic_value());
+                self.builder
+                    .build_call(f, &[s.into(), n.into(), pv.into(), lv.into()], "")
+                    .map_err(e)?;
+                self.builder.build_unreachable().map_err(e)?;
+                self.builder.position_at_end(here);
+                self.abort_blocks.push((msg.to_string(), block, p, l));
+                self.abort_blocks.len() - 1
+            }
+        };
+        let (_, block, p, l) = &self.abort_blocks[i];
+        p.add_incoming(&[(&at, here)]);
+        l.add_incoming(&[(&at_n, here)]);
+        let block = *block;
+        self.builder.build_unconditional_branch(block).map_err(e)?;
         Ok(())
     }
 
