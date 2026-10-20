@@ -1,0 +1,3 @@
+# Mirrors tests/codegen/io_runtime.rs::test_e2e_file_seek_positions_and_reads: {path} is a temp file the program creates then reopens.
+[holes]
+path = "{tmp}/karac_e2e_file_seek.bin"

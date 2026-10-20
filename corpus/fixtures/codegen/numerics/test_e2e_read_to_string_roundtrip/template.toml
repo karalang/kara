@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/numerics.rs::test_e2e_read_to_string_roundtrip: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_read_to_string.txt"
+
+[files]
+"karac_e2e_read_to_string.txt" = "alpha\nbeta\n"

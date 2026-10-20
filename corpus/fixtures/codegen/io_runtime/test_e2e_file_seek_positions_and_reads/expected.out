@@ -1,0 +1,5 @@
+pos 2
+read 2 b0 67
+end 3
+cur 3
+neg rejected

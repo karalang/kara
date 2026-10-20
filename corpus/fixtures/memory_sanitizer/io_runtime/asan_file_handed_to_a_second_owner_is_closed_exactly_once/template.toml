@@ -1,0 +1,6 @@
+# Mirrors tests/memory_sanitizer/io_runtime.rs::asan_file_handed_to_a_second_owner_is_closed_exactly_once: {path} is file_fixture_path("file_second_owner"), a pre-written temp file.
+[holes]
+path = "{tmp}/karac_asan_file_second_owner.txt"
+
+[files]
+"karac_asan_file_second_owner.txt" = "ABCDEFGH"

@@ -1,0 +1,3 @@
+# Mirrors tests/codegen/numerics.rs::test_e2e_fs_write_then_read_round_trips: {path} is a temp file the program writes then reads.
+[holes]
+path = "{tmp}/karac_e2e_fs_write_rt.txt"

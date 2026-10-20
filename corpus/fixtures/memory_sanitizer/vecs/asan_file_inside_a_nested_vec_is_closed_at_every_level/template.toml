@@ -1,0 +1,6 @@
+# Mirrors tests/memory_sanitizer/vecs.rs::asan_file_inside_a_nested_vec_is_closed_at_every_level: {path} is file_fixture_path("file_nested_vec"), a pre-written temp file.
+[holes]
+path = "{tmp}/karac_asan_file_nested_vec.txt"
+
+[files]
+"karac_asan_file_nested_vec.txt" = "ABCDEFGH"

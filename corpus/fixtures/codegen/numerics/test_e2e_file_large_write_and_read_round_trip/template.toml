@@ -1,0 +1,5 @@
+# Mirrors tests/codegen/numerics.rs::test_e2e_file_large_write_and_read_round_trip: {path} is a temp file the program creates.
+# Its test checks this file after the run.
+show_files = ["karac_e2e_file_f6_large.bin"]
+[holes]
+path = "{tmp}/karac_e2e_file_f6_large.bin"

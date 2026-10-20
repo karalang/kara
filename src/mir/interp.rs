@@ -627,6 +627,7 @@ fn run_with(
         interners: Vec::new(),
         http_builders: Vec::new(),
         http_headers: rustc_hash::FxHashMap::default(),
+        http_bodies: rustc_hash::FxHashMap::default(),
         http_request: crate::http1::Request::default(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
@@ -995,6 +996,9 @@ struct Interp<'a> {
     /// own for as long as the response lives (`karac_runtime_http_client_mir_send`
     /// keys the compiled backend's the same way).
     http_headers: rustc_hash::FxHashMap<AllocId, Vec<(String, String)>>,
+    /// A client response's body bytes, by the body's `String` box: what
+    /// `Response.bytes()` returns, which the lossy `String` cannot hold.
+    http_bodies: rustc_hash::FxHashMap<AllocId, Vec<u8>>,
     /// The request a `Server.serve` handler is answering, which `Request`'s
     /// methods read.
     http_request: crate::http1::Request,
@@ -10426,6 +10430,8 @@ impl<'a> Interp<'a> {
         self.table_holes.remove(&id);
         self.deque_front.remove(&id);
         self.caps.remove(&id);
+        self.http_headers.remove(&id);
+        self.http_bodies.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
         }
@@ -11055,11 +11061,14 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Response", "bytes") => {
-                let text = match field(1) {
-                    Some(v) => self.string_at(&v)?,
+                let raw = match field(1) {
+                    Some(Value::Box(id)) if self.http_bodies.contains_key(&id) => {
+                        self.http_bodies[&id].clone()
+                    }
+                    Some(v) => self.string_at(&v)?.into_bytes(),
                     None => return err(format!("{name} of {recv:?}")),
                 };
-                let bytes = text.bytes().map(|b| Value::Int(i128::from(b))).collect();
+                let bytes = raw.into_iter().map(|b| Value::Int(i128::from(b))).collect();
                 Ok(self.alloc_box("Vec", Value::Agg(bytes)))
             }
             ("Response", "header" | "headers") => {
@@ -11130,10 +11139,15 @@ impl<'a> Interp<'a> {
                     .into_iter()
                     .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
                     .collect();
-                let body = resp.into_string().unwrap_or_default();
-                let body = self.alloc_box("String", Value::Str(body));
+                // The body as it came, which `bytes()` returns: a body that is
+                // not UTF-8 keeps its bytes there, as the compiled backend's does.
+                let mut raw = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
+                let text = String::from_utf8_lossy(&raw).into_owned();
+                let body = self.alloc_box("String", Value::Str(text));
                 if let Value::Box(id) = body {
                     self.http_headers.insert(id, headers);
+                    self.http_bodies.insert(id, raw);
                 }
                 let response = Value::Agg(vec![Value::Int(status), body]);
                 self.variant_named(ret, None, "Ok", vec![response])

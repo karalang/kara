@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/moves.rs::test_e2e_file_moved_into_a_struct_survives_a_function_return: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_file_moved_into_struct.txt"
+
+[files]
+"karac_e2e_file_moved_into_struct.txt" = "ABCDEFGH"

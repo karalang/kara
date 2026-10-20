@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/vecs.rs::test_e2e_file_moved_into_a_vec_outlives_its_origin_binding: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_file_moved_into_vec.txt"
+
+[files]
+"karac_e2e_file_moved_into_vec.txt" = "ABCDEFGH"

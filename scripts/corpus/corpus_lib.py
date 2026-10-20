@@ -79,10 +79,17 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
     env.update(spec.get("env", {}))
     env.update({k: str(v) for k, v in env_extra.items()})
     driver = read_toml(entry / "driver.toml") or None
+    template = read_toml(entry / "template.toml") or None
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="corpus-") as tmp:
         tmpd = Path(tmp)
-        shutil.copy(entry / source, tmpd / "source.kara")
+        origin = None
+        if template is None:
+            shutil.copy(entry / source, tmpd / "source.kara")
+        else:
+            origin = Origin(template["origin"]) if "origin" in template else None
+            (tmpd / "source.kara").write_text(
+                render_template((entry / source).read_text(), template, tmpd, origin))
         try:
             if spec.get("check"):
                 c = subprocess.run([karac, "check", "source.kara"], cwd=tmpd, env=env,
@@ -106,8 +113,118 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
         except subprocess.TimeoutExpired as t:
             return {"status": "timeout", "exit": None, "stdout": t.stdout or b"", "stderr": t.stderr or b"",
                     "secs": time.monotonic() - start}
-    return {"status": "ran", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr,
+        finally:
+            if origin is not None:
+                origin.stop()
+        stdout = r.stdout
+        if origin is not None and origin.record:
+            stdout += b"=== origin ===\n" + origin.transcript()
+        # Files whose contents its test checks after the run.
+        for name in (template or {}).get("show_files", []):
+            f = tmpd / name
+            stdout += f"=== file {name} ===\n".encode() + (f.read_bytes() if f.exists() else b"(missing)\n")
+    return {"status": "ran", "exit": r.returncode, "stdout": stdout, "stderr": r.stderr,
             "secs": time.monotonic() - start}
+
+
+# A `{{`, a `}}` or a `{name}` hole of a Rust `format!` template.
+HOLE = re.compile(r"\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
+    """A `format!` template entry, filled in. `template.toml`'s `[holes]` gives
+    each hole's value as its test fills it in; a value may name `{tmp}`, the
+    run's own directory (for a file the program writes or reads), and
+    `{origin_port}`, the port of the HTTP origin `[origin]` describes.
+    `[files]` are written into that directory first, and the contents of the
+    files `show_files` names end the entry's stdout, each after a
+    `=== file <name> ===` line, for a test that checks a file after the run."""
+    fills = {"tmp": str(tmpd), "origin_port": str(origin.port) if origin else ""}
+    holes = {k: str(v).format(**fills) for k, v in template.get("holes", {}).items()}
+    for name, text in template.get("files", {}).items():
+        (tmpd / name).write_text(text)
+
+    def fill(m):
+        if m.group(1) is None:
+            return m.group(0)[0]
+        if m.group(1) not in holes:
+            raise KeyError(f"template.toml has no value for the hole {{{m.group(1)}}}")
+        return holes[m.group(1)]
+    return HOLE.sub(fill, src)
+
+
+class Origin:
+    """The HTTP server a client entry talks to, standing in for the one its
+    Rust test starts: on 127.0.0.1, port 0, answering every request with
+    `reply`. With `record = true` the entry's stdout ends with
+    `=== origin ===` and each request it got: the request line, the headers
+    named in `record_headers` (in that order, names in lower case) and the
+    body, with CRLF written as LF."""
+
+    def __init__(self, spec: dict):
+        import socket
+        import threading
+        self.reply = spec["reply"].encode("latin-1")
+        self.record = bool(spec.get("record"))
+        self.headers = [h.lower() for h in spec.get("record_headers", [])]
+        self.seen = []
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(10)
+                data = b""
+                try:
+                    while b"\r\n\r\n" not in data:
+                        got = conn.recv(65536)
+                        if not got:
+                            break
+                        data += got
+                    head, _, body = data.partition(b"\r\n\r\n")
+                    lines = head.split(b"\r\n")
+                    fields = {}
+                    for line in lines[1:]:
+                        k, _, v = line.partition(b":")
+                        fields[k.strip().lower().decode("latin-1")] = v.strip()
+                    want = int(fields.get("content-length", b"0") or 0)
+                    while len(body) < want:
+                        got = conn.recv(65536)
+                        if not got:
+                            break
+                        body += got
+                    self.seen.append((lines[0], fields, body))
+                    conn.sendall(self.reply)
+                except OSError:
+                    pass
+
+    def stop(self):
+        import socket
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)  # wakes the blocked accept (a close alone does not)
+        except OSError:
+            pass
+        self.sock.close()
+        self.thread.join(1)
+
+    def transcript(self) -> bytes:
+        out = b""
+        for line, fields, body in self.seen:
+            out += line + b"\n"
+            for h in self.headers:
+                if h in fields:
+                    out += h.encode() + b": " + fields[h] + b"\n"
+            out += b"\n" + body + b"\n"
+        return out
 
 
 def execute(cmd: list, cwd: Path, env: dict, timeout: float, driver):

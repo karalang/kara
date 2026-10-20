@@ -1,0 +1,6 @@
+# Mirrors tests/memory_sanitizer/vecs.rs::asan_file_moved_into_a_vec_is_closed_by_the_vec: {path} is file_fixture_path("file_into_vec"), a pre-written temp file.
+[holes]
+path = "{tmp}/karac_asan_file_into_vec.txt"
+
+[files]
+"karac_asan_file_into_vec.txt" = "ABCDEFGH"

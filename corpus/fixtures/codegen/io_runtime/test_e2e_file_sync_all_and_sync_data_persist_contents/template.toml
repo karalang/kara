@@ -1,0 +1,5 @@
+# Mirrors tests/codegen/io_runtime.rs::test_e2e_file_sync_all_and_sync_data_persist_contents: {path} is a temp file the program creates.
+# Its test checks this file after the run.
+show_files = ["karac_e2e_file_sync_pair.txt"]
+[holes]
+path = "{tmp}/karac_e2e_file_sync_pair.txt"

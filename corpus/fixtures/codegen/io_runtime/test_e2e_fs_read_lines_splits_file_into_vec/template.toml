@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/io_runtime.rs::test_e2e_fs_read_lines_splits_file_into_vec: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_fs_read_lines.txt"
+
+[files]
+"karac_e2e_fs_read_lines.txt" = "alpha\nbeta\n\ndelta\n"

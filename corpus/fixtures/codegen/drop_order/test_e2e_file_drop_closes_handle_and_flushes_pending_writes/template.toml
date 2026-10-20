@@ -1,0 +1,5 @@
+# Mirrors tests/codegen/drop_order.rs::test_e2e_file_drop_closes_handle_and_flushes_pending_writes: {path} is a temp file the program creates.
+# Its test checks this file after the run.
+show_files = ["karac_e2e_file_f6_drop_flushes.txt"]
+[holes]
+path = "{tmp}/karac_e2e_file_f6_drop_flushes.txt"

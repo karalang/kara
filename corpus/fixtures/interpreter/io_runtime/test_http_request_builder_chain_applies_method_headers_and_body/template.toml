@@ -1,0 +1,9 @@
+# The port tests/interpreter/io_runtime.rs fills in. Its echo origin answers
+# with the method, X-A, X-B and body it saw; this one records them instead.
+[holes]
+port = "{origin_port}"
+
+[origin]
+reply = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+record = true
+record_headers = ["x-a", "x-b"]

@@ -662,9 +662,10 @@ fn nanosecond_clocks_match_the_interpreter() {
 }
 
 /// A loopback HTTP/1.1 server for the client test, on its own thread:
-/// `GET /hello` is "hi", `GET /empty` empty, any other `GET` a 404, `POST`
-/// echoes its body and `PUT` its method, body and `X-Echo` header (as a
-/// header too, with a 201). Every response carries `X-Kara: yes`.
+/// `GET /hello` is "hi", `GET /empty` empty, `GET /binary` four bytes that
+/// are not UTF-8, any other `GET` a 404, `POST` echoes its body and `PUT`
+/// its method, body and `X-Echo` header (as a header too, with a 201).
+/// Every other response carries `X-Kara: yes`.
 fn http_server() -> u16 {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -699,6 +700,13 @@ fn http_server() -> u16 {
                     let mut body = vec![0; len];
                     if r.read_exact(&mut body).is_err() {
                         return;
+                    }
+                    if path == "/binary" {
+                        let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n\xff\xfe\x00\x41";
+                        if out.write_all(reply).is_err() {
+                            return;
+                        }
+                        continue;
                     }
                     let body = String::from_utf8_lossy(&body).into_owned();
                     let (code, text, extra) = match (method.as_str(), path.as_str()) {
@@ -777,6 +785,13 @@ fn main() {
         Ok(r) => println(f"empty {r.status()} [{r.body()}]"),
         Err(e) => println(f"empty failed: {e.message()}"),
     }
+    match c.get(f"{base}/binary") {
+        Ok(r) => {
+            let b = r.bytes();
+            println(f"binary {b.len()} bytes, {b[0]} {b[1]} {b[2]} {b[3]}");
+        }
+        Err(e) => println(f"binary failed: {e.message()}"),
+    }
     match c.get("http://127.0.0.1:1/") {
         Ok(r) => println(f"refused? {r.status()}"),
         Err(e) => println(f"refused: {e.message()}"),
@@ -802,6 +817,7 @@ fn http_client_natives_match_the_interpreter() {
             "get 200 [hi] 2 bytes\nheader yes\nno absent header\nlisted yes\n\
              post 200 [posted body]\nsend 201 [PUT built body]\nechoed from builder\n\
              missing: http://127.0.0.1:{port}/missing: status code 404\nempty 200 []\n\
+             binary 4 bytes, 255 254 0 65\n\
              refused: http://127.0.0.1:1/: connect failed: {refused}\n"
         )
     );

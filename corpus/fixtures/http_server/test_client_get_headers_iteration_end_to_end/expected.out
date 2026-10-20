@@ -1,0 +1,4 @@
+content-length=2
+x-custom=custom-value
+x-trace-id=trace-42
+connection=close

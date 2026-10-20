@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/option_result.rs::test_e2e_lowercase_fs_read_lines_question_unwrap: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_lc_fs_read_lines.txt"
+
+[files]
+"karac_e2e_lc_fs_read_lines.txt" = "first line\nsecond\n\nfourth line\n"

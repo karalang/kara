@@ -1,0 +1,9 @@
+# The values tests/http_server.rs fills in, and the origin it starts; its
+# test also asserts the header the origin saw, so the request is recorded.
+[holes]
+url = "http://127.0.0.1:{origin_port}/test"
+
+[origin]
+reply = "HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nhello-from-origin\n"
+record = true
+record_headers = ["x-trace-id"]

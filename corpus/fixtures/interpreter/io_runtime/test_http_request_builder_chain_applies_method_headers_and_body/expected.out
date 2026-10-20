@@ -1,0 +1,8 @@
+200
+ok
+=== origin ===
+PUT /p HTTP/1.1
+x-a: one
+x-b: two
+
+payload42

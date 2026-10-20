@@ -1,0 +1,6 @@
+# Mirrors tests/codegen/option_result.rs::test_e2e_file_open_question_passes_through_ok: {path} is a temp file the test pre-writes.
+[holes]
+path = "{tmp}/karac_e2e_file_f5_open_ok.txt"
+
+[files]
+"karac_e2e_file_f5_open_ok.txt" = "seed"

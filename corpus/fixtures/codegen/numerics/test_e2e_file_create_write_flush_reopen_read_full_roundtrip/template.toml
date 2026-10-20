@@ -1,0 +1,5 @@
+# Mirrors tests/codegen/numerics.rs::test_e2e_file_create_write_flush_reopen_read_full_roundtrip: {path} is a temp file the program creates then reopens.
+# Its test checks this file after the run.
+show_files = ["karac_e2e_file_f6_roundtrip.txt"]
+[holes]
+path = "{tmp}/karac_e2e_file_f6_roundtrip.txt"

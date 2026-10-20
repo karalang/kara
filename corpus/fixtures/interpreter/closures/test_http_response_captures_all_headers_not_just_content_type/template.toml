@@ -1,0 +1,7 @@
+# The port tests/interpreter/closures.rs fills in, and the headers its echo
+# origin (tests/interpreter.rs spawn_echo_origin) sends.
+[holes]
+port = "{origin_port}"
+
+[origin]
+reply = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Echo: yes\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
