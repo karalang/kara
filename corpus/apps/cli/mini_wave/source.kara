@@ -1,0 +1,1905 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters property files hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or n == 0xfffe or n == 0xffff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ text helpers (from mini_urlparse)
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+// str.split(sep) for a one-byte separator
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let sep_s = (sep as char).to_string();
+    let mut out: Vec[String] = Vec.new();
+    for part in s.split(sep_s) {
+        out.push(part.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+// ------------------------------------------------------------ errors
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn wave_error(msg: Str) -> Exc {
+    Exc { kind: "Error".to_string(), msg: msg.to_string() }
+}
+
+fn bare(kind: Str) -> Exc {
+    Exc { kind: kind.to_string(), msg: String.new() }
+}
+
+fn not_found(path: ref String) -> Exc {
+    Exc { kind: "FileNotFoundError".to_string(), msg: f"[Errno 2] No such file or directory: {py_repr_str(path)}" }
+}
+
+fn err_text(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push_str(hex_digits(*x as i64, 2));
+    }
+    out
+}
+
+fn le(b: ref Vec[u8], at: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    let mut k = n;
+    while k > 0 {
+        k -= 1;
+        v = v * 256 + b[at + k] as i64;
+    }
+    v
+}
+
+fn put_le(out: mut ref Vec[u8], v: i64, n: i64) {
+    for k in 0..n {
+        out.push(((v >> (8 * k)) & 0xFF) as u8);
+    }
+}
+
+fn same(b: ref Vec[u8], s: Str) -> bool {
+    *b == to_bytes(s)
+}
+
+// ------------------------------------------------------------ wave.py's _Chunk
+// The file is its bytes and a position; seeking past the end is allowed
+// and reads there give nothing, as with a real file. The RIFF chunk reads
+// from the file and every other chunk reads from the RIFF chunk, so a
+// RIFF size that is too small or too big shows through, as in wave.py.
+
+struct RawFile {
+    data: Vec[u8],
+    pos: i64,
+}
+
+fn raw_read(f: mut ref RawFile, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k < n and f.pos < f.data.len() {
+        out.push(f.data[f.pos]);
+        f.pos += 1;
+        k += 1;
+    }
+    out
+}
+
+struct Chunk {
+    name: Vec[u8],
+    size: i64,
+    size_read: i64,
+    offset: i64,
+}
+
+fn header_of(name: own Vec[u8], size_bytes: ref Vec[u8], offset: i64) -> Result[Chunk, Exc] {
+    if name.len() < 4 {
+        return Err(bare("EOFError"));
+    }
+    if size_bytes.len() < 4 {
+        return Err(bare("EOFError"));
+    }
+    Ok(Chunk { name: name, size: le(size_bytes, 0, 4), size_read: 0, offset: offset })
+}
+
+fn riff_open(f: mut ref RawFile) -> Result[Chunk, Exc] {
+    let name = raw_read(mut f, 4);
+    if name.len() < 4 {
+        return Err(bare("EOFError"));
+    }
+    let size = raw_read(mut f, 4);
+    header_of(name, size, f.pos)
+}
+
+// How many bytes a read of `size` takes from a chunk.
+fn read_len(c: ref Chunk, size: i64) -> i64 {
+    let left = c.size - c.size_read;
+    if size < 0 or size > left { left } else { size }
+}
+
+fn riff_read(f: mut ref RawFile, riff: mut ref Chunk, size: i64) -> Vec[u8] {
+    if riff.size_read >= riff.size {
+        return Vec.new();
+    }
+    let data = raw_read(mut f, read_len(riff, size));
+    riff.size_read += data.len();
+    if riff.size_read == riff.size and (riff.size & 1) == 1 {
+        let pad = raw_read(mut f, 1);
+        riff.size_read += pad.len();
+    }
+    data
+}
+
+fn riff_seek(f: mut ref RawFile, riff: mut ref Chunk, pos: i64) -> Result[(), Exc] {
+    if pos < 0 or pos > riff.size {
+        return Err(bare("RuntimeError"));
+    }
+    f.pos = riff.offset + pos;
+    riff.size_read = pos;
+    Ok(())
+}
+
+fn inner_open(f: mut ref RawFile, riff: mut ref Chunk) -> Result[Chunk, Exc] {
+    let name = riff_read(mut f, mut riff, 4);
+    if name.len() < 4 {
+        return Err(bare("EOFError"));
+    }
+    let size = riff_read(mut f, mut riff, 4);
+    header_of(name, size, riff.size_read)
+}
+
+fn inner_read(f: mut ref RawFile, riff: mut ref Chunk, c: mut ref Chunk, size: i64) -> Vec[u8] {
+    if c.size_read >= c.size {
+        return Vec.new();
+    }
+    let data = riff_read(mut f, mut riff, read_len(c, size));
+    c.size_read += data.len();
+    if c.size_read == c.size and (c.size & 1) == 1 {
+        let pad = riff_read(mut f, mut riff, 1);
+        c.size_read += pad.len();
+    }
+    data
+}
+
+fn inner_seek(f: mut ref RawFile, riff: mut ref Chunk, c: mut ref Chunk, pos: i64) -> Result[(), Exc] {
+    if pos < 0 or pos > c.size {
+        return Err(bare("RuntimeError"));
+    }
+    riff_seek(mut f, mut riff, c.offset + pos)?;
+    c.size_read = pos;
+    Ok(())
+}
+
+// skip(): a relative seek of the RIFF chunk, which refuses to go past
+// its end with a bare RuntimeError that skip() does not catch.
+fn inner_skip(f: mut ref RawFile, riff: mut ref Chunk, c: mut ref Chunk) -> Result[(), Exc] {
+    let mut n = c.size - c.size_read;
+    if (c.size & 1) == 1 {
+        n += 1;
+    }
+    let to = n + riff.size_read;
+    riff_seek(mut f, mut riff, to)?;
+    c.size_read += n;
+    Ok(())
+}
+
+// ------------------------------------------------------------ Wave_read
+
+struct Reader {
+    file: RawFile,
+    riff: Chunk,
+    data: Chunk,
+    nchannels: i64,
+    sampwidth: i64,
+    framerate: i64,
+    framesize: i64,
+    nframes: i64,
+    soundpos: i64,
+    seek_needed: bool,
+}
+
+struct Fmt {
+    nchannels: i64,
+    sampwidth: i64,
+    framerate: i64,
+}
+
+fn uuid_le(b: ref Vec[u8]) -> String {
+    let order = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+    let mut out = String.new();
+    for i in 0..16 {
+        if i == 4 or i == 6 or i == 8 or i == 10 {
+            out.push('-');
+        }
+        out.push_str(hex_digits(b[order[i]] as i64, 2));
+    }
+    out
+}
+
+fn read_fmt(f: mut ref RawFile, riff: mut ref Chunk, c: mut ref Chunk) -> Result[Fmt, Exc] {
+    let head = inner_read(mut f, mut riff, mut c, 14);
+    if head.len() < 14 {
+        return Err(bare("EOFError"));
+    }
+    let tag = le(head, 0, 2);
+    if tag != 1 and tag != 0xFFFE {
+        return Err(Exc { kind: "Error".to_string(), msg: f"unknown format: {tag}" });
+    }
+    let bits_b = inner_read(mut f, mut riff, mut c, 2);
+    if bits_b.len() < 2 {
+        return Err(bare("EOFError"));
+    }
+    if tag == 0xFFFE {
+        let ext = inner_read(mut f, mut riff, mut c, 8);
+        if ext.len() < 8 {
+            return Err(bare("EOFError"));
+        }
+        let sub = inner_read(mut f, mut riff, mut c, 16);
+        if sub.len() < 16 {
+            return Err(bare("EOFError"));
+        }
+        let pcm = [1u8, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
+        if sub != pcm {
+            return Err(Exc { kind: "Error".to_string(), msg: f"unknown extended format: {uuid_le(sub)}" });
+        }
+    }
+    let sampwidth = (le(bits_b, 0, 2) + 7) / 8;
+    if sampwidth == 0 {
+        return Err(wave_error("bad sample width"));
+    }
+    let nchannels = le(head, 2, 2);
+    if nchannels == 0 {
+        return Err(wave_error("bad # of channels"));
+    }
+    Ok(Fmt { nchannels: nchannels, sampwidth: sampwidth, framerate: le(head, 4, 4) })
+}
+
+fn open_reader(path: ref String) -> Result[Reader, Exc] {
+    let bytes = match fs.read_bytes(f"data/{path}") {
+        Ok(b) => b,
+        Err(_) => return Err(not_found(path)),
+    };
+    let mut file = RawFile { data: bytes, pos: 0 };
+    let mut riff = riff_open(mut file)?;
+    if not same(riff.name, "RIFF") {
+        return Err(wave_error("file does not start with RIFF id"));
+    }
+    if not same(riff_read(mut file, mut riff, 4), "WAVE") {
+        return Err(wave_error("not a WAVE file"));
+    }
+    let mut fmt: Option[Fmt] = None;
+    let mut data: Option[Chunk] = None;
+    loop {
+        let mut chunk = match inner_open(mut file, mut riff) {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+        if same(chunk.name, "fmt ") {
+            fmt = Some(read_fmt(mut file, mut riff, mut chunk)?);
+        } else if same(chunk.name, "data") {
+            if fmt.is_none() {
+                return Err(wave_error("data chunk before fmt chunk"));
+            }
+            data = Some(chunk);
+            break;
+        }
+        inner_skip(mut file, mut riff, mut chunk)?;
+    }
+    let (fm, dc) = match (fmt, data) {
+        (Some(fm), Some(dc)) => (fm, dc),
+        _ => return Err(wave_error("fmt chunk and/or data chunk missing")),
+    };
+    let framesize = fm.nchannels * fm.sampwidth;
+    let nframes = dc.size / framesize;
+    Ok(Reader {
+        file: file,
+        riff: riff,
+        data: dc,
+        nchannels: fm.nchannels,
+        sampwidth: fm.sampwidth,
+        framerate: fm.framerate,
+        framesize: framesize,
+        nframes: nframes,
+        soundpos: 0,
+        seek_needed: false,
+    })
+}
+
+impl Reader {
+    fn params(ref self) -> String {
+        f"_wave_params(nchannels={self.nchannels}, sampwidth={self.sampwidth}, framerate={self.framerate}, nframes={self.nframes}, comptype='NONE', compname='not compressed')"
+    }
+
+    fn setpos(mut ref self, pos: i64) -> Result[(), Exc] {
+        if pos < 0 or pos > self.nframes {
+            return Err(wave_error("position not in range"));
+        }
+        self.soundpos = pos;
+        self.seek_needed = true;
+        Ok(())
+    }
+
+    fn rewind(mut ref self) {
+        self.seek_needed = true;
+        self.soundpos = 0;
+    }
+
+    fn readframes(mut ref self, n: i64) -> Result[Vec[u8], Exc] {
+        if self.seek_needed {
+            inner_seek(mut self.file, mut self.riff, mut self.data, 0)?;
+            let pos = self.soundpos * self.framesize;
+            if pos != 0 {
+                inner_seek(mut self.file, mut self.riff, mut self.data, pos)?;
+            }
+            self.seek_needed = false;
+        }
+        if n == 0 {
+            return Ok(Vec.new());
+        }
+        let got = inner_read(mut self.file, mut self.riff, mut self.data, n * self.framesize);
+        self.soundpos += got.len() / self.framesize;
+        Ok(got)
+    }
+}
+
+// ------------------------------------------------------------ Wave_write
+// The file is created when the writer opens and holds what the writer
+// wrote when it closes; seek and tell work on that buffer.
+
+struct Writer {
+    path: String,
+    buf: Vec[u8],
+    pos: i64,
+    open: bool,
+    nchannels: i64,
+    sampwidth: i64,
+    framerate: i64,
+    nframes: i64,
+    nframeswritten: i64,
+    datawritten: i64,
+    datalength: i64,
+    headerwritten: bool,
+    comptype: Option[String],
+    compname: Option[String],
+    form_length_pos: i64,
+    data_length_pos: i64,
+}
+
+fn open_writer(path: ref String) -> Writer {
+    let _ = fs.write_bytes(f"data/{path}", Vec.new());
+    Writer {
+        path: path.clone(),
+        buf: Vec.new(),
+        pos: 0,
+        open: true,
+        nchannels: 0,
+        sampwidth: 0,
+        framerate: 0,
+        nframes: 0,
+        nframeswritten: 0,
+        datawritten: 0,
+        datalength: 0,
+        headerwritten: false,
+        comptype: None,
+        compname: None,
+        form_length_pos: 0,
+        data_length_pos: 0,
+    }
+}
+
+// int(round(x)): round half to even.
+fn py_round(x: f64) -> i64 {
+    let fl = x.floor();
+    let d = x - fl;
+    let n = fl as i64;
+    if d > 0.5 {
+        n + 1
+    } else if d < 0.5 {
+        n
+    } else if n % 2 == 0 {
+        n
+    } else {
+        n + 1
+    }
+}
+
+fn changing(w: ref Writer) -> Result[(), Exc] {
+    if w.datawritten != 0 {
+        return Err(wave_error("cannot change parameters after starting to write"));
+    }
+    Ok(())
+}
+
+fn no_attr(owner: Str, name: Str) -> Exc {
+    Exc { kind: "AttributeError".to_string(), msg: f"'{owner}' object has no attribute '{name}'" }
+}
+
+impl Writer {
+    fn setnchannels(mut ref self, n: i64) -> Result[(), Exc] {
+        changing(self)?;
+        if n < 1 {
+            return Err(wave_error("bad # of channels"));
+        }
+        self.nchannels = n;
+        Ok(())
+    }
+
+    fn setsampwidth(mut ref self, n: i64) -> Result[(), Exc] {
+        changing(self)?;
+        if n < 1 or n > 4 {
+            return Err(wave_error("bad sample width"));
+        }
+        self.sampwidth = n;
+        Ok(())
+    }
+
+    fn setframerate(mut ref self, rate: f64) -> Result[(), Exc] {
+        changing(self)?;
+        if rate <= 0.0 {
+            return Err(wave_error("bad frame rate"));
+        }
+        self.framerate = py_round(rate);
+        Ok(())
+    }
+
+    fn setnframes(mut ref self, n: i64) -> Result[(), Exc] {
+        changing(self)?;
+        self.nframes = n;
+        Ok(())
+    }
+
+    fn setcomptype(mut ref self, kind: ref String, name: ref String) -> Result[(), Exc] {
+        changing(self)?;
+        if kind != "NONE" {
+            return Err(wave_error("unsupported compression type"));
+        }
+        self.comptype = Some(kind.clone());
+        self.compname = Some(name.clone());
+        Ok(())
+    }
+
+    fn setparams(mut ref self, nch: i64, sw: i64, rate: i64, nframes: i64, kind: ref String, name: ref String) -> Result[(), Exc] {
+        changing(self)?;
+        self.setnchannels(nch)?;
+        self.setsampwidth(sw)?;
+        self.setframerate(rate as f64)?;
+        self.setnframes(nframes)?;
+        self.setcomptype(kind, name)
+    }
+
+    fn getparams(ref self) -> Result[String, Exc] {
+        if self.nchannels == 0 or self.sampwidth == 0 or self.framerate == 0 {
+            return Err(wave_error("not all parameters set"));
+        }
+        let kind = match self.comptype {
+            Some(k) => k.clone(),
+            None => return Err(no_attr("Wave_write", "_comptype")),
+        };
+        let name = match self.compname {
+            Some(k) => k.clone(),
+            None => return Err(no_attr("Wave_write", "_compname")),
+        };
+        Ok(f"_wave_params(nchannels={self.nchannels}, sampwidth={self.sampwidth}, framerate={self.framerate}, nframes={self.nframes}, comptype={py_repr_str(kind)}, compname={py_repr_str(name)})")
+    }
+
+    fn put(mut ref self, b: ref Vec[u8]) {
+        for x in b.iter() {
+            if self.pos < self.buf.len() {
+                self.buf[self.pos] = *x;
+            } else {
+                self.buf.push(*x);
+            }
+            self.pos += 1;
+        }
+    }
+
+    fn ensure_header(mut ref self, datasize: i64) -> Result[(), Exc] {
+        if self.headerwritten {
+            return Ok(());
+        }
+        if self.nchannels == 0 {
+            return Err(wave_error("# channels not specified"));
+        }
+        if self.sampwidth == 0 {
+            return Err(wave_error("sample width not specified"));
+        }
+        if self.framerate == 0 {
+            return Err(wave_error("sampling rate not specified"));
+        }
+        self.put(to_bytes("RIFF"));
+        if self.nframes == 0 {
+            self.nframes = datasize / (self.nchannels * self.sampwidth);
+        }
+        self.datalength = self.nframes * self.nchannels * self.sampwidth;
+        self.form_length_pos = self.pos;
+        let mut h: Vec[u8] = Vec.new();
+        put_le(mut h, 36 + self.datalength, 4);
+        for c in to_bytes("WAVEfmt ").iter() {
+            h.push(*c);
+        }
+        put_le(mut h, 16, 4);
+        put_le(mut h, 1, 2);
+        put_le(mut h, self.nchannels, 2);
+        put_le(mut h, self.framerate, 4);
+        put_le(mut h, self.nchannels * self.framerate * self.sampwidth, 4);
+        put_le(mut h, self.nchannels * self.sampwidth, 2);
+        put_le(mut h, self.sampwidth * 8, 2);
+        for c in to_bytes("data").iter() {
+            h.push(*c);
+        }
+        self.put(h);
+        self.data_length_pos = self.pos;
+        let mut n: Vec[u8] = Vec.new();
+        put_le(mut n, self.datalength, 4);
+        self.put(n);
+        self.headerwritten = true;
+        Ok(())
+    }
+
+    fn patch(mut ref self) {
+        if self.datawritten == self.datalength {
+            return;
+        }
+        let cur = self.pos;
+        let mut a: Vec[u8] = Vec.new();
+        put_le(mut a, 36 + self.datawritten, 4);
+        self.pos = self.form_length_pos;
+        self.put(a);
+        let mut b: Vec[u8] = Vec.new();
+        put_le(mut b, self.datawritten, 4);
+        self.pos = self.data_length_pos;
+        self.put(b);
+        self.pos = cur;
+        self.datalength = self.datawritten;
+    }
+
+    fn writeframesraw(mut ref self, data: ref Vec[u8]) -> Result[(), Exc] {
+        self.ensure_header(data.len())?;
+        let nframes = data.len() / (self.sampwidth * self.nchannels);
+        if not self.open {
+            return Err(no_attr("NoneType", "write"));
+        }
+        self.put(data);
+        self.datawritten += data.len();
+        self.nframeswritten += nframes;
+        Ok(())
+    }
+
+    fn writeframes(mut ref self, data: ref Vec[u8]) -> Result[(), Exc] {
+        self.writeframesraw(data)?;
+        if self.datalength != self.datawritten {
+            self.patch();
+        }
+        Ok(())
+    }
+
+    // close(): whatever happens, the file is closed with what was written.
+    fn close(mut ref self) -> Result[(), Exc] {
+        if not self.open {
+            return Ok(());
+        }
+        let mut r = self.ensure_header(0);
+        if r.is_ok() and self.datalength != self.datawritten {
+            self.patch();
+        }
+        self.open = false;
+        if let Err(e) = fs.write_bytes(f"data/{self.path}", self.buf.clone()) {
+            r = Err(Exc { kind: "OSError".to_string(), msg: f"{e}" });
+        }
+        r
+    }
+}
+// ------------------------------------------------------------ output
+
+fn show(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        let n = c as i64;
+        if c == '\r' {
+            out.push_str("<CR>");
+        } else if (n < 0x20 and c != '\t' and c != '\n') or (n >= 0x7f and n <= 0x9f) {
+            out.push_str(f"<x{hex_digits(n, 2)}>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// Every line goes out through show().
+fn emit(out: mut ref String, line: ref String) {
+    out.push_str(show(line));
+    out.push_str("\n");
+}
+
+fn short(data: ref Vec[u8]) -> String {
+    let mut head: Vec[u8] = Vec.new();
+    for i in 0..data.len() {
+        if i < 16 {
+            head.push(data[i]);
+        }
+    }
+    let more = if data.len() > 16 { "..." } else { "" };
+    f"{data.len()} bytes {hex_of(head)}{more}"
+}
+
+fn int_of(s: ref String) -> i64 {
+    i64.parse(s).unwrap_or(0)
+}
+
+// "name:arg" -> (name, arg), as str.partition(":").
+fn op_parts(op: ref String) -> (String, String) {
+    match op.find(":") {
+        Some(i) => (op[0..i].to_string(), op[(i + 1)..].to_string()),
+        None => (op.clone(), String.new()),
+    }
+}
+
+// ------------------------------------------------------------ the module, op by op
+
+fn reader_op(w: mut ref Reader, op: ref String) -> Result[String, Exc] {
+    let (name, arg) = op_parts(op);
+    if name == "params" {
+        Ok(w.params())
+    } else if name == "nframes" {
+        Ok(f"{w.nframes}")
+    } else if name == "read" {
+        Ok(short(w.readframes(int_of(arg))?))
+    } else if name == "tell" {
+        Ok(f"{w.soundpos}")
+    } else if name == "setpos" {
+        w.setpos(int_of(arg))?;
+        Ok("ok".to_string())
+    } else if name == "rewind" {
+        w.rewind();
+        Ok("ok".to_string())
+    } else {
+        Ok("None".to_string())
+    }
+}
+
+fn reader_job(path: ref String, ops: ref Vec[String], out: mut ref String) {
+    let mut w = match open_reader(path) {
+        Ok(r) => r,
+        Err(e) => {
+            emit(mut out, f"  open: {err_text(e)}");
+            return;
+        }
+    };
+    for op in ops.iter() {
+        match reader_op(mut w, op) {
+            Ok(s) => emit(mut out, f"  {op}: {s}"),
+            Err(e) => emit(mut out, f"  {op}: {err_text(e)}"),
+        }
+    }
+}
+
+fn writer_op(w: mut ref Writer, op: ref String) -> Result[String, Exc] {
+    let (name, arg) = op_parts(op);
+    if name == "nch" {
+        w.setnchannels(int_of(arg))?;
+    } else if name == "sw" {
+        w.setsampwidth(int_of(arg))?;
+    } else if name == "rate" {
+        w.setframerate(f64.parse(arg).unwrap_or(0.0))?;
+    } else if name == "nframes" {
+        w.setnframes(int_of(arg))?;
+    } else if name == "comp" {
+        let (kind, label) = op_parts(arg);
+        w.setcomptype(kind, label)?;
+    } else if name == "params" {
+        let p = split_on(arg, b',');
+        w.setparams(int_of(p[0]), int_of(p[1]), int_of(p[2]), int_of(p[3]), p[4], p[5])?;
+    } else if name == "write" {
+        w.writeframes(unhex(arg))?;
+    } else if name == "raw" {
+        w.writeframesraw(unhex(arg))?;
+    } else if name == "getnframes" or name == "tell" {
+        return Ok(f"{w.nframeswritten}");
+    } else if name == "getparams" {
+        return w.getparams();
+    } else if name == "markers" {
+        return Ok("None".to_string());
+    } else {
+        w.close()?;
+    }
+    Ok("ok".to_string())
+}
+
+fn writer_job(path: ref String, ops: ref Vec[String], out: mut ref String) {
+    let mut w = open_writer(path);
+    let mut all = ops.clone();
+    all.push("end".to_string());
+    for op in all.iter() {
+        match writer_op(mut w, op) {
+            Ok(s) => emit(mut out, f"  {op}: {s}"),
+            Err(e) => emit(mut out, f"  {op}: {err_text(e)}"),
+        }
+    }
+    let data = fs.read_bytes(f"data/{path}").unwrap_or(Vec.new());
+    emit(mut out, f"  file {data.len()} bytes: {hex_of(data)}");
+}
+
+// ------------------------------------------------------------ programs
+
+struct Clip {
+    nchannels: i64,
+    sampwidth: i64,
+    framerate: i64,
+    nframes: i64,
+    frames: Vec[Vec[i64]],
+}
+
+fn full(sw: i64) -> i64 {
+    1 << (8 * sw - 1)
+}
+
+fn decode(data: ref Vec[u8], nch: i64, sw: i64) -> Vec[Vec[i64]] {
+    let mut frames: Vec[Vec[i64]] = Vec.new();
+    let size = nch * sw;
+    let top = full(sw);
+    for i in 0..(data.len() / size) {
+        let mut frame: Vec[i64] = Vec.new();
+        for c in 0..nch {
+            let at = i * size + c * sw;
+            let s = if sw == 1 {
+                data[at] as i64 - 128
+            } else {
+                let v = le(data, at, sw);
+                if v >= top { v - 2 * top } else { v }
+            };
+            frame.push(s);
+        }
+        frames.push(frame);
+    }
+    frames
+}
+
+fn encode(frames: ref Vec[Vec[i64]], sw: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for frame in frames.iter() {
+        for s in frame.iter() {
+            if sw == 1 {
+                out.push((*s + 128) as u8);
+            } else {
+                put_le(mut out, *s, sw);
+            }
+        }
+    }
+    out
+}
+
+fn load(path: ref String) -> Result[Clip, Exc] {
+    let mut w = open_reader(path)?;
+    let n = w.nframes;
+    let data = w.readframes(n)?;
+    Ok(Clip {
+        nchannels: w.nchannels,
+        sampwidth: w.sampwidth,
+        framerate: w.framerate,
+        nframes: n,
+        frames: decode(data, w.nchannels, w.sampwidth),
+    })
+}
+
+fn describe(c: ref Clip) -> String {
+    f"{c.nchannels} ch, {c.sampwidth * 8}-bit, {c.framerate} Hz"
+}
+
+fn abs(x: i64) -> i64 {
+    if x < 0 { -x } else { x }
+}
+
+// Indexes of the first and last frames with a sample above the
+// threshold, or None.
+fn loud_span(frames: ref Vec[Vec[i64]], threshold: i64) -> Option[(i64, i64)] {
+    let mut first: i64 = -1;
+    let mut last: i64 = -1;
+    for i in 0..frames.len() {
+        let mut loud = false;
+        for s in frames[i].iter() {
+            if abs(*s) > threshold {
+                loud = true;
+            }
+        }
+        if loud {
+            if first < 0 {
+                first = i;
+            }
+            last = i;
+        }
+    }
+    if first < 0 { None } else { Some((first, last)) }
+}
+
+fn inspect(folder: ref String, out: mut ref String) {
+    let mut names = fs.read_dir(f"data/{folder}").unwrap_or(Vec.new());
+    names.sort();
+    let mut ok = 0;
+    let mut bad = 0;
+    let mut total = 0;
+    for name in names.iter() {
+        let c = match load(f"{folder}/{name}") {
+            Ok(c) => c,
+            Err(e) => {
+                emit(mut out, f"{name}: {err_text(e)}");
+                bad += 1;
+                continue;
+            }
+        };
+        emit(mut out, f"{name}: {describe(c)}, {c.nframes} frames, {c.nframes * 1000 / c.framerate} ms");
+        if c.frames.len() != c.nframes {
+            emit(mut out, f"  header says {c.nframes} frames, the file holds {c.frames.len()}");
+        }
+        let top = full(c.sampwidth);
+        let mut peaks: Vec[String] = Vec.new();
+        for ch in 0..c.nchannels {
+            let mut pk = 0;
+            for f in c.frames.iter() {
+                if abs(f[ch]) > pk {
+                    pk = abs(f[ch]);
+                }
+            }
+            peaks.push(f"{pk} ({pk * 100 / top}%)");
+        }
+        emit(mut out, f"  peak {join(peaks, " ")}");
+        match loud_span(c.frames, top / 100) {
+            None => emit(mut out, "  silent".to_string()),
+            Some((a, b)) => {
+                let tail = c.frames.len() - 1 - b;
+                emit(mut out, f"  quiet {a * 1000 / c.framerate} ms in, {tail * 1000 / c.framerate} ms out");
+            }
+        }
+        ok += 1;
+        total += c.frames.len() * 1000 / c.framerate;
+    }
+    emit(mut out, f"{ok} files read, {bad} refused, {total} ms of audio");
+}
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(data: ref Vec[u8]) -> i64 {
+    let table = crc_table();
+    let mut c = 0xFFFFFFFFu32;
+    for b in data.iter() {
+        let idx = ((c ^ (*b as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    (c ^ 0xFFFFFFFFu32) as i64
+}
+
+fn report(path: ref String, out: mut ref String) {
+    let raw = fs.read_bytes(f"data/{path}").unwrap_or(Vec.new());
+    match load(path) {
+        Ok(c) => emit(mut out, f"  wrote {path}: {describe(c)}, {c.nframes} frames, {raw.len()} bytes, crc32 {hex_digits(crc32(raw), 8)}"),
+        Err(e) => emit(mut out, f"  wrote {path}: {err_text(e)}"),
+    }
+}
+
+fn opened(path: ref String) -> Writer {
+    let parts = split_on(path, b'/');
+    let mut dir = "data".to_string();
+    for i in 0..(parts.len() - 1) {
+        dir = f"{dir}/{parts[i]}";
+    }
+    let _ = fs.create_dir_all(dir);
+    open_writer(path)
+}
+
+fn source(src: ref String, out: mut ref String) -> Option[Clip] {
+    match load(src) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            emit(mut out, f"{src}: {err_text(e)}");
+            None
+        }
+    }
+}
+
+// Python's floor division.
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn finish(w: mut ref Writer, r: own Result[(), Exc], out: mut ref String) {
+    let closed = w.close();
+    if let Err(e) = r {
+        emit(mut out, f"  {err_text(e)}");
+    } else if let Err(e) = closed {
+        emit(mut out, f"  {err_text(e)}");
+    }
+}
+
+fn write_chunked(w: mut ref Writer, frames: ref Vec[Vec[i64]], sw: i64, step: i64, raw: bool) -> Result[(), Exc] {
+    let mut i = 0;
+    while i < frames.len() {
+        let mut part: Vec[Vec[i64]] = Vec.new();
+        let mut k = i;
+        while k < i + step and k < frames.len() {
+            part.push(frames[k].clone());
+            k += 1;
+        }
+        let bytes = encode(part, sw);
+        if raw {
+            w.writeframesraw(bytes)?;
+        } else {
+            w.writeframes(bytes)?;
+        }
+        i += step;
+    }
+    Ok(())
+}
+
+fn mixdown(src: ref String, dst: ref String, out: mut ref String) {
+    let c = match source(src, mut out) {
+        Some(c) => c,
+        None => return,
+    };
+    if c.nchannels == 1 {
+        emit(mut out, f"{src} is already mono");
+        return;
+    }
+    let mut mono: Vec[Vec[i64]] = Vec.new();
+    for f in c.frames.iter() {
+        let mut sum = 0;
+        for s in f.iter() {
+            sum += *s;
+        }
+        mono.push([floor_div(sum, c.nchannels)]);
+    }
+    emit(mut out, f"mixdown {src}: {mono.len()} frames");
+    let mut w = opened(dst);
+    let r = set_format(mut w, 1, c.sampwidth, c.framerate);
+    let r2 = if r.is_ok() { write_chunked(mut w, mono, c.sampwidth, 256, false) } else { r };
+    finish(mut w, r2, mut out);
+    report(dst, mut out);
+}
+
+fn set_format(w: mut ref Writer, nch: i64, sw: i64, rate: i64) -> Result[(), Exc] {
+    w.setnchannels(nch)?;
+    w.setsampwidth(sw)?;
+    w.setframerate(rate as f64)?;
+    Ok(())
+}
+
+fn normalize(src: ref String, dst: ref String, pct: i64, out: mut ref String) {
+    let c = match source(src, mut out) {
+        Some(c) => c,
+        None => return,
+    };
+    let mut peak = 0;
+    for f in c.frames.iter() {
+        for s in f.iter() {
+            if abs(*s) > peak {
+                peak = abs(*s);
+            }
+        }
+    }
+    if peak == 0 {
+        emit(mut out, f"{src} is silent, nothing to normalize");
+        return;
+    }
+    let top = full(c.sampwidth);
+    let target = top * pct / 100;
+    let mut loud: Vec[Vec[i64]] = Vec.new();
+    let mut newpeak = 0;
+    for f in c.frames.iter() {
+        let mut nf: Vec[i64] = Vec.new();
+        for s in f.iter() {
+            let mut v = floor_div(*s * target, peak);
+            if v > top - 1 {
+                v = top - 1;
+            }
+            if v < -top {
+                v = -top;
+            }
+            if abs(v) > newpeak {
+                newpeak = abs(v);
+            }
+            nf.push(v);
+        }
+        loud.push(nf);
+    }
+    emit(mut out, f"normalize {src}: peak {peak} -> {newpeak}");
+    let mut w = opened(dst);
+    let kind = "NONE".to_string();
+    let label = "not compressed".to_string();
+    let mut r = w.setparams(c.nchannels, c.sampwidth, c.framerate, loud.len(), kind, label);
+    if r.is_ok() {
+        r = w.writeframes(encode(loud, c.sampwidth));
+    }
+    finish(mut w, r, mut out);
+    report(dst, mut out);
+}
+
+fn trim(src: ref String, dst: ref String, pct: i64, out: mut ref String) {
+    let c = match source(src, mut out) {
+        Some(c) => c,
+        None => return,
+    };
+    let (a, b) = match loud_span(c.frames, full(c.sampwidth) * pct / 100) {
+        Some(s) => s,
+        None => {
+            emit(mut out, f"{src}: nothing left after trimming");
+            return;
+        }
+    };
+    let mut keep: Vec[Vec[i64]] = Vec.new();
+    for i in a..(b + 1) {
+        keep.push(c.frames[i].clone());
+    }
+    emit(mut out, f"trim {src}: {a} frames from the start, {c.frames.len() - 1 - b} from the end");
+    let mut w = opened(dst);
+    let r = set_format(mut w, c.nchannels, c.sampwidth, c.framerate);
+    let r2 = if r.is_ok() { write_chunked(mut w, keep, c.sampwidth, 100, true) } else { r };
+    finish(mut w, r2, mut out);
+    report(dst, mut out);
+}
+
+fn convert(src: ref String, dst: ref String, bits: i64, out: mut ref String) {
+    let c = match source(src, mut out) {
+        Some(c) => c,
+        None => return,
+    };
+    let sw = bits / 8;
+    let d = 8 * (sw - c.sampwidth);
+    let mut conv: Vec[Vec[i64]] = Vec.new();
+    for f in c.frames.iter() {
+        let mut nf: Vec[i64] = Vec.new();
+        for s in f.iter() {
+            nf.push(if d >= 0 { *s << d } else { *s >> (-d) });
+        }
+        conv.push(nf);
+    }
+    emit(mut out, f"convert {src}: {c.sampwidth * 8}-bit to {bits}-bit");
+    let mut w = opened(dst);
+    let mut r = set_format(mut w, c.nchannels, sw, c.framerate);
+    if r.is_ok() {
+        r = w.writeframes(encode(conv, sw));
+    }
+    finish(mut w, r, mut out);
+    report(dst, mut out);
+}
+
+fn concat(playlist: ref String, dst: ref String, out: mut ref String) {
+    let text = read_text(playlist);
+    let mut want: Option[Clip] = None;
+    let mut clips: Vec[Vec[u8]] = Vec.new();
+    let mut total_bytes = 0;
+    for name in split_on(text, b'\n').iter() {
+        if name.len() == 0 or name.starts_with("#") {
+            continue;
+        }
+        let c = match load(name) {
+            Ok(c) => c,
+            Err(e) => {
+                emit(mut out, f"  skipping {name}: {err_text(e)}");
+                continue;
+            }
+        };
+        let matches_want = match want {
+            None => true,
+            Some(ref wc) => wc.nchannels == c.nchannels and wc.sampwidth == c.sampwidth and wc.framerate == c.framerate,
+        };
+        if not matches_want {
+            let wd = match want {
+                Some(ref wc) => describe(wc),
+                None => String.new(),
+            };
+            emit(mut out, f"  skipping {name}: {describe(c)}, want {wd}");
+            continue;
+        }
+        emit(mut out, f"  {name}: {c.frames.len()} frames");
+        let bytes = encode(c.frames, c.sampwidth);
+        total_bytes += bytes.len();
+        clips.push(bytes);
+        if want.is_none() {
+            want = Some(c);
+        }
+    }
+    let wc = match want {
+        Some(wc) => wc,
+        None => {
+            emit(mut out, f"concat {playlist}: nothing to write");
+            return;
+        }
+    };
+    let mut w = opened(dst);
+    let mut r = set_format(mut w, wc.nchannels, wc.sampwidth, wc.framerate);
+    for clip in clips.iter() {
+        if r.is_ok() {
+            r = w.writeframes(clip);
+        }
+    }
+    emit(mut out, f"concat {playlist}: {clips.len()} clips, {total_bytes / (wc.nchannels * wc.sampwidth)} frames");
+    finish(mut w, r, mut out);
+    report(dst, mut out);
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())).iter() {
+        let job = split_on(line, b'\t');
+        emit(mut out, f"== {join(job, " ")}");
+        let kind = job[0].clone();
+        let mut rest: Vec[String] = Vec.new();
+        for i in 2..job.len() {
+            rest.push(job[i].clone());
+        }
+        if kind == "reader" {
+            reader_job(job[1], rest, mut out);
+        } else if kind == "writer" {
+            writer_job(job[1], rest, mut out);
+        } else if kind == "inspect" {
+            inspect(job[1], mut out);
+        } else if kind == "mixdown" {
+            mixdown(job[1], job[2], mut out);
+        } else if kind == "normalize" {
+            normalize(job[1], job[2], int_of(job[3]), mut out);
+        } else if kind == "trim" {
+            trim(job[1], job[2], int_of(job[3]), mut out);
+        } else if kind == "convert" {
+            convert(job[1], job[2], int_of(job[3]), mut out);
+        } else if kind == "concat" {
+            concat(job[1], job[2], mut out);
+        }
+    }
+    print(out);
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("reader\tuploads/01-intro.wav\tparams\tnframes\tread:4\ttell\tread:2\tsetpos:2398\tread:10\ttell\trewind\tread:1\n");
+    t.push_str("reader\tuploads/02-interview.wav\tparams\tread:3\tsetpos:1102\tread:5\tsetpos:1103\tsetpos:-1\ttell\n");
+    t.push_str("reader\tuploads/03-phone.wav\tparams\tread:6\tread:0\ttell\n");
+    t.push_str("reader\tuploads/04-music.wav\tparams\tread:2\n");
+    t.push_str("reader\tuploads/05-extensible.wav\tparams\tread:2\n");
+    t.push_str("reader\tuploads/10-cut-off.wav\tparams\tread:3000\ttell\tsetpos:1000\tread:4\ttell\n");
+    t.push_str("reader\tuploads/14-12bit.wav\tparams\tread:3\n");
+    t.push_str("reader\tuploads/21-odd.wav\tparams\tsetpos:299\tread:5\ttell\n");
+    t.push_str("reader\tuploads/22-long-riff.wav\tparams\tread:40\ttell\n");
+    t.push_str("reader\tuploads/24-quiet.wav\tmarkers\n");
+    t.push_str("reader\tuploads/06-float.wav\tparams\n");
+    t.push_str("reader\tuploads/07-ext-float.wav\tparams\n");
+    t.push_str("reader\tuploads/08-episode.mp3.wav\tparams\n");
+    t.push_str("reader\tuploads/09-clip.avi.wav\tparams\n");
+    t.push_str("reader\tuploads/11-no-data.wav\tparams\n");
+    t.push_str("reader\tuploads/12-data-first.wav\tparams\n");
+    t.push_str("reader\tuploads/13-short-fmt.wav\tparams\n");
+    t.push_str("reader\tuploads/15-no-channels.wav\tparams\n");
+    t.push_str("reader\tuploads/16-big-list.wav\tparams\n");
+    t.push_str("reader\tuploads/17-short-riff.wav\tparams\n");
+    t.push_str("reader\tuploads/18-empty.wav\tparams\n");
+    t.push_str("reader\tuploads/19-zero-bits.wav\tparams\n");
+    t.push_str("reader\tuploads/23-fmt-only-14.wav\tparams\n");
+    t.push_str("reader\tuploads/notes.txt\tparams\n");
+    t.push_str("reader\tuploads/nothing-here.wav\tparams\n");
+    t.push_str("writer\tw1.wav\tnch:1\tsw:2\trate:8000\twrite:0100ff7f0080\n");
+    t.push_str("writer\tw2.wav\tnch:2\tsw:1\trate:22050.5\twrite:8080\tgetnframes\twrite:7f817e82\ttell\tgetparams\n");
+    t.push_str("writer\tw3.wav\tparams:1,2,8000,4,NONE,not compressed\traw:01000200\ttell\n");
+    t.push_str("writer\tw4.wav\tnch:1\tsw:2\trate:8000\tnframes:10\twrite:0100020003\n");
+    t.push_str("writer\tw5.wav\twrite:0000\n");
+    t.push_str("writer\tw6.wav\tnch:1\tsw:2\twrite:0000\n");
+    t.push_str("writer\tw7.wav\tnch:1\tsw:5\tsw:0\tnch:0\trate:0\trate:-5\tcomp:ULAW:u-law\tgetparams\tsw:3\trate:8000.5\n");
+    t.push_str("writer\tw8.wav\tnch:1\tsw:2\trate:8000\twrite:\tnch:2\twrite:01020304\tnch:1\tgetnframes\n");
+    t.push_str("writer\tw9.wav\tnch:1\tsw:1\trate:8000\twrite:808182\tclose\twrite:83\n");
+    t.push_str("writer\tw10.wav\tparams:2,3,44100,0,NONE,pcm\twrite:000000010000ffffff000080\tgetparams\n");
+    t.push_str("writer\tw11.wav\tnch:1\tsw:4\trate:96000\tgetnframes\tgetparams\tmarkers\n");
+    t.push_str("writer\tw12.wav\tnch:1\tsw:2\trate:7999.5\twrite:01\n");
+    t.push_str("inspect\tuploads\n");
+    t.push_str("mixdown\tuploads/02-interview.wav\tout/interview-mono.wav\n");
+    t.push_str("mixdown\tuploads/04-music.wav\tout/music-mono.wav\n");
+    t.push_str("mixdown\tuploads/01-intro.wav\tout/intro-mono.wav\n");
+    t.push_str("mixdown\tuploads/06-float.wav\tout/float-mono.wav\n");
+    t.push_str("normalize\tuploads/01-intro.wav\tout/intro-loud.wav\t90\n");
+    t.push_str("normalize\tuploads/03-phone.wav\tout/phone-loud.wav\t100\n");
+    t.push_str("normalize\tuploads/24-quiet.wav\tout/quiet-loud.wav\t50\n");
+    t.push_str("normalize\tuploads/20-silence.wav\tout/silence-loud.wav\t90\n");
+    t.push_str("trim\tuploads/01-intro.wav\tout/intro-trim.wav\t1\n");
+    t.push_str("trim\tuploads/02-interview.wav\tout/interview-trim.wav\t5\n");
+    t.push_str("trim\tuploads/20-silence.wav\tout/silence-trim.wav\t1\n");
+    t.push_str("trim\tuploads/21-odd.wav\tout/odd-trim.wav\t10\n");
+    t.push_str("convert\tuploads/03-phone.wav\tout/phone-16.wav\t16\n");
+    t.push_str("convert\tuploads/04-music.wav\tout/music-16.wav\t16\n");
+    t.push_str("convert\tuploads/01-intro.wav\tout/intro-8.wav\t8\n");
+    t.push_str("convert\tuploads/14-12bit.wav\tout/12bit-32.wav\t32\n");
+    t.push_str("concat\tplaylist.txt\tout/episode.wav\n");
+    t.push_str("concat\tphone-playlist.txt\tout/phone-call.wav\n");
+    t.push_str("inspect\tout\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("uploads/03-phone.wav\n");
+    t.push_str("uploads/21-odd.wav\n");
+    t.push_str("uploads/03-phone.wav\n");
+    v.push(DataFile { path: "phone-playlist.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# episode 12, in order\n");
+    t.push_str("uploads/01-intro.wav\n");
+    t.push_str("uploads/20-silence.wav\n");
+    t.push_str("uploads/02-interview.wav\n");
+    t.push_str("uploads/05-extensible.wav\n");
+    t.push_str("uploads/missing.wav\n");
+    t.push_str("uploads/10-cut-off.wav\n");
+    t.push_str("uploads/06-float.wav\n");
+    t.push_str("uploads/01-intro.wav\n");
+    v.push(DataFile { path: "playlist.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("52494646e412000057415645666d74201000000001000100401f0000803e00000200100064617461c0120000feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff01000000e10fe11d59280b2e4c2e1429001f41117901");
+    t.push_str("84f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4");
+    t.push_str("d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923");
+    t.push_str("952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d");
+    t.push_str("0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928e11de10f00001ff01fe2a7d7f5d1b4d1");
+    t.push_str("ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd999d255d196d5dbde0bec97fba80b591a");
+    t.push_str("ec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8c908dc171e241b2ce02e1b2c1e24dc17");
+    t.push_str("c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042dec25591aa80b97fb0becdbde96d555d1");
+    t.push_str("99d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1ecd6b4d1f5d1a7d71fe21ff00000e10f");
+    t.push_str("e11d59280b2e4c2e1429001f4111790184f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521");
+    t.push_str("f513690458f4a7e514dafcd238d1fbd4d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d3");
+    t.push_str("20d1e5d3e2db24e837f7550795162923952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904");
+    t.push_str("f51325216a2aab2e672dc5268d1b140d0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928");
+    t.push_str("e11de10f00001ff01fe2a7d7f5d1b4d1ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd9");
+    t.push_str("99d255d196d5dbde0bec97fba80b591aec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8");
+    t.push_str("c908dc171e241b2ce02e1b2c1e24dc17c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042d");
+    t.push_str("ec25591aa80b97fb0becdbde96d555d199d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1");
+    t.push_str("ecd6b4d1f5d1a7d71fe21ff00000e10fe11d59280b2e4c2e1429001f4111790184f145e36cd841d27fd13cd6e9df62ed");
+    t.push_str("0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4d4ddb8ea20fa3a0a1e190a25952cda2e");
+    t.push_str("952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923952bda2e952c0a251e193a0a20fab8ea");
+    t.push_str("d4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d0ffd62ede9df3cd67fd141d26cd845e3");
+    t.push_str("84f179014111001f14294c2e0b2e5928e11de10f00001ff01fe2a7d7f5d1b4d1ecd600e1bfee87fe7c0ebb1c9427bf2d");
+    t.push_str("812ec42917209e12f102ecf273e43bd999d255d196d5dbde0bec97fba80b591aec25042dc82e052b2c224815e005c6f5");
+    t.push_str("e2e6f6da6bd326d16bd4d7dc6be9abf8c908dc171e241b2ce02e1b2c1e24dc17c908abf86be9d7dc6bd426d16bd3f6da");
+    t.push_str("e2e6c6f5e00548152c22052bc82e042dec25591aa80b97fb0becdbde96d555d199d23bd973e4ecf2f1029e121720c429");
+    t.push_str("812ebf2d9427bb1c7c0e87febfee00e1ecd6b4d1f5d1a7d71fe21ff00000e10fe11d59280b2e4c2e1429001f41117901");
+    t.push_str("84f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4");
+    t.push_str("d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923");
+    t.push_str("952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d");
+    t.push_str("0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928e11de10f00001ff01fe2a7d7f5d1b4d1");
+    t.push_str("ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd999d255d196d5dbde0bec97fba80b591a");
+    t.push_str("ec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8c908dc171e241b2ce02e1b2c1e24dc17");
+    t.push_str("c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042dec25591aa80b97fb0becdbde96d555d1");
+    t.push_str("99d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1ecd6b4d1f5d1a7d71fe21ff00000e10f");
+    t.push_str("e11d59280b2e4c2e1429001f4111790184f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521");
+    t.push_str("f513690458f4a7e514dafcd238d1fbd4d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d3");
+    t.push_str("20d1e5d3e2db24e837f7550795162923952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904");
+    t.push_str("f51325216a2aab2e672dc5268d1b140d0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928");
+    t.push_str("e11de10f00001ff01fe2a7d7f5d1b4d1ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd9");
+    t.push_str("99d255d196d5dbde0bec97fba80b591aec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8");
+    t.push_str("c908dc171e241b2ce02e1b2c1e24dc17c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042d");
+    t.push_str("ec25591aa80b97fb0becdbde96d555d199d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1");
+    t.push_str("ecd6b4d1f5d1a7d71fe21ff00000e10fe11d59280b2e4c2e1429001f4111790184f145e36cd841d27fd13cd6e9df62ed");
+    t.push_str("0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4d4ddb8ea20fa3a0a1e190a25952cda2e");
+    t.push_str("952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923952bda2e952c0a251e193a0a20fab8ea");
+    t.push_str("d4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d0ffd62ede9df3cd67fd141d26cd845e3");
+    t.push_str("84f179014111001f14294c2e0b2e5928e11de10f00001ff01fe2a7d7f5d1b4d1ecd600e1bfee87fe7c0ebb1c9427bf2d");
+    t.push_str("812ec42917209e12f102ecf273e43bd999d255d196d5dbde0bec97fba80b591aec25042dc82e052b2c224815e005c6f5");
+    t.push_str("e2e6f6da6bd326d16bd4d7dc6be9abf8c908dc171e241b2ce02e1b2c1e24dc17c908abf86be9d7dc6bd426d16bd3f6da");
+    t.push_str("e2e6c6f5e00548152c22052bc82e042dec25591aa80b97fb0becdbde96d555d199d23bd973e4ecf2f1029e121720c429");
+    t.push_str("812ebf2d9427bb1c7c0e87febfee00e1ecd6b4d1f5d1a7d71fe21ff00000e10fe11d59280b2e4c2e1429001f41117901");
+    t.push_str("84f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4");
+    t.push_str("d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923");
+    t.push_str("952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d");
+    t.push_str("0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928e11de10f00001ff01fe2a7d7f5d1b4d1");
+    t.push_str("ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd999d255d196d5dbde0bec97fba80b591a");
+    t.push_str("ec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8c908dc171e241b2ce02e1b2c1e24dc17");
+    t.push_str("c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042dec25591aa80b97fb0becdbde96d555d1");
+    t.push_str("99d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1ecd6b4d1f5d1a7d71fe21ff00000e10f");
+    t.push_str("e11d59280b2e4c2e1429001f4111790184f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521");
+    t.push_str("f513690458f4a7e514dafcd238d1fbd4d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d3");
+    t.push_str("20d1e5d3e2db24e837f7550795162923952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904");
+    t.push_str("f51325216a2aab2e672dc5268d1b140d0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928");
+    t.push_str("e11de10f00001ff01fe2a7d7f5d1b4d1ecd600e1bfee87fe7c0ebb1c9427bf2d812ec42917209e12f102ecf273e43bd9");
+    t.push_str("99d255d196d5dbde0bec97fba80b591aec25042dc82e052b2c224815e005c6f5e2e6f6da6bd326d16bd4d7dc6be9abf8");
+    t.push_str("c908dc171e241b2ce02e1b2c1e24dc17c908abf86be9d7dc6bd426d16bd3f6dae2e6c6f5e00548152c22052bc82e042d");
+    t.push_str("ec25591aa80b97fb0becdbde96d555d199d23bd973e4ecf2f1029e121720c429812ebf2d9427bb1c7c0e87febfee00e1");
+    t.push_str("ecd6b4d1f5d1a7d71fe21ff0feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    v.push(DataFile { path: "uploads/01-intro.wav".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("524946465c11000057415645666d74201000000001000200112b000044ac0000040010006461746138110000feff0000");
+    t.push_str("0000f6150200272afffff23a0100fb46feff4b4d00005f4d02003647ffff4f3b01009f2afeff7f1600008e00020093ea");
+    t.push_str("ffff51d601006cc5feff41b90000cab202008db2ffff90b8010055c4feffead40000f9e80200e3feffffe41401003629");
+    t.push_str("feff353a000082460200204dffff854d0100a947feff073c00008c2b02008f17ffffab010100a5ebfeff43d700002ac6");
+    t.push_str("0200bcb9fffff8b201006ab2feff1eb800009fc30200fed3ffffe9e70100c6fdfeffd1130000432802007539ffff0646");
+    t.push_str("0100f04cfeffa64d000019480200bb3cffff782c01009e18feffc8020000b9ec020037d8ffffecc601003abafeff29b3");
+    t.push_str("00004bb20200b1b7ffffebc2010013d3feffdbe60000a9fc0200bd12ffff4e270100b338feff85450000bd4c0200c44d");
+    t.push_str("ffff854801006d3dfeff612d0000ac190200e503ffffcded01002ed9feffb0c70000bcba02005fb3ffff2fb2010047b7");
+    t.push_str("feff3bc200002bd20200cee5ffff8dfb0100a811feff56260000ed3702000245ffff854c0100dd4dfeffed4800001c3e");
+    t.push_str("0200482effffb81a01000105feffe3ee000026da020077c8ffff42bb010098b3feff18b20000e0b602008ec1ffff46d1");
+    t.push_str("0100c2e4000070fa510592107b0a5d25560f2537be137a4494174a4cb91af24d171d51499c1ec73e3c1f2c2ff31ec31b");
+    t.push_str("c31d1e06b51bfaefd81820db411540c90c11cbbb580cd5b3470705b201027eb6abfce5c06ef763d071f2b8e3d9ed54f9");
+    t.push_str("c9e97b0f5fe66224b4e35a36dce1ef43e5e00a4cd6e0034eb0e1b2496de36f3ffee50e3052e9cd1c4fed3a07d8f111f1");
+    t.push_str("caf61cdc01fc0dca560157bca10617b4ba0bf5b17c101fb6c3143ec06f1882cf641bafe28d1d39f8d91e630e401f6523");
+    t.push_str("bc1e8c35541d6143101bc74b0318114e42140f4aea0f13401b0bed30f905d51dab00550858fb29f227f61add40f1ddca");
+    t.push_str("c7ece8bcdee85cb4a1e5eab129e3c5b589e19bbfcbe0a4cef7e0a7e10be21df7fee34b0dc2e6662243eabb3465eecf42");
+    t.push_str("0cf3804b13f81a4e55fd674aab02b540ed07ca31f40cdc1e9b117009bd1542f33e191ade021cafcbf51d7bbd091fa5b4");
+    t.push_str("351fe3b1771e6eb5d71cfcbe5f1ac8cd2217a2e0391302f6c00e320cd9096521a804e73355ff394207fa344be5f41f4e");
+    t.push_str("16f0bc4abeeb5341fde7a532f0e4e11face28b0a44e15bf4c0e01cdf27e184cc73e213be9ce4f3b491e7e0b13deb1bb5");
+    t.push_str("84ef5fbe46f4efcc5ff99ddfaafee8f4ff03180b36096320280e1133b112a141ae16e54a021a204e931c0d4b501eed41");
+    t.push_str("2a1f7c331b1fe420241ea50b4c1c75f5a1191fe037165bcd2712adbe8f0d44b59208e1b15503ccb4fffdc7bdb9f819cc");
+    t.push_str("a8f39bdef4eecef3bfeafe0928e75e1f4be438323de204410de1924ac4e01d4e64e15b4be9e2854247e551346ce8e621");
+    t.push_str("42ecbe0caaf090f685f524e1affa36ce00004bbf510599b57b0ae6b1560f80b4be1331bd941745cbb91a9add171db5f2");
+    t.push_str("9c1ee3083c1f591ef31e5c31c31d6540b51b3b4ad818164e4115a44b0c111843580c23354707e6220102d70dabfcabf7");
+    t.push_str("6ef72be271f213cfd9ededbfc9e9f1b55fe6efb1b4e339b4dce19fbce5e074cad6e09bdcb0e19df16de3c707fee5511d");
+    t.push_str("52e97e304fedc23fd8f1e149caf60b4e01fce94b5601a943a106f335ba0be4237c10ef0ec314c6f86f1833e3641bf2cf");
+    t.push_str("8d1d91c0d91e4eb6401ffdb1bc1ef6b3541d11bc101ba6c903189edb421485f0ea0fac061b0b481cf9059d2fab001b3f");
+    t.push_str("58fb824927f6fb4d40f12b4cc7ec3544dee8c036a1e5e02429e3061089e1e2f9cbe03de4f7e0d4d00be239c1fee3afb6");
+    t.push_str("c2e60eb243eab6b365ee86bb0cf3dbc813f8a3da55fd6eefab029005ed073e1bf40cba2e9b11723ebd1520493e19e84d");
+    t.push_str("021c684cf51dbe44091f8937351fda25771e1d11d71cfffa5f1a48e52217b8d13913e4c1c00e13b7d90923b2a8047bb3");
+    t.push_str("55fffeba07fa13c8e5f4aad916f058eebeeb7304fde7321af0e4d52dace2c53d44e1b948c0e0d14d27e1a14c73e24445");
+    t.push_str("9ce4503891e7d2263deb331284ef1bfc46f454e65ff99fd2aafe93c2ff037bb736093cb2280e43b3b1127bbaae164dc7");
+    t.push_str("021ab2d8931c43ed501e57032a1f25191b1fed2c241e153d4c1c4f48a119b54d3716d74c2712c6458f0d14399208c927");
+    t.push_str("55034713fffd38fdb9f862e7a8f388d3f4ee45c3bfeae7b728e75ab24be410b33de2fab90de18bc6c4e0bdd764e12fec");
+    t.push_str("e9e23a0247e517186ce8022c42ec613caaf0e24785f5964daffa084d000044465105d6397b0abd28560f5b14be1355fe");
+    t.push_str("941771e8b91a74d4171df9c39c1e57b83c1f7bb2f31ee0b2c31d7eb9b51bcbc5d818cad641151ceb0c111d01580c0717");
+    t.push_str("4707162b0102ab3babfc70476ef7734d71f2364dd9edbf46c9e9943a5fe6af29b4e36d15dce172ffe5e081e9d6e061d5");
+    t.push_str("b0e1b1c46de3cab8fee5a1b252e9b5b24fed05b9d8f10ec5caf6d9d501fc0aea56010000a106f615ba0b272a7c10f23a");
+    t.push_str("c314fb466f184b4d641b5f4d8d1d3647d91e4f3b401f9f2abc1e7f16541d8e00101b93ea031851d642146cc5ea0f41b9");
+    t.push_str("1b0bcab2f9058db2ab0090b858fb55c427f6ead440f1f9e8c7ece3fedee8e414a1e5362929e3353a89e18246cbe0204d");
+    t.push_str("f7e0854d0be2a947fee3073cc2e68c2b43ea8f1765eeab010cf3a5eb13f843d755fd2ac6ab02bcb9ed07f8b2f40c6ab2");
+    t.push_str("9b111eb8bd159fc33e19fed3021ce9e7f51dc6fd091fd113351f4328771e7539d71c06465f1af04c2217a64d39131948");
+    t.push_str("c00ebb3cd909782ca8049e1855ffc80207fab9ece5f437d816f0ecc6beeb3abafde729b3f0e44bb2ace2b1b744e1ebc2");
+    t.push_str("c0e013d327e1dbe673e2a9fc9ce4bd1291e74e273debb33884ef854546f4bd4c5ff9c44daafe8548ff036d3d3609612d");
+    t.push_str("280eac19b112e503ae16cded021a2ed9931cb0c7501ebcba2a1f5fb31b1f2fb2241e47b74c1c3bc2a1192bd23716cee5");
+    t.push_str("27128dfb8f0da811920856265503ed37fffd0245b9f8854ca8f3dd4df4eeed48bfea1c3e28e7482e4be4b81a3de20105");
+    t.push_str("0de1e3eec4e026da64e177c8e9e242bb47e598b36ce818b242ece0b6aaf08ec185f546d1affac2e4000070fa51059210");
+    t.push_str("7b0a5d25560f2537be137a4494174a4cb91af24d171d51499c1ec73e3c1f2c2ff31ec31bc31d1e06b51bfaefd81820db");
+    t.push_str("411540c90c11cbbb580cd5b3470705b201027eb6abfce5c06ef763d071f2b8e3d9ed54f9c9e97b0f5fe66224b4e35a36");
+    t.push_str("dce1ef43e5e00a4cd6e0034eb0e1b2496de36f3ffee50e3052e9cd1c4fed3a07d8f111f1caf61cdc01fc0dca560157bc");
+    t.push_str("a10617b4ba0bf5b17c101fb6c3143ec06f1882cf641bafe28d1d39f8d91e630e401f6523bc1e8c35541d6143101bc74b");
+    t.push_str("0318114e42140f4aea0f13401b0bed30f905d51dab00550858fb29f227f61add40f1ddcac7ece8bcdee85cb4a1e5eab1");
+    t.push_str("29e3c5b589e19bbfcbe0a4cef7e0a7e10be21df7fee34b0dc2e6662243eabb3465eecf420cf3804b13f81a4e55fd674a");
+    t.push_str("ab02b540ed07ca31f40cdc1e9b117009bd1542f33e191ade021cafcbf51d7bbd091fa5b4351fe3b1771e6eb5d71cfcbe");
+    t.push_str("5f1ac8cd2217a2e0391302f6c00e320cd9096521a804e73355ff394207fa344be5f41f4e16f0bc4abeeb5341fde7a532");
+    t.push_str("f0e4e11face28b0a44e15bf4c0e01cdf27e184cc73e213be9ce4f3b491e7e0b13deb1bb584ef5fbe46f4efcc5ff99ddf");
+    t.push_str("aafee8f4ff03180b36096320280e1133b112a141ae16e54a021a204e931c0d4b501eed412a1f7c331b1fe420241ea50b");
+    t.push_str("4c1c75f5a1191fe037165bcd2712adbe8f0d44b59208e1b15503ccb4fffdc7bdb9f819cca8f39bdef4eecef3bfeafe09");
+    t.push_str("28e75e1f4be438323de204410de1924ac4e01d4e64e15b4be9e2854247e551346ce8e62142ecbe0caaf090f685f524e1");
+    t.push_str("affa36ce00004bbf510599b57b0ae6b1560f80b4be1331bd941745cbb91a9add171db5f29c1ee3083c1f591ef31e5c31");
+    t.push_str("c31d6540b51b3b4ad818164e4115a44b0c111843580c23354707e6220102d70dabfcabf76ef72be271f213cfd9ededbf");
+    t.push_str("c9e9f1b55fe6efb1b4e339b4dce19fbce5e074cad6e09bdcb0e19df16de3c707fee5511d52e97e304fedc23fd8f1e149");
+    t.push_str("caf60b4e01fce94b5601a943a106f335ba0be4237c10ef0ec314c6f86f1833e3641bf2cf8d1d91c0d91e4eb6401ffdb1");
+    t.push_str("bc1ef6b3541d11bc101ba6c903189edb421485f0ea0fac061b0b481cf9059d2fab001b3f58fb824927f6fb4d40f12b4c");
+    t.push_str("c7ec3544dee8c036a1e5e02429e3061089e1e2f9cbe03de4f7e0d4d00be239c1fee3afb6c2e60eb243eab6b365ee86bb");
+    t.push_str("0cf3dbc813f8a3da55fd6eefab029005ed073e1bf40cba2e9b11723ebd1520493e19e84d021c684cf51dbe44091f8937");
+    t.push_str("351fda25771e1d11d71cfffa5f1a48e52217b8d13913e4c1c00e13b7d90923b2a8047bb355fffeba07fa13c8e5f4aad9");
+    t.push_str("16f058eebeeb7304fde7321af0e4d52dace2c53d44e1b948c0e0d14d27e1a14c73e244459ce4503891e7d2263deb3312");
+    t.push_str("84ef1bfc46f454e65ff99fd2aafe93c2ff037bb736093cb2280e43b3b1127bbaae164dc7021ab2d8931c43ed501e5703");
+    t.push_str("2a1f25191b1fed2c241e153d4c1c4f48a119b54d3716d74c2712c6458f0d14399208c92755034713fffd38fdb9f862e7");
+    t.push_str("a8f388d3f4ee45c3bfeae7b728e75ab24be410b33de2fab90de18bc6c4e0bdd764e12fece9e23a0247e517186ce8022c");
+    t.push_str("42ec613caaf0e24785f5964daffa084d000044465105d6397b0abd28560f5b14be1355fe941771e8b91a74d4171df9c3");
+    t.push_str("9c1e57b83c1f7bb2f31ee0b2c31d7eb9b51bcbc5d818cad641151ceb0c111d01580c07174707162b0102ab3babfc7047");
+    t.push_str("6ef7734d71f2364dd9edbf46c9e9943a5fe6af29b4e36d15dce172ffe5e081e9d6e061d5b0e1b1c46de3cab8fee5a1b2");
+    t.push_str("52e9b5b24fed05b9d8f10ec5caf6d9d501fc0aea56010000a1060200ba0bffff7c100100c314feff6f180000641b0200");
+    t.push_str("8d1dffffd91e0100401ffeffbc1e0000541d0200101bffff031801004214feffea0f00001b0b0200f905ffffab000100");
+    t.push_str("58fbfeff27f6000040f10200c7ecffffdee80100a1e5feff29e3000089e10200cbe0fffff7e001000be2fefffee30000");
+    t.push_str("c2e6020043eaffff65ee01000cf3feff13f8000055fd0200ab02ffffed070100f40cfeff9b110000bd1502003e19ffff");
+    t.push_str("021c0100f51dfeff091f0000351f0200771effffd71c01005f1afeff2217000039130200c00effffd9090100a804feff");
+    t.push_str("55ff000007fa0200e5f4ffff16f00100beebfefffde70000f0e40200ace2ffff44e10100c0e0feff27e1000073e20200");
+    t.push_str("9ce4ffff91e701003debfeff84ef000046f402005ff9ffffaafe0100ff03feff36090000280e0200b112ffffae160100");
+    t.push_str("021afeff931c0000501e02002a1fffff1b1f0100241efeff4c1c0000a11902003716ffff271201008f0dfeff92080000");
+    t.push_str("55030200fffdffffb9f80100a8f3fefff4ee0000bfea020028e7ffff4be401003de2feff0de10000c4e0020064e1ffff");
+    t.push_str("e9e2010047e5feff6ce8000042ec0200aaf0ffff85f50100affafeff00000000510502007b0affff560f0100be13feff");
+    t.push_str("94170000b91a0200171dffff9c1e01003c1ffefff31e0000c31d0200b51bffffd81801004115feff0c110000580c0200");
+    t.push_str("4707ffff01020100abfcfeff6ef7000071f20200d9edffffc9e901005fe6feffb4e30000dce10200e5e0ffffd6e00100");
+    t.push_str("b0e1feff6de30000fee5020052e9ffff4fed0100d8f1feffcaf6000001fc02005601ffffa1060100ba0bfeff7c100000");
+    t.push_str("c31402006f18ffff641b01008d1dfeffd91e0000401f0200bc1effff541d0100101bfeff0318000042140200ea0fffff");
+    t.push_str("1b0b0100f905feffab00000058fb020027f6ffff40f10100c7ecfeffdee80000a1e5020029e3ffff89e10100cbe0feff");
+    t.push_str("f7e000000be20200fee3ffffc2e6010043eafeff65ee00000cf3020013f8ffff55fd0100ab02feffed070000f40c0200");
+    t.push_str("9b11ffffbd1501003e19feff021c0000f51d0200091fffff351f0100771efeffd71c00005f1a02002217ffff39130100");
+    t.push_str("c00efeffd9090000a804020055ffffff07fa0100e5f4feff16f00000beeb0200fde7fffff0e40100ace2feff44e10000");
+    t.push_str("c0e0020027e1ffff73e201009ce4feff91e700003deb020084efffff46f401005ff9feff");
+    v.push(DataFile { path: "uploads/02-interview.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646d404000057415645666d74201000000001000100401f0000401f00000100080064617461b00400007e80827f");
+    t.push_str("817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80");
+    t.push_str("827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f81");
+    t.push_str("7e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e8082");
+    t.push_str("7f817e80827f817e80827f81809bb4c9d9e2e4ded1bea68c70563f2d211c1f29394f69849fb8ccdbe3e3dccfbba3886c");
+    t.push_str("533c2b201c202b3c536c88a3bbcfdce3e3dbccb89f84694f39291f1c212d3f56708ca6bed1dee4e2d9c9b49b80654c37");
+    t.push_str("271e1c222f425a7490aac1d3dfe4e1d7c7b1977c614834251d1d2431455d7894adc4d5e0e4e0d5c4ad94785d4531241d");
+    t.push_str("1d253448617c97b1c7d7e1e4dfd3c1aa90745a422f221c1e27374c65809bb4c9d9e2e4ded1bea68c70563f2d211c1f29");
+    t.push_str("394f69849fb8ccdbe3e3dccfbba3886c533c2b201c202b3c536c88a3bbcfdce3e3dbccb89f84694f39291f1c212d3f56");
+    t.push_str("708ca6bed1dee4e2d9c9b49b80654c37271e1c222f425a7490aac1d3dfe4e1d7c7b1977c614834251d1d2431455d7894");
+    t.push_str("adc4d5e0e4e0d5c4ad94785d4531241d1d253448617c97b1c7d7e1e4dfd3c1aa90745a422f221c1e27374c65809bb4c9");
+    t.push_str("d9e2e4ded1bea68c70563f2d211c1f29394f69849fb8ccdbe3e3dccfbba3886c533c2b201c202b3c536c88a3bbcfdce3");
+    t.push_str("e3dbccb89f84694f39291f1c212d3f56708ca6bed1dee4e2d9c9b49b80654c37271e1c222f425a7490aac1d3dfe4e1d7");
+    t.push_str("c7b1977c614834251d1d2431455d7894adc4d5e0e4e0d5c4ad94785d4531241d1d253448617c97b1c7d7e1e4dfd3c1aa");
+    t.push_str("90745a422f221c1e27374c65809bb4c9d9e2e4ded1bea68c70563f2d211c1f29394f69849fb8ccdbe3e3dccfbba3886c");
+    t.push_str("533c2b201c202b3c536c88a3bbcfdce3e3dbccb89f84694f39291f1c212d3f56708ca6bed1dee4e2d9c9b49b80654c37");
+    t.push_str("271e1c222f425a7490aac1d3dfe4e1d7c7b1977c614834251d1d2431455d7894adc4d5e0e4e0d5c4ad94785d4531241d");
+    t.push_str("1d253448617c97b1c7d7e1e4dfd3c1aa90745a422f221c1e27374c65809bb4c9d9e2e4ded1bea68c70563f2d211c1f29");
+    t.push_str("394f69849fb8ccdbe3e3dccfbba3886c533c2b201c202b3c536c88a3bbcfdce3e3dbccb89f84694f39291f1c212d3f56");
+    t.push_str("708ca6bed1dee4e2d9c9b49b80654c37271e1c222f425a7490aac1d3dfe4e1d7c7b1977c614834251d1d2431455d7894");
+    t.push_str("adc4d5e0e4e0d5c4ad94785d4531241d1d253448617c97b1c7d7e1e4dfd3c1aa90745a422f221c1e27374c65809bb4c9");
+    t.push_str("d9e2e4ded1bea68c70563f2d211c1f29394f69849fb8ccdbe3e3dccfbba3886c533c2b201c202b3c536c88a3bbcfdce3");
+    t.push_str("e3dbccb89f84694f39291f1c212d3f56708ca6bed1dee4e2d9c9b49b7e80827f817e80827f817e80827f817e80827f81");
+    t.push_str("7e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e8082");
+    t.push_str("7f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e");
+    t.push_str("80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f81");
+    v.push(DataFile { path: "uploads/03-phone.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646b009000057415645666d74201000000001000200401f000080bb0000060018004c49535424000000494e464f");
+    t.push_str("494e414d060000005468656d650049415254090000005468652042616e6400006461746160090000000000000000647e");
+    t.push_str("0a596b19c8ac140124318b3d1e529445c0e726c75e5558692e57755f1889347e2b63501839c441603df43bf9e9561307");
+    t.push_str("3de4c347a1483c91d23395be390a6b1c4b7c358a1d033aa22fc49ae9ff5c28f896d10ae41fd3acbcf27716fc41ac8d60");
+    t.push_str("0c346fa1cbea0190ed9c6b66f7200a9f9c23edcaa0a79970e3ad1eb65497daf88bc944dbd2749ce06077ccb6c5f9629c");
+    t.push_str("c77759134d6fc455a22b5908c30501413572c3180852bca9c55d945d069ec95be062ed30cf7c9161f437d620be59857d");
+    t.push_str("de19ec4b90c2e7be07396bc0f1215422e62afc78550999b20631b7ef3c0711652fd70dda1a8f61c125e0238ec2afb9d4");
+    t.push_str("2bb67fa3227b32b66a9dada0378eeb9d1d1e3ba3f9a4d5d83c501cb2a8c33cf572c436df3af7c3daec3937b691f397ef");
+    t.push_str("3109340d8b282b92f4257518230b2c3ccdfc19885e4e041b10d8545b71be055231621436fba17e6238d2f09b375c17e2");
+    t.push_str("e69ac74f72b1dd4d033e5d86d5891a281c9fcef8830f5230c913e4f56963c50ef1dc5c55c38e55c6d515c33094b3b8a6");
+    t.push_str("c4adeda515fcc7754b9e83fccc13309ddd81d373aea26f5adba568ae664ae41c96bf9f0dee1811d5ab59f8456aed0ae0");
+    t.push_str("024301077d500d7720206e5b17471a374bb420ca654ad213290cb9582c3a30141f61d7f035430863420c3aeb535e1f6d");
+    t.push_str("3c8052534a013d35c0425bc43b6db82dc2bf38cba215810a342b1bfc7cc82d22d6e26b2926d083cb67671d08b3b736c5");
+    t.push_str("13a5b6a84a8c09ec8e9f930aff6cd89c2b90f48bc1a0f56cea6807ab3aeee057faba605cd89a89cfbbf8d09c55e7a2fb");
+    t.push_str("ca6ac700bd92c6e72b1aabdfc3d6d03100f7c2e22146abdfc39dc355bd92c6b7aa5fa2fbcad82d63bbf8d0ef1060605c");
+    t.push_str("d83889563aeee0ad3947f56cea2028332b90f4c2ab1b930aff3256024a8c09add8e836c51319e7d067671dec1abc6b29");
+    t.push_str("26ccd7ab7cc82dd133a1810a34f3e49cc2bf38dd349f5bc43b05fca74a013d4ea4b61f6d3c1233ca420c3ade59e1d7f0");
+    t.push_str("35c88cfa2c3a30e51c14d2132911552c4bb4201f97416e5b178877527d500db3d55d0ae00238ef62ab59f8e36c619f0d");
+    t.push_str("ee826859664ae42f6b4b6f5adb246438dd81d3c4982183fcccdd8e0815fcc79df2eeb8a6c4f879d6d515c368c7c05c55");
+    t.push_str("c3f94daf6963c57e38a35230c99b559d1c9fcefa099e5d86d58d49a572b1dd6298b217e2e6e512c538d2f0167ddb1436");
+    t.push_str("fba757f471be0592f90d041b1082ac26cdfc1918ca3c75182322d84e8b282be1a15b97ef31a44c62ec39376a666236df");
+    t.push_str("3a78ed5ba8c33c7e504fd5d83c2f673d1d1e3bd56327ada037e3be0e227b32c71df5b9d42bca36dc25e023c4b3c50dda");
+    t.push_str("1aae15b33c0711e79aa599b206f2299ee62afc0f429d6bc0f1bcf2a290c2e7abdaae857dde412ec0f437d633c5d5ed30");
+    t.push_str("cf4d2eee069ec920c807bca9c5e0dc203572c3a6bf375908c314e94a4d6fc47b1159629cc7c046616077cc86fc6244db");
+    t.push_str("d28d155e5497daace5529970e3302c429c23ed1a072d6b66f702e014cbea01f053fb8d600cc317e2f2771606dbca0ae4");
+    t.push_str("1f182bb7ff5c28a358a83aa22f21619f4b7c35e7dd9c95be39eef9a0a1483cef6eab13073d178abb3df43bf937d05018");
+    t.push_str("39f416e8188934d28e0158692e0bec1ac0e726e17c328b3d1e56ae46c8ac14192756647e0a95de5f000000a02e639c81");
+    t.push_str("f595de5f3853eb19275675c2e156ae464018d9e17c32a896d10bec1ae876cbd28e01b0e7c6f416e8c30bc4f937d0edf8");
+    t.push_str("c2178abb5fb7c3ef6eab6b41c6eef9a0b583cae7dd9cc65dd021619f01a3d7a358a8f61be0182bb70e88e906dbca739f");
+    t.push_str("f3c317e23515fef053fb95990802e01464dc121a072d678f1c302c42ac6825ace552bc242d8d155ea0883386fc629e63");
+    t.push_str("38c04661b3903b7b1159a7f73c14e94acb8d3ca6bf3744563ae0dc20fa613620c80713cf304d2eee0cc82933c5d57b82");
+    t.push_str("21412ec0703d18abdaae953f0ebcf2a21ad5030f429d674df9f2299ec4f8eee79aa5f325e5ae15b3db1fdcc4b3c5472b");
+    t.push_str("d4ca36dcde84cdc71df5535fc8e3be0ee3e1c4d563272b27c32f673d583cc37e504fca20c578ed5b14c6c86a66626910");
+    t.push_str("cea44c6275d7d4e1a15b8be7dc22d84e3303e618ca3cfce4ef82ac268f41fa92f90decc904a757f4c82d0f167ddbe91d");
+    t.push_str("19e512c58e4e226298b2a3792a8d49a5e46031fa099eaecf369b559d979c3a7e38a3a4aa3cf94daf2bea3c68c7c04859");
+    t.push_str("3bf879d6eb03389df2ee7d0333dd8e08237e2cc4982191a5242464389ab51b2f6b4b61f21182685955a607e36c61f61f");
+    t.push_str("fd38ef6283aff2b3d55d92a4e8887752b54bdf1f97412eecd611552cd4c5cfe51c14290fcac88cfabef3c5de59e1e192");
+    t.push_str("c31233cab6fec24ea4b6a53bc405fca73e40c7dd349f7ff5cbf3e49c8437d2d133a195d6d9ccd7ab9998e2ec1abcca3a");
+    t.push_str("ec19e7d0b673f6add8e86df500325602d56f0bc2ab1b0b9315202833c6111fad3947a0a32738895645072fef10605e04");
+    t.push_str("35d82d63436d39b7aa5f55203c9dc35500093de2214655203cd6d031436d39e72b1a5e04356ac70045072f9c55e7a0a3");
+    t.push_str("279a89cfc6111f57faba0b93156807abd56f0b8bc1a06df5006cd89cb673f6ec8e9fca3aeca5b6a89998e208b3b795d6");
+    t.push_str("d9d083cb8437d222d6e27ff5cb2b1bfc3e40c7cba215a53bc46db82db6fec235c042e192c3805253bef3c5eb535e290f");
+    t.push_str("ca430863d4c5cf141f612eecd60cb958b54bdfca654a92a4e8471a3783aff2772020f61ffd43010755a607456aed61f2");
+    t.push_str("111811d59ab51b1c96bf91a524a568ae237e2c73aea27d033313309deb0338754b9e48593badeda52bea3c3094b3a4aa");
+    t.push_str("3c8e55c6979c3a0ef1dcaecf3613e4f5e46031f8830fa3792a891a288e4e224d033ee91d199ac74fc82d0f9b375cecc9");
+    t.push_str("04a17e628f41fa523162fce4efd8545b3303e6885e4e8be7dc0b2c3c75d7d492f4256910ce09340d14c6c8b691f3ca20");
+    t.push_str("c5f7c3da583cc3f572c42b27c3501cb2e3e1c4a3f9a4535fc88eeb9dde84cdb66a9d472bd4b67fa3db1fdc8ec2aff325");
+    t.push_str("e58f61c1c4f8ee652fd7674df931b7ef1ad503785509953f0e215422703d18be07397b822119ec4b0cc82920be5913cf");
+    t.push_str("307c9161fa61365be06244563a5d945dcb8d3c180852a7f73c050141b3903b55a22b9e6338775913a08833b6c5f9bc24");
+    t.push_str("2d749ce0ac6825f88bc9678f1cad1eb664dc12caa0a7959908200a9f3515fe90ed9c739ff3346fa10e88e9fc41acf61b");
+    t.push_str("e0d3acbc01a3d7f896d1c65dd0c49ae9b583ca8a1d036b41c60a6b1c5fb7c391d233edf8c2e4c347c30bc4f9e956b0e7");
+    t.push_str("c6c44160e876cb7e2b63a896d157755f4018d9c75e5575c2e15294453853eb0124319c81f5596b19");
+    v.push(DataFile { path: "uploads/04-music.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946466803000057415645666d742028000000feff0100401f0000803e000002001000160010000400000001000000");
+    t.push_str("00001000800000aa00389b716661637404000000900100006461746120030000feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff01000000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23ad");
+    t.push_str("0000dd523075dd52000023add08a23ad0000dd523075dd52000023add08a23adfeff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100");
+    v.push(DataFile { path: "uploads/05-extensible.wav".to_string(), hex: true, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("524946464c00000057415645666d74201000000003000100401f0000007d000004002000646174612800000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "uploads/06-float.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946467c00000057415645666d742028000000feff020080bb000000dc050008002000160020000300000003000000");
+    t.push_str("00001000800000aa00389b71646174614000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "uploads/07-ext-float.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("49443304000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "uploads/08-episode.mp3.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946464400000041564920617669683800000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "uploads/09-clip.avi.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646e412000057415645666d74201000000001000100401f0000803e00000200100064617461c0120000feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    t.push_str("feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff");
+    t.push_str("0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200");
+    t.push_str("ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100feff00000200ffff0100feff00000200ffff01000000e10fe11d59280b2e4c2e1429001f41117901");
+    t.push_str("84f145e36cd841d27fd13cd6e9df62ed0ffd140d8d1bc526672dab2e6a2a2521f513690458f4a7e514dafcd238d1fbd4");
+    t.push_str("d4ddb8ea20fa3a0a1e190a25952cda2e952b29239516550737f724e8e2dbe5d320d1e5d3e2db24e837f7550795162923");
+    t.push_str("952bda2e952c0a251e193a0a20fab8ead4ddfbd438d1fcd214daa7e558f46904f51325216a2aab2e672dc5268d1b140d");
+    t.push_str("0ffd62ede9df3cd67fd141d26cd845e384f179014111001f14294c2e0b2e5928e11de10f");
+    v.push(DataFile { path: "uploads/10-cut-off.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946461c00000057415645666d74201000000001000100401f0000803e000002001000");
+    v.push(DataFile { path: "uploads/11-no-data.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462c0000005741564564617461080000000000000000000000666d74201000000001000100401f0000803e0000");
+    t.push_str("02001000");
+    v.push(DataFile { path: "uploads/12-data-first.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462800000057415645666d74200c00000001000100401f0000803e000064617461080000000000000000000000");
+    v.push(DataFile { path: "uploads/13-short-fmt.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946466401000057415645666d74201000000001000100401f0000803e000002000c00646174614001000000003e02");
+    t.push_str("25046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fd");
+    t.push_str("dbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e02");
+    t.push_str("25046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fd");
+    t.push_str("dbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e02");
+    t.push_str("25046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fd");
+    t.push_str("dbfb96fa24fa96fadbfbc2fd00003e0225046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd00003e02");
+    t.push_str("25046a05dc056a0525043e020000c2fddbfb96fa24fa96fadbfbc2fd");
+    v.push(DataFile { path: "uploads/14-12bit.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462c00000057415645666d74201000000001000000401f00000000000000001000646174610800000000000000");
+    t.push_str("00000000");
+    v.push(DataFile { path: "uploads/15-no-channels.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946464c00000057415645666d74201000000001000100401f0000803e0000020010004c49535440420f00494e464f");
+    t.push_str("000000000000000000000000000000000000000064617461080000000000000000000000");
+    v.push(DataFile { path: "uploads/16-big-list.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946461c00000057415645666d74201000000001000100401f0000803e0000020010006461746128000000feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100");
+    v.push(DataFile { path: "uploads/17-short-riff.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "uploads/18-empty.wav".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("524946462c00000057415645666d74201000000001000100401f00000000000000000000646174610800000000000000");
+    t.push_str("00000000");
+    v.push(DataFile { path: "uploads/19-zero-bits.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946466406000057415645666d74201000000001000100401f0000803e000002001000646174614006000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000");
+    v.push(DataFile { path: "uploads/20-silence.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946466801000057415645666d74201000000001000100401f0000401f000001000800646174612d0100007e80827f");
+    t.push_str("817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f817e80827f8180a9c9d9d6c09c724b302630");
+    t.push_str("4b729cc0d6d9c9a9805737272a40648eb5d0dad0b58e64402a27375780a9c9d9d6c09c724b3026304b729cc0d6d9c9a9");
+    t.push_str("805737272a40648eb5d0dad0b58e64402a27375780a9c9d9d6c09c724b3026304b729cc0d6d9c9a9805737272a40648e");
+    t.push_str("b5d0dad0b58e64402a27375780a9c9d9d6c09c724b3026304b729cc0d6d9c9a9805737272a40648eb5d0dad0b58e6440");
+    t.push_str("2a27375780a9c9d9d6c09c724b3026304b729cc0d6d9c9a9805737272a40648eb5d0dad0b58e64402a27375780a9c9d9");
+    t.push_str("d6c09c724b3026304b729cc0d6d9c9a9805737272a40648eb5d0dad0b58e64402a27375780a9c9d9d6c09c724b302630");
+    t.push_str("4b729cc0d6d9c9a980006a756e6b0d000000747261696c696e67206a756e6b00");
+    v.push(DataFile { path: "uploads/21-odd.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646a00f000057415645666d74201000000001000100401f0000803e000002001000646174613c000000feff0000");
+    t.push_str("0200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff00000200ffff0100feff");
+    t.push_str("00000200ffff0100");
+    v.push(DataFile { path: "uploads/22-long-riff.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462a00000057415645666d74200e00000001000100401f0000803e000002006461746108000000000000000000");
+    t.push_str("0000");
+    v.push(DataFile { path: "uploads/23-fmt-only-14.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462405000057415645666d74201000000001000200401f0000007d000004001000646174610005000000000000");
+    t.push_str("0900080013000f001b00160023001c002a0021003100250035002700390028003b0027003c0025003b00210039001c00");
+    t.push_str("3500160031000f002a000800230000001b00f8ff1300f1ff0900eaff0000e4fff7ffdfffedffdbffe5ffd9ffddffd8ff");
+    t.push_str("d6ffd9ffcfffdbffcbffdfffc7ffe4ffc5ffeaffc4fff1ffc5fff8ffc7ff0000cbff0800cfff0f00d6ff1600ddff1c00");
+    t.push_str("e5ff2100edff2500f7ff27000000280009002700130025001b00210023001c002a00160031000f003500080039000000");
+    t.push_str("3b00f8ff3c00f1ff3b00eaff3900e4ff3500dfff3100dbff2a00d9ff2300d8ff1b00d9ff1300dbff0900dfff0000e4ff");
+    t.push_str("f7ffeaffedfff1ffe5fff8ffddff0000d6ff0800cfff0f00cbff1600c7ff1c00c5ff2100c4ff2500c5ff2700c7ff2800");
+    t.push_str("cbff2700cfff2500d6ff2100ddff1c00e5ff1600edff0f00f7ff0800000000000900f8ff1300f1ff1b00eaff2300e4ff");
+    t.push_str("2a00dfff3100dbff3500d9ff3900d8ff3b00d9ff3c00dbff3b00dfff3900e4ff3500eaff3100f1ff2a00f8ff23000000");
+    t.push_str("1b00080013000f000900160000001c00f7ff2100edff2500e5ff2700ddff2800d6ff2700cfff2500cbff2100c7ff1c00");
+    t.push_str("c5ff1600c4ff0f00c5ff0800c7ff0000cbfff8ffcffff1ffd6ffeaffddffe4ffe5ffdfffedffdbfff7ffd9ff0000d8ff");
+    t.push_str("0900d9ff1300dbff1b00dfff2300e4ff2a00eaff3100f1ff3500f8ff390000003b0008003c000f003b00160039001c00");
+    t.push_str("35002100310025002a002700230028001b002700130025000900210000001c00f7ff1600edff0f00e5ff0800ddff0000");
+    t.push_str("d6fff8ffcffff1ffcbffeaffc7ffe4ffc5ffdfffc4ffdbffc5ffd9ffc7ffd8ffcbffd9ffcfffdbffd6ffdfffddffe4ff");
+    t.push_str("e5ffeaffedfff1fff7fff8ff000000000900080013000f001b00160023001c002a002100310025003500270039002800");
+    t.push_str("3b0027003c0025003b00210039001c003500160031000f002a000800230000001b00f8ff1300f1ff0900eaff0000e4ff");
+    t.push_str("f7ffdfffedffdbffe5ffd9ffddffd8ffd6ffd9ffcfffdbffcbffdfffc7ffe4ffc5ffeaffc4fff1ffc5fff8ffc7ff0000");
+    t.push_str("cbff0800cfff0f00d6ff1600ddff1c00e5ff2100edff2500f7ff27000000280009002700130025001b00210023001c00");
+    t.push_str("2a00160031000f0035000800390000003b00f8ff3c00f1ff3b00eaff3900e4ff3500dfff3100dbff2a00d9ff2300d8ff");
+    t.push_str("1b00d9ff1300dbff0900dfff0000e4fff7ffeaffedfff1ffe5fff8ffddff0000d6ff0800cfff0f00cbff1600c7ff1c00");
+    t.push_str("c5ff2100c4ff2500c5ff2700c7ff2800cbff2700cfff2500d6ff2100ddff1c00e5ff1600edff0f00f7ff080000000000");
+    t.push_str("0900f8ff1300f1ff1b00eaff2300e4ff2a00dfff3100dbff3500d9ff3900d8ff3b00d9ff3c00dbff3b00dfff3900e4ff");
+    t.push_str("3500eaff3100f1ff2a00f8ff230000001b00080013000f000900160000001c00f7ff2100edff2500e5ff2700ddff2800");
+    t.push_str("d6ff2700cfff2500cbff2100c7ff1c00c5ff1600c4ff0f00c5ff0800c7ff0000cbfff8ffcffff1ffd6ffeaffddffe4ff");
+    t.push_str("e5ffdfffedffdbfff7ffd9ff0000d8ff0900d9ff1300dbff1b00dfff2300e4ff2a00eaff3100f1ff3500f8ff39000000");
+    t.push_str("3b0008003c000f003b00160039001c0035002100310025002a002700230028001b002700130025000900210000001c00");
+    t.push_str("f7ff1600edff0f00e5ff0800ddff0000d6fff8ffcffff1ffcbffeaffc7ffe4ffc5ffdfffc4ffdbffc5ffd9ffc7ffd8ff");
+    t.push_str("cbffd9ffcfffdbffd6ffdfffddffe4ffe5ffeaffedfff1fff7fff8ff");
+    v.push(DataFile { path: "uploads/24-quiet.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("episode 12: intro, interview, theme. phone call at 14:05.\n");
+    v.push(DataFile { path: "uploads/notes.txt".to_string(), hex: false, body: t });
+}

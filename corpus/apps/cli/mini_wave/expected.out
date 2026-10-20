@@ -1,0 +1,333 @@
+== reader uploads/01-intro.wav params nframes read:4 tell read:2 setpos:2398 read:10 tell rewind read:1
+  params: _wave_params(nchannels=1, sampwidth=2, framerate=8000, nframes=2400, comptype='NONE', compname='not compressed')
+  nframes: 2400
+  read:4: 8 bytes feff00000200ffff
+  tell: 4
+  read:2: 4 bytes 0100feff
+  setpos:2398: ok
+  read:10: 4 bytes ffff0100
+  tell: 2400
+  rewind: ok
+  read:1: 2 bytes feff
+== reader uploads/02-interview.wav params read:3 setpos:1102 read:5 setpos:1103 setpos:-1 tell
+  params: _wave_params(nchannels=2, sampwidth=2, framerate=11025, nframes=1102, comptype='NONE', compname='not compressed')
+  read:3: 12 bytes feff00000000f6150200272a
+  setpos:1102: ok
+  read:5: 0 bytes 
+  setpos:1103: error: Error: position not in range
+  setpos:-1: error: Error: position not in range
+  tell: 1102
+== reader uploads/03-phone.wav params read:6 read:0 tell
+  params: _wave_params(nchannels=1, sampwidth=1, framerate=8000, nframes=1200, comptype='NONE', compname='not compressed')
+  read:6: 6 bytes 7e80827f817e
+  read:0: 0 bytes 
+  tell: 6
+== reader uploads/04-music.wav params read:2
+  params: _wave_params(nchannels=2, sampwidth=3, framerate=8000, nframes=400, comptype='NONE', compname='not compressed')
+  read:2: 12 bytes 000000000000647e0a596b19
+== reader uploads/05-extensible.wav params read:2
+  params: _wave_params(nchannels=1, sampwidth=2, framerate=8000, nframes=400, comptype='NONE', compname='not compressed')
+  read:2: 4 bytes feff0000
+== reader uploads/10-cut-off.wav params read:3000 tell setpos:1000 read:4 tell
+  params: _wave_params(nchannels=1, sampwidth=2, framerate=8000, nframes=2400, comptype='NONE', compname='not compressed')
+  read:3000: 1000 bytes feff00000200ffff0100feff00000200...
+  tell: 500
+  setpos:1000: ok
+  read:4: 0 bytes 
+  tell: 1000
+== reader uploads/14-12bit.wav params read:3
+  params: _wave_params(nchannels=1, sampwidth=2, framerate=8000, nframes=160, comptype='NONE', compname='not compressed')
+  read:3: 6 bytes 00003e022504
+== reader uploads/21-odd.wav params setpos:299 read:5 tell
+  params: _wave_params(nchannels=1, sampwidth=1, framerate=8000, nframes=301, comptype='NONE', compname='not compressed')
+  setpos:299: ok
+  read:5: 2 bytes a980
+  tell: 301
+== reader uploads/22-long-riff.wav params read:40 tell
+  params: _wave_params(nchannels=1, sampwidth=2, framerate=8000, nframes=30, comptype='NONE', compname='not compressed')
+  read:40: 60 bytes feff00000200ffff0100feff00000200...
+  tell: 30
+== reader uploads/24-quiet.wav markers
+  markers: None
+== reader uploads/06-float.wav params
+  open: error: Error: unknown format: 3
+== reader uploads/07-ext-float.wav params
+  open: error: Error: unknown extended format: 00000003-0000-0010-8000-00aa00389b71
+== reader uploads/08-episode.mp3.wav params
+  open: error: Error: file does not start with RIFF id
+== reader uploads/09-clip.avi.wav params
+  open: error: Error: not a WAVE file
+== reader uploads/11-no-data.wav params
+  open: error: Error: fmt chunk and/or data chunk missing
+== reader uploads/12-data-first.wav params
+  open: error: Error: data chunk before fmt chunk
+== reader uploads/13-short-fmt.wav params
+  open: error: EOFError: 
+== reader uploads/15-no-channels.wav params
+  open: error: Error: bad # of channels
+== reader uploads/16-big-list.wav params
+  open: error: RuntimeError: 
+== reader uploads/17-short-riff.wav params
+  open: error: Error: fmt chunk and/or data chunk missing
+== reader uploads/18-empty.wav params
+  open: error: EOFError: 
+== reader uploads/19-zero-bits.wav params
+  open: error: Error: bad sample width
+== reader uploads/23-fmt-only-14.wav params
+  open: error: EOFError: 
+== reader uploads/notes.txt params
+  open: error: Error: file does not start with RIFF id
+== reader uploads/nothing-here.wav params
+  open: error: FileNotFoundError: [Errno 2] No such file or directory: 'uploads/nothing-here.wav'
+== writer w1.wav nch:1 sw:2 rate:8000 write:0100ff7f0080
+  nch:1: ok
+  sw:2: ok
+  rate:8000: ok
+  write:0100ff7f0080: ok
+  end: ok
+  file 50 bytes: 524946462a00000057415645666d74201000000001000100401f0000803e00000200100064617461060000000100ff7f0080
+== writer w2.wav nch:2 sw:1 rate:22050.5 write:8080 getnframes write:7f817e82 tell getparams
+  nch:2: ok
+  sw:1: ok
+  rate:22050.5: ok
+  write:8080: ok
+  getnframes: 1
+  write:7f817e82: ok
+  tell: 3
+  getparams: error: AttributeError: 'Wave_write' object has no attribute '_comptype'
+  end: ok
+  file 50 bytes: 524946462a00000057415645666d742010000000010002002256000044ac000002000800646174610600000080807f817e82
+== writer w3.wav params:1,2,8000,4,NONE,not compressed raw:01000200 tell
+  params:1,2,8000,4,NONE,not compressed: ok
+  raw:01000200: ok
+  tell: 2
+  end: ok
+  file 48 bytes: 524946462800000057415645666d74201000000001000100401f0000803e000002001000646174610400000001000200
+== writer w4.wav nch:1 sw:2 rate:8000 nframes:10 write:0100020003
+  nch:1: ok
+  sw:2: ok
+  rate:8000: ok
+  nframes:10: ok
+  write:0100020003: ok
+  end: ok
+  file 49 bytes: 524946462900000057415645666d74201000000001000100401f0000803e00000200100064617461050000000100020003
+== writer w5.wav write:0000
+  write:0000: error: Error: # channels not specified
+  end: error: Error: # channels not specified
+  file 0 bytes: 
+== writer w6.wav nch:1 sw:2 write:0000
+  nch:1: ok
+  sw:2: ok
+  write:0000: error: Error: sampling rate not specified
+  end: error: Error: sampling rate not specified
+  file 0 bytes: 
+== writer w7.wav nch:1 sw:5 sw:0 nch:0 rate:0 rate:-5 comp:ULAW:u-law getparams sw:3 rate:8000.5
+  nch:1: ok
+  sw:5: error: Error: bad sample width
+  sw:0: error: Error: bad sample width
+  nch:0: error: Error: bad # of channels
+  rate:0: error: Error: bad frame rate
+  rate:-5: error: Error: bad frame rate
+  comp:ULAW:u-law: error: Error: unsupported compression type
+  getparams: error: Error: not all parameters set
+  sw:3: ok
+  rate:8000.5: ok
+  end: ok
+  file 44 bytes: 524946462400000057415645666d74201000000001000100401f0000c05d0000030018006461746100000000
+== writer w8.wav nch:1 sw:2 rate:8000 write: nch:2 write:01020304 nch:1 getnframes
+  nch:1: ok
+  sw:2: ok
+  rate:8000: ok
+  write:: ok
+  nch:2: ok
+  write:01020304: ok
+  nch:1: error: Error: cannot change parameters after starting to write
+  getnframes: 1
+  end: ok
+  file 48 bytes: 524946462800000057415645666d74201000000001000100401f0000803e000002001000646174610400000001020304
+== writer w9.wav nch:1 sw:1 rate:8000 write:808182 close write:83
+  nch:1: ok
+  sw:1: ok
+  rate:8000: ok
+  write:808182: ok
+  close: ok
+  write:83: error: AttributeError: 'NoneType' object has no attribute 'write'
+  end: ok
+  file 47 bytes: 524946462700000057415645666d74201000000001000100401f0000401f0000010008006461746103000000808182
+== writer w10.wav params:2,3,44100,0,NONE,pcm write:000000010000ffffff000080 getparams
+  params:2,3,44100,0,NONE,pcm: ok
+  write:000000010000ffffff000080: ok
+  getparams: _wave_params(nchannels=2, sampwidth=3, framerate=44100, nframes=2, comptype='NONE', compname='pcm')
+  end: ok
+  file 56 bytes: 524946463000000057415645666d7420100000000100020044ac00009809040006001800646174610c000000000000010000ffffff000080
+== writer w11.wav nch:1 sw:4 rate:96000 getnframes getparams markers
+  nch:1: ok
+  sw:4: ok
+  rate:96000: ok
+  getnframes: 0
+  getparams: error: AttributeError: 'Wave_write' object has no attribute '_comptype'
+  markers: None
+  end: ok
+  file 44 bytes: 524946462400000057415645666d742010000000010001000077010000dc0500040020006461746100000000
+== writer w12.wav nch:1 sw:2 rate:7999.5 write:01
+  nch:1: ok
+  sw:2: ok
+  rate:7999.5: ok
+  write:01: ok
+  end: ok
+  file 45 bytes: 524946462500000057415645666d74201000000001000100401f0000803e000002001000646174610100000001
+== inspect uploads
+01-intro.wav: 1 ch, 16-bit, 8000 Hz, 2400 frames, 300 ms
+  peak 12000 (36%)
+  quiet 50 ms in, 50 ms out
+02-interview.wav: 2 ch, 16-bit, 11025 Hz, 1102 frames, 99 ms
+  peak 8000 (24%) 20000 (61%)
+  quiet 0 ms in, 0 ms out
+03-phone.wav: 1 ch, 8-bit, 8000 Hz, 1200 frames, 150 ms
+  peak 100 (78%)
+  quiet 0 ms in, 0 ms out
+04-music.wav: 2 ch, 24-bit, 8000 Hz, 400 frames, 50 ms
+  peak 4000000 (47%) 6500000 (77%)
+  quiet 0 ms in, 0 ms out
+05-extensible.wav: 1 ch, 16-bit, 8000 Hz, 400 frames, 50 ms
+  peak 30000 (91%)
+  quiet 5 ms in, 5 ms out
+06-float.wav: error: Error: unknown format: 3
+07-ext-float.wav: error: Error: unknown extended format: 00000003-0000-0010-8000-00aa00389b71
+08-episode.mp3.wav: error: Error: file does not start with RIFF id
+09-clip.avi.wav: error: Error: not a WAVE file
+10-cut-off.wav: 1 ch, 16-bit, 8000 Hz, 2400 frames, 300 ms
+  header says 2400 frames, the file holds 500
+  peak 12000 (36%)
+  quiet 50 ms in, 0 ms out
+11-no-data.wav: error: Error: fmt chunk and/or data chunk missing
+12-data-first.wav: error: Error: data chunk before fmt chunk
+13-short-fmt.wav: error: EOFError: 
+14-12bit.wav: 1 ch, 16-bit, 8000 Hz, 160 frames, 20 ms
+  peak 1500 (4%)
+  quiet 0 ms in, 0 ms out
+15-no-channels.wav: error: Error: bad # of channels
+16-big-list.wav: error: RuntimeError: 
+17-short-riff.wav: error: Error: fmt chunk and/or data chunk missing
+18-empty.wav: error: EOFError: 
+19-zero-bits.wav: error: Error: bad sample width
+20-silence.wav: 1 ch, 16-bit, 8000 Hz, 800 frames, 100 ms
+  peak 0 (0%)
+  silent
+21-odd.wav: 1 ch, 8-bit, 8000 Hz, 301 frames, 37 ms
+  peak 90 (70%)
+  quiet 0 ms in, 0 ms out
+22-long-riff.wav: 1 ch, 16-bit, 8000 Hz, 30 frames, 3 ms
+  peak 2 (0%)
+  silent
+23-fmt-only-14.wav: error: EOFError: 
+24-quiet.wav: 2 ch, 16-bit, 8000 Hz, 320 frames, 40 ms
+  peak 60 (0%) 40 (0%)
+  silent
+notes.txt: error: Error: file does not start with RIFF id
+11 files read, 14 refused, 911 ms of audio
+== mixdown uploads/02-interview.wav out/interview-mono.wav
+mixdown uploads/02-interview.wav: 1102 frames
+  wrote out/interview-mono.wav: 1 ch, 16-bit, 11025 Hz, 1102 frames, 2248 bytes, crc32 8d44eb4e
+== mixdown uploads/04-music.wav out/music-mono.wav
+mixdown uploads/04-music.wav: 400 frames
+  wrote out/music-mono.wav: 1 ch, 24-bit, 8000 Hz, 400 frames, 1244 bytes, crc32 8bb48280
+== mixdown uploads/01-intro.wav out/intro-mono.wav
+uploads/01-intro.wav is already mono
+== mixdown uploads/06-float.wav out/float-mono.wav
+uploads/06-float.wav: error: Error: unknown format: 3
+== normalize uploads/01-intro.wav out/intro-loud.wav 90
+normalize uploads/01-intro.wav: peak 12000 -> 29491
+  wrote out/intro-loud.wav: 1 ch, 16-bit, 8000 Hz, 2400 frames, 4844 bytes, crc32 06679fa5
+== normalize uploads/03-phone.wav out/phone-loud.wav 100
+normalize uploads/03-phone.wav: peak 100 -> 128
+  wrote out/phone-loud.wav: 1 ch, 8-bit, 8000 Hz, 1200 frames, 1244 bytes, crc32 b3d45cc2
+== normalize uploads/24-quiet.wav out/quiet-loud.wav 50
+normalize uploads/24-quiet.wav: peak 60 -> 16384
+  wrote out/quiet-loud.wav: 2 ch, 16-bit, 8000 Hz, 320 frames, 1324 bytes, crc32 1b22d788
+== normalize uploads/20-silence.wav out/silence-loud.wav 90
+uploads/20-silence.wav is silent, nothing to normalize
+== trim uploads/01-intro.wav out/intro-trim.wav 1
+trim uploads/01-intro.wav: 401 frames from the start, 400 from the end
+  wrote out/intro-trim.wav: 1 ch, 16-bit, 8000 Hz, 1599 frames, 3242 bytes, crc32 8ea3d756
+== trim uploads/02-interview.wav out/interview-trim.wav 5
+trim uploads/02-interview.wav: 1 frames from the start, 0 from the end
+  wrote out/interview-trim.wav: 2 ch, 16-bit, 11025 Hz, 1101 frames, 4448 bytes, crc32 fa0afe1f
+== trim uploads/20-silence.wav out/silence-trim.wav 1
+uploads/20-silence.wav: nothing left after trimming
+== trim uploads/21-odd.wav out/odd-trim.wav 10
+trim uploads/21-odd.wav: 41 frames from the start, 1 from the end
+  wrote out/odd-trim.wav: 1 ch, 8-bit, 8000 Hz, 259 frames, 303 bytes, crc32 126d275e
+== convert uploads/03-phone.wav out/phone-16.wav 16
+convert uploads/03-phone.wav: 8-bit to 16-bit
+  wrote out/phone-16.wav: 1 ch, 16-bit, 8000 Hz, 1200 frames, 2444 bytes, crc32 e714f0c4
+== convert uploads/04-music.wav out/music-16.wav 16
+convert uploads/04-music.wav: 24-bit to 16-bit
+  wrote out/music-16.wav: 2 ch, 16-bit, 8000 Hz, 400 frames, 1644 bytes, crc32 89ab9f28
+== convert uploads/01-intro.wav out/intro-8.wav 8
+convert uploads/01-intro.wav: 16-bit to 8-bit
+  wrote out/intro-8.wav: 1 ch, 8-bit, 8000 Hz, 2400 frames, 2444 bytes, crc32 6ddcbfcf
+== convert uploads/14-12bit.wav out/12bit-32.wav 32
+convert uploads/14-12bit.wav: 16-bit to 32-bit
+  wrote out/12bit-32.wav: 1 ch, 32-bit, 8000 Hz, 160 frames, 684 bytes, crc32 a50e8be4
+== concat playlist.txt out/episode.wav
+  uploads/01-intro.wav: 2400 frames
+  uploads/20-silence.wav: 800 frames
+  skipping uploads/02-interview.wav: 2 ch, 16-bit, 11025 Hz, want 1 ch, 16-bit, 8000 Hz
+  uploads/05-extensible.wav: 400 frames
+  skipping uploads/missing.wav: error: FileNotFoundError: [Errno 2] No such file or directory: 'uploads/missing.wav'
+  uploads/10-cut-off.wav: 500 frames
+  skipping uploads/06-float.wav: error: Error: unknown format: 3
+  uploads/01-intro.wav: 2400 frames
+concat playlist.txt: 5 clips, 6500 frames
+  wrote out/episode.wav: 1 ch, 16-bit, 8000 Hz, 6500 frames, 13044 bytes, crc32 3937e191
+== concat phone-playlist.txt out/phone-call.wav
+  uploads/03-phone.wav: 1200 frames
+  uploads/21-odd.wav: 301 frames
+  uploads/03-phone.wav: 1200 frames
+concat phone-playlist.txt: 3 clips, 2701 frames
+  wrote out/phone-call.wav: 1 ch, 8-bit, 8000 Hz, 2701 frames, 2745 bytes, crc32 f6f279d6
+== inspect out
+12bit-32.wav: 1 ch, 32-bit, 8000 Hz, 160 frames, 20 ms
+  peak 98304000 (4%)
+  quiet 0 ms in, 0 ms out
+episode.wav: 1 ch, 16-bit, 8000 Hz, 6500 frames, 812 ms
+  peak 30000 (91%)
+  quiet 50 ms in, 50 ms out
+interview-mono.wav: 1 ch, 16-bit, 11025 Hz, 1102 frames, 99 ms
+  peak 13411 (40%)
+  quiet 0 ms in, 0 ms out
+interview-trim.wav: 2 ch, 16-bit, 11025 Hz, 1101 frames, 99 ms
+  peak 8000 (24%) 20000 (61%)
+  quiet 0 ms in, 0 ms out
+intro-8.wav: 1 ch, 8-bit, 8000 Hz, 2400 frames, 300 ms
+  peak 47 (36%)
+  quiet 50 ms in, 50 ms out
+intro-loud.wav: 1 ch, 16-bit, 8000 Hz, 2400 frames, 300 ms
+  peak 29491 (89%)
+  quiet 50 ms in, 50 ms out
+intro-trim.wav: 1 ch, 16-bit, 8000 Hz, 1599 frames, 199 ms
+  peak 12000 (36%)
+  quiet 0 ms in, 0 ms out
+music-16.wav: 2 ch, 16-bit, 8000 Hz, 400 frames, 50 ms
+  peak 15625 (47%) 25390 (77%)
+  quiet 0 ms in, 0 ms out
+music-mono.wav: 1 ch, 24-bit, 8000 Hz, 400 frames, 50 ms
+  peak 5037115 (60%)
+  quiet 0 ms in, 0 ms out
+odd-trim.wav: 1 ch, 8-bit, 8000 Hz, 259 frames, 32 ms
+  peak 90 (70%)
+  quiet 0 ms in, 0 ms out
+phone-16.wav: 1 ch, 16-bit, 8000 Hz, 1200 frames, 150 ms
+  peak 25600 (78%)
+  quiet 0 ms in, 0 ms out
+phone-call.wav: 1 ch, 8-bit, 8000 Hz, 2701 frames, 337 ms
+  peak 100 (78%)
+  quiet 0 ms in, 0 ms out
+phone-loud.wav: 1 ch, 8-bit, 8000 Hz, 1200 frames, 150 ms
+  peak 128 (100%)
+  quiet 0 ms in, 0 ms out
+quiet-loud.wav: 2 ch, 16-bit, 8000 Hz, 320 frames, 40 ms
+  peak 16384 (50%) 10923 (33%)
+  quiet 0 ms in, 0 ms out
+14 files read, 0 refused, 2638 ms of audio
