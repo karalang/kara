@@ -2217,11 +2217,7 @@ fn named_types() -> Vec[Str] {
 fn valid_types() -> Vec[Str] {
     let mut v = primitive_types();
     v.extend(named_types());
-    v.push("array");
-    v.push("map");
-    v.push("union");
-    v.push("request");
-    v.push("error_union");
+    v.extend(vec!["array", "map", "union", "request", "error_union"]);
     v
 }
 
