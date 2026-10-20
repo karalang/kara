@@ -43031,10 +43031,18 @@ fn test_type_name_rejection_stays_out_of_path_and_field_bases() {
     // suite, and both places a future refactor would reintroduce the bug by
     // moving the check back into `resolve_identifier_type`.
     //
-    // 1. A field-access base. `i64.NONEXISTENT` keeps its documented silent
-    //    `Type::Error` (see `test_primitive_const_unknown_silent_fall_through`);
+    // 1. A field-access base. `i64.NONEXISTENT` is an unknown constant
+    //    (B-2026-10-20-23, `test_primitive_const_unknown_is_an_error`);
     //    "is a type, not a function" is the wrong wording for a field access.
-    typecheck_ok("fn main() { let x = i64.NONEXISTENT; let _ = x; }");
+    let errs = typecheck_errors("fn main() { let x = i64.NONEXISTENT; let _ = x; }");
+    assert!(
+        errs.iter()
+            .all(|e| !e.message.contains("is a type, not a function"))
+            && errs
+                .iter()
+                .any(|e| e.message.contains("no associated constant `NONEXISTENT`")),
+        "{errs:?}"
+    );
     typecheck_ok("fn main() { let x = i64.MAX + 1_i64; let _y: i64 = x; }");
     // 2. A path's first segment. `resolve_path_type` falls back to
     //    `resolve_identifier_type` on segment 0 BEFORE later machinery gets its
