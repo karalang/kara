@@ -530,3 +530,37 @@ fn main() {
         assert!(err.starts_with(what), "{name}: {err}");
     }
 }
+
+/// `with_span` around a closure that suspends runs it as a coroutine with
+/// the span active across the pause, on both backends (B-2026-10-20-26):
+/// the native would have called it through a function value, which cannot
+/// run one. A closure taking its environment by borrow, and one owning a
+/// capture that drops after the call, both go through.
+#[test]
+fn mir_tasks_with_span_runs_a_suspending_closure() {
+    let src = r#"
+struct Noisy { id: i64 }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn take(n: own Noisy) -> i64 { n.id + 1 }
+fn pause_then_log(n: i64) -> i64 {
+    sleep_ms(1);
+    Log.info("after-resume");
+    n * 2
+}
+fn main() {
+    let s = Span.root("req", 7);
+    let r = with_span(s, || pause_then_log(21));
+    Log.info("outside");
+    println(r);
+    let t = Span.root("own", 9);
+    let noisy = Noisy { id: 1 };
+    let k = with_span(t, || { sleep_ms(1); Log.info("owned"); take(noisy) });
+    println(k);
+}
+"#;
+    let out = stdout_on_both("with_span_suspends", src);
+    assert_eq!(
+        out,
+        "[info] after-resume span_id=7\n[info] outside\n42\n[info] owned span_id=9\ndrop 1\n2\n"
+    );
+}

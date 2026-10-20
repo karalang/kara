@@ -138,6 +138,24 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
             }
+            ("with_span_enter", "", [span]) => {
+                // `with_span` around a closure that suspends, split by the
+                // coroutine transform around a direct call of its body.
+                let st = self.operand_type(span)?;
+                let (sp, sty) = match self.tys.kind(st) {
+                    TyKind::Ref(t) | TyKind::MutRef(t) => {
+                        let q = self.operand_ptr(span)?;
+                        (self.load_ptr(q)?, t)
+                    }
+                    _ => (self.operand_ptr(span)?, st),
+                };
+                let id = self.load_i64(self.offset(sp, self.field_offset(sty, None, 1)?)?)?;
+                self.rt("span_push", &[id.into()])?;
+                self.drop_moved(std::slice::from_ref(span))?;
+            }
+            ("with_span_exit", "", []) => {
+                self.rt("span_pop", &[])?;
+            }
             ("with_span", "", [span, body]) => {
                 // The body runs with the span's id active; `LogEvent`'s
                 // constructors stamp it.

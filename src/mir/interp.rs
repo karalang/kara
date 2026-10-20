@@ -1597,6 +1597,30 @@ impl<'a> Interp<'a> {
                 self.emit_event(event, t)?;
                 Ok(Value::Unit)
             }
+            ("with_span_enter", "") | ("with_span_exit", "") => {
+                // `with_span` around a closure that suspends, split by the
+                // coroutine transform around a direct call of its body.
+                match args.into_iter().next() {
+                    Some(span) => {
+                        let span = match span {
+                            Value::Ref(at) => self.slot(&at)?,
+                            v => v,
+                        };
+                        let id = match &span {
+                            Value::Agg(fs) => match fs.get(1) {
+                                Some(Value::Int(id)) => *id,
+                                _ => 0,
+                            },
+                            _ => 0,
+                        };
+                        self.active_spans.push(id);
+                    }
+                    None => {
+                        self.active_spans.pop();
+                    }
+                }
+                Ok(Value::Unit)
+            }
             ("with_span", "") => {
                 // The body runs with the span's id active; `LogEvent`'s
                 // constructors stamp it.

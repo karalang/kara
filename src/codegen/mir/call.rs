@@ -555,6 +555,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 | "tracing_reset"
                 | "tracing_emit_event"
                 | "with_span"
+                | "with_span_enter"
+                | "with_span_exit"
                 | "Log"
         ) && self.tracing_native(base, method, args, dest)?.is_some()
         {

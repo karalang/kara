@@ -763,6 +763,7 @@ pub fn transform(
     // A spawned closure runs as a task: its task body is a task root, and
     // a coroutine, whether or not the closure suspends.
     let mut bodies: Vec<Body> = bodies.to_vec();
+    direct_span_bodies(&mut bodies, tys);
     let tasks = rewrite_spawns(&mut bodies, tys)?;
     let task_names: BTreeSet<String> = tasks.iter().map(|b| b.instance.name.clone()).collect();
     bodies.extend(tasks);
@@ -888,6 +889,176 @@ pub fn transform(
 /// A coroutine that is used other than as the callee of a direct call: a
 /// function item taken as a value, or a closure that is made. Its callers
 /// cannot be found, so the transform cannot give them a frame for it.
+/// The natives `with_span` becomes around a closure that suspends.
+pub const SPAN_ENTER: &str = "with_span_enter";
+pub const SPAN_EXIT: &str = "with_span_exit";
+
+/// Rewrites `with_span(span, closure)` whose closure suspends into the
+/// span's enter, a direct call of the closure's body, and the exit
+/// (B-2026-10-20-26). The native would call the closure through a function
+/// value, which cannot run a coroutine; the closure is made in the same
+/// block, so the call can name its body, and the caller then suspends with
+/// it like any other caller of a coroutine.
+fn direct_span_bodies(bodies: &mut [Body], tys: &TyInterner) {
+    let set = coroutines(bodies.iter());
+    // Each suspending closure's body and the type of its environment
+    // parameter: the closure itself, or a borrow of it.
+    let closures: BTreeMap<DefId, (InstanceId, Ty)> = bodies
+        .iter()
+        .filter(|b| set.contains(&b.instance.name) && b.arg_count >= 1)
+        .map(|b| (b.instance.def, (b.instance.clone(), b.locals[1].ty)))
+        .collect();
+    if closures.is_empty() {
+        return;
+    }
+    let native = |name: &str| {
+        Operand::Const(Const {
+            ty: tys.unit(),
+            kind: ConstKind::FnDef(InstanceId {
+                def: DefId(u32::MAX),
+                args: Vec::new(),
+                name: name.to_string(),
+            }),
+        })
+    };
+    for b in bodies.iter_mut() {
+        let mut bi = 0;
+        while bi < b.blocks.len() {
+            let data = &b.blocks[bi];
+            let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(callee),
+                        ..
+                    }),
+                args,
+                destination,
+                target,
+                unwind,
+            } = &data.terminator.kind
+            else {
+                bi += 1;
+                continue;
+            };
+            let (span, Some(Operand::Move(value))) = (args.first(), args.get(1)) else {
+                bi += 1;
+                continue;
+            };
+            if callee.name != "with_span" || !value.projection.is_empty() || span.is_none() {
+                bi += 1;
+                continue;
+            }
+            // `value = move closure as OnceFn() -> T`, `closure` made here.
+            let cast = data.statements.iter().rposition(|st| {
+                matches!(&st.kind, StatementKind::Assign(p, Rvalue::Cast(_, Operand::Move(_), _))
+                    if p.local == value.local && p.projection.is_empty())
+            });
+            let Some(cast) = cast else {
+                bi += 1;
+                continue;
+            };
+            let StatementKind::Assign(_, Rvalue::Cast(_, Operand::Move(closure), _)) =
+                &data.statements[cast].kind
+            else {
+                unreachable!()
+            };
+            let body = data.statements[..cast]
+                .iter()
+                .rev()
+                .find_map(|st| match &st.kind {
+                    StatementKind::Assign(
+                        p,
+                        Rvalue::Aggregate(AggregateKind::Closure { ty }, _),
+                    ) if p == closure => match tys.kind(*ty) {
+                        TyKind::Closure(def, _) => closures.get(&def).cloned(),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+            let Some((body, env_ty)) = body else {
+                bi += 1;
+                continue;
+            };
+            let by_ref = matches!(tys.kind(env_ty), TyKind::Ref(_));
+            let (closure, span) = (closure.clone(), span.cloned().unwrap());
+            let (destination, target, unwind) = (destination.clone(), *target, *unwind);
+            let info = data.terminator.source_info;
+            let unit = |b: &mut Body| {
+                b.locals.push(LocalDecl {
+                    ty: tys.unit(),
+                    mutability: Mutability::Mut,
+                    kind: LocalKind::Temp,
+                    source_info: info,
+                });
+                Place::local(Local((b.locals.len() - 1) as u32))
+            };
+            let (entered, exited) = (unit(b), unit(b));
+            let run = BasicBlock(b.blocks.len() as u32);
+            let exit = BasicBlock(run.0 + 1);
+            let dropped = BasicBlock(run.0 + 2);
+            let call = |func, args, destination, target| Terminator {
+                kind: TerminatorKind::Call {
+                    func,
+                    args,
+                    destination,
+                    target,
+                    unwind,
+                },
+                source_info: info,
+            };
+            b.blocks[bi].statements.remove(cast);
+            b.blocks[bi].terminator = call(native(SPAN_ENTER), vec![span], entered, Some(run));
+            let direct = Operand::Const(Const {
+                ty: tys.unit(),
+                kind: ConstKind::FnDef(body),
+            });
+            // A closure called through a borrow is still the caller's after
+            // the call, and drops then, as `with_span` would have dropped it.
+            let (statements, env, after) = if by_ref {
+                b.locals.push(LocalDecl {
+                    ty: env_ty,
+                    mutability: Mutability::Not,
+                    kind: LocalKind::Temp,
+                    source_info: info,
+                });
+                let r = Place::local(Local((b.locals.len() - 1) as u32));
+                let borrow = Statement {
+                    kind: StatementKind::Assign(
+                        r.clone(),
+                        Rvalue::Ref(BorrowKind::Shared, closure.clone()),
+                    ),
+                    source_info: info,
+                };
+                (vec![borrow], Operand::Move(r), dropped)
+            } else {
+                (Vec::new(), Operand::Move(closure.clone()), exit)
+            };
+            b.blocks.push(BasicBlockData {
+                statements,
+                terminator: call(direct, vec![env], destination, Some(after)),
+            });
+            b.blocks.push(BasicBlockData {
+                statements: Vec::new(),
+                terminator: call(native(SPAN_EXIT), Vec::new(), exited, target),
+            });
+            if by_ref {
+                b.blocks.push(BasicBlockData {
+                    statements: Vec::new(),
+                    terminator: Terminator {
+                        kind: TerminatorKind::Drop {
+                            place: closure,
+                            target: exit,
+                            unwind,
+                        },
+                        source_info: info,
+                    },
+                });
+            }
+            bi += 1;
+        }
+    }
+}
+
 fn called_indirectly(bodies: &[Body], set: &BTreeSet<String>, tys: &TyInterner) -> Option<String> {
     let closure_defs: BTreeMap<DefId, &str> = bodies
         .iter()
@@ -902,15 +1073,57 @@ fn called_indirectly(bodies: &[Body], set: &BTreeSet<String>, tys: &TyInterner) 
         _ => None,
     };
     for b in bodies {
+        // A closure value whose only use is a direct call of its body (the
+        // split `with_span`, `direct_span_bodies`) is no function value.
+        let called: BTreeSet<Local> = b
+            .blocks
+            .iter()
+            .filter_map(|d| match &d.terminator.kind {
+                TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(inst),
+                            ..
+                        }),
+                    args,
+                    ..
+                } if closure_defs.contains_key(&inst.def) && set.contains(&inst.name) => {
+                    match args.first() {
+                        Some(Operand::Move(p)) if p.projection.is_empty() => Some(p.local),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        // ... or a borrow of it, made only for that call.
+        let mut called = called;
+        for d in &b.blocks {
+            for st in &d.statements {
+                if let StatementKind::Assign(r, Rvalue::Ref(_, c)) = &st.kind {
+                    if r.projection.is_empty()
+                        && c.projection.is_empty()
+                        && called.contains(&r.local)
+                    {
+                        called.insert(c.local);
+                    }
+                }
+            }
+        }
         for data in &b.blocks {
             for st in &data.statements {
-                let StatementKind::Assign(_, rv) = &st.kind else {
+                let StatementKind::Assign(dest, rv) = &st.kind else {
                     continue;
                 };
                 if let Rvalue::Aggregate(AggregateKind::Closure { ty }, _) = rv {
                     if let TyKind::Closure(def, _) = tys.kind(*ty) {
                         if let Some(n) = closure_defs.get(&def) {
-                            return Some(n.to_string());
+                            let direct = dest.projection.is_empty()
+                                && called.contains(&dest.local)
+                                && !uses_elsewhere(b, dest.local, &called);
+                            if !direct {
+                                return Some(n.to_string());
+                            }
                         }
                     }
                 }
@@ -932,6 +1145,32 @@ fn called_indirectly(bodies: &[Body], set: &BTreeSet<String>, tys: &TyInterner) 
         }
     }
     None
+}
+
+/// Whether `l` is read anywhere but as the first argument of a call, or
+/// by a borrow into one of `called` (the temporaries those calls take).
+fn uses_elsewhere(b: &Body, l: Local, called: &BTreeSet<Local>) -> bool {
+    let is = |o: &Operand| matches!(o, Operand::Move(p) | Operand::Copy(p) if p.local == l);
+    b.blocks.iter().any(|d| {
+        d.statements.iter().any(|st| match &st.kind {
+            StatementKind::Assign(r, Rvalue::Ref(_, p))
+                if p.local == l && r.projection.is_empty() && called.contains(&r.local) =>
+            {
+                false
+            }
+            StatementKind::Assign(_, rv) => match rv {
+                Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => is(o),
+                Rvalue::BinaryOp(_, x, y) | Rvalue::CheckedBinaryOp(_, x, y) => is(x) || is(y),
+                Rvalue::Aggregate(_, ops) => ops.iter().any(is),
+                Rvalue::Ref(_, p) => p.local == l,
+                _ => false,
+            },
+            _ => false,
+        }) || match &d.terminator.kind {
+            TerminatorKind::Call { func, args, .. } => is(func) || args.iter().skip(1).any(is),
+            _ => false,
+        }
+    })
 }
 
 struct Resume<'a> {
