@@ -1,0 +1,336 @@
+== lookup
+lookup 'utf-8' -> 'utf-8'
+lookup 'UTF8' -> 'utf-8'
+lookup 'utf_8' -> 'utf-8'
+lookup 'U8' -> 'utf-8'
+lookup 'UTF 8' -> 'utf-8'
+lookup ' utf-8 ' -> 'utf-8'
+lookup 'utf--8' -> 'utf-8'
+lookup 'utf-8.x' -> ! LookupError: unknown encoding: utf-8.x
+lookup 'latin1' -> 'iso8859-1'
+lookup 'Latin-1' -> 'iso8859-1'
+lookup 'ISO-8859-1' -> 'iso8859-1'
+lookup 'l1' -> 'iso8859-1'
+lookup '8859' -> 'iso8859-1'
+lookup 'iso8859_15' -> 'iso8859-15'
+lookup 'ISO-8859-15' -> 'iso8859-15'
+lookup 'latin9' -> 'iso8859-15'
+lookup 'cp-1252' -> ! LookupError: unknown encoding: cp-1252
+lookup 'windows-1252' -> 'cp1252'
+lookup 'CP1252' -> 'cp1252'
+lookup 'cp1251' -> 'cp1251'
+lookup 'windows_1251' -> 'cp1251'
+lookup 'KOI8-R' -> 'koi8-r'
+lookup 'koi8_r' -> 'koi8-r'
+lookup 'macroman' -> 'mac-roman'
+lookup 'mac-roman' -> 'mac-roman'
+lookup 'MacRoman' -> 'mac-roman'
+lookup 'cp437' -> 'cp437'
+lookup 'IBM437' -> 'cp437'
+lookup '437' -> 'cp437'
+lookup 'cp850' -> 'cp850'
+lookup 'IBM850' -> 'cp850'
+lookup 'ascii' -> 'ascii'
+lookup 'US-ASCII' -> 'ascii'
+lookup '646' -> 'ascii'
+lookup 'ansi_x3.4_1968' -> 'ascii'
+lookup 'utf-16' -> 'utf-16'
+lookup 'UTF16' -> 'utf-16'
+lookup 'utf-16le' -> 'utf-16-le'
+lookup 'UTF_16_BE' -> 'utf-16-be'
+lookup 'utf32' -> 'utf-32'
+lookup 'utf-32-le' -> 'utf-32-le'
+lookup 'utf_8_sig' -> 'utf-8-sig'
+lookup 'utf8-sig' -> ! LookupError: unknown encoding: utf8-sig
+lookup 'unicode-escape' -> 'unicode-escape'
+lookup 'unicode_escape' -> 'unicode-escape'
+lookup 'raw-unicode-escape' -> 'raw-unicode-escape'
+lookup 'nope' -> ! LookupError: unknown encoding: nope
+lookup '' -> ! LookupError: unknown encoding: 
+lookup 'utf-8é' -> 'utf-8'
+== utf-8
+decode utf-8 strict b'caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\x89' -> 'café € 🎉'
+decode utf-8 strict b'\xef\xbb\xbfBOM kept' -> '\ufeffBOM kept'
+decode utf-8 strict b'ab\xffcd' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 2: invalid start byte
+decode utf-8 strict b'ab\x80cd' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 2: invalid start byte
+decode utf-8 strict b'\xc0\xaf' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte
+decode utf-8 strict b'\xc2' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc2 in position 0: unexpected end of data
+decode utf-8 strict b'\xe2\x82' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+decode utf-8 strict b'\xe2\x28\xa1' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte
+decode utf-8 strict b'\xe2\x82\x28' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte
+decode utf-8 strict b'\xe0\x80\x80' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe0 in position 0: invalid continuation byte
+decode utf-8 strict b'\xed\xa0\x80' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+decode utf-8 strict b'\xed\xa0' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+decode utf-8 strict b'\xf0\x80\x80\x80' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf0 in position 0: invalid continuation byte
+decode utf-8 strict b'\xf0\x9f\x8e' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-2: unexpected end of data
+decode utf-8 strict b'\xf0\x9f\x8e(' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-2: invalid continuation byte
+decode utf-8 strict b'\xf4\x90\x80\x80' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte
+decode utf-8 strict b'\xf5\x80' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf5 in position 0: invalid start byte
+decode utf-8 replace b'a\xffb\xe2\x82c\xf0\x9f\x8e\xe2\x28\xa1' -> 'a�b�c��(�'
+decode utf-8 ignore b'a\xffb\xe2\x82c\xf0\x9f\x8e' -> 'abc'
+decode utf-8 backslashreplace b'a\xffb\xe2\x82c\xf0\x9f\x8e' -> 'a\\xffb\\xe2\\x82c\\xf0\\x9f\\x8e'
+decode utf-8 surrogateescape b'a\xffb\xe2\x82c\xf0\x9f\x8e' -> 'a\udcffb\udce2\udc82c\udcf0\udc9f\udc8e'
+decode utf-8 surrogatepass b'\xed\xa0\x80\xed\xb2\xa9x' -> '\ud800\udca9x'
+decode utf-8 surrogatepass b'\xed\xa0' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+decode utf-8 bogus b'ok' -> 'ok'
+decode utf-8 bogus b'\xff' -> ! LookupError: unknown error handler name 'bogus'
+decode utf-8-sig strict b'\xef\xbb\xbfBOM gone' -> 'BOM gone'
+decode utf-8-sig strict b'no BOM' -> 'no BOM'
+decode utf-8-sig strict b'\xef\xbb' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+encode utf-8 strict 'caf\xe9 \u20ac \U0001f389' -> b'caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\x89'
+encode utf-8 strict 'a\ud800b' -> ! UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+encode utf-8 strict 'a\ud800\udc00b' -> ! UnicodeEncodeError: 'utf-8' codec can't encode characters in position 1-2: surrogates not allowed
+encode utf-8 replace 'a\ud800\udc00b' -> b'a??b'
+encode utf-8 ignore 'a\ud800b' -> b'ab'
+encode utf-8 backslashreplace 'a\ud800b' -> b'a\\ud800b'
+encode utf-8 xmlcharrefreplace 'a\ud800b' -> b'a&#55296;b'
+encode utf-8 surrogatepass 'a\ud800\udfffb' -> b'a\xed\xa0\x80\xed\xbf\xbfb'
+encode utf-8 surrogateescape 'a\udcffb\udc80' -> b'a\xffb\x80'
+encode utf-8 surrogateescape 'a\ud800b' -> ! UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+encode utf-8-sig strict 'x' -> b'\xef\xbb\xbfx'
+encode utf-8-sig strict '' -> b'\xef\xbb\xbf'
+== ascii and latin-1
+decode ascii strict b'plain' -> 'plain'
+decode ascii strict b'caf\xe9' -> ! UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+decode ascii replace b'caf\xe9\xe9!' -> 'caf��!'
+decode ascii surrogateescape b'caf\xe9' -> 'caf\udce9'
+decode latin-1 strict b'caf\xe9 \x80\xff' -> 'café \x80ÿ'
+encode ascii strict 'na\xefve caf\xe9' -> ! UnicodeEncodeError: 'ascii' codec can't encode character '\xef' in position 2: ordinal not in range(128)
+encode ascii strict '\u201cquoted\u201d' -> ! UnicodeEncodeError: 'ascii' codec can't encode character '\u201c' in position 0: ordinal not in range(128)
+encode ascii strict 'x\u2014\u2014\u2014y' -> ! UnicodeEncodeError: 'ascii' codec can't encode characters in position 1-3: ordinal not in range(128)
+encode ascii replace 'na\xefve \u2014 caf\xe9' -> b'na?ve ? caf?'
+encode ascii ignore 'na\xefve \u2014 caf\xe9' -> b'nave  caf'
+encode ascii backslashreplace 'na\xefve \u2014 \U0001f600' -> b'na\\xefve \\u2014 \\U0001f600'
+encode ascii xmlcharrefreplace 'na\xefve \u2014 \U0001f600' -> b'na&#239;ve &#8212; &#128512;'
+encode ascii namereplace 'na\xefve \u2014 \U0001f600' -> b'na\\N{LATIN SMALL LETTER I WITH DIAERESIS}ve \\N{EM DASH} \\N{GRINNING FACE}'
+encode ascii surrogateescape 'a\udce9b' -> b'a\xe9b'
+encode ascii surrogateescape 'a\udce9\u2014b' -> ! UnicodeEncodeError: 'ascii' codec can't encode character '\u2014' in position 2: ordinal not in range(128)
+encode latin-1 strict 'caf\xe9 \xff' -> b'caf\xe9 \xff'
+encode latin-1 strict 'caf\xe9 \u20ac' -> ! UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 5: ordinal not in range(256)
+encode latin-1 xmlcharrefreplace '5 \u20ac' -> b'5 &#8364;'
+encode latin-1 bogus '5 \u20ac' -> ! LookupError: unknown error handler name 'bogus'
+== utf-16 and utf-32
+encode utf-16 strict 'hi \U0001f600' -> b'\xff\xfeh\x00i\x00 \x00=\xd8\x00\xde'
+encode utf-16-le strict 'hi \U0001f600' -> b'h\x00i\x00 \x00=\xd8\x00\xde'
+encode utf-16-be strict 'hi \U0001f600' -> b'\x00h\x00i\x00 \xd8=\xde\x00'
+encode utf-16-le strict 'a\ud800b' -> ! UnicodeEncodeError: 'utf-16-le' codec can't encode character '\ud800' in position 1: surrogates not allowed
+encode utf-16-le surrogatepass 'a\ud800b' -> b'a\x00\x00\xd8b\x00'
+encode utf-16-le replace 'a\ud800b' -> b'a\x00?\x00b\x00'
+encode utf-32 strict 'hi \U0001f600' -> b'\xff\xfe\x00\x00h\x00\x00\x00i\x00\x00\x00 \x00\x00\x00\x00\xf6\x01\x00'
+encode utf-32-be strict 'hi' -> b'\x00\x00\x00h\x00\x00\x00i'
+encode utf-32-le backslashreplace 'a\udfffb' -> b'a\x00\x00\x00\\\x00\x00\x00u\x00\x00\x00d\x00\x00\x00f\x00\x00\x00f\x00\x00\x00f\x00\x00\x00b\x00\x00\x00'
+decode utf-16 strict b'\xff\xfeh\x00i\x00' -> 'hi'
+decode utf-16 strict b'\xfe\xff\x00h\x00i' -> 'hi'
+decode utf-16 strict b'h\x00i\x00' -> 'hi'
+decode utf-16 strict b'\xff\xfe\xff\xfeh\x00' -> '\ufeffh'
+decode utf-16-le strict b'\xff\xfeh\x00' -> '\ufeffh'
+decode utf-16-le strict b'=\xd8\x00\xde' -> '😀'
+decode utf-16-be strict b'\xd8=\xde\x00' -> '😀'
+decode utf-16-le strict b'a\x00\x00\xdcb\x00' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-3: illegal encoding
+decode utf-16-le strict b'a\x00\x00\xd8b\x00' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-3: illegal UTF-16 surrogate
+decode utf-16-le strict b'a\x00\x00\xd8' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-3: unexpected end of data
+decode utf-16-le strict b'a\x00\x00\xd8b' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-4: unexpected end of data
+decode utf-16-le strict b'a\x00b' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode byte 0x62 in position 2: truncated data
+decode utf-16 strict b'\xfe\xff\x00a\x00' -> ! UnicodeDecodeError: 'utf-16-be' codec can't decode byte 0x00 in position 4: truncated data
+decode utf-16-le replace b'a\x00\x00\xdcb\x00\x00\xd8c\x00d' -> 'a�b�c�'
+decode utf-16-le surrogatepass b'a\x00\x00\xdcb\x00' -> 'a\udc00b'
+decode utf-16-le backslashreplace b'a\x00\x00\xdcb' -> 'a\\x00\\xdc\\x62'
+decode utf-32 strict b'\xff\xfe\x00\x00h\x00\x00\x00' -> 'h'
+decode utf-32 strict b'\x00\x00\xfe\xff\x00\x00\x00h' -> 'h'
+decode utf-32-le strict b'\x00\x00\x11\x00' -> ! UnicodeDecodeError: 'utf-32-le' codec can't decode bytes in position 0-3: code point not in range(0x110000)
+decode utf-32-le strict b'\x00\xd8\x00\x00' -> ! UnicodeDecodeError: 'utf-32-le' codec can't decode bytes in position 0-3: code point in surrogate code point range(0xd800, 0xe000)
+decode utf-32-le strict b'a\x00\x00\x00b\x00' -> ! UnicodeDecodeError: 'utf-32-le' codec can't decode bytes in position 4-5: truncated data
+decode utf-32-be replace b'\x00\x00\x00a\x00\x11\x00\x00\x00\x00\x00b' -> 'a�b'
+decode utf-32-le surrogatepass b'\x00\xd8\x00\x00' -> '\ud800'
+== 8-bit code pages
+decode cp1252 strict b'\x93smart\x94 \x80 5 \x96 caf\xe9' -> '“smart” € 5 – café'
+decode cp1252 strict b'a\x81b' -> ! UnicodeDecodeError: 'charmap' codec can't decode byte 0x81 in position 1: character maps to <undefined>
+decode cp1252 replace b'a\x81\x8d\x8fb' -> 'a���b'
+decode cp1252 backslashreplace b'a\x81b' -> 'a\\x81b'
+decode cp1252 surrogateescape b'a\x81b' -> 'a\udc81b'
+decode cp1251 strict b'\xcf\xf0\xe8\xe2\xe5\xf2' -> 'Привет'
+decode koi8-r strict b'\xf0\xd2\xc9\xd7\xc5\xd4' -> 'Привет'
+decode iso8859-15 strict b'5 \xa4 \xbd' -> '5 € œ'
+decode mac-roman strict b'caf\x8e \xa5 \xf0' -> 'café • \uf8ff'
+decode cp437 strict b'\xc9\xcd\xbb\xba\xb0\xb1\xb2\x01\x02' -> '╔═╗║░▒▓\x01\x02'
+decode cp850 strict b'\x82\x90\xd0' -> 'éÉð'
+encode cp1252 strict '\u201csmart\u201d \u20ac \u2013 caf\xe9' -> b'\x93smart\x94 \x80 \x96 caf\xe9'
+encode cp1252 strict '\u0442\u0435\u043a\u0441\u0442' -> ! UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-4: character maps to <undefined>
+encode cp1252 replace 'x \u0442\u0435 y \u2192' -> b'x ?? y ?'
+encode cp1252 xmlcharrefreplace 'x \u2192 y' -> b'x &#8594; y'
+encode cp1252 namereplace 'x \u2192 y' -> b'x \\N{RIGHTWARDS ARROW} y'
+encode cp1252 surrogateescape 'a\udc81b' -> b'a\x81b'
+encode cp1251 strict '\u041f\u0440\u0438\u0432\u0435\u0442' -> b'\xcf\xf0\xe8\xe2\xe5\xf2'
+encode koi8-r strict '\u041f\u0440\u0438\u0432\u0435\u0442' -> b'\xf0\xd2\xc9\xd7\xc5\xd4'
+encode koi8-r strict 'caf\xe9' -> ! UnicodeEncodeError: 'charmap' codec can't encode character '\xe9' in position 3: character maps to <undefined>
+encode iso8859-15 strict '5 \u20ac' -> b'5 \xa4'
+encode iso8859-15 strict '\xa4' -> ! UnicodeEncodeError: 'charmap' codec can't encode character '\xa4' in position 0: character maps to <undefined>
+encode mac-roman strict 'caf\xe9 \uf8ff' -> b'caf\x8e \xf0'
+encode cp437 strict '\u2554\u2550\u2557 \u263a' -> ! UnicodeEncodeError: 'charmap' codec can't encode character '\u263a' in position 4: character maps to <undefined>
+== escape codecs
+decode unicode_escape strict b'tab\\there \\x41 \\u20ac \\U0001f600 \\101 \\n\xe9' -> 'tab\there A € 😀 A \né'
+decode unicode_escape strict b'a\\x4' -> ! UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 1-3: truncated \xXX escape
+decode unicode_escape strict b'a\\' -> ! UnicodeDecodeError: 'unicodeescape' codec can't decode byte 0x5c in position 1: \ at end of string
+decode unicode_escape strict b'a\\U00110000b' -> ! UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 1-10: illegal Unicode character
+decode unicode_escape strict b'a\\u12z' -> ! UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 1-4: truncated \uXXXX escape
+decode unicode_escape replace b'a\\x4zb\\u12' -> 'a�zb�'
+decode unicode_escape backslashreplace b'a\\x4zb' -> 'a\\x5c\\x78\\x34zb'
+decode unicode_escape strict b'\\\\ \\\' \\" \\a\\b\\f\\v\\0\\377' -> '\\ \' " \x07\x08\x0c\x0b\x00ÿ'
+decode raw_unicode_escape strict b'a\\x41 \\u20ac \\U0001f600 \xe9' -> 'a\\x41 € 😀 é'
+decode raw_unicode_escape strict b'a\\u12' -> ! UnicodeDecodeError: 'rawunicodeescape' codec can't decode bytes in position 1-4: truncated \uXXXX escape
+decode raw_unicode_escape strict b'a\\\\u0041' -> 'a\\\\u0041'
+encode unicode_escape strict 'tab\there \\ \'q\' caf\xe9 \u20ac \U0001f600 \x7f\x00' -> b"tab\\there \\\\ 'q' caf\\xe9 \\u20ac \\U0001f600 \\x7f\\x00"
+encode raw_unicode_escape strict 'caf\xe9 \u20ac \U0001f600 \\u' -> b'caf\xe9 \\u20ac \\U0001f600 \\u'
+== incremental decoding
+feed utf-8 strict
+  b'caf\xc3' -> 'caf'
+  b'\xa9 \xe2\x82' -> 'é '
+  b'\xac' -> '€'
+  b' \xf0\x9f' -> ' '
+  b'\x8e' -> ''
+  b'\x89!' final -> '🎉!'
+feed utf-8 strict
+  b'ab\xe2\x82' -> 'ab'
+  b'' -> ! UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+feed utf-8 replace
+  b'ab\xe2' -> 'ab'
+  b'(' -> '�('
+  b'\xf0\x9f\x8e' final -> '�'
+feed utf-8 strict
+  b'ab\xe2(' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe2 in position 2: invalid continuation byte
+feed utf-8-sig strict
+  b'\xef' -> ''
+  b'\xbb' -> ''
+  b'\xbfhi' final -> 'hi'
+feed utf-8-sig strict
+  b'\xef' -> ''
+  b'x' -> ! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xef in position 0: invalid continuation byte
+feed utf-16 strict
+  b'\xff' -> ''
+  b'\xfeh' -> ''
+  b'\x00i' -> 'h'
+  b'\x00=\xd8' -> 'i'
+  b'\x00\xde' final -> '😀'
+feed utf-16 strict
+  b'\x00' -> ''
+  b'h\x00' -> ! UnicodeDecodeError: 'utf-16' codec can't decode bytes in position 0-1: Stream does not start with BOM
+feed utf-16-le strict
+  b'h\x00=' -> 'h'
+  b'\xd8' -> ''
+  b'' -> ! UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 0-1: unexpected end of data
+feed utf-32 strict
+  b'\x00\x00\xfe' -> ''
+  b'\xff\x00\x00' -> ''
+  b'\x00h' final -> 'h'
+feed cp1252 strict
+  b'\x93a' -> '“a'
+  b'\x94' final -> '”'
+feed unicode_escape strict
+  b'a\\' -> 'a'
+  b'x4' -> ''
+  b'1b' final -> 'Ab'
+feed ascii strict
+  b'ok' -> 'ok'
+  b'\xff' -> ! UnicodeDecodeError: 'ascii' codec can't decode byte 0xff in position 0: ordinal not in range(128)
+== convert legacy files to utf-8
+notes-win.txt (windows-1252)
+  codec cp1252, 62 bytes, crlf=2 cr=0 lf=0
+  wrote work/notes-win.txt: 70 bytes, 2 lines, same=True
+  | '“Quarterly” notes – café budget €1,200'
+  | 'Next: naïve forecast'
+  back to cp1252: 60 bytes
+menu-mac.txt (macintosh)
+  codec mac-roman, 38 bytes, crlf=0 cr=2 lf=0
+  wrote work/menu-mac.txt: 47 bytes, 2 lines, same=True
+  | 'Crème brûlée • 7,50'
+  | 'Café crème • 3,20'
+  back to mac-roman: 38 bytes
+report-ru.txt (KOI8-R)
+  codec koi8-r, 24 bytes, crlf=0 cr=0 lf=2
+  wrote work/report-ru.txt: 40 bytes, 2 lines, same=True
+  | 'Отчёт за март'
+  | 'Итого: 42'
+  back to koi8-r: 24 bytes
+invoice-1251.txt (latin-1)
+  codec iso8859-1, 25 bytes, crlf=0 cr=0 lf=2
+  suspicious: 0 C1 controls, longest run 'Ñóììà'
+  wrote work/invoice-1251.txt: 35 bytes, 2 lines, same=True
+  | 'Ñ÷¸ò ¹ 17'
+  | 'Ñóììà: 9 900 ?'
+  back to iso8859-1: 25 bytes
+banner-dos.txt (ibm437)
+  codec cp437, 21 bytes, crlf=0 cr=0 lf=3
+  wrote work/banner-dos.txt: 49 bytes, 3 lines, same=True
+  | '╔════╗'
+  | '║ OK ║'
+  | '╚════╝'
+  back to cp437: 21 bytes
+price-l9.txt (ISO-8859-15)
+  codec iso8859-15, 19 bytes, crlf=0 cr=0 lf=1
+  wrote work/price-l9.txt: 22 bytes, 1 lines, same=True
+  | 'Prix: 12 € ? œuvre'
+  back to iso8859-15: 19 bytes
+missing.txt (utf-8)
+  ! FileNotFoundError: [Errno 2] No such file or directory: 'data/legacy/missing.txt'
+notes-win.txt (cp-1252)
+  ! LookupError: unknown encoding: cp-1252
+== read csv uploads
+a-utf8.csv: 24 bytes, utf-8
+  'name' | 'city'
+  'Zoë' | 'München'
+b-utf8-bom.csv: 30 bytes, BOM efbbbf -> utf-8-sig
+  'name' | 'city'
+  'José' | 'São Paulo'
+c-utf16le-bom.csv: 34 bytes, BOM fffe -> utf-16
+  'name' | 'city'
+  '李雷' | '北京'
+d-utf16be-bom.csv: 46 bytes, BOM feff -> utf-16
+  'name' | 'city'
+  'Anna' | 'Kraków'
+e-cp1252.csv: 27 bytes, not utf-8 ('utf-8' codec can't decode byte 0xe7 in position 14: invalid continuation byte)
+  fallback cp1252
+  'name' | 'city'
+  'François' | '“Paris”'
+f-utf32-bom.csv: 76 bytes, BOM fffe0000 -> utf-32
+  'name' | 'city'
+  '😀' | 'Tokyo'
+g-broken.csv: 36 bytes, not utf-8 ('utf-8' codec can't decode byte 0xff in position 33: invalid start byte)
+  fallback cp1252
+  'name' | 'city'
+  'BjÃ¶rk' | 'ReykjavÃ\xadk'
+  'Oops' | 'ÿþ'
+== sanitise server.log
+line 1: 52 bytes, 50 chars, 0 undecodable
+  escaped  '2026-10-20 12:00:01 user=zoë path=/café status=200'
+  shown    2026-10-20 12:00:01 user=zoë path=/café status=200
+  ascii    2026-10-20 12:00:01 user=zo\xeb path=/caf\xe9 status=200
+  strict encode ok
+  round trip True
+  user='zoë' path='/café'
+line 2: 53 bytes, 53 chars, 3 undecodable
+  escaped  '2026-10-20 12:00:02 user=\udcff\udcfeadmin path=/x\udc80y status=404'
+  shown    2026-10-20 12:00:02 user=\xff\xfeadmin path=/x\x80y status=404
+  ascii    2026-10-20 12:00:02 user=\udcff\udcfeadmin path=/x\udc80y status=404
+  strict encode ! UnicodeEncodeError: 'utf-8' codec can't encode characters in position 25-26: surrogates not allowed
+  round trip True
+  user='\udcff\udcfeadmin' path='/x\udc80y'
+line 3: 48 bytes, 48 chars, 2 undecodable
+  escaped  '2026-10-20 12:00:03 user=bob path=/\udce2\udc82 status=500'
+  shown    2026-10-20 12:00:03 user=bob path=/\xe2\x82 status=500
+  ascii    2026-10-20 12:00:03 user=bob path=/\udce2\udc82 status=500
+  strict encode ! UnicodeEncodeError: 'utf-8' codec can't encode characters in position 35-36: surrogates not allowed
+  round trip True
+  user='bob' path='/\udce2\udc82'
+== fix mojibake
+'cafÃ©'
+  fixed 'café'
+'naÃ¯ve rÃ©sumÃ©'
+  fixed 'naïve résumé'
+'â€œsmart quotesâ€�'
+  cannot fix: ! UnicodeEncodeError: 'charmap' codec can't encode character '\ufffd' in position 17: character maps to <undefined>
+'MÃ¼nchen â€“ ZÃ¼rich'
+  fixed 'München – Zürich'
+'plain ascii'
+  unchanged
+'Å�Ã³dÅº'
+  cannot fix: ! UnicodeEncodeError: 'charmap' codec can't encode character '\ufffd' in position 1: character maps to <undefined>
