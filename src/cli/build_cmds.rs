@@ -2638,6 +2638,7 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::UnionNonExhaustiveForbidden => "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
         ResolveErrorKind::DefaultAttributeInvalidPosition => "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
         ResolveErrorKind::DefaultAttributeWithoutDerive => "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
+        ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
         ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
     }
 }

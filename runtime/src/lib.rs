@@ -364,6 +364,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_panic_set,
         mir::karac_mir_abort,
         mir::karac_mir_abort_at,
+        mir::karac_mir_set_panic_handler,
+        mir::karac_mir_panic_info,
     );
     keep!(
         alloc::karac_alloc_fallible,

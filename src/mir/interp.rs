@@ -622,6 +622,7 @@ fn run_with(
         debug_render: false,
         panic_message: None,
         abort_reported: false,
+        panic_info: None,
         tracing_sink: None,
         active_spans: Vec::new(),
         interners: Vec::new(),
@@ -985,6 +986,9 @@ struct Interp<'a> {
     /// Whether an abort has been reported on stderr: the innermost frame
     /// reports it, where it happened.
     abort_reported: bool,
+    /// The panic the `#[panic_handler]` is running for, its message and
+    /// location; set once, so the handler runs at most once.
+    panic_info: Option<(String, String)>,
     /// The exporter `Log.set_exporter` registered, and its type; `None`
     /// sends events to the default `StdoutExporter`.
     tracing_sink: Option<(Value, Ty)>,
@@ -1642,6 +1646,16 @@ impl<'a> Interp<'a> {
                 }
                 self.write_out(name.starts_with('e'), &text);
                 Ok(Value::Unit)
+            }
+            // `PanicInfo`'s parts, for the panic handler's thunk.
+            ("__karac_panic_message" | "__karac_panic_location", "") => {
+                let (message, location) = self.panic_info.clone().unwrap_or_default();
+                let text = if base == "__karac_panic_message" {
+                    message
+                } else {
+                    location
+                };
+                Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("sleep_ms", "") => {
                 // `std.time::sleep_ms`, bodyless: a real pause, as legacy's
@@ -8860,9 +8874,29 @@ impl<'a> Interp<'a> {
                     true,
                     &format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n"),
                 );
+                self.run_panic_handler(msg, at);
             }
         }
         s
+    }
+
+    /// The program's `#[panic_handler]`, once, after the panic record
+    /// (core semantics §10.2): its library thunk, which reads `message`
+    /// and `location` back through `__karac_panic_message` and
+    /// `__karac_panic_location`. Whatever the handler does, the panic
+    /// still ends the process, and a panic inside it ends the process at
+    /// once: the record is already written, so it reports nothing more.
+    fn run_panic_handler(&mut self, message: String, location: String) {
+        if self.panic_info.is_some()
+            || !self
+                .program
+                .bodies
+                .contains_key(crate::mir::lower::PANIC_THUNK)
+        {
+            return;
+        }
+        self.panic_info = Some((message, location));
+        let _ = self.call(crate::mir::lower::PANIC_THUNK, Vec::new());
     }
 
     /// A deadlock is a panic (core semantics §10.1): the message the
@@ -8871,6 +8905,7 @@ impl<'a> Interp<'a> {
         if !self.abort_reported {
             self.abort_reported = true;
             self.write_out(true, &format!("error: deadlock: {what}\n"));
+            self.run_panic_handler(format!("deadlock: {what}"), String::new());
         }
         if self.trace {
             self.events.push(Event::Abort(AbortReason::Panic));

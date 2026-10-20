@@ -1,0 +1,33 @@
+// `PanicInfo`, what a program's custom panic handler is given (design.md
+// § Panic handler, core-semantics §10.2), for the MIR pipeline.
+//
+//     #[panic_handler]
+//     fn on_panic(info: PanicInfo) {
+//         eprintln(f"PANIC: {info.message} at {info.location}");
+//     }
+//
+// `message` is the panic's message and `location` its place in the source
+// as `file:line:col`, both as the panic record on stderr gives them; a
+// deadlock has no place, so its `location` is empty.
+//
+// `lower::library_source` appends `__karac_panic_thunk`, which builds one
+// from the two natives below and calls the program's handler. A backend
+// runs the thunk once, after the panic record is written and before the
+// process exits with code 101.
+
+struct PanicInfo {
+    message: String,
+    location: String,
+}
+
+// The message and location of the panic being handled: natives of both
+// backends, outside a handler empty.
+#[compiler_builtin]
+fn __karac_panic_message() -> String {
+    String.new()
+}
+
+#[compiler_builtin]
+fn __karac_panic_location() -> String {
+    String.new()
+}

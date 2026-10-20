@@ -6682,3 +6682,107 @@ fn main() {
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
 }
+
+/// `#[panic_handler]` (core semantics §10.2, B-2026-10-19-59): after the
+/// panic record, the handler runs once with the panic's `PanicInfo`, then
+/// the process exits with code 101, on both backends. A panic inside the
+/// handler ends the process at once, and a deadlock is a panic too.
+#[test]
+fn mir_panic_handler_runs_once_before_the_exit() {
+    let cases = [
+        (
+            "#[panic_handler]\nfn on_panic(info: PanicInfo) {\n    \
+             println(f\"handler {info.message}\");\n}\n\
+             fn main() {\n    println(\"start\");\n    panic(\"boom\");\n}\n",
+            "start\nhandler boom\n",
+        ),
+        (
+            "#[panic_handler]\nfn on_panic(info: ref PanicInfo) {\n    \
+             println(f\"{info.message} at {info.location}\");\n}\n\
+             fn main() {\n    let v: Vec[i64] = Vec.new();\n    println(v[3]);\n}\n",
+            "index out of bounds at {f}:7:13\n",
+        ),
+        (
+            "#[panic_handler]\nfn on_panic(info: PanicInfo) {\n    println(\"once\");\n    \
+             let o: Option[i64] = None;\n    println(o.unwrap());\n    println(\"never\");\n}\n\
+             fn main() {\n    let x: i64 = 9223372036854775807;\n    println(x + 1);\n}\n",
+            "once\n",
+        ),
+        (
+            "#[panic_handler]\nfn on_panic(info: PanicInfo) {\n    \
+             println(f\"[{info.message}] [{info.location}]\");\n}\n\
+             fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n    \
+             let v = rx.recv();\n    println(v.is_some());\n    let _ = tx.send(1);\n}\n",
+            "[deadlock: every task waits on a channel that no running task sends to or receives \
+             from] []\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let dir = Scratch::new();
+        let file = dir.path().join("main.kara");
+        std::fs::write(&file, src).unwrap();
+        let want = want.replace("{f}", &file.to_string_lossy());
+        let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["__mir-run", file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&interp.stderr);
+        assert_eq!(interp.status.code(), Some(101), "__mir-run: {err}");
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout),
+            want,
+            "__mir-run: {err}"
+        );
+        for opt in ["0", "2"] {
+            let Some(exe) = cli_build(&dir, src, &[("KARAC_MIR_OPT", opt)]) else {
+                return;
+            };
+            let run = Command::new(&exe).output().unwrap();
+            assert_eq!(run.status.code(), Some(101), "at -O{opt}");
+            assert_eq!(String::from_utf8_lossy(&run.stdout), want, "at -O{opt}");
+            // The panic record is written once, before the handler runs.
+            assert_eq!(
+                String::from_utf8_lossy(&run.stderr),
+                String::from_utf8_lossy(&interp.stderr),
+                "at -O{opt}"
+            );
+        }
+    }
+}
+
+/// `karac check` takes one well-formed `#[panic_handler]` and refuses a
+/// second, a wrong signature and a method, each with `E_PANIC_HANDLER`.
+#[test]
+fn panic_handler_placement_and_signature_are_checked() {
+    let ok = "#[panic_handler]\nfn on_panic(info: PanicInfo) {\n    eprintln(info.message);\n}\n\
+              fn main() {}\n";
+    let bad = [
+        "#[panic_handler]\nfn a(info: PanicInfo) {}\n#[panic_handler]\nfn b(info: PanicInfo) {}\n\
+         fn main() {}\n",
+        "#[panic_handler]\nfn a(code: i64) {}\nfn main() {}\n",
+        "#[panic_handler]\nfn a(info: PanicInfo) -> i64 {\n    1\n}\nfn main() {}\n",
+        "struct S {}\nimpl S {\n    #[panic_handler]\n    fn h(info: PanicInfo) {}\n}\n\
+         fn main() {}\n",
+    ];
+    let check = |src: &str| {
+        let dir = Scratch::new();
+        let file = dir.path().join("main.kara");
+        std::fs::write(&file, src).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["check", file.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let out = check(ok);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for src in bad {
+        let out = check(src);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "accepted:\n{src}");
+        assert!(err.contains("E_PANIC_HANDLER"), "{src}\n{err}");
+    }
+}

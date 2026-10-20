@@ -2098,17 +2098,91 @@ pub extern "C" fn karac_mir_exit(code: i32) -> ! {
     std::process::exit(code)
 }
 
+/// The program's `#[panic_handler]` thunk (`__karac_panic_thunk`), which
+/// `main` registers before it runs: a unit function of no arguments, so it
+/// takes only the slot for its result.
+static PANIC_HANDLER: std::sync::atomic::AtomicPtr<u8> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Set once a panic has begun running the handler; a panic after that,
+/// in the handler or in another task, ends the process at once.
+static PANICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The message and location of the panic the handler runs for.
+static PANIC_INFO: std::sync::Mutex<(String, String)> =
+    std::sync::Mutex::new((String::new(), String::new()));
+
+/// Registers the program's panic-handler thunk (core semantics §10.2).
+#[no_mangle]
+pub extern "C" fn karac_mir_set_panic_handler(thunk: *mut u8) {
+    PANIC_HANDLER.store(thunk, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether a panic may report itself: false once one has begun, whose
+/// handler is running or has run. A panic for which this is false exits
+/// with code 101 without a second report.
+pub(crate) fn panic_begins() -> bool {
+    !PANICKING.swap(true, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Runs the program's panic handler, if it has one, for the panic whose
+/// record was just written: once, then the caller exits with code 101.
+pub(crate) fn run_panic_handler(message: &str, location: &str) {
+    let thunk = PANIC_HANDLER.load(std::sync::atomic::Ordering::SeqCst);
+    if thunk.is_null() {
+        return;
+    }
+    if let Ok(mut info) = PANIC_INFO.lock() {
+        *info = (message.to_string(), location.to_string());
+    }
+    // SAFETY: `karac_mir_set_panic_handler` was given the thunk, a unit
+    // function whose only parameter is the slot for its result.
+    let f: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(thunk) };
+    let mut slot = [0u64; 2];
+    f(slot.as_mut_ptr().cast());
+}
+
+/// `__karac_panic_message` (`which` 0) or `__karac_panic_location` (1):
+/// that part of the panic being handled, as a `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_panic_info(out: *mut RawVec, which: i32) {
+    let text = PANIC_INFO
+        .lock()
+        .map(|i| if which == 0 { i.0.clone() } else { i.1.clone() })
+        .unwrap_or_default();
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, text.as_bytes()) };
+}
+
+/// A deadlock, which is a panic (core semantics §10.1): `error: deadlock:
+/// {what}` on standard error, the panic handler, then exit 101.
+pub(crate) fn deadlock(what: &str) -> ! {
+    if panic_begins() {
+        karac_mir_flush();
+        eprintln!("error: deadlock: {what}");
+        run_panic_handler(&format!("deadlock: {what}"), "");
+    }
+    karac_mir_exit(101)
+}
+
 /// A runtime error: the message on standard error, then exit 101.
 ///
 /// # Safety
 /// `ptr` is readable for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: usize) -> ! {
+    if !panic_begins() {
+        karac_mir_exit(101)
+    }
     // SAFETY: the caller's contract.
     let msg = PANIC
         .with(|p| p.borrow_mut().take())
         .unwrap_or_else(|| String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned());
     write(true, format!("runtime error: {msg}\n").as_bytes());
+    run_panic_handler(&msg, "");
     karac_mir_exit(101)
 }
 
@@ -2125,6 +2199,9 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     at: *const u8,
     at_len: usize,
 ) -> ! {
+    if !panic_begins() {
+        karac_mir_exit(101)
+    }
     // SAFETY: the caller's contract.
     let msg = PANIC
         .with(|p| p.borrow_mut().take())
@@ -2137,6 +2214,7 @@ pub unsafe extern "C" fn karac_mir_abort_at(
         format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n")
     };
     write(true, report.as_bytes());
+    run_panic_handler(&msg, &at);
     karac_mir_exit(101)
 }
 

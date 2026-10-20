@@ -632,6 +632,15 @@ impl<'ctx> Cx<'ctx, '_> {
             // One thread runs the program; a fence orders nothing.
             ("fence" | "compiler_fence", "") => Ok(()),
             ("__ready", "") => self.ready_native(args, dest),
+            // `PanicInfo`'s parts, for the panic handler's thunk.
+            ("__karac_panic_message" | "__karac_panic_location", "") => {
+                let d = self.place_ptr(dest)?;
+                let which = self
+                    .llcx
+                    .i32_type()
+                    .const_int(u64::from(base == "__karac_panic_location"), false);
+                self.rt("panic_info", &[d.into(), which.into()])
+            }
             ("sleep_ms", "") if args.len() == 1 => {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])

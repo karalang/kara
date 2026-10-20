@@ -291,6 +291,11 @@ fn lower_program_inner<'a>(
         }
         None => lcx.errors.push("no `main` function".into()),
     }
+    // The `#[panic_handler]` thunk is a root too: nothing calls it but the
+    // backends, when a panic ends the process.
+    if let Some(thunk) = defs.lookup(0, PANIC_THUNK) {
+        lcx.instance(thunk, Vec::new());
+    }
     let mut receivers = FxHashSet::default();
     let mut views = FxHashSet::default();
     loop {
@@ -16300,8 +16305,46 @@ pub fn library_source(src: &str) -> (String, usize) {
             }
         }
     }
+    // The program's `#[panic_handler]` is called through a library function
+    // the backends know by name, which builds its `PanicInfo`.
+    if let Some(handler) = panic_handler_name(src) {
+        lib.push_str(&format!(
+            "\nfn {PANIC_THUNK}() {{\n    {handler}(PanicInfo {{ message: __karac_panic_message(), \
+             location: __karac_panic_location() }});\n}}\n"
+        ));
+    }
     let lib = rename_clashing_library_items(src, lib);
     (format!("{src}{lib}"), user_len)
+}
+
+/// The library function a backend calls on a panic when the program has a
+/// `#[panic_handler]` (core semantics §10.2): it calls the handler with the
+/// panic's `PanicInfo`.
+pub const PANIC_THUNK: &str = "__karac_panic_thunk";
+
+/// The name of the function `src` marks `#[panic_handler]`: the first `fn`
+/// after that attribute, by token, so a comment or a string that spells it
+/// counts for nothing. Whether there is one and it is well formed is
+/// checked by `attribute_validator`.
+fn panic_handler_name(src: &str) -> Option<String> {
+    use crate::token::Token;
+    if !src.contains("panic_handler") {
+        return None;
+    }
+    let toks = crate::tokenize(src);
+    let at = toks.windows(4).position(|w| {
+        matches!(
+            (&w[0].token, &w[1].token, &w[2].token, &w[3].token),
+            (Token::Pound, Token::LeftBracket, Token::Identifier { name, .. }, Token::RightBracket)
+                if name == "panic_handler"
+        )
+    })?;
+    toks[at + 4..]
+        .windows(2)
+        .find_map(|w| match (&w[0].token, &w[1].token) {
+            (Token::Fn, Token::Identifier { name, .. }) => Some(name.clone()),
+            _ => None,
+        })
 }
 
 /// Empty the bodies of the library's functions and methods in `range` (the

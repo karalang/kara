@@ -96,6 +96,10 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // Recognised here so it does not trip `E_UNKNOWN_ATTRIBUTE`; placement
     // and arg-shape are enforced by `validate_default_attribute`.
     "default",
+    // The custom panic handler (design.md § Panic handler, core semantics
+    // §10.2); its placement and signature are checked by
+    // `validate_panic_handler`.
+    "panic_handler",
     // Derive helper for `#[derive(Serialize, Deserialize)]` (design.md
     // § Serialize and Deserialize): `rename`, `skip`, `skip_serializing`,
     // `skip_deserializing`, `default`. Read by the comptime derive in
@@ -283,6 +287,112 @@ pub fn validate_program_attributes(program: &Program) -> Vec<ResolveError> {
     let mut errors = Vec::new();
     for item in &program.items {
         visit_item(item, &mut errors);
+    }
+    errors
+}
+
+/// `#[panic_handler]` (design.md § Panic handler): at most one in a
+/// program, on a free function of one `PanicInfo` parameter that returns
+/// nothing, with no type parameters and no arguments to the attribute.
+/// Each violation is `E_PANIC_HANDLER`, at the attribute.
+pub fn validate_panic_handler(program: &Program) -> Vec<ResolveError> {
+    let mut errors = Vec::new();
+    let mut first: Option<String> = None;
+    let mut report = |span: Span, message: String| {
+        errors.push(ResolveError {
+            message: format!("error[E_PANIC_HANDLER]: {message}"),
+            span,
+            kind: ResolveErrorKind::PanicHandlerInvalid,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    };
+    let marker = |attrs: &[Attribute]| attrs.iter().find(|a| a.is_bare("panic_handler")).cloned();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                let Some(attr) = marker(&f.attributes) else {
+                    continue;
+                };
+                if !attr.args.is_empty() || attr.string_value.is_some() {
+                    report(
+                        attr.span,
+                        "`#[panic_handler]` takes no arguments".to_string(),
+                    );
+                }
+                if let Some(prev) = &first {
+                    report(
+                        attr.span,
+                        format!(
+                            "a program has at most one panic handler, and `{prev}` is \
+                             already marked `#[panic_handler]`"
+                        ),
+                    );
+                    continue;
+                }
+                first = Some(f.name.clone());
+                let param_ok = match f.params.as_slice() {
+                    [p] => {
+                        let ty = match &p.ty.kind {
+                            TypeKind::Ref(inner) => inner.as_ref(),
+                            _ => &p.ty,
+                        };
+                        matches!(&ty.kind, TypeKind::Path(path)
+                            if path.segments.len() == 1
+                                && path.segments[0] == "PanicInfo"
+                                && path.generic_args.is_none())
+                    }
+                    _ => false,
+                };
+                let returns_unit = match &f.return_type {
+                    None => true,
+                    Some(t) => matches!(&t.kind, TypeKind::Tuple(ts) if ts.is_empty()),
+                };
+                if f.generic_params.is_some() || !param_ok || !returns_unit {
+                    report(
+                        attr.span,
+                        format!(
+                            "the panic handler `{}` must be `fn {}(info: PanicInfo)`: one \
+                             `PanicInfo` parameter, no type parameters and no return value",
+                            f.name, f.name
+                        ),
+                    );
+                }
+            }
+            Item::ImplBlock(b) => {
+                for it in &b.items {
+                    if let ImplItem::Method(m) = it {
+                        if let Some(attr) = marker(&m.attributes) {
+                            report(
+                                attr.span,
+                                format!(
+                                    "`#[panic_handler]` marks a free function, not the method `{}`",
+                                    m.name
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            Item::StructDef(s) => {
+                if let Some(attr) = marker(&s.attributes) {
+                    report(
+                        attr.span,
+                        "`#[panic_handler]` marks a free function".to_string(),
+                    );
+                }
+            }
+            Item::EnumDef(e) => {
+                if let Some(attr) = marker(&e.attributes) {
+                    report(
+                        attr.span,
+                        "`#[panic_handler]` marks a free function".to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
     errors
 }

@@ -239,12 +239,9 @@ fn block(waits: &[Wait]) {
         })
         .collect();
     if until.is_none() && fds.is_empty() {
-        crate::mir::karac_mir_flush();
-        eprintln!(
-            "error: deadlock: every task waits on a channel that no running task sends to or \
-             receives from"
+        crate::mir::deadlock(
+            "every task waits on a channel that no running task sends to or receives from",
         );
-        std::process::exit(101);
     }
     let timeout = until.map(|t| t.saturating_duration_since(Instant::now()));
     wait_fds(&fds, timeout);
@@ -408,9 +405,7 @@ pub extern "C" fn karac_mir_mutex_acquire(cell: *mut u8) {
         held
     });
     if taken {
-        crate::mir::karac_mir_flush();
-        eprintln!("error: deadlock: lock of a mutex that is already held");
-        std::process::exit(101);
+        crate::mir::deadlock("lock of a mutex that is already held");
     }
 }
 

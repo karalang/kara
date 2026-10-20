@@ -858,6 +858,19 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let start = self.body_start(body);
         self.debug_enter("karac.main", "karac.main", start, f);
         self.init_statics()?;
+        // The program's `#[panic_handler]` runs through its library thunk,
+        // which the runtime calls on a panic (core semantics §10.2).
+        if self
+            .program
+            .bodies
+            .contains_key(crate::mir::lower::PANIC_THUNK)
+        {
+            let thunk = self.function(crate::mir::lower::PANIC_THUNK)?;
+            self.rt(
+                "set_panic_handler",
+                &[thunk.as_global_value().as_pointer_value().into()],
+            )?;
+        }
         // A static's initializer may be lowered meanwhile, leaving no
         // location set.
         self.debug_at(start);

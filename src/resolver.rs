@@ -940,6 +940,9 @@ pub enum ResolveErrorKind {
     /// derive, so the dead annotation is rejected rather than silently
     /// ignored. Mapped to `E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE`.
     DefaultAttributeWithoutDerive,
+    /// A misplaced or ill-formed `#[panic_handler]`, or a second one
+    /// (design.md § Panic handler). Mapped to `E_PANIC_HANDLER`.
+    PanicHandlerInvalid,
     /// `#[default(...)]` or `#[default = ...]` — the `#[default]`
     /// attribute accepts no arguments. Mapped to
     /// `E_MALFORMED_ATTRIBUTE_ARGS`.
@@ -1440,6 +1443,11 @@ impl<'a> Resolver<'a> {
         // diagnostics before the per-derive validators run.
         self.errors
             .extend(crate::attribute_validator::validate_default_attribute(
+                self.program,
+            ));
+        // Pass 1.8: `#[panic_handler]` placement, signature and count.
+        self.errors
+            .extend(crate::attribute_validator::validate_panic_handler(
                 self.program,
             ));
         // Pass 2: resolve all bodies
