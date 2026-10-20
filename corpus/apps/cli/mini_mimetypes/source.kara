@@ -1,0 +1,2743 @@
+// mini_mimetypes: Python 3.13's mimetypes module, ported from
+// mimetypes.py. A MimeTypes database maps file extensions to media types
+// and back, with a strict table (the registered types) and a lenient one
+// (common types that are not registered), plus the suffix map that turns
+// `.tgz` into `.tar.gz` and the encodings map for `.gz`, `.Z`, `.bz2`,
+// `.xz` and `.br`.
+//
+// The port covers guess_type over paths and URLs (with the parts of
+// urllib.parse.urlsplit it runs, IPv6 bracket checks included, and data:
+// URLs), guess_file_type, guess_extension, guess_all_extensions,
+// add_type, reading mime.types files the way readfp splits them,
+// read_mime_types, the module-level database with init() and its
+// knownfiles, and `python -m mimetypes` with getopt's errors.
+//
+// The run writes data/ first: data/jobs.tsv, the mime.types files and
+// the inputs of the programs. The last jobs are programs: a static file
+// server choosing Content-type as http.server does, an nginx `types`
+// block compared with mime.types, an upload validator, an object store
+// upload plan, mail attachments, content negotiation over Accept
+// headers, a CDN log summed by type and a shared-drive inventory.
+
+// ------------------------------------------------------------ text
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split(sep, 1)
+fn split_once(s: ref String, sep: char) -> Option[(String, String)] {
+    let v = chars(s);
+    for i in 0..v.len() {
+        if v[i] == sep {
+            return Some((slice(v, 0, i), slice(v, i + 1, v.len())));
+        }
+    }
+    None
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn has_char(s: ref String, c: char) -> bool {
+    for d in s.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.find(c, start); -1 when absent
+fn find_from(v: ref Vec[char], c: char, start: i64) -> i64 {
+    let mut i = start;
+    while i < v.len() {
+        if v[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn rfind_char(v: ref Vec[char], c: char) -> i64 {
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        if v[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// The characters str.split() and str.strip() treat as whitespace.
+fn is_py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f
+        or n == 0x205f or n == 0x3000
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_py_space(c) {
+            if not cur.is_empty() {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and is_py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    slice(v, lo, hi)
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out
+}
+
+fn lower(s: ref String) -> String {
+    s.to_lowercase()
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: u32) -> String {
+    let d = chars(HEX.to_string());
+    let mut out = String.new();
+    out.push(d[((n >> 4) & 15) as i64]);
+    out.push(d[(n & 15) as i64]);
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    let d = chars(HEX.to_string());
+    let l = lower(f"{c}");
+    let lc = chars(l)[0];
+    for i in 0..16 {
+        if d[i] == lc {
+            return i;
+        }
+    }
+    -1
+}
+
+fn is_hex_digit(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ascii_alpha(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+// ------------------------------------------------------------ Python reprs
+
+fn repr_str(s: ref String) -> String {
+    let q = if has_char(s, '\'') and not has_char(s, '"') { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(t) => repr_str(t),
+        None => "None".to_string(),
+    }
+}
+
+fn repr_pair(t: ref (Option[String], Option[String])) -> String {
+    f"({repr_opt(t.0)}, {repr_opt(t.1)})"
+}
+
+fn repr_strs(v: ref Vec[String]) -> String {
+    let r: Vec[String] = v.iter().map(|s| repr_str(s)).collect();
+    f"[{join(r, ", ")}]"
+}
+
+fn opt_or(s: ref Option[String], d: Str) -> String {
+    match s {
+        Some(t) => t.clone(),
+        None => d.to_string(),
+    }
+}
+
+// ------------------------------------------------------------ an ordered str -> str map
+
+// A Python dict of str to str: lookups through a Map, and the keys in
+// the order they were first set, as the dict keeps them.
+struct OMap {
+    keys: Vec[String],
+    m: Map[String, String],
+}
+
+impl OMap {
+    fn new() -> OMap {
+        OMap { keys: Vec.new(), m: Map.new() }
+    }
+
+    fn set(mut ref self, k: ref String, v: ref String) {
+        if not self.m.contains_key(k) {
+            self.keys.push(k.clone());
+        }
+        self.m.insert(k.clone(), v.clone());
+    }
+
+    fn get(ref self, k: ref String) -> Option[String] {
+        match self.m.get(k) {
+            Some(v) => Some(v.clone()),
+            None => None,
+        }
+    }
+
+    fn has(ref self, k: ref String) -> bool {
+        self.m.contains_key(k)
+    }
+
+    fn len(ref self) -> i64 {
+        self.keys.len()
+    }
+
+    fn copy(ref self) -> OMap {
+        let mut o = OMap.new();
+        for k in self.keys.iter() {
+            o.set(k, self.m.get(k).unwrap());
+        }
+        o
+    }
+
+    // repr() of the dict, or of the entries `keep` says yes to.
+    fn repr_where(ref self, keep: ref OMap, only_new: bool) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for k in self.keys.iter() {
+            let v = self.m.get(k).unwrap();
+            if only_new {
+                match keep.get(k) {
+                    Some(d) => {
+                        if d == *v {
+                            continue;
+                        }
+                    }
+                    None => {}
+                }
+            }
+            parts.push(f"{repr_str(k)}: {repr_str(v)}");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+}
+
+// ------------------------------------------------------------ errors
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn value_error(msg: ref String) -> Exc {
+    Exc { kind: "ValueError".to_string(), msg: msg.clone() }
+}
+
+fn not_found(path: ref String) -> Exc {
+    Exc {
+        kind: "FileNotFoundError".to_string(),
+        msg: f"[Errno 2] No such file or directory: {repr_str(path)}",
+    }
+}
+
+fn show_exc(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------ urllib.parse, the parts guess_type runs
+
+const SCHEME_CHARS: Str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-.";
+
+fn is_scheme_char(c: char) -> bool {
+    for d in SCHEME_CHARS.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+const USES_PARAMS: Array[Str, 16] = [
+    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu",
+    "sip", "sips", "mms", "sftp", "tel",
+];
+
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+// ipaddress.IPv4Address's parse: four decimal octets, no leading zeros.
+fn is_ipv4(s: ref String) -> bool {
+    let parts = split_on(s, '.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for p in parts.iter() {
+        let v = chars(p);
+        if v.len() == 0 or v.len() > 3 {
+            return false;
+        }
+        for c in v.iter() {
+            if not is_digit(*c) {
+                return false;
+            }
+        }
+        if v.len() > 1 and v[0] == '0' {
+            return false;
+        }
+        let n = i64.parse(p).unwrap_or(999);
+        if n > 255 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: ref String) -> bool {
+    let v = chars(s);
+    if v.len() == 0 or v.len() > 4 {
+        return false;
+    }
+    for c in v.iter() {
+        if not is_hex_digit(*c) {
+            return false;
+        }
+    }
+    true
+}
+
+// ipaddress.IPv6Address's parse (_ip_int_from_string), as a yes or no.
+fn is_ipv6(s: ref String) -> bool {
+    let mut addr = s.clone();
+    match split_once(s, '%') {
+        Some((a, scope)) => {
+            if scope.is_empty() or has_char(scope, '%') {
+                return false;
+            }
+            addr = a;
+        }
+        None => {}
+    }
+    let mut parts = split_on(addr, ':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_char(last, '.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    let mut i = 1;
+    while i < n - 1 {
+        if parts[i].is_empty() {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+        i += 1;
+    }
+    let mut hi: i64 = 0;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].is_empty() {
+            hi -= 1;
+            if hi != 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].is_empty() {
+            lo -= 1;
+            if lo != 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else {
+        if n != 8 {
+            return false;
+        }
+        if parts[0].is_empty() or parts[n - 1].is_empty() {
+            return false;
+        }
+        hi = n;
+        lo = 0;
+    }
+    for k in 0..hi {
+        if not is_hextet(parts[k]) {
+            return false;
+        }
+    }
+    for k in 0..lo {
+        if not is_hextet(parts[n - lo + k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// _check_bracketed_host
+fn check_bracketed_host(host: ref String) -> Result[(), Exc] {
+    if host.starts_with("v") or host.starts_with("V") {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let v = chars(host);
+        let mut i = 1;
+        while i < v.len() and is_hex_digit(v[i]) {
+            i += 1;
+        }
+        let mut ok = i > 1 and i < v.len() and v[i] == '.';
+        if ok {
+            let rest = slice(v, i + 1, v.len());
+            ok = not rest.is_empty() and not has_char(rest, '\n');
+        }
+        if not ok {
+            return Err(value_error("IPvFuture address is invalid"));
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err(value_error("An IPv4 address cannot be in brackets"));
+    }
+    if not is_ipv6(host) {
+        return Err(value_error(f"{repr_str(host)} does not appear to be an IPv4 or IPv6 address"));
+    }
+    Ok(())
+}
+
+// str.partition(c)
+fn partition(s: ref String, c: char) -> (String, bool, String) {
+    match split_once(s, c) {
+        Some((a, b)) => (a, true, b),
+        None => (s.clone(), false, String.new()),
+    }
+}
+
+fn rpartition_after(s: ref String, c: char) -> String {
+    let v = chars(s);
+    let i = rfind_char(v, c);
+    if i < 0 {
+        s.clone()
+    } else {
+        slice(v, i + 1, v.len())
+    }
+}
+
+fn check_bracketed_netloc(netloc: ref String) -> Result[(), Exc] {
+    let hp = rpartition_after(netloc, '@');
+    let (before, have, bracketed) = partition(hp, '[');
+    let mut host = String.new();
+    if have {
+        if not before.is_empty() {
+            return Err(value_error("Invalid IPv6 URL"));
+        }
+        let (h, _, port) = partition(bracketed, ']');
+        if not port.is_empty() and not port.starts_with(":") {
+            return Err(value_error("Invalid IPv6 URL"));
+        }
+        host = h;
+    } else {
+        let (h, _, _) = partition(hp, ':');
+        host = h;
+    }
+    check_bracketed_host(host)
+}
+
+fn is_c0_or_space(c: char) -> bool {
+    (c as u32) <= 32
+}
+
+fn urlsplit(url0: ref String) -> Result[Split, Exc] {
+    // url.lstrip(C0 control or space), then drop tab, CR and LF
+    let v0 = chars(url0);
+    let mut lo = 0;
+    while lo < v0.len() and is_c0_or_space(v0[lo]) {
+        lo += 1;
+    }
+    let mut url = String.new();
+    for k in lo..v0.len() {
+        let c = v0[k];
+        if c != '\t' and c != '\r' and c != '\n' {
+            url.push(c);
+        }
+    }
+    let mut scheme = String.new();
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let v = chars(url);
+    let i = find_from(v, ':', 0);
+    if i > 0 and (v[0] as u32) < 128 and is_ascii_alpha(v[0]) {
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(v[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(slice(v, 0, i));
+            url = slice(v, i + 1, v.len());
+        }
+    }
+    if url.starts_with("//") {
+        let w = chars(url);
+        let mut delim = w.len();
+        for c in ['/', '?', '#'] {
+            let d = find_from(w, c, 2);
+            if d >= 0 and d < delim {
+                delim = d;
+            }
+        }
+        netloc = slice(w, 2, delim);
+        url = slice(w, delim, w.len());
+        let ob = has_char(netloc, '[');
+        let cb = has_char(netloc, ']');
+        if (ob and not cb) or (cb and not ob) {
+            return Err(value_error("Invalid IPv6 URL"));
+        }
+        if ob and cb {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_char(url, '#') {
+        let (a, b) = split_once(url, '#').unwrap();
+        url = a;
+        fragment = b;
+    }
+    if has_char(url, '?') {
+        let (a, b) = split_once(url, '?').unwrap();
+        url = a;
+        query = b;
+    }
+    Ok(Split { scheme, netloc, path: url, query, fragment })
+}
+
+// urlparse(url).path: urlsplit, then the params cut off for the schemes
+// that have them.
+fn urlparse_path(url: ref String) -> Result[(String, String), Exc] {
+    let s = urlsplit(url)?;
+    let mut path = s.path.clone();
+    let mut uses = false;
+    for u in USES_PARAMS {
+        if s.scheme == u {
+            uses = true;
+        }
+    }
+    if uses and has_char(path, ';') {
+        let v = chars(path);
+        if has_char(path, '/') {
+            let i = find_from(v, ';', rfind_char(v, '/'));
+            if i >= 0 {
+                path = slice(v, 0, i);
+            }
+        } else {
+            let i = find_from(v, ';', 0);
+            path = slice(v, 0, i);
+        }
+    }
+    Ok((s.scheme, path))
+}
+
+// ------------------------------------------------------------ posixpath.splitext
+
+fn splitext(p: ref String) -> (String, String) {
+    let v = chars(p);
+    let sep = rfind_char(v, '/');
+    let dot = rfind_char(v, '.');
+    if dot > sep {
+        let mut k = sep + 1;
+        while k < dot {
+            if v[k] != '.' {
+                return (slice(v, 0, dot), slice(v, dot, v.len()));
+            }
+            k += 1;
+        }
+    }
+    (p.clone(), String.new())
+}
+
+// ------------------------------------------------------------ the database
+
+struct MimeTypes {
+    encodings_map: OMap,
+    suffix_map: OMap,
+    strict_map: OMap,
+    lax_map: OMap,
+    strict_inv: Map[String, Vec[String]],
+    lax_inv: Map[String, Vec[String]],
+}
+
+fn default_suffix_map() -> OMap {
+    let mut m = OMap.new();
+    for (k, v) in [
+        (".svgz", ".svg.gz"), (".tgz", ".tar.gz"), (".taz", ".tar.gz"), (".tz", ".tar.gz"),
+        (".tbz2", ".tar.bz2"), (".txz", ".tar.xz"),
+    ] {
+        m.set(k.to_string(), v.to_string());
+    }
+    m
+}
+
+fn default_encodings_map() -> OMap {
+    let mut m = OMap.new();
+    for (k, v) in [(".gz", "gzip"), (".Z", "compress"), (".bz2", "bzip2"), (".xz", "xz"), (".br", "br")] {
+        m.set(k.to_string(), v.to_string());
+    }
+    m
+}
+
+fn default_types() -> Vec[(Str, Str)] {
+    vec![
+        (".js", "text/javascript"), (".mjs", "text/javascript"), (".json", "application/json"),
+        (".webmanifest", "application/manifest+json"), (".doc", "application/msword"),
+        (".dot", "application/msword"), (".wiz", "application/msword"),
+        (".nq", "application/n-quads"), (".nt", "application/n-triples"),
+        (".bin", "application/octet-stream"), (".a", "application/octet-stream"),
+        (".dll", "application/octet-stream"), (".exe", "application/octet-stream"),
+        (".o", "application/octet-stream"), (".obj", "application/octet-stream"),
+        (".so", "application/octet-stream"), (".oda", "application/oda"),
+        (".pdf", "application/pdf"), (".p7c", "application/pkcs7-mime"),
+        (".ps", "application/postscript"), (".ai", "application/postscript"),
+        (".eps", "application/postscript"), (".trig", "application/trig"),
+        (".m3u", "application/vnd.apple.mpegurl"), (".m3u8", "application/vnd.apple.mpegurl"),
+        (".xls", "application/vnd.ms-excel"), (".xlb", "application/vnd.ms-excel"),
+        (".ppt", "application/vnd.ms-powerpoint"), (".pot", "application/vnd.ms-powerpoint"),
+        (".ppa", "application/vnd.ms-powerpoint"), (".pps", "application/vnd.ms-powerpoint"),
+        (".pwz", "application/vnd.ms-powerpoint"), (".wasm", "application/wasm"),
+        (".bcpio", "application/x-bcpio"), (".cpio", "application/x-cpio"),
+        (".csh", "application/x-csh"), (".dvi", "application/x-dvi"),
+        (".gtar", "application/x-gtar"), (".hdf", "application/x-hdf"),
+        (".h5", "application/x-hdf5"), (".latex", "application/x-latex"),
+        (".mif", "application/x-mif"), (".cdf", "application/x-netcdf"),
+        (".nc", "application/x-netcdf"), (".p12", "application/x-pkcs12"),
+        (".pfx", "application/x-pkcs12"), (".ram", "application/x-pn-realaudio"),
+        (".pyc", "application/x-python-code"), (".pyo", "application/x-python-code"),
+        (".sh", "application/x-sh"), (".shar", "application/x-shar"),
+        (".swf", "application/x-shockwave-flash"), (".sv4cpio", "application/x-sv4cpio"),
+        (".sv4crc", "application/x-sv4crc"), (".tar", "application/x-tar"),
+        (".tcl", "application/x-tcl"), (".tex", "application/x-tex"),
+        (".texi", "application/x-texinfo"), (".texinfo", "application/x-texinfo"),
+        (".roff", "application/x-troff"), (".t", "application/x-troff"),
+        (".tr", "application/x-troff"), (".man", "application/x-troff-man"),
+        (".me", "application/x-troff-me"), (".ms", "application/x-troff-ms"),
+        (".ustar", "application/x-ustar"), (".src", "application/x-wais-source"),
+        (".xsl", "application/xml"), (".rdf", "application/xml"), (".wsdl", "application/xml"),
+        (".xpdl", "application/xml"), (".zip", "application/zip"), (".3gp", "audio/3gpp"),
+        (".3gpp", "audio/3gpp"), (".3g2", "audio/3gpp2"), (".3gpp2", "audio/3gpp2"),
+        (".aac", "audio/aac"), (".adts", "audio/aac"), (".loas", "audio/aac"), (".ass", "audio/aac"),
+        (".au", "audio/basic"), (".snd", "audio/basic"), (".mp3", "audio/mpeg"),
+        (".mp2", "audio/mpeg"), (".opus", "audio/opus"), (".aif", "audio/x-aiff"),
+        (".aifc", "audio/x-aiff"), (".aiff", "audio/x-aiff"), (".ra", "audio/x-pn-realaudio"),
+        (".wav", "audio/x-wav"), (".avif", "image/avif"), (".bmp", "image/bmp"),
+        (".gif", "image/gif"), (".ief", "image/ief"), (".jpg", "image/jpeg"),
+        (".jpe", "image/jpeg"), (".jpeg", "image/jpeg"), (".heic", "image/heic"),
+        (".heif", "image/heif"), (".png", "image/png"), (".svg", "image/svg+xml"),
+        (".tiff", "image/tiff"), (".tif", "image/tiff"), (".ico", "image/vnd.microsoft.icon"),
+        (".webp", "image/webp"), (".ras", "image/x-cmu-raster"),
+        (".pnm", "image/x-portable-anymap"), (".pbm", "image/x-portable-bitmap"),
+        (".pgm", "image/x-portable-graymap"), (".ppm", "image/x-portable-pixmap"),
+        (".rgb", "image/x-rgb"), (".xbm", "image/x-xbitmap"), (".xpm", "image/x-xpixmap"),
+        (".xwd", "image/x-xwindowdump"), (".eml", "message/rfc822"), (".mht", "message/rfc822"),
+        (".mhtml", "message/rfc822"), (".nws", "message/rfc822"), (".css", "text/css"),
+        (".csv", "text/csv"), (".html", "text/html"), (".htm", "text/html"),
+        (".md", "text/markdown"), (".markdown", "text/markdown"), (".n3", "text/n3"),
+        (".txt", "text/plain"), (".bat", "text/plain"), (".c", "text/plain"), (".h", "text/plain"),
+        (".ksh", "text/plain"), (".pl", "text/plain"), (".srt", "text/plain"),
+        (".rtx", "text/richtext"), (".rtf", "text/rtf"), (".tsv", "text/tab-separated-values"),
+        (".vtt", "text/vtt"), (".py", "text/x-python"), (".rst", "text/x-rst"),
+        (".etx", "text/x-setext"), (".sgm", "text/x-sgml"), (".sgml", "text/x-sgml"),
+        (".vcf", "text/x-vcard"), (".xml", "text/xml"), (".mp4", "video/mp4"),
+        (".mpeg", "video/mpeg"), (".m1v", "video/mpeg"), (".mpa", "video/mpeg"),
+        (".mpe", "video/mpeg"), (".mpg", "video/mpeg"), (".mov", "video/quicktime"),
+        (".qt", "video/quicktime"), (".webm", "video/webm"), (".avi", "video/x-msvideo"),
+        (".movie", "video/x-sgi-movie"),
+    ]
+}
+
+fn default_common_types() -> Vec[(Str, Str)] {
+    vec![
+        (".rtf", "application/rtf"), (".midi", "audio/midi"), (".mid", "audio/midi"),
+        (".jpg", "image/jpg"), (".pict", "image/pict"), (".pct", "image/pict"),
+        (".pic", "image/pict"), (".xul", "text/xul"),
+    ]
+}
+
+fn read_file(path: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(not_found(path)),
+    }
+}
+
+impl MimeTypes {
+    fn new() -> MimeTypes {
+        let mut db = MimeTypes {
+            encodings_map: default_encodings_map(),
+            suffix_map: default_suffix_map(),
+            strict_map: OMap.new(),
+            lax_map: OMap.new(),
+            strict_inv: Map.new(),
+            lax_inv: Map.new(),
+        };
+        for (ext, t) in default_types() {
+            db.add_type(t.to_string(), ext.to_string(), true);
+        }
+        for (ext, t) in default_common_types() {
+            db.add_type(t.to_string(), ext.to_string(), false);
+        }
+        db
+    }
+
+    // MimeTypes(filenames, strict)
+    fn with_files(files: ref Vec[String], strict: bool) -> Result[MimeTypes, Exc] {
+        let mut db = MimeTypes.new();
+        for f in files.iter() {
+            db.read(f, strict)?;
+        }
+        Ok(db)
+    }
+
+    fn add_type(mut ref self, t: ref String, ext: ref String, strict: bool) {
+        if t.is_empty() {
+            return;
+        }
+        if strict {
+            self.strict_map.set(ext, t);
+            if not self.strict_inv.contains_key(t) {
+                self.strict_inv.insert(t.clone(), Vec.new());
+            }
+            let exts = self.strict_inv.get_mut(t).unwrap();
+            if not exts.contains(ext) {
+                exts.push(ext.clone());
+            }
+        } else {
+            self.lax_map.set(ext, t);
+            if not self.lax_inv.contains_key(t) {
+                self.lax_inv.insert(t.clone(), Vec.new());
+            }
+            let exts = self.lax_inv.get_mut(t).unwrap();
+            if not exts.contains(ext) {
+                exts.push(ext.clone());
+            }
+        }
+    }
+
+    fn guess_type(ref self, url: ref String, strict: bool) -> Result[(Option[String], Option[String]), Exc] {
+        let (scheme, path) = urlparse_path(url)?;
+        if scheme.chars().count() <= 1 {
+            return Ok(self.guess_file_type(url, strict));
+        }
+        if scheme == "data" {
+            let v = chars(path);
+            let comma = find_from(v, ',', 0);
+            if comma < 0 {
+                return Ok((None, None));
+            }
+            let mut semi: i64 = -1;
+            for k in 0..comma {
+                if v[k] == ';' {
+                    semi = k;
+                    break;
+                }
+            }
+            let mut t = if semi >= 0 { slice(v, 0, semi) } else { slice(v, 0, comma) };
+            if has_char(t, '=') or not has_char(t, '/') {
+                t = "text/plain".to_string();
+            }
+            return Ok((Some(t), None));
+        }
+        Ok(self.guess_path(path, strict))
+    }
+
+    fn guess_file_type(ref self, path: ref String, strict: bool) -> (Option[String], Option[String]) {
+        self.guess_path(path, strict)
+    }
+
+    fn guess_path(ref self, path: ref String, strict: bool) -> (Option[String], Option[String]) {
+        let mut (base, ext) = splitext(path);
+        loop {
+            match self.suffix_map.get(lower(ext)) {
+                Some(s) => {
+                    let (b, e) = splitext(f"{base}{s}");
+                    base = b;
+                    ext = e;
+                }
+                None => break,
+            }
+        }
+        let mut encoding: Option[String] = None;
+        match self.encodings_map.get(ext) {
+            Some(e) => {
+                encoding = Some(e);
+                let (b, x) = splitext(base);
+                base = b;
+                ext = x;
+            }
+            None => {}
+        }
+        let ext = lower(ext);
+        match self.strict_map.get(ext) {
+            Some(t) => return (Some(t), encoding),
+            None => {}
+        }
+        if strict {
+            return (None, encoding);
+        }
+        (self.lax_map.get(ext), encoding)
+    }
+
+    fn guess_all_extensions(ref self, t: ref String, strict: bool) -> Vec[String] {
+        let t = lower(t);
+        let mut out: Vec[String] = match self.strict_inv.get(t) {
+            Some(v) => v.clone(),
+            None => Vec.new(),
+        };
+        if not strict {
+            match self.lax_inv.get(t) {
+                Some(v) => {
+                    for e in v.iter() {
+                        if not out.contains(e) {
+                            out.push(e.clone());
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        out
+    }
+
+    fn guess_extension(ref self, t: ref String, strict: bool) -> Option[String] {
+        let v = self.guess_all_extensions(t, strict);
+        if v.is_empty() {
+            None
+        } else {
+            Some(v[0].clone())
+        }
+    }
+
+    fn read(mut ref self, path: ref String, strict: bool) -> Result[(), Exc] {
+        let text = read_file(path)?;
+        self.readfp(text, strict);
+        Ok(())
+    }
+
+    // readfp: one line at a time (readline keeps the line ending), split
+    // on whitespace, cut at the first word that starts with '#'.
+    fn readfp(mut ref self, text: ref String, strict: bool) {
+        for line in split_on(text, '\n') {
+            let mut words: Vec[String] = Vec.new();
+            for w in split_ws(line).into_iter() {
+                if w.starts_with("#") {
+                    break;
+                }
+                words.push(w);
+            }
+            if words.is_empty() {
+                continue;
+            }
+            let t = words[0].clone();
+            for k in 1..words.len() {
+                self.add_type(t, f".{words[k]}", strict);
+            }
+        }
+    }
+}
+
+// read_mime_types(file): the strict map of a fresh database that has read
+// the file, or None when it cannot be opened.
+fn read_mime_types(path: ref String) -> Option[OMap] {
+    match read_file(path) {
+        Ok(text) => {
+            let mut db = MimeTypes.new();
+            db.readfp(text, true);
+            Some(db.strict_map.copy())
+        }
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ the module
+
+// mimetypes' module state: knownfiles and the database init() made.
+const KNOWNFILES: Array[Str, 3] = ["data/system/mime.types", "data/apache/mime.types", "data/missing/mime.types"];
+
+struct Module {
+    db: Option[MimeTypes],
+}
+
+fn is_file(path: ref String) -> bool {
+    fs.read_to_string(path.clone()).is_ok()
+}
+
+impl Module {
+    fn new() -> Module {
+        Module { db: None }
+    }
+
+    fn init(mut ref self, files: Option[Vec[String]]) {
+        let mut list: Vec[String] = Vec.new();
+        let fresh = files.is_none() or self.db.is_none();
+        if fresh {
+            for k in KNOWNFILES {
+                list.push(k.to_string());
+            }
+        }
+        match files {
+            Some(fs_) => {
+                for f in fs_.iter() {
+                    list.push(f.clone());
+                }
+            }
+            None => {}
+        }
+        let mut db = if fresh {
+            MimeTypes.new()
+        } else {
+            self.db.take().unwrap()
+        };
+        for f in list.iter() {
+            if is_file(f) {
+                let _ = db.read(f, true);
+            }
+        }
+        self.db = Some(db);
+    }
+
+    fn ensure(mut ref self) {
+        if self.db.is_none() {
+            self.init(None);
+        }
+    }
+
+    fn guess_type(mut ref self, url: ref String, strict: bool) -> Result[(Option[String], Option[String]), Exc] {
+        self.ensure();
+        match self.db {
+            Some(ref d) => d.guess_type(url, strict),
+            None => Ok((None, None)),
+        }
+    }
+
+    fn guess_extension(mut ref self, t: ref String, strict: bool) -> Option[String] {
+        self.ensure();
+        match self.db {
+            Some(ref d) => d.guess_extension(t, strict),
+            None => None,
+        }
+    }
+
+    fn add_type(mut ref self, t: ref String, ext: ref String, strict: bool) {
+        self.ensure();
+        match self.db {
+            Some(mut ref d) => d.add_type(t, ext, strict),
+            None => {}
+        }
+    }
+}
+
+// ------------------------------------------------------------ the jobs
+
+// A '\\' and a '\xNN' in a job argument stand for one character.
+fn unesc(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\\' and i + 1 < v.len() {
+            if v[i + 1] == '\\' {
+                out.push('\\');
+                i += 2;
+                continue;
+            }
+            if v[i + 1] == 'x' and i + 3 < v.len() {
+                let n = hex_val(v[i + 2]) * 16 + hex_val(v[i + 3]);
+                out.push((n as u8) as char);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn strict_arg(flag: ref String) -> String {
+    if flag == "1" { String.new() } else { ", strict=False".to_string() }
+}
+
+fn show_pair(head: ref String, r: ref Result[(Option[String], Option[String]), Exc]) {
+    match r {
+        Ok(t) => println(f"{head} = {repr_pair(t)}"),
+        Err(e) => println(f"{head} -> {show_exc(e)}"),
+    }
+}
+
+fn data_paths(f: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = from;
+    while i < f.len() {
+        out.push(f"data/{f[i]}");
+        i += 1;
+    }
+    out
+}
+
+fn run_job(name: ref String, lines: ref Vec[String], m: mut ref Module, defaults: ref OMap) {
+    println(f"== {name}");
+    let mut db = MimeTypes.new();
+    m.ensure();
+    for line in lines.iter() {
+        let f: Vec[String] = split_on(line, '\t').iter().map(|x| unesc(x)).collect();
+        let op = f[0].clone();
+        let flag = if f.len() > 1 { f[1].clone() } else { String.new() };
+        let s = flag == "1";
+        let arg = if f.len() > 2 { f[2].clone() } else { String.new() };
+        let sa = strict_arg(flag);
+        if op == "type" {
+            show_pair(f"guess_type({repr_str(arg)}{sa})", db.guess_type(arg, s));
+        } else if op == "ftype" {
+            let r: Result[(Option[String], Option[String]), Exc] = Ok(db.guess_file_type(arg, s));
+            show_pair(f"guess_file_type({repr_str(arg)}{sa})", r);
+        } else if op == "ext" {
+            println(f"guess_extension({repr_str(arg)}{sa}) = {repr_opt(db.guess_extension(arg, s))}");
+        } else if op == "exts" {
+            println(f"guess_all_extensions({repr_str(arg)}{sa}) = {repr_strs(db.guess_all_extensions(arg, s))}");
+        } else if op == "gtype" {
+            show_pair(f"mimetypes.guess_type({repr_str(arg)}{sa})", m.guess_type(arg, s));
+        } else if op == "gext" {
+            println(f"mimetypes.guess_extension({repr_str(arg)}{sa}) = {repr_opt(m.guess_extension(arg, s))}");
+        } else if op == "add" {
+            db.add_type(f[2], f[3], s);
+            println(f"add_type({repr_str(f[2])}, {repr_str(f[3])}{sa})");
+        } else if op == "gadd" {
+            m.add_type(f[2], f[3], s);
+            println(f"mimetypes.add_type({repr_str(f[2])}, {repr_str(f[3])}{sa})");
+        } else if op == "read" {
+            let path = f"data/{f[2]}";
+            match db.read(path, s) {
+                Ok(_) => println(f"read({repr_str(path)}{sa})"),
+                Err(e) => println(f"read({repr_str(path)}{sa}) -> {show_exc(e)}"),
+            }
+        } else if op == "readmt" {
+            let path = f"data/{f[1]}";
+            match read_mime_types(path) {
+                None => println(f"read_mime_types({repr_str(path)}) = None"),
+                Some(r) => println(
+                    f"read_mime_types({repr_str(path)}) = {r.len()} entries; from the file: {r.repr_where(defaults, true)}",
+                ),
+            }
+        } else if op == "init" {
+            let files = data_paths(f, 1);
+            if files.is_empty() {
+                m.init(None);
+                println("mimetypes.init()");
+            } else {
+                m.init(Some(files.clone()));
+                println(f"mimetypes.init({repr_strs(files)})");
+            }
+        } else if op == "maps" {
+            m.ensure();
+            match m.db {
+                Some(ref d) => {
+                    println(f"suffix_map = {d.suffix_map.repr_where(defaults, false)}");
+                    println(f"encodings_map = {d.encodings_map.repr_where(defaults, false)}");
+                    println(
+                        f"types_map: {d.strict_map.len()} entries; from files: {d.strict_map.repr_where(defaults, true)}",
+                    );
+                    println(f"common_types = {d.lax_map.repr_where(defaults, false)}");
+                }
+                None => {}
+            }
+        } else if op == "new" or op == "new0" {
+            let files = data_paths(f, 1);
+            let st = op == "new";
+            let sa2 = if st { String.new() } else { ", strict=False".to_string() };
+            match MimeTypes.with_files(files, st) {
+                Ok(d) => {
+                    db = d;
+                    println(f"MimeTypes({repr_strs(files)}{sa2})");
+                }
+                Err(e) => println(f"MimeTypes({repr_strs(files)}{sa2}) -> {show_exc(e)}"),
+            }
+        } else {
+            println(f"bad op {op}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ python -m mimetypes
+
+const USAGE: Array[Str, 9] = [
+    "Usage: mimetypes.py [options] type",
+    "",
+    "Options:",
+    "    --help / -h       -- print this message and exit",
+    "    --lenient / -l    -- additionally search of some common, but non-standard",
+    "                         types.",
+    "    --extension / -e  -- guess extension instead of type",
+    "",
+    "More than one type argument may be given.",
+];
+
+// getopt.long_has_args over ["help", "lenient", "extension"], none of
+// which take an argument.
+fn long_has_args(opt: ref String) -> Result[String, String] {
+    let mut possible: Vec[String] = Vec.new();
+    for o in ["help", "lenient", "extension"] {
+        if o.starts_with(opt.as_str()) {
+            possible.push(o.to_string());
+        }
+    }
+    if possible.is_empty() {
+        return Err(f"option --{opt} not recognized");
+    }
+    if possible.contains(opt) {
+        return Ok(opt.clone());
+    }
+    if possible.len() > 1 {
+        return Err(f"option --{opt} not a unique prefix");
+    }
+    Ok(possible[0].clone())
+}
+
+// getopt.getopt(args, 'hle', ['help', 'lenient', 'extension'])
+fn getopt(argv: ref Vec[String]) -> Result[(Vec[String], Vec[String]), String] {
+    let mut opts: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < argv.len() and argv[i].starts_with("-") and argv[i] != "-" {
+        let a = argv[i].clone();
+        i += 1;
+        if a == "--" {
+            break;
+        }
+        let w = chars(a);
+        if a.starts_with("--") {
+            let body = slice(w, 2, w.len());
+            let bw = chars(body);
+            let eq = find_from(bw, '=', 0);
+            let name = if eq >= 0 { slice(bw, 0, eq) } else { body.clone() };
+            let full = long_has_args(name)?;
+            if eq >= 0 {
+                return Err(f"option --{full} must not have an argument");
+            }
+            opts.push(f"--{full}");
+            continue;
+        }
+        for j in 1..w.len() {
+            let c = w[j];
+            if c != 'h' and c != 'l' and c != 'e' {
+                return Err(f"option -{c} not recognized");
+            }
+            opts.push(f"-{c}");
+        }
+    }
+    let mut rest: Vec[String] = Vec.new();
+    while i < argv.len() {
+        rest.push(argv[i].clone());
+        i += 1;
+    }
+    Ok((opts, rest))
+}
+
+fn cli_line(out: mut ref Vec[String], s: ref String) {
+    out.push(s.clone());
+}
+
+fn usage(out: mut ref Vec[String], msg: ref String) {
+    for u in USAGE {
+        cli_line(mut out, u.to_string());
+    }
+    cli_line(mut out, String.new());
+    if not msg.is_empty() {
+        cli_line(mut out, msg);
+    }
+}
+
+// mimetypes._main(); the lines it prints and the exit status.
+fn cli_main(argv: ref Vec[String], m: mut ref Module, out: mut ref Vec[String]) -> i64 {
+    let (opts, args) = match getopt(argv) {
+        Ok(r) => r,
+        Err(msg) => {
+            usage(mut out, msg);
+            return 1;
+        }
+    };
+    let mut strict = true;
+    let mut extension = false;
+    for o in opts.iter() {
+        if o == "-h" or o == "--help" {
+            usage(mut out, String.new());
+            return 0;
+        } else if o == "-l" or o == "--lenient" {
+            strict = false;
+        } else if o == "-e" or o == "--extension" {
+            extension = true;
+        }
+    }
+    for g in args.iter() {
+        if extension {
+            match m.guess_extension(g, strict) {
+                Some(e) => cli_line(mut out, e),
+                None => cli_line(mut out, f"I don't know anything about type {g}"),
+            }
+        } else {
+            match m.guess_type(g, strict) {
+                Ok((Some(t), enc)) => cli_line(mut out, f"type: {t} encoding: {opt_or(enc, "None")}"),
+                Ok((None, _)) => cli_line(mut out, f"I don't know anything about type {g}"),
+                Err(e) => cli_line(mut out, show_exc(e)),
+            }
+        }
+    }
+    0
+}
+
+fn run_cli(args: ref Vec[String]) {
+    let line = strip(f"$ python -m mimetypes {join(args, " ")}");
+    println(line);
+    let mut m = Module.new();
+    let mut out: Vec[String] = Vec.new();
+    let code = cli_main(args, mut m, mut out);
+    for l in out.iter() {
+        if l.is_empty() {
+            println("");
+        } else {
+            println(f"  {l}");
+        }
+    }
+    println(f"exit {code}");
+}
+
+// ------------------------------------------------------------ the run
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"OSError: {e}"),
+    };
+    let mut jobs = split_on(text, '\n');
+    jobs.pop();
+    let defaults = MimeTypes.new().strict_map.copy();
+    let mut i = 0;
+    while i < jobs.len() {
+        let f = split_on(jobs[i], '\t');
+        if f[0] == "job" {
+            let mut body: Vec[String] = Vec.new();
+            i += 1;
+            while i < jobs.len() {
+                let head = split_on(jobs[i], '\t')[0].clone();
+                if head == "job" or head == "cli" or head == "program" {
+                    break;
+                }
+                body.push(jobs[i].clone());
+                i += 1;
+            }
+            let mut m = Module.new();
+            run_job(f[1], body, mut m, defaults);
+            continue;
+        }
+        if f[0] == "cli" {
+            let mut args: Vec[String] = Vec.new();
+            for k in 1..f.len() {
+                args.push(f[k].clone());
+            }
+            run_cli(args);
+        } else if f[0] == "program" {
+            run_program(f[1]);
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn dirname(p: ref String) -> String {
+    let v = chars(p);
+    let i = rfind_char(v, '/');
+    if i < 0 { ".".to_string() } else { slice(v, 0, i) }
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+fn data_lines(path: Str) -> Vec[String] {
+    let text = match fs.read_to_string(f"data/{path}") {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for l in split_on(text, '\n').into_iter() {
+        if strip(l).is_empty() or l.starts_with("#") {
+            continue;
+        }
+        out.push(l);
+    }
+    out
+}
+
+fn site_db() -> MimeTypes {
+    let mut db = MimeTypes.new();
+    let _ = db.read("data/system/mime.types".to_string(), true);
+    let _ = db.read("data/apache/mime.types".to_string(), true);
+    let _ = db.read("data/local/mime.types".to_string(), false);
+    db
+}
+
+fn with_charset(t: ref String) -> String {
+    let textish = [
+        "application/javascript", "text/javascript", "application/json", "application/xml",
+        "image/svg+xml", "application/manifest+json",
+    ];
+    let mut yes = t.starts_with("text/");
+    for x in textish {
+        if t == x {
+            yes = true;
+        }
+    }
+    if yes { f"{t}; charset=utf-8" } else { t.clone() }
+}
+
+fn type_of(db: ref MimeTypes, p: ref String, strict: bool) -> (Option[String], Option[String]) {
+    match db.guess_type(p, strict) {
+        Ok(r) => r,
+        Err(_) => (None, None),
+    }
+}
+
+// http.server's SimpleHTTPRequestHandler.guess_type, over the module's
+// database.
+fn handler_guess(m: mut ref Module, path: ref String) -> String {
+    let (_, ext) = splitext(path);
+    let hmap = [
+        (".gz", "application/gzip"), (".Z", "application/octet-stream"),
+        (".bz2", "application/x-bzip2"), (".xz", "application/x-xz"),
+    ];
+    for (k, v) in hmap {
+        if ext == k {
+            return v.to_string();
+        }
+    }
+    let el = lower(ext);
+    for (k, v) in hmap {
+        if el == k {
+            return v.to_string();
+        }
+    }
+    m.ensure();
+    let g = match m.db {
+        Some(ref d) => d.guess_file_type(path, true).0,
+        None => None,
+    };
+    match g {
+        Some(t) => t,
+        None => "application/octet-stream".to_string(),
+    }
+}
+
+fn prog_server() {
+    println("== program: static file server");
+    let mut m = Module.new();
+    m.init(None);
+    println("Content-type, as http.server picks it:");
+    for p in data_lines("server/requests.txt") {
+        let t = if p.ends_with("/") {
+            "text/html; charset=utf-8 (directory listing)".to_string()
+        } else {
+            handler_guess(mut m, p)
+        };
+        println(f"  {pad_right(p, 36)} {t}");
+    }
+    let db = site_db();
+    let disk = data_lines("server/precompressed.txt");
+    println("precompressed variants:");
+    for l in data_lines("server/accept.txt") {
+        let parts = split_on(l, '\t');
+        let path = parts[0].clone();
+        let ae = parts[1].clone();
+        let toks: Vec[String] = split_on(ae, ',').iter().map(|t| lower(strip(split_on(t, ';')[0]))).collect();
+        let pv = chars(path);
+        let rel = slice(pv, 1, pv.len());
+        let mut enc: Option[(String, String)] = None;
+        for (want, suf) in [("br", ".br"), ("gzip", ".gz")] {
+            let w = want.to_string();
+            let star = "*".to_string();
+            if (toks.contains(w) or toks.contains(star)) and disk.contains(f"{rel}{suf}") {
+                enc = Some((w, suf.to_string()));
+                break;
+            }
+        }
+        let ctype = match type_of(db, rel, true).0 {
+            Some(t) => with_charset(t),
+            None => "application/octet-stream".to_string(),
+        };
+        match enc {
+            Some((e, suf)) => println(
+                f"  {path} [{ae}] -> {rel}{suf}: Content-Type {ctype}, Content-Encoding {e}, Vary: Accept-Encoding",
+            ),
+            None => println(f"  {path} [{ae}] -> {rel}: Content-Type {ctype}, Vary: Accept-Encoding"),
+        }
+    }
+}
+
+fn prog_nginx() {
+    println("== program: nginx types block");
+    let mut db = MimeTypes.new();
+    let mut order: Vec[String] = Vec.new();
+    let mut exts_of: Map[String, Vec[String]] = Map.new();
+    let mut stmts = 0;
+    let text = match fs.read_to_string("data/nginx/mime.types") {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    };
+    let mut inside = false;
+    for raw in split_on(text, '\n') {
+        let l = strip(raw);
+        if l.is_empty() or l.starts_with("#") {
+            continue;
+        }
+        if l == "types {" {
+            inside = true;
+            continue;
+        }
+        if l == "}" {
+            inside = false;
+            continue;
+        }
+        if not inside or not l.ends_with(";") {
+            println(f"  skipped: {repr_str(l)}");
+            continue;
+        }
+        let lv = chars(l);
+        let words = split_ws(slice(lv, 0, lv.len() - 1));
+        stmts += 1;
+        let t = words[0].clone();
+        if not exts_of.contains_key(t) {
+            order.push(t.clone());
+            exts_of.insert(t.clone(), Vec.new());
+        }
+        for k in 1..words.len() {
+            db.add_type(t, f".{words[k]}", true);
+            exts_of.get_mut(t).unwrap().push(words[k].clone());
+        }
+    }
+    println(f"{stmts} statements, {order.len()} types");
+    let sysdb = site_db();
+    println("where nginx and the site's mime.types disagree:");
+    let mut n = 0;
+    for t in order.iter() {
+        for e in exts_of.get(t).unwrap().iter() {
+            let a = type_of(db, f"x.{e}", true).0;
+            let b = type_of(sysdb, f"x.{e}", true).0;
+            if a != b {
+                n += 1;
+                println(f"  {pad_right(f".{e}", 7)} nginx {opt_or(a, "None")}, mime.types {opt_or(b, "None")}");
+            }
+        }
+    }
+    println(f"  {n} extensions differ");
+    let mut out: Vec[String] = Vec.new();
+    for t in order.iter() {
+        out.push(f"{pad_right(t, 40)}{join(exts_of.get(t).unwrap(), " ")}");
+    }
+    println(f"as a mime.types file ({out.len()} lines), the first five and the octet-stream line:");
+    for k in 0..5 {
+        println(f"  {out[k]}");
+    }
+    for l in out.iter() {
+        if l.starts_with("application/octet-stream") {
+            println(f"  {l}");
+        }
+    }
+    let mut back = MimeTypes.new();
+    back.readfp(f"{join(out, "\n")}\n", true);
+    let mut same = 0;
+    let mut total = 0;
+    for t in order.iter() {
+        for e in exts_of.get(t).unwrap().iter() {
+            total += 1;
+            let x = f"x.{e}";
+            if type_of(back, x, true) == type_of(db, x, true) {
+                same += 1;
+            }
+        }
+    }
+    println(f"read back: {same} of {total} extensions guess the same");
+    let os = "application/octet-stream".to_string();
+    println(
+        f"guess_extension('application/octet-stream') nginx {opt_or(db.guess_extension(os, true), "None")}, read back {opt_or(back.guess_extension(os, true), "None")}",
+    );
+}
+
+fn prog_uploads() {
+    println("== program: upload validator");
+    let db = site_db();
+    let mut policy: Map[String, i64] = Map.new();
+    for l in data_lines("uploads/policy.conf") {
+        let w = split_ws(l);
+        policy.insert(w[0].clone(), i64.parse(w[1]).unwrap_or(0));
+    }
+    let mut ok = 0;
+    let lines = data_lines("uploads/uploads.tsv");
+    for i in 0..lines.len() {
+        let parts = split_on(lines[i], '\t');
+        let name = parts[0].clone();
+        let size = i64.parse(parts[2]).unwrap_or(0);
+        let declared = lower(strip(split_on(parts[1], ';')[0]));
+        let (t, enc) = type_of(db, name, true);
+        let (base, ext) = splitext(name);
+        let inner = if ext.is_empty() { None } else { type_of(db, base, true).0 };
+        let verdict = match t {
+            None => "reject: the name gives no known type".to_string(),
+            Some(t) => {
+                if enc.is_some() {
+                    f"reject: {enc.unwrap()}-compressed {t}"
+                } else if inner.is_some() and (t == "application/x-msdownload" or t == "application/octet-stream") {
+                    f"reject: an executable named like {inner.unwrap()}"
+                } else if not policy.contains_key(t) {
+                    f"reject: {t} is not accepted"
+                } else if declared != t {
+                    f"reject: sent as {declared} but the name says {t}"
+                } else if size > *policy.get(t).unwrap() {
+                    f"reject: {size} bytes, over the {policy.get(t).unwrap()} limit"
+                } else {
+                    ok += 1;
+                    let num = pad_left(f"{i + 1}", 3).replace(" ", "0");
+                    f"accept as upload-{num}{opt_or(db.guess_extension(t, true), "None")}"
+                }
+            }
+        };
+        println(f"  {pad_right(name, 18)} {verdict}");
+    }
+    println(f"{ok} accepted");
+}
+
+fn bump(m: mut ref Map[String, i64], k: ref String, by: i64) {
+    let cur = match m.get(k) {
+        Some(v) => *v,
+        None => 0,
+    };
+    m.insert(k.clone(), cur + by);
+}
+
+fn sorted_keys(m: ref Map[String, i64]) -> Vec[String] {
+    let mut v: Vec[String] = m.keys().map(|k| k.clone()).collect();
+    v.sort();
+    v
+}
+
+fn major_of(t: ref String) -> String {
+    split_on(t, '/')[0].clone()
+}
+
+fn prog_objstore() {
+    println("== program: object store upload plan");
+    let db = site_db();
+    let mut by: Map[String, i64] = Map.new();
+    for p in data_lines("objstore/manifest.txt") {
+        let (t, enc) = type_of(db, p, false);
+        let ctype = match t {
+            Some(ref x) => with_charset(x),
+            None => "application/octet-stream".to_string(),
+        };
+        let cache = match t {
+            None => "public, max-age=300",
+            Some(ref x) => {
+                if p.contains("/assets/") or x.starts_with("font/") or x.starts_with("image/") {
+                    "public, max-age=31536000, immutable"
+                } else if x == "text/html" {
+                    "no-cache"
+                } else {
+                    "public, max-age=300"
+                }
+            }
+        };
+        let extra = match enc {
+            Some(ref e) => {
+                if e == "gzip" or e == "br" { f"; Content-Encoding: {e}" } else { String.new() }
+            }
+            None => String.new(),
+        };
+        println(f"  {p}: Content-Type: {ctype}{extra}; Cache-Control: {cache}");
+        let major = major_of(opt_or(t, "application/octet-stream"));
+        bump(mut by, major, 1);
+    }
+    let parts: Vec[String] = sorted_keys(by).iter().map(|k| f"{k} {by.get(k).unwrap()}").collect();
+    println(f"objects by major type: {join(parts, ", ")}");
+}
+
+fn prog_mail() {
+    println("== program: mail attachments");
+    let db = site_db();
+    for p in data_lines("mail/attachments.txt") {
+        let (t, encoding) = type_of(db, p, true);
+        let ctype = if t.is_none() or encoding.is_some() {
+            "application/octet-stream".to_string()
+        } else {
+            t.unwrap()
+        };
+        let (maintype, subtype) = split_once(ctype, '/').unwrap();
+        let c = if maintype == "text" {
+            "MIMEText"
+        } else if maintype == "image" {
+            "MIMEImage"
+        } else if maintype == "audio" {
+            "MIMEAudio"
+        } else {
+            "MIMEBase"
+        };
+        println(f"  {repr_str(p)}: {c}, Content-Type: {maintype}/{subtype}; name={repr_str(p)}");
+    }
+}
+
+fn parse_accept(h: ref String) -> Vec[(String, f64)] {
+    let mut out: Vec[(String, f64)] = Vec.new();
+    for part0 in split_on(h, ',') {
+        let part = strip(part0);
+        if part.is_empty() {
+            continue;
+        }
+        let bits: Vec[String] = split_on(part, ';').iter().map(|b| strip(b)).collect();
+        let mut q = 1.0;
+        for k in 1..bits.len() {
+            if bits[k].starts_with("q=") {
+                let bv = chars(bits[k]);
+                q = f64.parse(slice(bv, 2, bv.len())).unwrap_or(0.0);
+            }
+        }
+        out.push((lower(bits[0]), q));
+    }
+    if out.is_empty() {
+        out.push(("*/*".to_string(), 1.0));
+    }
+    out
+}
+
+fn match_q(rng: ref Vec[(String, f64)], t: ref String) -> Option[f64] {
+    let mut best_spec = 0;
+    let mut best_q = 0.0;
+    for (r, q) in rng.iter() {
+        let mut spec = 0;
+        if r == t {
+            spec = 3;
+        } else if r.ends_with("/*") {
+            let rv = chars(r);
+            if major_of(t) == slice(rv, 0, rv.len() - 2) {
+                spec = 2;
+            }
+        }
+        if spec == 0 and r == "*/*" {
+            spec = 1;
+        }
+        if spec == 0 {
+            continue;
+        }
+        if spec > best_spec {
+            best_spec = spec;
+            best_q = *q;
+        }
+    }
+    if best_spec == 0 { None } else { Some(best_q) }
+}
+
+fn fmt3(x: f64) -> String {
+    let n = (x * 1000.0).round() as i64;
+    let frac = pad_left(f"{n % 1000}", 3).replace(" ", "0");
+    f"{n / 1000}.{frac}"
+}
+
+fn prog_negotiate() {
+    println("== program: content negotiation");
+    let db = site_db();
+    let mut variants: Map[String, Vec[String]] = Map.new();
+    for l in data_lines("negotiate/variants.txt") {
+        let parts = split_on(l, '\t');
+        variants.insert(parts[0].clone(), split_ws(parts[1]));
+    }
+    let text = match fs.read_to_string("data/negotiate/requests.txt") {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    };
+    for l in split_on(text, '\n') {
+        if l.is_empty() or l.starts_with("#") {
+            continue;
+        }
+        let parts = split_on(l, '\t');
+        let name = parts[0].clone();
+        let accept = parts[1].clone();
+        let rng = parse_accept(accept);
+        let mut best: Option[(String, f64, String)] = None;
+        for f in variants.get(name).unwrap().iter() {
+            let t = match type_of(db, f, true).0 {
+                Some(t) => t,
+                None => continue,
+            };
+            let q = match match_q(rng, t) {
+                Some(q) => q,
+                None => continue,
+            };
+            if q <= 0.0 {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some(ref b) => q > b.1,
+            };
+            if better {
+                best = Some((f.clone(), q, t));
+            }
+        }
+        match best {
+            None => println(f"  {name} [{accept}] -> 406 Not Acceptable"),
+            Some((f, q, t)) => println(f"  {name} [{accept}] -> {f} ({t}, q={fmt3(q)})"),
+        }
+    }
+}
+
+fn prog_cdnlog() {
+    println("== program: CDN log by type");
+    let db = site_db();
+    let mut bytes_by: Map[String, i64] = Map.new();
+    let mut hits_by: Map[String, i64] = Map.new();
+    let mut naive_wrong = 0;
+    let mut bad = 0;
+    for l in data_lines("cdnlog/access.log") {
+        let v = chars(l);
+        let q1 = find_from(v, '"', 0);
+        let q2 = find_from(v, '"', q1 + 1);
+        let req = split_on(slice(v, q1 + 1, q2), ' ');
+        let rest = split_ws(slice(v, q2 + 1, v.len()));
+        if req.len() != 3 or rest.len() != 2 {
+            bad += 1;
+            continue;
+        }
+        let target = req[1].clone();
+        let naive = type_of(db, target, true).0;
+        let path = match urlsplit(target) {
+            Ok(s) => s.path,
+            Err(_) => target.clone(),
+        };
+        let t = type_of(db, path, true).0;
+        if naive != t {
+            naive_wrong += 1;
+            println(
+                f"  {target}: guess_type on the raw target says {opt_or(naive, "None")}, on the path {opt_or(t, "None")}",
+            );
+        }
+        let key = opt_or(t, "(unknown)");
+        bump(mut bytes_by, key, i64.parse(rest[1]).unwrap_or(0));
+        bump(mut hits_by, key, 1);
+    }
+    println(f"{bad} unparsable lines; {naive_wrong} targets need the query or fragment cut first");
+    let mut keys = sorted_keys(bytes_by);
+    keys.sort_by(|a, b| {
+        let x = *bytes_by.get(a).unwrap();
+        let y = *bytes_by.get(b).unwrap();
+        if x != y { y.cmp(x) } else { a.cmp(b) }
+    });
+    for k in keys.iter() {
+        let h = pad_left(f"{hits_by.get(k).unwrap()}", 3);
+        let b = pad_left(f"{bytes_by.get(k).unwrap()}", 10);
+        println(f"  {pad_right(k, 28)} {h} hits {b} bytes");
+    }
+}
+
+fn prog_inventory() {
+    println("== program: shared-drive inventory");
+    let db = site_db();
+    let mut size_by: Map[String, i64] = Map.new();
+    let mut count_by: Map[String, i64] = Map.new();
+    let mut renames: Vec[String] = Vec.new();
+    let mut unknown: Vec[String] = Vec.new();
+    for l in data_lines("inventory/files.txt") {
+        let v = chars(l);
+        let sp = rfind_char(v, ' ');
+        let path = slice(v, 0, sp);
+        let size = i64.parse(slice(v, sp + 1, v.len())).unwrap_or(0);
+        let (t, enc) = type_of(db, path, true);
+        let major = match t {
+            None => {
+                unknown.push(path.clone());
+                "(unknown)".to_string()
+            }
+            Some(ref x) => {
+                if enc.is_none() {
+                    match db.guess_extension(x, true) {
+                        Some(canon) => {
+                            let (_, ext) = splitext(path);
+                            if ext != canon {
+                                renames.push(f"  {path} ({x}): {canon}");
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                major_of(x)
+            }
+        };
+        bump(mut size_by, major, size);
+        bump(mut count_by, major, 1);
+    }
+    println("by major type:");
+    for k in sorted_keys(size_by).iter() {
+        let c = pad_left(f"{count_by.get(k).unwrap()}", 3);
+        let s = pad_left(f"{size_by.get(k).unwrap()}", 11);
+        println(f"  {pad_right(k, 12)} {c} files {s} bytes");
+    }
+    println(f"{renames.len()} files whose extension is not the type's first one:");
+    for r in renames.iter() {
+        println(r);
+    }
+    println(f"{unknown.len()} with no known type: {join(unknown, ", ")}");
+}
+
+fn run_program(name: ref String) {
+    if name == "server" {
+        prog_server();
+    } else if name == "nginx" {
+        prog_nginx();
+    } else if name == "uploads" {
+        prog_uploads();
+    } else if name == "objstore" {
+        prog_objstore();
+    } else if name == "mail" {
+        prog_mail();
+    } else if name == "negotiate" {
+        prog_negotiate();
+    } else if name == "cdnlog" {
+        prog_cdnlog();
+    } else if name == "inventory" {
+        prog_inventory();
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# This file maps Internet media types to unique file extension(s).\n");
+    t.push_str("# Apache's copy, trimmed. Where it disagrees with the system file,\n");
+    t.push_str("# it is read later and wins.\n");
+    t.push_str("#\n");
+    t.push_str("# MIME type (lowercased)\t\t\tExtensions\n");
+    t.push_str("# ============================================\t==========\n");
+    t.push_str("application/ecmascript\t\t\t\tes ecma\n");
+    t.push_str("application/java-archive\t\t\tjar\n");
+    t.push_str("application/vnd.apple.installer+xml\t\tmpkg\n");
+    t.push_str("application/vnd.apple.mpegurl\t\t\tm3u8\n");
+    t.push_str("application/x-msdownload\t\t\texe dll com bat msi\n");
+    t.push_str("text/javascript\t\t\t\t\tjs\n");
+    t.push_str("text/x-asm\t\t\t\t\ts asm\n");
+    t.push_str("text/x-fortran\t\t\t\t\tf for f77 f90\n");
+    t.push_str("text/x-pascal\t\t\t\t\tp pas\n");
+    t.push_str("text/x-vcalendar\t\t\t\tvcs\n");
+    t.push_str("video/mp2t\t\t\t\t\tts\n");
+    t.push_str("video/x-flv\t\t\t\t\tflv\n");
+    t.push_str("Application/X-Shockwave-Flash\t\tswf\n");
+    t.push_str("application/x-photoshop\t\t\tPSD\n");
+    v.push(DataFile { path: "apache/mime.types".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("text/x-crlf crlf\u{d}\n");
+    t.push_str("text/x-formfeed\u{c}");
+    t.push_str("ff\n");
+    t.push_str("text/x-vtab\u{b}");
+    t.push_str("vt\n");
+    t.push_str("text/x-nbsp nbsp\n");
+    t.push_str("text/x-dup dupe\n");
+    t.push_str("text/x-dup2 dupe\n");
+    t.push_str("text/x-dup dupe dupe2\n");
+    v.push(DataFile { path: "broken/odd.types".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("203.0.113.10 - - [20/Oct/2026:10:00:01 +0000] \"GET /index.html HTTP/2.0\" 200 5120\n");
+    t.push_str("203.0.113.10 - - [20/Oct/2026:10:00:01 +0000] \"GET /css/site.css HTTP/2.0\" 200 18210\n");
+    t.push_str("203.0.113.10 - - [20/Oct/2026:10:00:01 +0000] \"GET /js/app.min.js?v=8f3a HTTP/2.0\" 200 92012\n");
+    t.push_str("203.0.113.11 - - [20/Oct/2026:10:00:02 +0000] \"GET /img/hero.webp HTTP/2.0\" 200 210334\n");
+    t.push_str("203.0.113.11 - - [20/Oct/2026:10:00:02 +0000] \"GET /img/thumbs/1.jpg HTTP/2.0\" 200 12001\n");
+    t.push_str("203.0.113.11 - - [20/Oct/2026:10:00:02 +0000] \"GET /img/thumbs/2.JPG HTTP/2.0\" 200 12890\n");
+    t.push_str("203.0.113.12 - - [20/Oct/2026:10:00:03 +0000] \"GET /fonts/Inter.woff2 HTTP/2.0\" 200 98112\n");
+    t.push_str("203.0.113.12 - - [20/Oct/2026:10:00:03 +0000] \"GET /api/v1/items?page=2 HTTP/2.0\" 200 3311\n");
+    t.push_str("203.0.113.12 - - [20/Oct/2026:10:00:03 +0000] \"GET /api/v1/items.json HTTP/2.0\" 200 3311\n");
+    t.push_str("203.0.113.13 - - [20/Oct/2026:10:00:04 +0000] \"GET /downloads/app-2.4.0.dmg HTTP/1.1\" 200 88120334\n");
+    t.push_str("203.0.113.13 - - [20/Oct/2026:10:00:05 +0000] \"GET /downloads/app-2.4.0.tar.gz HTTP/1.1\" 200 20331002\n");
+    t.push_str("203.0.113.14 - - [20/Oct/2026:10:00:05 +0000] \"GET /video/intro.mp4 HTTP/1.1\" 206 1048576\n");
+    t.push_str("203.0.113.14 - - [20/Oct/2026:10:00:06 +0000] \"GET /video/intro.mp4 HTTP/1.1\" 206 1048576\n");
+    t.push_str("203.0.113.14 - - [20/Oct/2026:10:00:06 +0000] \"GET /video/intro.vtt HTTP/1.1\" 200 2201\n");
+    t.push_str("203.0.113.15 - - [20/Oct/2026:10:00:07 +0000] \"GET /favicon.ico HTTP/1.1\" 404 153\n");
+    t.push_str("203.0.113.15 - - [20/Oct/2026:10:00:07 +0000] \"GET /robots.txt HTTP/1.1\" 200 68\n");
+    t.push_str("203.0.113.16 - - [20/Oct/2026:10:00:08 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153\n");
+    t.push_str("203.0.113.16 - - [20/Oct/2026:10:00:08 +0000] \"GET /.env HTTP/1.1\" 404 153\n");
+    t.push_str("203.0.113.16 - - [20/Oct/2026:10:00:08 +0000] \"GET /backup.sql.gz HTTP/1.1\" 404 153\n");
+    t.push_str("203.0.113.17 - - [20/Oct/2026:10:00:09 +0000] \"GET /docs/guide.pdf#page=4 HTTP/1.1\" 200 1203344\n");
+    t.push_str("203.0.113.17 - - [20/Oct/2026:10:00:10 +0000] \"GET /docs/ HTTP/1.1\" 200 4401\n");
+    t.push_str("203.0.113.18 - - [20/Oct/2026:10:00:11 +0000] \"HEAD /index.html HTTP/1.1\" 200 0\n");
+    t.push_str("203.0.113.18 - - [20/Oct/2026:10:00:11 +0000] \"GET /feed.rss HTTP/1.1\" 304 0\n");
+    t.push_str("203.0.113.19 - - [20/Oct/2026:10:00:12 +0000] \"GET /audio/ep12.mp3 HTTP/1.1\" 200 41203398\n");
+    t.push_str("203.0.113.19 - - [20/Oct/2026:10:00:12 +0000] \"GET /audio/ep12.m4a HTTP/1.1\" 200 39002110\n");
+    t.push_str("203.0.113.20 - - [20/Oct/2026:10:00:13 +0000] \"garbage line without a request\"\n");
+    t.push_str("203.0.113.21 - - [20/Oct/2026:10:00:14 +0000] \"GET https://example.com/img/x.gif HTTP/1.1\" 200 43\n");
+    v.push(DataFile { path: "cdnlog/access.log".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# every file in a shared drive, with its size in bytes\n");
+    t.push_str("Projects/website/index.htm 4120\n");
+    t.push_str("Projects/website/style.CSS 2210\n");
+    t.push_str("Projects/website/logo.jpe 30122\n");
+    t.push_str("Projects/website/logo.jpeg 30122\n");
+    t.push_str("Projects/website/banner.tif 2210443\n");
+    t.push_str("Projects/website/script.mjs 3301\n");
+    t.push_str("Projects/budget/2026.xls 50102\n");
+    t.push_str("Projects/budget/2026.xlsx 41022\n");
+    t.push_str("Projects/budget/notes.text 812\n");
+    t.push_str("Projects/budget/minutes.doc 30021\n");
+    t.push_str("Photos/IMG_0001.JPG 3021442\n");
+    t.push_str("Photos/IMG_0002.HEIC 2210331\n");
+    t.push_str("Photos/IMG_0003.heif 2310201\n");
+    t.push_str("Photos/scan.pbm 1203\n");
+    t.push_str("Music/track01.mp3 6102331\n");
+    t.push_str("Music/track02.mp2 5102331\n");
+    t.push_str("Music/track03.flac 30120443\n");
+    t.push_str("Music/cover.bmp 921654\n");
+    t.push_str("Videos/clip.qt 1210442\n");
+    t.push_str("Videos/clip.mov 1210442\n");
+    t.push_str("Videos/old.mpe 8120332\n");
+    t.push_str("Archive/2019.tgz 120334112\n");
+    t.push_str("Archive/2020.tar.bz2 98120112\n");
+    t.push_str("Archive/2021.taz 77120331\n");
+    t.push_str("Archive/mail.mbox 4012331\n");
+    t.push_str("Archive/thumbs.db 12288\n");
+    t.push_str("Code/main.rs 4401\n");
+    t.push_str("Code/main.go 3301\n");
+    t.push_str("Code/main.kara 2201\n");
+    t.push_str("Code/build.ninja 1204\n");
+    t.push_str("Code/Dockerfile 811\n");
+    v.push(DataFile { path: "inventory/files.txt".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("job\tguess_type on paths\n");
+    t.push_str("type\t1\tindex.html\n");
+    t.push_str("type\t1\tREADME\n");
+    t.push_str("type\t1\tREADME.md\n");
+    t.push_str("type\t1\tphoto.JPG\n");
+    t.push_str("type\t1\tPHOTO.Jpeg\n");
+    t.push_str("type\t1\tarchive.tar.gz\n");
+    t.push_str("type\t1\tarchive.tgz\n");
+    t.push_str("type\t1\tarchive.TGZ\n");
+    t.push_str("type\t1\tarchive.tar.GZ\n");
+    t.push_str("type\t1\tbackup.tar.bz2\n");
+    t.push_str("type\t1\tbackup.tbz2\n");
+    t.push_str("type\t1\tlogs.txz\n");
+    t.push_str("type\t1\tdrawing.svgz\n");
+    t.push_str("type\t1\tdata.json.br\n");
+    t.push_str("type\t1\tdata.json.Z\n");
+    t.push_str("type\t1\tdata.json.z\n");
+    t.push_str("type\t1\tfile.gz\n");
+    t.push_str("type\t1\t.gz\n");
+    t.push_str("type\t1\tx.gz.gz\n");
+    t.push_str("type\t1\t.bashrc\n");
+    t.push_str("type\t1\t..html\n");
+    t.push_str("type\t1\t...\n");
+    t.push_str("type\t1\tfile.\n");
+    t.push_str("type\t1\tdir.d/file\n");
+    t.push_str("type\t1\tdir.d/.html\n");
+    t.push_str("type\t1\t/var/www/site/app.min.js\n");
+    t.push_str("type\t1\tC:\\\\Users\\\\me\\\\report.pdf\n");
+    t.push_str("type\t1\tc:report.pdf\n");
+    t.push_str("type\t1\tnotes.MD\n");
+    t.push_str("type\t1\tclip.mid\n");
+    t.push_str("type\t0\tclip.mid\n");
+    t.push_str("type\t1\tpicture.jpg\n");
+    t.push_str("type\t0\tpicture.jpg\n");
+    t.push_str("type\t0\tpicture.pict\n");
+    t.push_str("type\t1\tpicture.pict\n");
+    t.push_str("type\t0\tdoc.rtf\n");
+    t.push_str("type\t1\tunknown.qqq\n");
+    t.push_str("type\t0\tunknown.qqq\n");
+    t.push_str("type\t1\tmodule.wasm\n");
+    t.push_str("type\t1\tstyle.css.map\n");
+    t.push_str("type\t1\tarchive.tar.zst\n");
+    t.push_str("type\t1\tsound.WAV\n");
+    t.push_str("type\t1\t\n");
+    t.push_str("job\tguess_type on URLs\n");
+    t.push_str("type\t1\thttps://example.com/img/logo.png\n");
+    t.push_str("type\t1\thttps://example.com/img/logo.png?v=3\n");
+    t.push_str("type\t1\thttps://example.com/img/logo.png#top\n");
+    t.push_str("type\t1\thttps://example.com/download?file=report.pdf\n");
+    t.push_str("type\t1\thttps://example.com/page.html;jsessionid=abc123\n");
+    t.push_str("type\t1\thttps://example.com/a;b/page.html\n");
+    t.push_str("type\t1\tftp://ftp.example.org/pub/linux.tar.gz\n");
+    t.push_str("type\t1\tfile:///home/me/Music/song.mp3\n");
+    t.push_str("type\t1\thttps://example.com\n");
+    t.push_str("type\t1\thttps://example.com/\n");
+    t.push_str("type\t1\thttps://example.com/archive.tgz\n");
+    t.push_str("type\t1\thttps://cdn.example.com/fonts/Inter.WOFF2\n");
+    t.push_str("type\t1\tHTTPS://EXAMPLE.COM/INDEX.HTM\n");
+    t.push_str("type\t1\ts3://bucket/key/data.csv\n");
+    t.push_str("type\t1\tmailto:someone@example.com\n");
+    t.push_str("type\t1\tnews:comp.lang.python\n");
+    t.push_str("type\t1\turn:isbn:0451450523.pdf\n");
+    t.push_str("type\t1\thttp://[::1]:8080/status.json\n");
+    t.push_str("type\t1\thttp://[2001:db8::7]/x.png\n");
+    t.push_str("type\t1\thttp://[::1/x.png\n");
+    t.push_str("type\t1\thttp://::1]/x.png\n");
+    t.push_str("type\t1\thttp://host]/x.png\n");
+    t.push_str("type\t1\thttp://x[::1]/x.png\n");
+    t.push_str("type\t1\thttp://[::1]x/x.png\n");
+    t.push_str("type\t1\thttp://[127.0.0.1]/x.png\n");
+    t.push_str("type\t1\thttp://[v1.fe]/x.png\n");
+    t.push_str("type\t1\thttp://[vz.fe]/x.png\n");
+    t.push_str("type\t1\thttp://[::g]/x.png\n");
+    t.push_str("type\t1\thttp://user@[::1]:80/x.png\n");
+    t.push_str("type\t1\t//cdn.example.com/lib.js\n");
+    t.push_str("type\t1\t\\x01\\x02 https://example.com/a.png\n");
+    t.push_str("type\t1\thttps://exa\\x09mple.com/a.p\\x0ang\n");
+    t.push_str("type\t1\t1http://example.com/a.png\n");
+    t.push_str("type\t1\tht+tp.v-1://example.com/a.png\n");
+    t.push_str("type\t1\tht_tp://example.com/a.png\n");
+    t.push_str("type\t1\tx:a.png\n");
+    t.push_str("type\t1\t:a.png\n");
+    t.push_str("type\t1\tpath/with:colon/a.png\n");
+    t.push_str("type\t1\thttps://example.com/a.png?x=1#frag.html\n");
+    t.push_str("type\t1\thttps://example.com/a#b?c.html\n");
+    t.push_str("type\t1\tsip:alice@example.com;transport=tcp\n");
+    t.push_str("job\tdata URLs\n");
+    t.push_str("type\t1\tdata:,Hello%2C%20World!\n");
+    t.push_str("type\t1\tdata:text/plain;base64,SGVsbG8=\n");
+    t.push_str("type\t1\tdata:image/png;base64,iVBORw0KGgo=\n");
+    t.push_str("type\t1\tdata:text/html,<b>hi</b>\n");
+    t.push_str("type\t1\tdata:text/html;charset=utf-8,<b>hi</b>\n");
+    t.push_str("type\t1\tdata:application/json;x=1;y=2,{}\n");
+    t.push_str("type\t1\tdata:image/svg+xml,<svg/>\n");
+    t.push_str("type\t1\tdata:;base64,AAAA\n");
+    t.push_str("type\t1\tdata:charset=utf-8,x\n");
+    t.push_str("type\t1\tdata:texthtml,x\n");
+    t.push_str("type\t1\tdata:a=b/c,x\n");
+    t.push_str("type\t1\tdata:IMAGE/PNG,x\n");
+    t.push_str("type\t1\tdata:image/png\n");
+    t.push_str("type\t1\tDATA:image/gif,x\n");
+    t.push_str("type\t1\tdata:image/gif;a,b;c,d\n");
+    t.push_str("type\t1\tdata:image/gif?x=1,d\n");
+    t.push_str("type\t1\tdata:image/gif#a,b\n");
+    t.push_str("type\t1\tdata://image/gif,x\n");
+    t.push_str("job\tguess_file_type\n");
+    t.push_str("ftype\t1\treport.pdf\n");
+    t.push_str("ftype\t1\thttps://example.com/a.png?x=1\n");
+    t.push_str("ftype\t1\tdata:image/png,x\n");
+    t.push_str("ftype\t1\tarchive.tar.gz\n");
+    t.push_str("ftype\t0\tpicture.jpg\n");
+    t.push_str("ftype\t1\t/tmp/a.b/c\n");
+    t.push_str("ftype\t1\tsong.mp3#1\n");
+    t.push_str("job\tguess_extension and guess_all_extensions\n");
+    t.push_str("ext\t1\ttext/html\n");
+    t.push_str("ext\t1\tTEXT/HTML\n");
+    t.push_str("ext\t1\ttext/plain\n");
+    t.push_str("ext\t1\timage/jpeg\n");
+    t.push_str("ext\t1\tapplication/octet-stream\n");
+    t.push_str("ext\t1\taudio/midi\n");
+    t.push_str("ext\t0\taudio/midi\n");
+    t.push_str("ext\t1\timage/jpg\n");
+    t.push_str("ext\t0\timage/jpg\n");
+    t.push_str("ext\t1\ttext/x-nothing\n");
+    t.push_str("ext\t1\t\n");
+    t.push_str("ext\t1\ttext/javascript\n");
+    t.push_str("ext\t1\tapplication/xml\n");
+    t.push_str("exts\t1\ttext/plain\n");
+    t.push_str("exts\t1\timage/jpeg\n");
+    t.push_str("exts\t0\timage/jpeg\n");
+    t.push_str("exts\t1\tapplication/rtf\n");
+    t.push_str("exts\t0\tapplication/rtf\n");
+    t.push_str("exts\t1\ttext/rtf\n");
+    t.push_str("exts\t1\tvideo/mpeg\n");
+    t.push_str("exts\t1\tapplication/vnd.ms-powerpoint\n");
+    t.push_str("exts\t1\tmessage/rfc822\n");
+    t.push_str("exts\t1\tapplication/x-troff\n");
+    t.push_str("exts\t1\tno/such\n");
+    t.push_str("job\tadd_type\n");
+    t.push_str("add\t1\tapplication/x-kara\t.kara\n");
+    t.push_str("type\t1\tmain.kara\n");
+    t.push_str("ext\t1\tapplication/x-kara\n");
+    t.push_str("add\t1\tapplication/x-kara-lib\t.kara\n");
+    t.push_str("type\t1\tmain.kara\n");
+    t.push_str("exts\t1\tapplication/x-kara\n");
+    t.push_str("exts\t1\tapplication/x-kara-lib\n");
+    t.push_str("add\t1\tapplication/x-kara\t.kara\n");
+    t.push_str("exts\t1\tapplication/x-kara\n");
+    t.push_str("add\t1\tapplication/x-kara\t.kr\n");
+    t.push_str("exts\t1\tapplication/x-kara\n");
+    t.push_str("add\t0\ttext/x-lenient\t.lnt\n");
+    t.push_str("type\t1\tx.lnt\n");
+    t.push_str("type\t0\tx.lnt\n");
+    t.push_str("add\t1\t\t.nothing\n");
+    t.push_str("type\t1\tx.nothing\n");
+    t.push_str("add\t1\ttext/x-upper\t.UPPER\n");
+    t.push_str("type\t1\tx.UPPER\n");
+    t.push_str("type\t1\tx.upper\n");
+    t.push_str("add\t1\ttext/x-nodot\tnodot\n");
+    t.push_str("type\t1\tx.nodot\n");
+    t.push_str("type\t1\txnodot\n");
+    t.push_str("add\t1\tText/X-Mixed\t.mixed\n");
+    t.push_str("type\t1\tx.mixed\n");
+    t.push_str("ext\t1\tText/X-Mixed\n");
+    t.push_str("ext\t1\ttext/x-mixed\n");
+    t.push_str("add\t1\ttext/x-gzip-ext\t.gz\n");
+    t.push_str("type\t1\tplain.gz\n");
+    t.push_str("type\t1\tplain.tar.gz\n");
+    t.push_str("add\t1\timage/png\t.png\n");
+    t.push_str("exts\t1\timage/png\n");
+    t.push_str("add\t1\timage/x-png\t.png\n");
+    t.push_str("type\t1\tx.png\n");
+    t.push_str("exts\t1\timage/png\n");
+    t.push_str("ext\t1\timage/png\n");
+    t.push_str("job\treading mime.types files\n");
+    t.push_str("read\t1\tsystem/mime.types\n");
+    t.push_str("type\t1\tapp.js\n");
+    t.push_str("ext\t1\ttext/javascript\n");
+    t.push_str("ext\t1\tapplication/javascript\n");
+    t.push_str("exts\t1\tapplication/javascript\n");
+    t.push_str("type\t1\tpkg.deb\n");
+    t.push_str("exts\t1\tapplication/octet-stream\n");
+    t.push_str("exts\t1\tapplication/x-debian-package\n");
+    t.push_str("type\t1\tnotes.log\n");
+    t.push_str("type\t1\tProgram.cs\n");
+    t.push_str("type\t1\tProgram.c#\n");
+    t.push_str("type\t1\tmail.eml\n");
+    t.push_str("type\t1\tcomment\n");
+    t.push_str("ext\t1\ttext/plain\n");
+    t.push_str("exts\t1\ttext/plain\n");
+    t.push_str("type\t1\tmovie.mkv\n");
+    t.push_str("type\t1\tsong.m4a\n");
+    t.push_str("type\t1\tsong.ogg\n");
+    t.push_str("type\t1\tfont.woff2\n");
+    t.push_str("type\t1\tkey.pem\n");
+    t.push_str("type\t1\tdb.sqlite3\n");
+    t.push_str("type\t1\tconfig.yml\n");
+    t.push_str("type\t1\tarchive.zst\n");
+    t.push_str("type\t1\tdump.tar.zst\n");
+    t.push_str("read\t1\tapache/mime.types\n");
+    t.push_str("type\t1\tapp.js\n");
+    t.push_str("exts\t1\ttext/javascript\n");
+    t.push_str("exts\t1\tapplication/javascript\n");
+    t.push_str("type\t1\tsetup.exe\n");
+    t.push_str("type\t1\tinstall.msi\n");
+    t.push_str("type\t1\tclip.ts\n");
+    t.push_str("type\t1\tmovie.swf\n");
+    t.push_str("ext\t1\tapplication/x-shockwave-flash\n");
+    t.push_str("ext\t1\tApplication/X-Shockwave-Flash\n");
+    t.push_str("type\t1\tlayers.psd\n");
+    t.push_str("type\t1\tlayers.PSD\n");
+    t.push_str("exts\t1\tapplication/x-photoshop\n");
+    t.push_str("read\t0\tlocal/mime.types\n");
+    t.push_str("type\t1\tmain.kara\n");
+    t.push_str("type\t0\tmain.kara\n");
+    t.push_str("type\t0\tevents.jsonl\n");
+    t.push_str("type\t0\t.env\n");
+    t.push_str("type\t0\tprod.env\n");
+    t.push_str("type\t0\timage.pgm\n");
+    t.push_str("type\t1\timage.pgm\n");
+    t.push_str("type\t0\tx.indented\n");
+    t.push_str("type\t0\tx.tabbed\n");
+    t.push_str("type\t0\tx.commented\n");
+    t.push_str("type\t0\tx.hash#word\n");
+    t.push_str("type\t0\tx.not#comment\n");
+    t.push_str("type\t0\tx.but\n");
+    t.push_str("exts\t0\ttext/x-hash-in-word\n");
+    t.push_str("exts\t0\ttext/x-only-comment\n");
+    t.push_str("read\t1\tbroken/odd.types\n");
+    t.push_str("type\t1\tx.crlf\n");
+    t.push_str("type\t1\tx.ff\n");
+    t.push_str("type\t1\tx.vt\n");
+    t.push_str("type\t1\tx.nbsp\n");
+    t.push_str("type\t1\tx.dupe\n");
+    t.push_str("type\t1\tx.dupe2\n");
+    t.push_str("exts\t1\ttext/x-dup\n");
+    t.push_str("exts\t1\ttext/x-dup2\n");
+    t.push_str("read\t1\tno/such.types\n");
+    t.push_str("type\t1\tstill.ok.png\n");
+    t.push_str("job\tread_mime_types\n");
+    t.push_str("readmt\tlocal/mime.types\n");
+    t.push_str("readmt\tapache/mime.types\n");
+    t.push_str("readmt\tbroken/odd.types\n");
+    t.push_str("readmt\tno/such.types\n");
+    t.push_str("readmt\tnginx/mime.types\n");
+    t.push_str("job\tthe module-level database\n");
+    t.push_str("init\n");
+    t.push_str("gtype\t1\tapp.js\n");
+    t.push_str("gtype\t1\tsetup.exe\n");
+    t.push_str("gext\t1\ttext/javascript\n");
+    t.push_str("gadd\t1\ttext/x-added\t.added\n");
+    t.push_str("gtype\t1\tx.added\n");
+    t.push_str("init\tlocal/mime.types\n");
+    t.push_str("gtype\t1\tx.added\n");
+    t.push_str("gtype\t1\tmain.kara\n");
+    t.push_str("gtype\t0\tmain.kara\n");
+    t.push_str("init\n");
+    t.push_str("gtype\t1\tx.added\n");
+    t.push_str("gtype\t0\tmain.kara\n");
+    t.push_str("init\tlocal/mime.types\n");
+    t.push_str("gtype\t1\tmain.kara\n");
+    t.push_str("gadd\t0\ttext/x-added\t.added\n");
+    t.push_str("init\tapache/mime.types\tno/such.types\n");
+    t.push_str("gtype\t1\tx.added\n");
+    t.push_str("gtype\t0\tx.added\n");
+    t.push_str("maps\n");
+    t.push_str("job\tthe instance's own files\n");
+    t.push_str("new\tapache/mime.types\n");
+    t.push_str("type\t1\tapp.js\n");
+    t.push_str("type\t1\tsetup.exe\n");
+    t.push_str("new0\tlocal/mime.types\n");
+    t.push_str("type\t1\tmain.kara\n");
+    t.push_str("type\t0\tmain.kara\n");
+    t.push_str("new\tno/such.types\n");
+    t.push_str("cli\tindex.html\n");
+    t.push_str("cli\tindex.html\tarchive.tar.gz\tunknown.qqq\ta.mid\n");
+    t.push_str("cli\t-l\ta.mid\tx.jpg\n");
+    t.push_str("cli\t--lenient\ta.mid\n");
+    t.push_str("cli\t--len\ta.mid\n");
+    t.push_str("cli\t-e\ttext/html\timage/jpeg\tno/such\taudio/midi\n");
+    t.push_str("cli\t-el\taudio/midi\timage/jpg\n");
+    t.push_str("cli\t-le\timage/jpg\n");
+    t.push_str("cli\t--extension\t--lenient\timage/jpg\n");
+    t.push_str("cli\t--ext\tapplication/javascript\n");
+    t.push_str("cli\t-e\t--\t-l\ttext/css\n");
+    t.push_str("cli\tindex.html\t-e\ttext/css\n");
+    t.push_str("cli\t-\tindex.html\n");
+    t.push_str("cli\t-x\n");
+    t.push_str("cli\t-lx\ta.mid\n");
+    t.push_str("cli\t--extensions\n");
+    t.push_str("cli\t--e\n");
+    t.push_str("cli\t--le\ta.mid\n");
+    t.push_str("cli\t--lenient=1\ta.mid\n");
+    t.push_str("cli\t--=x\n");
+    t.push_str("cli\t-:\n");
+    t.push_str("cli\t-h\n");
+    t.push_str("cli\t--help\tindex.html\n");
+    t.push_str("cli\t--he\n");
+    t.push_str("cli\n");
+    t.push_str("cli\tdata:text/csv,a,b\thttps://x.org/a.svgz\n");
+    t.push_str("cli\ttext/javascript\n");
+    t.push_str("cli\t-e\ttext/javascript\tapplication/javascript\n");
+    t.push_str("program\tserver\n");
+    t.push_str("program\tnginx\n");
+    t.push_str("program\tuploads\n");
+    t.push_str("program\tobjstore\n");
+    t.push_str("program\tmail\n");
+    t.push_str("program\tnegotiate\n");
+    t.push_str("program\tcdnlog\n");
+    t.push_str("program\tinventory\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# Site-local types, read with strict=False so they only show up for\n");
+    t.push_str("# a lenient guess.\n");
+    t.push_str("application/x-kara-source\tkara\n");
+    t.push_str("application/x-ndjson\tndjson jsonl\n");
+    t.push_str("text/x-dotenv\tenv\n");
+    t.push_str("image/x-portable-graymap\tpgm\t# overrides nothing: strict is separate\n");
+    t.push_str("  text/x-indented    indented   # leading blanks are fine\n");
+    t.push_str("\ttext/x-tabbed\ttabbed\n");
+    t.push_str("#text/x-commented commented\n");
+    t.push_str("text/x-hash-in-word\thash#word not#comment # but this is\n");
+    t.push_str("text/x-only-comment # nothing after the type\n");
+    v.push(DataFile { path: "local/mime.types".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# files attached to an outgoing message\n");
+    t.push_str("Quarterly report.pdf\n");
+    t.push_str("team-photo.JPG\n");
+    t.push_str("budget.xlsx\n");
+    t.push_str("slides.pptx\n");
+    t.push_str("logs.tar.gz\n");
+    t.push_str("notes.txt\n");
+    t.push_str("diagram.svg\n");
+    t.push_str("recording.wav\n");
+    t.push_str("contract.docx\n");
+    t.push_str("data.csv.gz\n");
+    t.push_str("README\n");
+    t.push_str("font.otf\n");
+    t.push_str("calendar.ics\n");
+    t.push_str("contact.vcf\n");
+    t.push_str("patch.diff\n");
+    t.push_str("thesis.tex\n");
+    v.push(DataFile { path: "mail/attachments.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# resource, then the Accept header\n");
+    t.push_str("report\ttext/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\n");
+    t.push_str("report\tapplication/json\n");
+    t.push_str("report\tapplication/json;q=0.5, text/csv\n");
+    t.push_str("report\ttext/*;q=0.3, application/pdf;q=0.2\n");
+    t.push_str("report\ttext/markdown;q=0, text/*;q=0.9\n");
+    t.push_str("report\timage/png\n");
+    t.push_str("report\t*/*\n");
+    t.push_str("report\t\n");
+    t.push_str("logo\timage/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8\n");
+    t.push_str("logo\timage/webp,*/*\n");
+    t.push_str("logo\timage/png;q=1.0, image/svg+xml;q=0.9\n");
+    t.push_str("logo\timage/*;q=0.5, image/svg+xml;q=0.5\n");
+    t.push_str("feed\tapplication/atom+xml\n");
+    t.push_str("feed\tapplication/rss+xml;q=0.9, application/atom+xml;q=0.9\n");
+    t.push_str("feed\tapplication/feed+json, application/json;q=0.4\n");
+    t.push_str("feed\ttext/plain\n");
+    v.push(DataFile { path: "negotiate/requests.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# the files a resource has; the server picks one for each Accept header\n");
+    t.push_str("report\treport.html report.json report.pdf report.csv report.md\n");
+    t.push_str("logo\tlogo.svg logo.png logo.webp logo.avif\n");
+    t.push_str("feed\tfeed.rss feed.atom feed.json\n");
+    v.push(DataFile { path: "negotiate/variants.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str("types {\n");
+    t.push_str("    text/html                                        html htm shtml;\n");
+    t.push_str("    text/css                                         css;\n");
+    t.push_str("    text/xml                                         xml;\n");
+    t.push_str("    image/gif                                        gif;\n");
+    t.push_str("    image/jpeg                                       jpeg jpg;\n");
+    t.push_str("    application/javascript                           js;\n");
+    t.push_str("    application/atom+xml                             atom;\n");
+    t.push_str("    application/rss+xml                              rss;\n");
+    t.push_str("\n");
+    t.push_str("    text/mathml                                      mml;\n");
+    t.push_str("    text/plain                                       txt;\n");
+    t.push_str("    text/vnd.sun.j2me.app-descriptor                 jad;\n");
+    t.push_str("    text/vnd.wap.wml                                 wml;\n");
+    t.push_str("    text/x-component                                 htc;\n");
+    t.push_str("\n");
+    t.push_str("    image/avif                                       avif;\n");
+    t.push_str("    image/png                                        png;\n");
+    t.push_str("    image/svg+xml                                    svg svgz;\n");
+    t.push_str("    image/tiff                                       tif tiff;\n");
+    t.push_str("    image/vnd.wap.wbmp                               wbmp;\n");
+    t.push_str("    image/webp                                       webp;\n");
+    t.push_str("    image/x-icon                                     ico;\n");
+    t.push_str("    image/x-jng                                      jng;\n");
+    t.push_str("    image/x-ms-bmp                                   bmp;\n");
+    t.push_str("\n");
+    t.push_str("    font/woff                                        woff;\n");
+    t.push_str("    font/woff2                                       woff2;\n");
+    t.push_str("\n");
+    t.push_str("    application/java-archive                         jar war ear;\n");
+    t.push_str("    application/json                                 json;\n");
+    t.push_str("    application/mac-binhex40                         hqx;\n");
+    t.push_str("    application/msword                               doc;\n");
+    t.push_str("    application/pdf                                  pdf;\n");
+    t.push_str("    application/postscript                           ps eps ai;\n");
+    t.push_str("    application/rtf                                  rtf;\n");
+    t.push_str("    application/vnd.apple.mpegurl                    m3u8;\n");
+    t.push_str("    application/vnd.ms-excel                         xls;\n");
+    t.push_str("    application/vnd.ms-fontobject                    eot;\n");
+    t.push_str("    application/vnd.ms-powerpoint                    ppt;\n");
+    t.push_str("    application/wasm                                 wasm;\n");
+    t.push_str("    application/x-7z-compressed                      7z;\n");
+    t.push_str("    application/x-perl                               pl pm;\n");
+    t.push_str("    application/x-x509-ca-cert                       der pem crt;\n");
+    t.push_str("    application/xhtml+xml                            xhtml;\n");
+    t.push_str("    application/zip                                  zip;\n");
+    t.push_str("\n");
+    t.push_str("    application/octet-stream                         bin exe dll;\n");
+    t.push_str("    application/octet-stream                         deb;\n");
+    t.push_str("    application/octet-stream                         dmg;\n");
+    t.push_str("    application/octet-stream                         iso img;\n");
+    t.push_str("\n");
+    t.push_str("    audio/midi                                       mid midi kar;\n");
+    t.push_str("    audio/mpeg                                       mp3;\n");
+    t.push_str("    audio/ogg                                        ogg;\n");
+    t.push_str("    audio/x-m4a                                      m4a;\n");
+    t.push_str("\n");
+    t.push_str("    video/mp2t                                       ts;\n");
+    t.push_str("    video/mp4                                        mp4;\n");
+    t.push_str("    video/mpeg                                       mpeg mpg;\n");
+    t.push_str("    video/quicktime                                  mov;\n");
+    t.push_str("    video/webm                                       webm;\n");
+    t.push_str("    video/x-flv                                      flv;\n");
+    t.push_str("    video/x-msvideo                                  avi;\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "nginx/mime.types".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# local files to upload to an object store, with the metadata each\n");
+    t.push_str("# object gets\n");
+    t.push_str("site/index.html\n");
+    t.push_str("site/index.html.gz\n");
+    t.push_str("site/assets/app.js\n");
+    t.push_str("site/assets/app.js.br\n");
+    t.push_str("site/assets/app.css\n");
+    t.push_str("site/assets/fonts/Inter.woff2\n");
+    t.push_str("site/assets/fonts/Inter.ttf\n");
+    t.push_str("site/assets/fonts/Inter.eot\n");
+    t.push_str("site/img/hero.avif\n");
+    t.push_str("site/img/hero.jpg\n");
+    t.push_str("site/img/favicon.ico\n");
+    t.push_str("site/docs/guide.pdf\n");
+    t.push_str("site/docs/guide.epub\n");
+    t.push_str("site/docs/handbook.docx\n");
+    t.push_str("site/data/prices.json\n");
+    t.push_str("site/data/prices.json.gz\n");
+    t.push_str("site/data/stations.geojson\n");
+    t.push_str("site/data/events.ndjson\n");
+    t.push_str("site/feeds/atom.xml\n");
+    t.push_str("site/feeds/podcast.rss\n");
+    t.push_str("site/media/episode-12.mp3\n");
+    t.push_str("site/media/episode-12.ogg\n");
+    t.push_str("site/media/trailer.mp4\n");
+    t.push_str("site/media/subtitles.vtt\n");
+    t.push_str("site/manifest.webmanifest\n");
+    t.push_str("site/sw.js\n");
+    t.push_str("site/LICENSE\n");
+    t.push_str("site/CHANGELOG\n");
+    t.push_str("site/backup.tar.gz\n");
+    v.push(DataFile { path: "objstore/manifest.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# request path, then the Accept-Encoding header\n");
+    t.push_str("/index.html\tbr, gzip, deflate\n");
+    t.push_str("/index.html\tgzip\n");
+    t.push_str("/index.html\tidentity\n");
+    t.push_str("/css/site.css\tbr, gzip\n");
+    t.push_str("/css/site.css\tbr\n");
+    t.push_str("/js/app.min.js\tgzip, br\n");
+    t.push_str("/img/icon.svg\tgzip\n");
+    t.push_str("/img/hero.webp\tbr, gzip\n");
+    t.push_str("/data/export.csv\t*\n");
+    t.push_str("/fonts/Inter.woff2\tbr, gzip\n");
+    v.push(DataFile { path: "server/accept.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# files on disk; a .br or .gz next to a file is a precompressed copy\n");
+    t.push_str("index.html\n");
+    t.push_str("index.html.br\n");
+    t.push_str("index.html.gz\n");
+    t.push_str("css/site.css\n");
+    t.push_str("css/site.css.gz\n");
+    t.push_str("js/app.min.js\n");
+    t.push_str("js/app.min.js.br\n");
+    t.push_str("img/hero.webp\n");
+    t.push_str("img/icon.svg\n");
+    t.push_str("img/icon.svgz\n");
+    t.push_str("data/export.csv\n");
+    t.push_str("data/export.csv.gz\n");
+    t.push_str("fonts/Inter.woff2\n");
+    v.push(DataFile { path: "server/precompressed.txt".to_string(), body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# what a static file server answers for each request path, as\n");
+    t.push_str("# http.server's SimpleHTTPRequestHandler picks Content-type\n");
+    t.push_str("/\n");
+    t.push_str("/index.html\n");
+    t.push_str("/about/\n");
+    t.push_str("/css/site.css\n");
+    t.push_str("/js/app.min.js\n");
+    t.push_str("/js/app.min.js.map\n");
+    t.push_str("/img/hero.webp\n");
+    t.push_str("/img/LOGO.PNG\n");
+    t.push_str("/img/icon.svg\n");
+    t.push_str("/downloads/release-2.4.0.tar.gz\n");
+    t.push_str("/downloads/release-2.4.0.tar.GZ\n");
+    t.push_str("/downloads/release-2.4.0.tgz\n");
+    t.push_str("/downloads/release-2.4.0.tar.bz2\n");
+    t.push_str("/downloads/release-2.4.0.tar.xz\n");
+    t.push_str("/downloads/legacy.tar.Z\n");
+    t.push_str("/downloads/legacy.tar.z\n");
+    t.push_str("/downloads/checksums.txt\n");
+    t.push_str("/downloads/checksums.txt.asc\n");
+    t.push_str("/fonts/Inter.woff2\n");
+    t.push_str("/data/export.csv\n");
+    t.push_str("/data/report.xlsx\n");
+    t.push_str("/data/archive.zst\n");
+    t.push_str("/feed.rss\n");
+    t.push_str("/sitemap.xml\n");
+    t.push_str("/robots.txt\n");
+    t.push_str("/.well-known/security.txt\n");
+    t.push_str("/.htaccess\n");
+    t.push_str("/Makefile\n");
+    t.push_str("/video/intro.webm\n");
+    t.push_str("/video/intro.MKV\n");
+    t.push_str("/app.wasm\n");
+    t.push_str("/notes.md\n");
+    v.push(DataFile { path: "server/requests.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("###############################################################\n");
+    t.push_str("#\n");
+    t.push_str("#  Media types and the extensions that stand for them: a type on\n");
+    t.push_str("#  the left, then zero or more extensions. A '#' that starts a word\n");
+    t.push_str("#  starts a comment.\n");
+    t.push_str("#\n");
+    t.push_str("###############################################################\n");
+    t.push_str("\n");
+    t.push_str("application/atom+xml\t\t\t\tatom\n");
+    t.push_str("application/epub+zip\t\t\t\tepub\n");
+    t.push_str("application/geo+json\t\t\t\tgeojson\n");
+    t.push_str("application/gzip\t\t\t\tgz\n");
+    t.push_str("application/javascript\t\t\t\tjs mjs\n");
+    t.push_str("application/json\t\t\t\tjson map\n");
+    t.push_str("application/ld+json\t\t\t\tjsonld\n");
+    t.push_str("application/manifest+json\t\t\twebmanifest\n");
+    t.push_str("application/msword\t\t\t\tdoc dot\n");
+    t.push_str("application/octet-stream\t\t\tbin deb dmg iso img msi msp msm\n");
+    t.push_str("application/pdf\t\t\t\t\tpdf\n");
+    t.push_str("application/pgp-signature\t\t\tasc sig\n");
+    t.push_str("application/rss+xml\t\t\t\trss\n");
+    t.push_str("application/rtf\t\t\t\t\trtf\n");
+    t.push_str("application/sql\t\t\t\t\tsql\n");
+    t.push_str("application/toml\t\t\t\ttoml\n");
+    t.push_str("application/vnd.android.package-archive\tapk\n");
+    t.push_str("application/vnd.ms-excel\t\t\txls xlb xlt\n");
+    t.push_str("application/vnd.ms-fontobject\t\t\teot\n");
+    t.push_str("application/vnd.oasis.opendocument.text\todt\n");
+    t.push_str("application/vnd.oasis.opendocument.spreadsheet\tods\n");
+    t.push_str("application/vnd.openxmlformats-officedocument.presentationml.presentation pptx\n");
+    t.push_str("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\txlsx\n");
+    t.push_str("application/vnd.openxmlformats-officedocument.wordprocessingml.document\tdocx\n");
+    t.push_str("application/wasm\t\t\t\twasm\n");
+    t.push_str("application/x-7z-compressed\t\t\t7z\n");
+    t.push_str("application/x-bittorrent\t\t\ttorrent\n");
+    t.push_str("application/x-debian-package\t\t\tdeb udeb\n");
+    t.push_str("application/x-httpd-php\t\t\t\tphtml pht php\n");
+    t.push_str("application/x-ruby\t\t\t\trb\n");
+    t.push_str("application/x-sh\t\t\t\tsh\n");
+    t.push_str("application/x-sqlite3\t\t\t\tsqlite sqlite3 db\n");
+    t.push_str("application/x-tar\t\t\t\ttar\n");
+    t.push_str("application/x-x509-ca-cert\t\t\tcrt der pem\n");
+    t.push_str("application/x-xpinstall\t\t\t\txpi\n");
+    t.push_str("application/xhtml+xml\t\t\t\txhtml xht\n");
+    t.push_str("application/xml\t\t\t\t\txml xsd\n");
+    t.push_str("application/yaml\t\t\t\tyaml yml\n");
+    t.push_str("application/zip\t\t\t\t\tzip\n");
+    t.push_str("application/zstd\t\t\t\tzst\n");
+    t.push_str("\n");
+    t.push_str("# audio\n");
+    t.push_str("audio/flac\t\t\t\t\tflac\n");
+    t.push_str("audio/midi\t\t\t\t\tmid midi kar\n");
+    t.push_str("audio/mpeg\t\t\t\t\tmpga mpega mp2 mp3 m4a\n");
+    t.push_str("audio/ogg\t\t\t\t\toga ogg opus spx\n");
+    t.push_str("audio/x-wav\t\t\t\t\twav\n");
+    t.push_str("audio/webm\t\t\t\t\tweba\n");
+    t.push_str("\n");
+    t.push_str("# fonts\n");
+    t.push_str("font/otf\t\t\t\t\totf\n");
+    t.push_str("font/ttf\t\t\t\t\tttf\n");
+    t.push_str("font/woff\t\t\t\t\twoff\n");
+    t.push_str("font/woff2\t\t\t\t\twoff2\n");
+    t.push_str("\n");
+    t.push_str("# images\n");
+    t.push_str("image/avif\t\t\t\t\tavif\n");
+    t.push_str("image/gif\t\t\t\t\tgif\n");
+    t.push_str("image/jpeg\t\t\t\t\tjpeg jpg jpe\n");
+    t.push_str("image/jxl\t\t\t\t\tjxl\n");
+    t.push_str("image/png\t\t\t\t\tpng\n");
+    t.push_str("image/svg+xml\t\t\t\t\tsvg svgz\n");
+    t.push_str("image/tiff\t\t\t\t\ttiff tif\n");
+    t.push_str("image/vnd.microsoft.icon\t\t\tico\n");
+    t.push_str("image/webp\t\t\t\t\twebp\n");
+    t.push_str("\n");
+    t.push_str("# text\n");
+    t.push_str("text/calendar\t\t\t\t\tics icz\n");
+    t.push_str("text/css\t\t\t\t\tcss\n");
+    t.push_str("text/csv\t\t\t\t\tcsv\n");
+    t.push_str("text/html\t\t\t\t\thtml htm shtml\n");
+    t.push_str("text/markdown\t\t\t\t\tmd markdown\n");
+    t.push_str("text/plain\t\t\t\t\tasc txt text pot brf srt log\n");
+    t.push_str("text/tab-separated-values\t\t\ttsv\n");
+    t.push_str("text/vcard\t\t\t\t\tvcf vcard\n");
+    t.push_str("text/x-c++src\t\t\t\t\tc++ cpp cxx cc\n");
+    t.push_str("text/x-csrc\t\t\t\t\tc\n");
+    t.push_str("text/x-csharp\t\t\t\t\tcs c#\n");
+    t.push_str("text/x-diff\t\t\t\t\tdiff patch\n");
+    t.push_str("text/x-go\t\t\t\t\tgo\n");
+    t.push_str("text/x-java\t\t\t\t\tjava\n");
+    t.push_str("text/x-python\t\t\t\t\tpy\n");
+    t.push_str("text/x-rust\t\t\t\t\trs\n");
+    t.push_str("\n");
+    t.push_str("# video\n");
+    t.push_str("video/mp4\t\t\t\t\tmp4\n");
+    t.push_str("video/mpeg\t\t\t\t\tmpeg mpg mpe\n");
+    t.push_str("video/quicktime\t\t\t\t\tqt mov\n");
+    t.push_str("video/webm\t\t\t\t\twebm\n");
+    t.push_str("video/x-matroska\t\t\t\tmpv mkv\n");
+    t.push_str("\n");
+    t.push_str("# types with no extension: read, but they add nothing\n");
+    t.push_str("application/vnd.kara-test+json\n");
+    t.push_str("multipart/form-data\n");
+    t.push_str("message/rfc822\t\t\t\t\teml # mail saved from a client\n");
+    v.push(DataFile { path: "system/mime.types".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# the types this upload form takes, and the size limit for each\n");
+    t.push_str("image/png 10485760\n");
+    t.push_str("image/jpeg 10485760\n");
+    t.push_str("image/gif 5242880\n");
+    t.push_str("image/webp 10485760\n");
+    t.push_str("image/heic 20971520\n");
+    t.push_str("application/pdf 26214400\n");
+    t.push_str("text/plain 1048576\n");
+    t.push_str("text/csv 1048576\n");
+    t.push_str("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet 26214400\n");
+    v.push(DataFile { path: "uploads/policy.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# file name, the Content-Type the browser sent, bytes\n");
+    t.push_str("avatar.png\timage/png\t48211\n");
+    t.push_str("avatar.jpg\timage/png\t51002\n");
+    t.push_str("resume.pdf\tapplication/pdf\t220140\n");
+    t.push_str("resume.PDF\tapplication/pdf\t220140\n");
+    t.push_str("invoice.pdf.exe\tapplication/pdf\t90112\n");
+    t.push_str("holiday.HEIC\timage/heic\t2210331\n");
+    t.push_str("budget.xlsx\tapplication/vnd.openxmlformats-officedocument.spreadsheetml.sheet\t30122\n");
+    t.push_str("budget.xls\tapplication/vnd.ms-excel\t40960\n");
+    t.push_str("notes.txt\ttext/plain; charset=utf-8\t1200\n");
+    t.push_str("notes\ttext/plain\t1200\n");
+    t.push_str("script.sh\ttext/x-sh\t310\n");
+    t.push_str("logo.svg\timage/svg+xml\t8122\n");
+    t.push_str("photo.jpeg\timage/jpeg\t3021133\n");
+    t.push_str("photo.jpe\timage/jpeg\t3021133\n");
+    t.push_str("huge.png\timage/png\t31457281\n");
+    t.push_str("data.json\tapplication/json\t512\n");
+    t.push_str("archive.tar.gz\tapplication/gzip\t1048576\n");
+    t.push_str("archive.tgz\tapplication/x-gzip\t1048576\n");
+    t.push_str(".png\timage/png\t100\n");
+    t.push_str("clip.mov\tvideo/quicktime\t9000000\n");
+    v.push(DataFile { path: "uploads/uploads.tsv".to_string(), body: t });
+}

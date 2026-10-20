@@ -1,0 +1,671 @@
+== guess_type on paths
+guess_type('index.html') = ('text/html', None)
+guess_type('README') = (None, None)
+guess_type('README.md') = ('text/markdown', None)
+guess_type('photo.JPG') = ('image/jpeg', None)
+guess_type('PHOTO.Jpeg') = ('image/jpeg', None)
+guess_type('archive.tar.gz') = ('application/x-tar', 'gzip')
+guess_type('archive.tgz') = ('application/x-tar', 'gzip')
+guess_type('archive.TGZ') = ('application/x-tar', 'gzip')
+guess_type('archive.tar.GZ') = (None, None)
+guess_type('backup.tar.bz2') = ('application/x-tar', 'bzip2')
+guess_type('backup.tbz2') = ('application/x-tar', 'bzip2')
+guess_type('logs.txz') = ('application/x-tar', 'xz')
+guess_type('drawing.svgz') = ('image/svg+xml', 'gzip')
+guess_type('data.json.br') = ('application/json', 'br')
+guess_type('data.json.Z') = ('application/json', 'compress')
+guess_type('data.json.z') = (None, None)
+guess_type('file.gz') = (None, 'gzip')
+guess_type('.gz') = (None, None)
+guess_type('x.gz.gz') = (None, 'gzip')
+guess_type('.bashrc') = (None, None)
+guess_type('..html') = (None, None)
+guess_type('...') = (None, None)
+guess_type('file.') = (None, None)
+guess_type('dir.d/file') = (None, None)
+guess_type('dir.d/.html') = (None, None)
+guess_type('/var/www/site/app.min.js') = ('text/javascript', None)
+guess_type('C:\\Users\\me\\report.pdf') = ('application/pdf', None)
+guess_type('c:report.pdf') = ('application/pdf', None)
+guess_type('notes.MD') = ('text/markdown', None)
+guess_type('clip.mid') = (None, None)
+guess_type('clip.mid', strict=False) = ('audio/midi', None)
+guess_type('picture.jpg') = ('image/jpeg', None)
+guess_type('picture.jpg', strict=False) = ('image/jpeg', None)
+guess_type('picture.pict', strict=False) = ('image/pict', None)
+guess_type('picture.pict') = (None, None)
+guess_type('doc.rtf', strict=False) = ('text/rtf', None)
+guess_type('unknown.qqq') = (None, None)
+guess_type('unknown.qqq', strict=False) = (None, None)
+guess_type('module.wasm') = ('application/wasm', None)
+guess_type('style.css.map') = (None, None)
+guess_type('archive.tar.zst') = (None, None)
+guess_type('sound.WAV') = ('audio/x-wav', None)
+guess_type('') = (None, None)
+== guess_type on URLs
+guess_type('https://example.com/img/logo.png') = ('image/png', None)
+guess_type('https://example.com/img/logo.png?v=3') = ('image/png', None)
+guess_type('https://example.com/img/logo.png#top') = ('image/png', None)
+guess_type('https://example.com/download?file=report.pdf') = (None, None)
+guess_type('https://example.com/page.html;jsessionid=abc123') = ('text/html', None)
+guess_type('https://example.com/a;b/page.html') = ('text/html', None)
+guess_type('ftp://ftp.example.org/pub/linux.tar.gz') = ('application/x-tar', 'gzip')
+guess_type('file:///home/me/Music/song.mp3') = ('audio/mpeg', None)
+guess_type('https://example.com') = (None, None)
+guess_type('https://example.com/') = (None, None)
+guess_type('https://example.com/archive.tgz') = ('application/x-tar', 'gzip')
+guess_type('https://cdn.example.com/fonts/Inter.WOFF2') = (None, None)
+guess_type('HTTPS://EXAMPLE.COM/INDEX.HTM') = ('text/html', None)
+guess_type('s3://bucket/key/data.csv') = ('text/csv', None)
+guess_type('mailto:someone@example.com') = (None, None)
+guess_type('news:comp.lang.python') = (None, None)
+guess_type('urn:isbn:0451450523.pdf') = ('application/pdf', None)
+guess_type('http://[::1]:8080/status.json') = ('application/json', None)
+guess_type('http://[2001:db8::7]/x.png') = ('image/png', None)
+guess_type('http://[::1/x.png') -> ValueError: Invalid IPv6 URL
+guess_type('http://::1]/x.png') -> ValueError: Invalid IPv6 URL
+guess_type('http://host]/x.png') -> ValueError: Invalid IPv6 URL
+guess_type('http://x[::1]/x.png') -> ValueError: Invalid IPv6 URL
+guess_type('http://[::1]x/x.png') -> ValueError: Invalid IPv6 URL
+guess_type('http://[127.0.0.1]/x.png') -> ValueError: An IPv4 address cannot be in brackets
+guess_type('http://[v1.fe]/x.png') = ('image/png', None)
+guess_type('http://[vz.fe]/x.png') -> ValueError: IPvFuture address is invalid
+guess_type('http://[::g]/x.png') -> ValueError: '::g' does not appear to be an IPv4 or IPv6 address
+guess_type('http://user@[::1]:80/x.png') = ('image/png', None)
+guess_type('//cdn.example.com/lib.js') = ('text/javascript', None)
+guess_type('\x01\x02 https://example.com/a.png') = ('image/png', None)
+guess_type('https://exa\tmple.com/a.p\nng') = ('image/png', None)
+guess_type('1http://example.com/a.png') = ('image/png', None)
+guess_type('ht+tp.v-1://example.com/a.png') = ('image/png', None)
+guess_type('ht_tp://example.com/a.png') = ('image/png', None)
+guess_type('x:a.png') = ('image/png', None)
+guess_type(':a.png') = ('image/png', None)
+guess_type('path/with:colon/a.png') = ('image/png', None)
+guess_type('https://example.com/a.png?x=1#frag.html') = ('image/png', None)
+guess_type('https://example.com/a#b?c.html') = (None, None)
+guess_type('sip:alice@example.com;transport=tcp') = (None, None)
+== data URLs
+guess_type('data:,Hello%2C%20World!') = ('text/plain', None)
+guess_type('data:text/plain;base64,SGVsbG8=') = ('text/plain', None)
+guess_type('data:image/png;base64,iVBORw0KGgo=') = ('image/png', None)
+guess_type('data:text/html,<b>hi</b>') = ('text/html', None)
+guess_type('data:text/html;charset=utf-8,<b>hi</b>') = ('text/html', None)
+guess_type('data:application/json;x=1;y=2,{}') = ('application/json', None)
+guess_type('data:image/svg+xml,<svg/>') = ('image/svg+xml', None)
+guess_type('data:;base64,AAAA') = ('text/plain', None)
+guess_type('data:charset=utf-8,x') = ('text/plain', None)
+guess_type('data:texthtml,x') = ('text/plain', None)
+guess_type('data:a=b/c,x') = ('text/plain', None)
+guess_type('data:IMAGE/PNG,x') = ('IMAGE/PNG', None)
+guess_type('data:image/png') = (None, None)
+guess_type('DATA:image/gif,x') = ('image/gif', None)
+guess_type('data:image/gif;a,b;c,d') = ('image/gif', None)
+guess_type('data:image/gif?x=1,d') = (None, None)
+guess_type('data:image/gif#a,b') = (None, None)
+guess_type('data://image/gif,x') = ('/gif', None)
+== guess_file_type
+guess_file_type('report.pdf') = ('application/pdf', None)
+guess_file_type('https://example.com/a.png?x=1') = (None, None)
+guess_file_type('data:image/png,x') = (None, None)
+guess_file_type('archive.tar.gz') = ('application/x-tar', 'gzip')
+guess_file_type('picture.jpg', strict=False) = ('image/jpeg', None)
+guess_file_type('/tmp/a.b/c') = (None, None)
+guess_file_type('song.mp3#1') = (None, None)
+== guess_extension and guess_all_extensions
+guess_extension('text/html') = '.html'
+guess_extension('TEXT/HTML') = '.html'
+guess_extension('text/plain') = '.txt'
+guess_extension('image/jpeg') = '.jpg'
+guess_extension('application/octet-stream') = '.bin'
+guess_extension('audio/midi') = None
+guess_extension('audio/midi', strict=False) = '.midi'
+guess_extension('image/jpg') = None
+guess_extension('image/jpg', strict=False) = '.jpg'
+guess_extension('text/x-nothing') = None
+guess_extension('') = None
+guess_extension('text/javascript') = '.js'
+guess_extension('application/xml') = '.xsl'
+guess_all_extensions('text/plain') = ['.txt', '.bat', '.c', '.h', '.ksh', '.pl', '.srt']
+guess_all_extensions('image/jpeg') = ['.jpg', '.jpe', '.jpeg']
+guess_all_extensions('image/jpeg', strict=False) = ['.jpg', '.jpe', '.jpeg']
+guess_all_extensions('application/rtf') = []
+guess_all_extensions('application/rtf', strict=False) = ['.rtf']
+guess_all_extensions('text/rtf') = ['.rtf']
+guess_all_extensions('video/mpeg') = ['.mpeg', '.m1v', '.mpa', '.mpe', '.mpg']
+guess_all_extensions('application/vnd.ms-powerpoint') = ['.ppt', '.pot', '.ppa', '.pps', '.pwz']
+guess_all_extensions('message/rfc822') = ['.eml', '.mht', '.mhtml', '.nws']
+guess_all_extensions('application/x-troff') = ['.roff', '.t', '.tr']
+guess_all_extensions('no/such') = []
+== add_type
+add_type('application/x-kara', '.kara')
+guess_type('main.kara') = ('application/x-kara', None)
+guess_extension('application/x-kara') = '.kara'
+add_type('application/x-kara-lib', '.kara')
+guess_type('main.kara') = ('application/x-kara-lib', None)
+guess_all_extensions('application/x-kara') = ['.kara']
+guess_all_extensions('application/x-kara-lib') = ['.kara']
+add_type('application/x-kara', '.kara')
+guess_all_extensions('application/x-kara') = ['.kara']
+add_type('application/x-kara', '.kr')
+guess_all_extensions('application/x-kara') = ['.kara', '.kr']
+add_type('text/x-lenient', '.lnt', strict=False)
+guess_type('x.lnt') = (None, None)
+guess_type('x.lnt', strict=False) = ('text/x-lenient', None)
+add_type('', '.nothing')
+guess_type('x.nothing') = (None, None)
+add_type('text/x-upper', '.UPPER')
+guess_type('x.UPPER') = (None, None)
+guess_type('x.upper') = (None, None)
+add_type('text/x-nodot', 'nodot')
+guess_type('x.nodot') = (None, None)
+guess_type('xnodot') = (None, None)
+add_type('Text/X-Mixed', '.mixed')
+guess_type('x.mixed') = ('Text/X-Mixed', None)
+guess_extension('Text/X-Mixed') = None
+guess_extension('text/x-mixed') = None
+add_type('text/x-gzip-ext', '.gz')
+guess_type('plain.gz') = (None, 'gzip')
+guess_type('plain.tar.gz') = ('application/x-tar', 'gzip')
+add_type('image/png', '.png')
+guess_all_extensions('image/png') = ['.png']
+add_type('image/x-png', '.png')
+guess_type('x.png') = ('image/x-png', None)
+guess_all_extensions('image/png') = ['.png']
+guess_extension('image/png') = '.png'
+== reading mime.types files
+read('data/system/mime.types')
+guess_type('app.js') = ('application/javascript', None)
+guess_extension('text/javascript') = '.js'
+guess_extension('application/javascript') = '.js'
+guess_all_extensions('application/javascript') = ['.js', '.mjs']
+guess_type('pkg.deb') = ('application/x-debian-package', None)
+guess_all_extensions('application/octet-stream') = ['.bin', '.a', '.dll', '.exe', '.o', '.obj', '.so', '.deb', '.dmg', '.iso', '.img', '.msi', '.msp', '.msm']
+guess_all_extensions('application/x-debian-package') = ['.deb', '.udeb']
+guess_type('notes.log') = ('text/plain', None)
+guess_type('Program.cs') = ('text/x-csharp', None)
+guess_type('Program.c#') = ('text/x-csharp', None)
+guess_type('mail.eml') = ('message/rfc822', None)
+guess_type('comment') = (None, None)
+guess_extension('text/plain') = '.txt'
+guess_all_extensions('text/plain') = ['.txt', '.bat', '.c', '.h', '.ksh', '.pl', '.srt', '.asc', '.text', '.pot', '.brf', '.log']
+guess_type('movie.mkv') = ('video/x-matroska', None)
+guess_type('song.m4a') = ('audio/mpeg', None)
+guess_type('song.ogg') = ('audio/ogg', None)
+guess_type('font.woff2') = ('font/woff2', None)
+guess_type('key.pem') = ('application/x-x509-ca-cert', None)
+guess_type('db.sqlite3') = ('application/x-sqlite3', None)
+guess_type('config.yml') = ('application/yaml', None)
+guess_type('archive.zst') = ('application/zstd', None)
+guess_type('dump.tar.zst') = ('application/zstd', None)
+read('data/apache/mime.types')
+guess_type('app.js') = ('text/javascript', None)
+guess_all_extensions('text/javascript') = ['.js', '.mjs']
+guess_all_extensions('application/javascript') = ['.js', '.mjs']
+guess_type('setup.exe') = ('application/x-msdownload', None)
+guess_type('install.msi') = ('application/x-msdownload', None)
+guess_type('clip.ts') = ('video/mp2t', None)
+guess_type('movie.swf') = ('Application/X-Shockwave-Flash', None)
+guess_extension('application/x-shockwave-flash') = '.swf'
+guess_extension('Application/X-Shockwave-Flash') = '.swf'
+guess_type('layers.psd') = (None, None)
+guess_type('layers.PSD') = (None, None)
+guess_all_extensions('application/x-photoshop') = ['.PSD']
+read('data/local/mime.types', strict=False)
+guess_type('main.kara') = (None, None)
+guess_type('main.kara', strict=False) = ('application/x-kara-source', None)
+guess_type('events.jsonl', strict=False) = ('application/x-ndjson', None)
+guess_type('.env', strict=False) = (None, None)
+guess_type('prod.env', strict=False) = ('text/x-dotenv', None)
+guess_type('image.pgm', strict=False) = ('image/x-portable-graymap', None)
+guess_type('image.pgm') = ('image/x-portable-graymap', None)
+guess_type('x.indented', strict=False) = ('text/x-indented', None)
+guess_type('x.tabbed', strict=False) = ('text/x-tabbed', None)
+guess_type('x.commented', strict=False) = (None, None)
+guess_type('x.hash#word', strict=False) = ('text/x-hash-in-word', None)
+guess_type('x.not#comment', strict=False) = ('text/x-hash-in-word', None)
+guess_type('x.but', strict=False) = (None, None)
+guess_all_extensions('text/x-hash-in-word', strict=False) = ['.hash#word', '.not#comment']
+guess_all_extensions('text/x-only-comment', strict=False) = []
+read('data/broken/odd.types')
+guess_type('x.crlf') = ('text/x-crlf', None)
+guess_type('x.ff') = ('text/x-formfeed', None)
+guess_type('x.vt') = ('text/x-vtab', None)
+guess_type('x.nbsp') = ('text/x-nbsp', None)
+guess_type('x.dupe') = ('text/x-dup', None)
+guess_type('x.dupe2') = ('text/x-dup', None)
+guess_all_extensions('text/x-dup') = ['.dupe', '.dupe2']
+guess_all_extensions('text/x-dup2') = ['.dupe']
+read('data/no/such.types') -> FileNotFoundError: [Errno 2] No such file or directory: 'data/no/such.types'
+guess_type('still.ok.png') = ('image/png', None)
+== read_mime_types
+read_mime_types('data/local/mime.types') = 162 entries; from the file: {'.kara': 'application/x-kara-source', '.ndjson': 'application/x-ndjson', '.jsonl': 'application/x-ndjson', '.env': 'text/x-dotenv', '.indented': 'text/x-indented', '.tabbed': 'text/x-tabbed', '.hash#word': 'text/x-hash-in-word', '.not#comment': 'text/x-hash-in-word'}
+read_mime_types('data/apache/mime.types') = 172 entries; from the file: {'.dll': 'application/x-msdownload', '.exe': 'application/x-msdownload', '.swf': 'Application/X-Shockwave-Flash', '.bat': 'application/x-msdownload', '.es': 'application/ecmascript', '.ecma': 'application/ecmascript', '.jar': 'application/java-archive', '.mpkg': 'application/vnd.apple.installer+xml', '.com': 'application/x-msdownload', '.msi': 'application/x-msdownload', '.s': 'text/x-asm', '.asm': 'text/x-asm', '.f': 'text/x-fortran', '.for': 'text/x-fortran', '.f77': 'text/x-fortran', '.f90': 'text/x-fortran', '.p': 'text/x-pascal', '.pas': 'text/x-pascal', '.vcs': 'text/x-vcalendar', '.ts': 'video/mp2t', '.flv': 'video/x-flv', '.PSD': 'application/x-photoshop'}
+read_mime_types('data/broken/odd.types') = 160 entries; from the file: {'.crlf': 'text/x-crlf', '.ff': 'text/x-formfeed', '.vt': 'text/x-vtab', '.nbsp': 'text/x-nbsp', '.dupe': 'text/x-dup', '.dupe2': 'text/x-dup'}
+read_mime_types('data/no/such.types') = None
+read_mime_types('data/nginx/mime.types') = 218 entries; from the file: {'.pl': 'application/x-perl', '.{': 'types', '.shtml;': 'text/html', '.css;': 'text/css', '.xml;': 'text/xml', '.gif;': 'image/gif', '.jpg;': 'image/jpeg', '.js;': 'application/javascript', '.atom;': 'application/atom+xml', '.rss;': 'application/rss+xml', '.mml;': 'text/mathml', '.txt;': 'text/plain', '.jad;': 'text/vnd.sun.j2me.app-descriptor', '.wml;': 'text/vnd.wap.wml', '.htc;': 'text/x-component', '.avif;': 'image/avif', '.png;': 'image/png', '.svgz;': 'image/svg+xml', '.tiff;': 'image/tiff', '.wbmp;': 'image/vnd.wap.wbmp', '.webp;': 'image/webp', '.ico;': 'image/x-icon', '.jng;': 'image/x-jng', '.bmp;': 'image/x-ms-bmp', '.woff;': 'font/woff', '.woff2;': 'font/woff2', '.jar': 'application/java-archive', '.war': 'application/java-archive', '.ear;': 'application/java-archive', '.json;': 'application/json', '.hqx;': 'application/mac-binhex40', '.doc;': 'application/msword', '.pdf;': 'application/pdf', '.ai;': 'application/postscript', '.rtf;': 'application/rtf', '.m3u8;': 'application/vnd.apple.mpegurl', '.xls;': 'application/vnd.ms-excel', '.eot;': 'application/vnd.ms-fontobject', '.ppt;': 'application/vnd.ms-powerpoint', '.wasm;': 'application/wasm', '.7z;': 'application/x-7z-compressed', '.pm;': 'application/x-perl', '.der': 'application/x-x509-ca-cert', '.pem': 'application/x-x509-ca-cert', '.crt;': 'application/x-x509-ca-cert', '.xhtml;': 'application/xhtml+xml', '.zip;': 'application/zip', '.dll;': 'application/octet-stream', '.deb;': 'application/octet-stream', '.dmg;': 'application/octet-stream', '.iso': 'application/octet-stream', '.img;': 'application/octet-stream', '.mid': 'audio/midi', '.midi': 'audio/midi', '.kar;': 'audio/midi', '.mp3;': 'audio/mpeg', '.ogg;': 'audio/ogg', '.m4a;': 'audio/x-m4a', '.ts;': 'video/mp2t', '.mp4;': 'video/mp4', '.mpg;': 'video/mpeg', '.mov;': 'video/quicktime', '.webm;': 'video/webm', '.flv;': 'video/x-flv', '.avi;': 'video/x-msvideo'}
+== the module-level database
+mimetypes.init()
+mimetypes.guess_type('app.js') = ('text/javascript', None)
+mimetypes.guess_type('setup.exe') = ('application/x-msdownload', None)
+mimetypes.guess_extension('text/javascript') = '.js'
+mimetypes.add_type('text/x-added', '.added')
+mimetypes.guess_type('x.added') = ('text/x-added', None)
+mimetypes.init(['data/local/mime.types'])
+mimetypes.guess_type('x.added') = ('text/x-added', None)
+mimetypes.guess_type('main.kara') = ('application/x-kara-source', None)
+mimetypes.guess_type('main.kara', strict=False) = ('application/x-kara-source', None)
+mimetypes.init()
+mimetypes.guess_type('x.added') = (None, None)
+mimetypes.guess_type('main.kara', strict=False) = (None, None)
+mimetypes.init(['data/local/mime.types'])
+mimetypes.guess_type('main.kara') = ('application/x-kara-source', None)
+mimetypes.add_type('text/x-added', '.added', strict=False)
+mimetypes.init(['data/apache/mime.types', 'data/no/such.types'])
+mimetypes.guess_type('x.added') = (None, None)
+mimetypes.guess_type('x.added', strict=False) = ('text/x-added', None)
+suffix_map = {'.svgz': '.svg.gz', '.tgz': '.tar.gz', '.taz': '.tar.gz', '.tz': '.tar.gz', '.tbz2': '.tar.bz2', '.txz': '.tar.xz'}
+encodings_map = {'.gz': 'gzip', '.Z': 'compress', '.bz2': 'bzip2', '.xz': 'xz', '.br': 'br'}
+types_map: 262 entries; from files: {'.mjs': 'application/javascript', '.dll': 'application/x-msdownload', '.exe': 'application/x-msdownload', '.pot': 'text/plain', '.swf': 'Application/X-Shockwave-Flash', '.opus': 'audio/ogg', '.bat': 'application/x-msdownload', '.c': 'text/x-csrc', '.rtf': 'application/rtf', '.vcf': 'text/vcard', '.xml': 'application/xml', '.atom': 'application/atom+xml', '.epub': 'application/epub+zip', '.geojson': 'application/geo+json', '.gz': 'application/gzip', '.map': 'application/json', '.jsonld': 'application/ld+json', '.deb': 'application/x-debian-package', '.dmg': 'application/octet-stream', '.iso': 'application/octet-stream', '.img': 'application/octet-stream', '.msi': 'application/x-msdownload', '.msp': 'application/octet-stream', '.msm': 'application/octet-stream', '.asc': 'text/plain', '.sig': 'application/pgp-signature', '.rss': 'application/rss+xml', '.sql': 'application/sql', '.toml': 'application/toml', '.apk': 'application/vnd.android.package-archive', '.xlt': 'application/vnd.ms-excel', '.eot': 'application/vnd.ms-fontobject', '.odt': 'application/vnd.oasis.opendocument.text', '.ods': 'application/vnd.oasis.opendocument.spreadsheet', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.7z': 'application/x-7z-compressed', '.torrent': 'application/x-bittorrent', '.udeb': 'application/x-debian-package', '.phtml': 'application/x-httpd-php', '.pht': 'application/x-httpd-php', '.php': 'application/x-httpd-php', '.rb': 'application/x-ruby', '.sqlite': 'application/x-sqlite3', '.sqlite3': 'application/x-sqlite3', '.db': 'application/x-sqlite3', '.crt': 'application/x-x509-ca-cert', '.der': 'application/x-x509-ca-cert', '.pem': 'application/x-x509-ca-cert', '.xpi': 'application/x-xpinstall', '.xhtml': 'application/xhtml+xml', '.xht': 'application/xhtml+xml', '.xsd': 'application/xml', '.yaml': 'application/yaml', '.yml': 'application/yaml', '.zst': 'application/zstd', '.flac': 'audio/flac', '.mid': 'audio/midi', '.midi': 'audio/midi', '.kar': 'audio/midi', '.mpga': 'audio/mpeg', '.mpega': 'audio/mpeg', '.m4a': 'audio/mpeg', '.oga': 'audio/ogg', '.ogg': 'audio/ogg', '.spx': 'audio/ogg', '.weba': 'audio/webm', '.otf': 'font/otf', '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.jxl': 'image/jxl', '.svgz': 'image/svg+xml', '.ics': 'text/calendar', '.icz': 'text/calendar', '.shtml': 'text/html', '.text': 'text/plain', '.brf': 'text/plain', '.log': 'text/plain', '.vcard': 'text/vcard', '.c++': 'text/x-c++src', '.cpp': 'text/x-c++src', '.cxx': 'text/x-c++src', '.cc': 'text/x-c++src', '.cs': 'text/x-csharp', '.c#': 'text/x-csharp', '.diff': 'text/x-diff', '.patch': 'text/x-diff', '.go': 'text/x-go', '.java': 'text/x-java', '.rs': 'text/x-rust', '.mpv': 'video/x-matroska', '.mkv': 'video/x-matroska', '.es': 'application/ecmascript', '.ecma': 'application/ecmascript', '.jar': 'application/java-archive', '.mpkg': 'application/vnd.apple.installer+xml', '.com': 'application/x-msdownload', '.s': 'text/x-asm', '.asm': 'text/x-asm', '.f': 'text/x-fortran', '.for': 'text/x-fortran', '.f77': 'text/x-fortran', '.f90': 'text/x-fortran', '.p': 'text/x-pascal', '.pas': 'text/x-pascal', '.vcs': 'text/x-vcalendar', '.ts': 'video/mp2t', '.flv': 'video/x-flv', '.PSD': 'application/x-photoshop', '.kara': 'application/x-kara-source', '.ndjson': 'application/x-ndjson', '.jsonl': 'application/x-ndjson', '.env': 'text/x-dotenv', '.indented': 'text/x-indented', '.tabbed': 'text/x-tabbed', '.hash#word': 'text/x-hash-in-word', '.not#comment': 'text/x-hash-in-word'}
+common_types = {'.rtf': 'application/rtf', '.midi': 'audio/midi', '.mid': 'audio/midi', '.jpg': 'image/jpg', '.pict': 'image/pict', '.pct': 'image/pict', '.pic': 'image/pict', '.xul': 'text/xul', '.added': 'text/x-added'}
+== the instance's own files
+MimeTypes(['data/apache/mime.types'])
+guess_type('app.js') = ('text/javascript', None)
+guess_type('setup.exe') = ('application/x-msdownload', None)
+MimeTypes(['data/local/mime.types'], strict=False)
+guess_type('main.kara') = (None, None)
+guess_type('main.kara', strict=False) = ('application/x-kara-source', None)
+MimeTypes(['data/no/such.types']) -> FileNotFoundError: [Errno 2] No such file or directory: 'data/no/such.types'
+$ python -m mimetypes index.html
+  type: text/html encoding: None
+exit 0
+$ python -m mimetypes index.html archive.tar.gz unknown.qqq a.mid
+  type: text/html encoding: None
+  type: application/x-tar encoding: gzip
+  I don't know anything about type unknown.qqq
+  type: audio/midi encoding: None
+exit 0
+$ python -m mimetypes -l a.mid x.jpg
+  type: audio/midi encoding: None
+  type: image/jpeg encoding: None
+exit 0
+$ python -m mimetypes --lenient a.mid
+  type: audio/midi encoding: None
+exit 0
+$ python -m mimetypes --len a.mid
+  type: audio/midi encoding: None
+exit 0
+$ python -m mimetypes -e text/html image/jpeg no/such audio/midi
+  .html
+  .jpg
+  I don't know anything about type no/such
+  .mid
+exit 0
+$ python -m mimetypes -el audio/midi image/jpg
+  .mid
+  .jpg
+exit 0
+$ python -m mimetypes -le image/jpg
+  .jpg
+exit 0
+$ python -m mimetypes --extension --lenient image/jpg
+  .jpg
+exit 0
+$ python -m mimetypes --ext application/javascript
+  .js
+exit 0
+$ python -m mimetypes -e -- -l text/css
+  I don't know anything about type -l
+  .css
+exit 0
+$ python -m mimetypes index.html -e text/css
+  type: text/html encoding: None
+  I don't know anything about type -e
+  I don't know anything about type text/css
+exit 0
+$ python -m mimetypes - index.html
+  I don't know anything about type -
+  type: text/html encoding: None
+exit 0
+$ python -m mimetypes -x
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option -x not recognized
+exit 1
+$ python -m mimetypes -lx a.mid
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option -x not recognized
+exit 1
+$ python -m mimetypes --extensions
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option --extensions not recognized
+exit 1
+$ python -m mimetypes --e
+exit 0
+$ python -m mimetypes --le a.mid
+  type: audio/midi encoding: None
+exit 0
+$ python -m mimetypes --lenient=1 a.mid
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option --lenient must not have an argument
+exit 1
+$ python -m mimetypes --=x
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option -- not a unique prefix
+exit 1
+$ python -m mimetypes -:
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+  option -: not recognized
+exit 1
+$ python -m mimetypes -h
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+exit 0
+$ python -m mimetypes --help index.html
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+exit 0
+$ python -m mimetypes --he
+  Usage: mimetypes.py [options] type
+
+  Options:
+      --help / -h       -- print this message and exit
+      --lenient / -l    -- additionally search of some common, but non-standard
+                           types.
+      --extension / -e  -- guess extension instead of type
+
+  More than one type argument may be given.
+
+exit 0
+$ python -m mimetypes
+exit 0
+$ python -m mimetypes data:text/csv,a,b https://x.org/a.svgz
+  type: text/csv encoding: None
+  type: image/svg+xml encoding: gzip
+exit 0
+$ python -m mimetypes text/javascript
+  I don't know anything about type text/javascript
+exit 0
+$ python -m mimetypes -e text/javascript application/javascript
+  .js
+  .js
+exit 0
+== program: static file server
+Content-type, as http.server picks it:
+  /                                    text/html; charset=utf-8 (directory listing)
+  /index.html                          text/html
+  /about/                              text/html; charset=utf-8 (directory listing)
+  /css/site.css                        text/css
+  /js/app.min.js                       text/javascript
+  /js/app.min.js.map                   application/json
+  /img/hero.webp                       image/webp
+  /img/LOGO.PNG                        image/png
+  /img/icon.svg                        image/svg+xml
+  /downloads/release-2.4.0.tar.gz      application/gzip
+  /downloads/release-2.4.0.tar.GZ      application/gzip
+  /downloads/release-2.4.0.tgz         application/x-tar
+  /downloads/release-2.4.0.tar.bz2     application/x-bzip2
+  /downloads/release-2.4.0.tar.xz      application/x-xz
+  /downloads/legacy.tar.Z              application/octet-stream
+  /downloads/legacy.tar.z              application/octet-stream
+  /downloads/checksums.txt             text/plain
+  /downloads/checksums.txt.asc         text/plain
+  /fonts/Inter.woff2                   font/woff2
+  /data/export.csv                     text/csv
+  /data/report.xlsx                    application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+  /data/archive.zst                    application/zstd
+  /feed.rss                            application/rss+xml
+  /sitemap.xml                         application/xml
+  /robots.txt                          text/plain
+  /.well-known/security.txt            text/plain
+  /.htaccess                           application/octet-stream
+  /Makefile                            application/octet-stream
+  /video/intro.webm                    video/webm
+  /video/intro.MKV                     video/x-matroska
+  /app.wasm                            application/wasm
+  /notes.md                            text/markdown
+precompressed variants:
+  /index.html [br, gzip, deflate] -> index.html.br: Content-Type text/html; charset=utf-8, Content-Encoding br, Vary: Accept-Encoding
+  /index.html [gzip] -> index.html.gz: Content-Type text/html; charset=utf-8, Content-Encoding gzip, Vary: Accept-Encoding
+  /index.html [identity] -> index.html: Content-Type text/html; charset=utf-8, Vary: Accept-Encoding
+  /css/site.css [br, gzip] -> css/site.css.gz: Content-Type text/css; charset=utf-8, Content-Encoding gzip, Vary: Accept-Encoding
+  /css/site.css [br] -> css/site.css: Content-Type text/css; charset=utf-8, Vary: Accept-Encoding
+  /js/app.min.js [gzip, br] -> js/app.min.js.br: Content-Type text/javascript; charset=utf-8, Content-Encoding br, Vary: Accept-Encoding
+  /img/icon.svg [gzip] -> img/icon.svg: Content-Type image/svg+xml; charset=utf-8, Vary: Accept-Encoding
+  /img/hero.webp [br, gzip] -> img/hero.webp: Content-Type image/webp, Vary: Accept-Encoding
+  /data/export.csv [*] -> data/export.csv.gz: Content-Type text/csv; charset=utf-8, Content-Encoding gzip, Vary: Accept-Encoding
+  /fonts/Inter.woff2 [br, gzip] -> fonts/Inter.woff2: Content-Type font/woff2, Vary: Accept-Encoding
+== program: nginx types block
+56 statements, 53 types
+where nginx and the site's mime.types disagree:
+  .xml    nginx text/xml, mime.types application/xml
+  .js     nginx application/javascript, mime.types text/javascript
+  .mml    nginx text/mathml, mime.types None
+  .jad    nginx text/vnd.sun.j2me.app-descriptor, mime.types None
+  .wml    nginx text/vnd.wap.wml, mime.types None
+  .htc    nginx text/x-component, mime.types None
+  .wbmp   nginx image/vnd.wap.wbmp, mime.types None
+  .ico    nginx image/x-icon, mime.types image/vnd.microsoft.icon
+  .jng    nginx image/x-jng, mime.types None
+  .bmp    nginx image/x-ms-bmp, mime.types image/bmp
+  .war    nginx application/java-archive, mime.types None
+  .ear    nginx application/java-archive, mime.types None
+  .hqx    nginx application/mac-binhex40, mime.types None
+  .pl     nginx application/x-perl, mime.types text/plain
+  .pm     nginx application/x-perl, mime.types None
+  .exe    nginx application/octet-stream, mime.types application/x-msdownload
+  .dll    nginx application/octet-stream, mime.types application/x-msdownload
+  .deb    nginx application/octet-stream, mime.types application/x-debian-package
+  .m4a    nginx audio/x-m4a, mime.types audio/mpeg
+  19 extensions differ
+as a mime.types file (53 lines), the first five and the octet-stream line:
+  text/html                               html htm shtml
+  text/css                                css
+  text/xml                                xml
+  image/gif                               gif
+  image/jpeg                              jpeg jpg
+  application/octet-stream                bin exe dll deb dmg iso img
+read back: 74 of 74 extensions guess the same
+guess_extension('application/octet-stream') nginx .bin, read back .bin
+== program: upload validator
+  avatar.png         accept as upload-001.png
+  avatar.jpg         reject: sent as image/png but the name says image/jpeg
+  resume.pdf         accept as upload-003.pdf
+  resume.PDF         accept as upload-004.pdf
+  invoice.pdf.exe    reject: an executable named like application/pdf
+  holiday.HEIC       accept as upload-006.heic
+  budget.xlsx        accept as upload-007.xlsx
+  budget.xls         reject: application/vnd.ms-excel is not accepted
+  notes.txt          accept as upload-009.txt
+  notes              reject: the name gives no known type
+  script.sh          reject: application/x-sh is not accepted
+  logo.svg           reject: image/svg+xml is not accepted
+  photo.jpeg         accept as upload-013.jpg
+  photo.jpe          accept as upload-014.jpg
+  huge.png           reject: 31457281 bytes, over the 10485760 limit
+  data.json          reject: application/json is not accepted
+  archive.tar.gz     reject: gzip-compressed application/x-tar
+  archive.tgz        reject: gzip-compressed application/x-tar
+  .png               reject: the name gives no known type
+  clip.mov           reject: video/quicktime is not accepted
+8 accepted
+== program: object store upload plan
+  site/index.html: Content-Type: text/html; charset=utf-8; Cache-Control: no-cache
+  site/index.html.gz: Content-Type: text/html; charset=utf-8; Content-Encoding: gzip; Cache-Control: no-cache
+  site/assets/app.js: Content-Type: text/javascript; charset=utf-8; Cache-Control: public, max-age=31536000, immutable
+  site/assets/app.js.br: Content-Type: text/javascript; charset=utf-8; Content-Encoding: br; Cache-Control: public, max-age=31536000, immutable
+  site/assets/app.css: Content-Type: text/css; charset=utf-8; Cache-Control: public, max-age=31536000, immutable
+  site/assets/fonts/Inter.woff2: Content-Type: font/woff2; Cache-Control: public, max-age=31536000, immutable
+  site/assets/fonts/Inter.ttf: Content-Type: font/ttf; Cache-Control: public, max-age=31536000, immutable
+  site/assets/fonts/Inter.eot: Content-Type: application/vnd.ms-fontobject; Cache-Control: public, max-age=31536000, immutable
+  site/img/hero.avif: Content-Type: image/avif; Cache-Control: public, max-age=31536000, immutable
+  site/img/hero.jpg: Content-Type: image/jpeg; Cache-Control: public, max-age=31536000, immutable
+  site/img/favicon.ico: Content-Type: image/vnd.microsoft.icon; Cache-Control: public, max-age=31536000, immutable
+  site/docs/guide.pdf: Content-Type: application/pdf; Cache-Control: public, max-age=300
+  site/docs/guide.epub: Content-Type: application/epub+zip; Cache-Control: public, max-age=300
+  site/docs/handbook.docx: Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; Cache-Control: public, max-age=300
+  site/data/prices.json: Content-Type: application/json; charset=utf-8; Cache-Control: public, max-age=300
+  site/data/prices.json.gz: Content-Type: application/json; charset=utf-8; Content-Encoding: gzip; Cache-Control: public, max-age=300
+  site/data/stations.geojson: Content-Type: application/geo+json; Cache-Control: public, max-age=300
+  site/data/events.ndjson: Content-Type: application/x-ndjson; Cache-Control: public, max-age=300
+  site/feeds/atom.xml: Content-Type: application/xml; charset=utf-8; Cache-Control: public, max-age=300
+  site/feeds/podcast.rss: Content-Type: application/rss+xml; Cache-Control: public, max-age=300
+  site/media/episode-12.mp3: Content-Type: audio/mpeg; Cache-Control: public, max-age=300
+  site/media/episode-12.ogg: Content-Type: audio/ogg; Cache-Control: public, max-age=300
+  site/media/trailer.mp4: Content-Type: video/mp4; Cache-Control: public, max-age=300
+  site/media/subtitles.vtt: Content-Type: text/vtt; charset=utf-8; Cache-Control: public, max-age=300
+  site/manifest.webmanifest: Content-Type: application/manifest+json; charset=utf-8; Cache-Control: public, max-age=300
+  site/sw.js: Content-Type: text/javascript; charset=utf-8; Cache-Control: public, max-age=300
+  site/LICENSE: Content-Type: application/octet-stream; Cache-Control: public, max-age=300
+  site/CHANGELOG: Content-Type: application/octet-stream; Cache-Control: public, max-age=300
+  site/backup.tar.gz: Content-Type: application/x-tar; Content-Encoding: gzip; Cache-Control: public, max-age=300
+objects by major type: application 14, audio 2, font 2, image 3, text 7, video 1
+== program: mail attachments
+  'Quarterly report.pdf': MIMEBase, Content-Type: application/pdf; name='Quarterly report.pdf'
+  'team-photo.JPG': MIMEImage, Content-Type: image/jpeg; name='team-photo.JPG'
+  'budget.xlsx': MIMEBase, Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; name='budget.xlsx'
+  'slides.pptx': MIMEBase, Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation; name='slides.pptx'
+  'logs.tar.gz': MIMEBase, Content-Type: application/octet-stream; name='logs.tar.gz'
+  'notes.txt': MIMEText, Content-Type: text/plain; name='notes.txt'
+  'diagram.svg': MIMEImage, Content-Type: image/svg+xml; name='diagram.svg'
+  'recording.wav': MIMEAudio, Content-Type: audio/x-wav; name='recording.wav'
+  'contract.docx': MIMEBase, Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name='contract.docx'
+  'data.csv.gz': MIMEBase, Content-Type: application/octet-stream; name='data.csv.gz'
+  'README': MIMEBase, Content-Type: application/octet-stream; name='README'
+  'font.otf': MIMEBase, Content-Type: font/otf; name='font.otf'
+  'calendar.ics': MIMEText, Content-Type: text/calendar; name='calendar.ics'
+  'contact.vcf': MIMEText, Content-Type: text/vcard; name='contact.vcf'
+  'patch.diff': MIMEText, Content-Type: text/x-diff; name='patch.diff'
+  'thesis.tex': MIMEBase, Content-Type: application/x-tex; name='thesis.tex'
+== program: content negotiation
+  report [text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8] -> report.html (text/html, q=1.000)
+  report [application/json] -> report.json (application/json, q=1.000)
+  report [application/json;q=0.5, text/csv] -> report.csv (text/csv, q=1.000)
+  report [text/*;q=0.3, application/pdf;q=0.2] -> report.html (text/html, q=0.300)
+  report [text/markdown;q=0, text/*;q=0.9] -> report.html (text/html, q=0.900)
+  report [image/png] -> 406 Not Acceptable
+  report [*/*] -> report.html (text/html, q=1.000)
+  report [] -> report.html (text/html, q=1.000)
+  logo [image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8] -> logo.svg (image/svg+xml, q=1.000)
+  logo [image/webp,*/*] -> logo.svg (image/svg+xml, q=1.000)
+  logo [image/png;q=1.0, image/svg+xml;q=0.9] -> logo.png (image/png, q=1.000)
+  logo [image/*;q=0.5, image/svg+xml;q=0.5] -> logo.svg (image/svg+xml, q=0.500)
+  feed [application/atom+xml] -> feed.atom (application/atom+xml, q=1.000)
+  feed [application/rss+xml;q=0.9, application/atom+xml;q=0.9] -> feed.rss (application/rss+xml, q=0.900)
+  feed [application/feed+json, application/json;q=0.4] -> feed.json (application/json, q=0.400)
+  feed [text/plain] -> 406 Not Acceptable
+== program: CDN log by type
+  /js/app.min.js?v=8f3a: guess_type on the raw target says None, on the path text/javascript
+  /docs/guide.pdf#page=4: guess_type on the raw target says None, on the path application/pdf
+1 unparsable lines; 2 targets need the query or fragment cut first
+  application/octet-stream       1 hits   88120334 bytes
+  audio/mpeg                     2 hits   80205508 bytes
+  application/x-tar              1 hits   20331002 bytes
+  video/mp4                      2 hits    2097152 bytes
+  application/pdf                1 hits    1203344 bytes
+  image/webp                     1 hits     210334 bytes
+  font/woff2                     1 hits      98112 bytes
+  text/javascript                1 hits      92012 bytes
+  image/jpeg                     2 hits      24891 bytes
+  text/css                       1 hits      18210 bytes
+  (unknown)                      3 hits       7865 bytes
+  text/html                      2 hits       5120 bytes
+  application/json               1 hits       3311 bytes
+  text/vtt                       1 hits       2201 bytes
+  application/sql                1 hits        153 bytes
+  application/x-httpd-php        1 hits        153 bytes
+  image/vnd.microsoft.icon       1 hits        153 bytes
+  text/plain                     1 hits         68 bytes
+  image/gif                      1 hits         43 bytes
+  application/rss+xml            1 hits          0 bytes
+== program: shared-drive inventory
+by major type:
+  (unknown)      4 files     4016547 bytes
+  application    8 files   295711289 bytes
+  audio          3 files    41325105 bytes
+  image          8 files    10735518 bytes
+  text           5 files       14844 bytes
+  video          3 files    10541216 bytes
+13 files whose extension is not the type's first one:
+  Projects/website/index.htm (text/html): .html
+  Projects/website/style.CSS (text/css): .css
+  Projects/website/logo.jpe (image/jpeg): .jpg
+  Projects/website/logo.jpeg (image/jpeg): .jpg
+  Projects/website/banner.tif (image/tiff): .tiff
+  Projects/website/script.mjs (application/javascript): .js
+  Projects/budget/notes.text (text/plain): .txt
+  Photos/IMG_0001.JPG (image/jpeg): .jpg
+  Photos/IMG_0002.HEIC (image/heic): .heic
+  Music/track02.mp2 (audio/mpeg): .mp3
+  Videos/clip.qt (video/quicktime): .mov
+  Videos/old.mpe (video/mpeg): .mpeg
+  Archive/thumbs.db (application/x-sqlite3): .sqlite
+4 with no known type: Archive/mail.mbox, Code/main.kara, Code/build.ninja, Code/Dockerfile
