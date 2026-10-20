@@ -338,11 +338,11 @@ enum SeekFrom {
 // here later breaks no existing double.
 trait EnvProvider {
     // The program's arguments, the program's name first.
-    fn args(self) -> Vec[String] {
+    fn args(ref self) -> Vec[String] {
         panic("Env.args called on a provider that does not implement it")
     }
 
-    fn var(self, name: Str) -> Result[String, VarError] {
+    fn var(ref self, name: Str) -> Result[String, VarError] {
         panic("Env.var called on a provider that does not implement it")
     }
 
@@ -353,18 +353,18 @@ trait EnvProvider {
 
 trait ClockProvider {
     // Whole seconds since the Unix epoch.
-    fn now(self) -> i64 {
+    fn now(ref self) -> i64 {
         panic("Clock.now called on a provider that does not implement it")
     }
 
     // Nanoseconds from an origin fixed for the process; never goes
     // backwards.
-    fn monotonic_ns(self) -> i64 {
+    fn monotonic_ns(ref self) -> i64 {
         panic("Clock.monotonic_ns called on a provider that does not implement it")
     }
 
     // Nanoseconds since the Unix epoch, from a clock that may jump.
-    fn wall_ns(self) -> i64 {
+    fn wall_ns(ref self) -> i64 {
         panic("Clock.wall_ns called on a provider that does not implement it")
     }
 }

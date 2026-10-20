@@ -84,15 +84,15 @@ fn port() -> i64 {
 
 ```kara
 trait EnvProvider {
-    fn args(self) -> Vec[String]
-    fn var(self, name: Str) -> Result[String, VarError]
+    fn args(ref self) -> Vec[String]
+    fn var(ref self, name: Str) -> Result[String, VarError]
     fn set(mut ref self, name: Str, value: Str)
 }
 
 trait ClockProvider {
-    fn now(self) -> i64            // whole seconds since the Unix epoch
-    fn monotonic_ns(self) -> i64   // from an origin fixed for the process
-    fn wall_ns(self) -> i64        // since the Unix epoch; may jump
+    fn now(ref self) -> i64            // whole seconds since the Unix epoch
+    fn monotonic_ns(ref self) -> i64   // from an origin fixed for the process
+    fn wall_ns(ref self) -> i64        // since the Unix epoch; may jump
 }
 
 trait RandomProvider {
@@ -106,7 +106,7 @@ Every method has a default body that panics, naming the resource and the method 
 struct FakeEnv {}
 
 impl EnvProvider for FakeEnv {
-    fn args(self) -> Vec[String] { ["prog", "--verbose"] }
+    fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }
 }
 
 fn main() {

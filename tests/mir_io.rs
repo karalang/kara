@@ -1804,7 +1804,7 @@ fn buffered_io_over_a_childs_pipes() {
 const DEFAULT_PROVIDERS: &str = r#"
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
-    fn var(self, name: Str) -> Result[String, VarError] { Ok("fake") }
+    fn var(ref self, name: Str) -> Result[String, VarError] { Ok("fake") }
 }
 fn main() {
     let e = OsEnv {};
@@ -1821,7 +1821,7 @@ fn main() {
     println(c.now() > 0);
     println(c.wall_ns() > 0);
     println(c.monotonic_ns() >= 0);
-    let r = OsRandom {};
+    let mut r = OsRandom {};
     println(r.next_u64() != r.next_u64());
     let f = FakeEnv {};
     match f.var("X") {
@@ -1835,7 +1835,7 @@ fn main() {
 const UNIMPLEMENTED_METHOD: &str = r#"
 struct FakeClock {}
 impl ClockProvider for FakeClock {
-    fn now(self) -> i64 { 42 }
+    fn now(ref self) -> i64 { 42 }
 }
 fn main() {
     let c = FakeClock {};

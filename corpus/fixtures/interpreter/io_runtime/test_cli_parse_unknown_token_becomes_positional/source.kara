@@ -1,5 +1,5 @@
 struct FakeEnv {}
-         impl EnvProvider for FakeEnv { fn args(self) -> Vec[String] { ["prog", "extra1", "extra2"] } }
+         impl EnvProvider for FakeEnv { fn args(ref self) -> Vec[String] { ["prog", "extra1", "extra2"] } }
          fn main() {
              with_provider[Env](FakeEnv {}, || {
                  let p = Parser.new("greet");

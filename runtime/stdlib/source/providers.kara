@@ -14,10 +14,10 @@ struct OsEnv {}
 
 impl EnvProvider for OsEnv {
     #[compiler_builtin]
-    fn args(self) -> Vec[String] { Vec.new() }
+    fn args(ref self) -> Vec[String] { Vec.new() }
 
     #[compiler_builtin]
-    fn var(self, name: Str) -> Result[String, VarError] { Err(VarError.NotPresent) }
+    fn var(ref self, name: Str) -> Result[String, VarError] { Err(VarError.NotPresent) }
 
     #[compiler_builtin]
     fn set(mut ref self, name: Str, value: Str) { }
@@ -27,13 +27,13 @@ struct OsClock {}
 
 impl ClockProvider for OsClock {
     #[compiler_builtin]
-    fn now(self) -> i64 { 0 }
+    fn now(ref self) -> i64 { 0 }
 
     #[compiler_builtin]
-    fn monotonic_ns(self) -> i64 { 0 }
+    fn monotonic_ns(ref self) -> i64 { 0 }
 
     #[compiler_builtin]
-    fn wall_ns(self) -> i64 { 0 }
+    fn wall_ns(ref self) -> i64 { 0 }
 }
 
 struct OsRandom {}

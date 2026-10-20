@@ -1,7 +1,7 @@
 
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
-    fn args(self) -> Vec[String] {
+    fn args(ref self) -> Vec[String] {
         let mut v: Vec[String] = Vec.new();
         v.push("alpha");
         v.push("beta");

@@ -313,7 +313,16 @@ fn stale_runtime_artifacts() -> Option<String> {
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out = Command::new("git")
-        .args(["log", "-1", "--format=%ct", "--", "runtime/src"])
+        // The runtime also compiles these two in through `#[path]`.
+        .args([
+            "log",
+            "-1",
+            "--format=%ct",
+            "--",
+            "runtime/src",
+            "src/http1.rs",
+            "src/format_spec.rs",
+        ])
         .current_dir(&root)
         .output()
         .ok()?;
