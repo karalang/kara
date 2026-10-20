@@ -6191,3 +6191,65 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-19-52: a `let ... else` initializer's temporaries drop before
+/// the else block runs, and at the `;` when the pattern matches (core
+/// semantics §7.4), on the interpreter and compiled alike.
+#[test]
+fn mir_let_else_temporaries_drop_before_the_else_block() {
+    let cases = [
+        (
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn make(id: i64) -> R { R { id: id } }
+fn find(r: R) -> Option[i64] { if r.id > 5 { Some(r.id) } else { None } }
+fn f(id: i64) {
+    let Some(v) = find(make(id)) else {
+        println("else");
+        return;
+    };
+    println(f"got{v}");
+}
+fn main() {
+    f(1);
+    f(9);
+}
+"#,
+            "d1\nelse\nd9\ngot9\n",
+        ),
+        (
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}{self.s}"); } }
+fn make(id: i64) -> R { R { id: id, s: f"s{id}" } }
+fn find(r: R) -> Option[String] { if r.id > 5 { Some(r.s.clone()) } else { None } }
+fn pick(v: ref Vec[String], i: i64) -> Option[ref String] { if i < v.len() { Some(v[i]) } else { None } }
+fn main() {
+    let names: Vec[String] = ["a".to_string(), "b".to_string()];
+    for i in 0..4 {
+        let Some(v) = find(make(i * 3)) else {
+            println("skip");
+            continue;
+        };
+        println(f"got {v}");
+        let Some(n) = pick(names, i) else {
+            println("no name");
+            break;
+        };
+        println(f"name {n}");
+    }
+}
+"#,
+            "d0s0\nskip\nd3s3\nskip\nd6s6\ngot s6\nno name\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
