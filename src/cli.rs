@@ -1169,6 +1169,13 @@ impl Pipeline {
         }
         self.parsed.program.library_start = Some(user_len);
         self.library_fns = library_fn_names(&self.parsed.program, user_len);
+        // The program's own text is what its diagnostics quote: a type the
+        // library source renamed apart (`Field` as `Fiel_`) keeps its length,
+        // so every span still lands where it did (B-2026-10-19-35).
+        let text = match text.get(user_len..) {
+            Some(lib) if src.len() == user_len => format!("{src}{lib}"),
+            _ => text,
+        };
         self.source = Some(text);
         self.library_len = Some(user_len);
         self
@@ -1196,8 +1203,15 @@ impl Pipeline {
             r.errors.iter_mut().for_each(|e| fix(&mut e.message));
         }
         if let Some(t) = self.typed.as_mut() {
-            t.errors.iter_mut().for_each(|e| fix(&mut e.message));
-            t.warnings.iter_mut().for_each(|e| fix(&mut e.message));
+            // The JSON record's `expected` / `got` and a fix-it's text name
+            // the type too (B-2026-10-19-35).
+            for e in t.errors.iter_mut().chain(t.warnings.iter_mut()) {
+                fix(&mut e.message);
+                e.expected.iter_mut().chain(e.got.iter_mut()).for_each(&fix);
+                if let Some(f) = e.fix_it.as_mut() {
+                    fix(&mut f.replacement);
+                }
+            }
         }
         if let Some(e) = self.effects.as_mut() {
             e.errors.iter_mut().for_each(|e| fix(&mut e.message));

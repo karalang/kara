@@ -10106,3 +10106,54 @@ fn a_borrowed_mut_fn_cannot_be_called() {
         "f: own MutFn()",
     );
 }
+
+/// B-2026-10-19-35: a program's own type renamed apart for the check
+/// (`Field`, `IoError`) is quoted as written in every excerpt and in the
+/// JSON record's `expected`.
+#[test]
+fn check_quotes_a_renamed_user_type_as_written() {
+    let (dir, path) = fixture(
+        "renamed-type-excerpt",
+        r#"struct IoError { code: i64 }
+
+struct Field { n: i64 }
+
+fn a(f: ref Field, k: i64) -> i64 {
+    if k == 0 { f.n } else { b(f, k - 1) }
+}
+
+fn b(f: ref Field, k: i64) -> i64 {
+    a(f, k)
+}
+
+fn main() {
+    let e: IoError = "x";
+    println(f"{a(Field { n: 3 }, 2)} {e.code}");
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("expected 'IoError', found 'String'")
+            && err.contains("let e: IoError = \"x\";")
+            && err.contains("fn a(f: ref Field, k: i64) -> i64 {")
+            && !err.contains("Fiel_")
+            && !err.contains("IoErro_"),
+        "renamed-type-excerpt: {err}"
+    );
+    let json = karac()
+        .arg("check")
+        .arg("--output=json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let json =
+        String::from_utf8_lossy(&json.stdout).to_string() + &String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json.contains("\"expected\":\"IoError\"") && !json.contains("IoErro_"),
+        "renamed-type-excerpt json: {json}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
