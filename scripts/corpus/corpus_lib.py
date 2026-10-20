@@ -124,7 +124,8 @@ BOUND_PORT = re.compile(rb"BOUND_PORT=(\d+)")
 def drive(cmd: list, cwd: Path, env: dict, timeout: float, driver: dict):
     """A server entry. `driver.toml` lists `[[connection]]` tables, each with
     `send`, a string or a list of strings. The program binds port 0 and
-    prints `BOUND_PORT=<n>` on stdout or stderr. Each connection then sends
+    prints `BOUND_PORT=<n>` on stdout or stderr; it runs with
+    `KARAC_ANNOUNCE_PORT=1`, which makes a v2 `TcpListener.bind` print it. Each connection then sends
     its strings in order, and after each one it reads until the server
     closes the connection or, once a reply has begun, sends nothing for
     `idle` seconds (default 1.0). The program is stopped after the last connection. Its stdout is
@@ -133,7 +134,8 @@ def drive(cmd: list, cwd: Path, env: dict, timeout: float, driver: dict):
     states what a client sees. With `wait = true` the program is left to end by itself and its
     exit code is the entry's; with `stdout = true` the transcript ends with
     `=== stdout ===` and what the program printed (its `BOUND_PORT` line
-    dropped). A program that exits before it reports a port is judged on what
+    dropped), and `unordered = true` sorts those lines, for a program whose
+    tasks print concurrently. A program that exits before it reports a port is judged on what
     it printed and its exit code, like any other entry."""
     import signal
     import socket
@@ -144,6 +146,9 @@ def drive(cmd: list, cwd: Path, env: dict, timeout: float, driver: dict):
     # Its own process group: a backend that runs the program as a child of
     # karac (the ASan lane) is stopped with it, so no server outlives its
     # entry and holds a port while the next entry runs.
+    # A listener bound to port 0 reports its port on stderr only when asked
+    # (B-2026-10-15-69); a driver is the one asking.
+    env = {**env, "KARAC_ANNOUNCE_PORT": "1"}
     p = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, start_new_session=True)
     out, err = bytearray(), bytearray()
@@ -223,7 +228,11 @@ def drive(cmd: list, cwd: Path, env: dict, timeout: float, driver: dict):
         # (.gitattributes), so an HTTP reply's CRLF could never match.
         transcript = bytearray(bytes(transcript).replace(b"\r\n", b"\n"))
         if driver.get("stdout"):
-            transcript += b"=== stdout ===\n" + re.sub(rb"(?m)^BOUND_PORT=\d+\n", b"", bytes(out))
+            printed = re.sub(rb"(?m)^BOUND_PORT=\d+\n", b"", bytes(out))
+            if driver.get("unordered"):
+                # Lines from concurrent tasks, whose order is not the program's.
+                printed = b"".join(sorted(printed.splitlines(keepends=True)))
+            transcript += b"=== stdout ===\n" + printed
         return subprocess.CompletedProcess(cmd, code, bytes(transcript), bytes(err))
     finally:
         try:

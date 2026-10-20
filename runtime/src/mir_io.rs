@@ -452,6 +452,30 @@ unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
 ///
 /// # Safety
 ///
+/// A test-harness hook, off unless `KARAC_ANNOUNCE_PORT` is set: a listener
+/// bound to port 0 reports `BOUND_PORT=<n>` on stderr, so a driver that
+/// cannot ask `local_addr` learns where to connect. A program's own output
+/// never carries it (B-2026-10-15-69). The MIR interpreter does the same.
+///
+/// # Safety
+/// `ptr`/`len` describe the address `karac_mir_tcp` was given.
+#[cfg(feature = "net")]
+unsafe fn announce_port(ptr: *mut u8, len: i64, fd: i64) {
+    if std::env::var_os("KARAC_ANNOUNCE_PORT").is_none() {
+        return;
+    }
+    // SAFETY: the caller's contract.
+    let requested = unsafe { std::str::from_utf8(buf_bytes(ptr, len.max(0) as usize)) }
+        .ok()
+        .and_then(|t| t.parse::<std::net::SocketAddr>().ok());
+    if requested.is_some_and(|a| a.port() == 0) {
+        // SAFETY: `fd` is the listener the bind just made.
+        if let Ok(local) = unsafe { borrowed::<std::net::TcpListener>(fd) }.local_addr() {
+            eprintln!("BOUND_PORT={}", local.port());
+        }
+    }
+}
+
 /// `ptr` and `len` describe the address or buffer the op reads or writes,
 /// and `value` is writable.
 #[cfg(feature = "net")]
@@ -490,7 +514,13 @@ pub unsafe extern "C" fn karac_mir_tcp(
     let (code, v) = unsafe {
         match op {
             0 | 1 if !parses() => (7, 0),
-            0 => built(ev::tcp_bind(ptr, len, false)),
+            0 => {
+                let bound = built(ev::tcp_bind(ptr, len, false));
+                if bound.0 == -1 {
+                    announce_port(ptr, len, bound.1);
+                }
+                bound
+            }
             1 => built(ev::karac_runtime_tcp_connect(ptr, len)),
             2 => built(ev::karac_runtime_tcp_accept(fd)),
             3 => match ev::karac_runtime_tcp_try_clone(fd) {

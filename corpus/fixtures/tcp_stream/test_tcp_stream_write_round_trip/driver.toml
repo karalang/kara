@@ -1,0 +1,5 @@
+wait = true
+stdout = true
+
+[[connection]]
+send = [""]

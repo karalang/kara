@@ -4846,8 +4846,14 @@ impl<'a> Interp<'a> {
                     Err(_) => Err(("InvalidInput", None)),
                     Ok(at) if method == "bind" => match std::net::TcpListener::bind(at) {
                         // Nothing is printed: a program learns the port
-                        // with `local_addr` (B-2026-10-15-69).
+                        // with `local_addr` (B-2026-10-15-69). A test
+                        // harness that cannot ask sets KARAC_ANNOUNCE_PORT
+                        // and reads the line on stderr, as the runtime
+                        // prints it.
                         Ok(l) => {
+                            if let Some(port) = announced_port(at, &l) {
+                                self.write_out(true, &format!("BOUND_PORT={port}\n"));
+                            }
                             let fd = socket_fd(&l);
                             self.sockets.listeners.insert(fd, l);
                             Ok(Value::Agg(vec![Value::Int(i128::from(fd))]))
@@ -12701,6 +12707,16 @@ fn regex_find_from(
         }
         return Some(slots);
     }
+}
+
+/// The port to report for a listener bound to port 0, when the
+/// `KARAC_ANNOUNCE_PORT` test hook asks for it (`karac_mir_tcp` does the same
+/// on the compiled side). A program itself asks `local_addr`.
+fn announced_port(at: std::net::SocketAddr, l: &std::net::TcpListener) -> Option<u16> {
+    if at.port() != 0 || std::env::var_os("KARAC_ANNOUNCE_PORT").is_none() {
+        return None;
+    }
+    l.local_addr().ok().map(|a| a.port())
 }
 
 /// The HTTP client's agent, trusting what the compiled program's client

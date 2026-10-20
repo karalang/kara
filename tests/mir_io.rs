@@ -1150,6 +1150,79 @@ fn serve_static_and_lowercased_header_names_match_on_both_backends() {
     }
 }
 
+/// A driver that cannot ask `local_addr` sets `KARAC_ANNOUNCE_PORT`, and a
+/// listener bound to port 0 then reports `BOUND_PORT=<n>` on stderr, on both
+/// backends. Unset, nothing is printed (`udp_and_socket_options_match_the_
+/// interpreter` asserts that output exactly). The corpus driver relies on it.
+const ANNOUNCED: &str = r#"fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let stream = listener.accept().unwrap();
+    let mut buf: Array[u8, 16] = [0u8; 16];
+    match stream.read(mut buf) {
+        Ok(n) => println(n),
+        Err(_) => println(-1),
+    }
+}
+"#;
+
+#[test]
+fn announce_port_hook_reports_a_bound_listener_on_both_backends() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let dir = Scratch::new("announce_port");
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let file = dir.path().join("announced.kara");
+    std::fs::write(&file, ANNOUNCED).unwrap();
+    let serve = |mut cmd: Command| -> String {
+        let mut child = cmd
+            .env("KARAC_ANNOUNCE_PORT", "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the listener");
+        let mut err = BufReader::new(child.stderr.take().expect("stderr"));
+        let mut line = String::new();
+        let _ = err.read_line(&mut line);
+        let Some(port) = line.trim().strip_prefix("BOUND_PORT=") else {
+            let _ = child.kill();
+            panic!("the listener printed {line:?}, not its port");
+        };
+        let mut s = connect(port.parse().expect("a port"));
+        s.write_all(b"ping\n").expect("send");
+        drop(s);
+        let mut out = String::new();
+        child
+            .stdout
+            .take()
+            .expect("stdout")
+            .read_to_string(&mut out)
+            .expect("stdout");
+        assert!(child.wait().expect("wait").success());
+        out
+    };
+    let mut interp = Command::new(karac);
+    interp.args(["__mir-run", file.to_str().unwrap()]);
+    assert_eq!(serve(interp), "5\n", "on the interpreter");
+    let exe = dir.path().join("announced");
+    let built = Command::new(karac)
+        .args([
+            "build",
+            "--mir",
+            file.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let linked = common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&built.stderr).to_string())
+    });
+    if linked.is_some() {
+        assert_eq!(serve(Command::new(&exe)), "5\n", "built");
+    }
+}
+
 /// B-2026-10-14-44 — io.md's spellings: paths and addresses are `Str`
 /// (a `String` still passes), and `File.read` / `write` count in `i64`.
 /// `karac check` accepts the program and both MIR backends run it.

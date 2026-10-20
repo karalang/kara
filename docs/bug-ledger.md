@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 301 |
+| missing-feature | 302 |
 | codegen-gap | 278 |
 | false-positive | 254 |
 | other | 185 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2976 |
-| interp | 994 |
+| codegen | 2977 |
+| interp | 995 |
 | typecheck | 516 |
 | ownership | 124 |
 | other | 121 |
@@ -184,6 +184,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-23 | 2026-10-20 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` stop with "a type that failed to check is not lowered yet"; and floats have no `PI`, `TAU` or `E` at all | — |
 | B-2026-10-20-24 | 2026-10-20 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) = t; *a + *b` are refused with "unary '*' requires 'ref T' .. found 'String'/'i64'" while `karac check` accepts them | — |
 | B-2026-10-20-25 | 2026-10-20 | parser | low | The struct-pattern field shorthand `P { ref name, ref n }` does not parse ("'ref' is a reserved keyword and cannot be used as an identifier"), though design.md's own example is `Foo { ref name, score, .. }`; `name: ref name` works | — |
+| B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
 
 ### Relocated
 
