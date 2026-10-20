@@ -6639,3 +6639,46 @@ true
         }
     }
 }
+
+/// B-2026-10-20-24: an explicit `ref name` over an owned scrutinee borrows
+/// its part on the MIR pipeline as in `karac check`, so `*name` reads
+/// through it, in a `match` arm, an `if let` and a `let` alike.
+#[test]
+fn mir_explicit_ref_pattern_derefs() {
+    let src = r#"struct P { name: String, n: i64 }
+fn main() {
+    let long = "b".to_string();
+    let opt: Option[String] = Some("a".to_string());
+    match opt {
+        Some(ref g) => {
+            if *g != long { println("differ"); }
+        }
+        None => {}
+    }
+    if let Some(ref g) = opt {
+        println(f"{*g == "a"}");
+    }
+    let t = (1, 2);
+    let (ref a, ref b) = t;
+    println(f"{*a + *b}");
+    let p = P { name: "pp".to_string(), n: 4 };
+    let P { ref name, ref n } = p;
+    println(f"{name} {*n * 2} {*name == "pp"}");
+    let mut o: Option[i64] = Some(1);
+    match o {
+        Some(mut ref x) => { *x = *x + 10; }
+        None => {}
+    }
+    println(f"{o.unwrap()} {p.name}");
+}
+"#;
+    let want = "differ\ntrue\n3\npp 8 true\n11 pp\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    let Some(exe) = cli_build(&dir, src, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+}

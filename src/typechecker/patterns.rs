@@ -1338,6 +1338,18 @@ impl<'a> super::TypeChecker<'a> {
                             .contains(&SpanKey::from_span(&pattern.span)))
                 {
                     self.local_scope.mark_view(name);
+                } else if self.library_methods_from_source
+                    && matches!(mode, ScrutineeMode::Owned)
+                    && self
+                        .program
+                        .ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span))
+                {
+                    // The MIR pipeline binds an explicit `ref name` over an
+                    // owned scrutinee through a reference (a `Copy` part by
+                    // value), so `*name` reads through it as `karac check`'s
+                    // view does (core semantics §4.6, §5.10; B-2026-10-20-24).
+                    self.local_scope.mark_view(name);
                 } else if self.cli_lint_overrides.strict_core
                     && matches!(mode, ScrutineeMode::Owned)
                     && !matches!(
@@ -3126,7 +3138,9 @@ impl<'a> super::TypeChecker<'a> {
                 self.local_scope.insert(name.clone(), ty.clone());
                 // v2 core §4.6: a `ref name` binding in a `let` borrows its
                 // part, as it does in a `match`; moving it is §3.7's error.
-                if self.cli_lint_overrides.strict_core
+                // The MIR pipeline reads `*name` through it the same way
+                // (B-2026-10-20-24).
+                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
                     && self
                         .program
                         .ref_binding_spans
