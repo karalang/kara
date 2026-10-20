@@ -1,0 +1,783 @@
+== dates
+> now | 1700000000
+> fn | http2time | Wed, 09 Feb 1994 22:23:32 GMT
+  760832612.0
+> fn | http2time | Thursday, 03-Feb-94 00:00:00 GMT
+  760233600
+> fn | http2time | 03-Feb-30
+  1896307200
+> fn | http2time | 03-Feb-76
+  192153600
+> fn | http2time | 08-Feb-1994 14:15:29 -0500
+  760734929
+> fn | http2time | 08-Feb-1994 14:15:29 +05:30
+  None
+> fn | http2time | 08-Feb-1994 14:15:29 +5
+  None
+> fn | http2time |   Mon,03 Feb 1994 10:00 UT
+  760269600
+> fn | http2time | 9 Feb 1994 22:23:32 EST
+  None
+> fn | http2time | 09-Feb-1994 22:23 (CET)
+  760832580
+> fn | http2time | 09/Feb/1994:22:23:32 +0100
+  760829012
+> fn | http2time | 9 2 1994
+  760752000
+> fn | http2time | 9 13 1994
+  None
+> fn | http2time | 31 Feb 2024
+  1709337600
+> fn | http2time | 28 Feb 2023 24:00:61
+  1677628861
+> fn | http2time | Feb 09 1994
+  None
+> fn | http2time | 09 Feb 94 3:30 PM
+  None
+> fn | http2time | 1994-02-09
+  None
+> fn | http2time | 1 Jan 1969
+  None
+> fn | http2time | 1 Jan 12345
+  None
+> fn | http2time | Sun, 06 Jxx 1994 08:49:37 GMT
+  ! ValueError: 'jxx' is not in list
+> fn | http2time | Sun, 06 Nov 1994 08:49:37 gmt
+  784111777
+> fn | http2time | Sunday,06-Nov-94 08:49:37
+  784111777
+> fn | http2time | 
+  None
+> fn | iso2time | 1994-02-03 14:15:29 -0100
+  760288529
+> fn | iso2time | 1994-02-03T14:15:29Z
+  760284929
+> fn | iso2time | 19940203T141529Z
+  760284929
+> fn | iso2time | 1994-02-03
+  760233600
+> fn | iso2time | 1994-02-03 14:15:29 +05:30
+  760265129
+> fn | iso2time | 1994-02-03 14:15:29.5Z
+  ! ValueError: invalid literal for int() with base 10: '29.5'
+> fn | iso2time | 94-02-03
+  None
+> fn | time2isoz | 784111777
+  '1994-11-06 08:49:37Z'
+> fn | time2isoz | 0
+  '1970-01-01 00:00:00Z'
+> fn | time2netscape | 784111777
+  'Sun, 06-Nov-1994 08:49:37 GMT'
+> fn | time2netscape | 2000000000
+  'Wed, 18-May-2033 03:33:20 GMT'
+== headers
+> fn | split_header_words | foo="bar"; port="80,81"; discard, bar=baz
+  [[('foo', 'bar'), ('port', '80,81'), ('discard', None)], [('bar', 'baz')]]
+> fn | split_header_words | text/html; charset="iso-8859-1"
+  [[('text/html', None), ('charset', 'iso-8859-1')]]
+> fn | split_header_words | Basic realm="\"foo\bar\""
+  [[('Basic', None), ('realm', '"foobar"')]]
+> fn | split_header_words | a, b | c=1;;d = 2 ;  e
+  [[('a', None)], [('b', None)], [('c', '1'), ('d', '2'), ('e', None)]]
+> fn | split_header_words | =junk; x=; y="open
+  [[('junk', None), ('x', ''), ('y', '"open')]]
+> fn | split_header_words | ,, ,
+  []
+> fn | join_header_words | foo="bar"; port="80,81"; discard, bar=baz
+  'foo=bar; port="80,81"; discard, bar=baz'
+> fn | join_header_words | Basic realm="\"foo\bar\""; x="a b"; y=c/d
+  'Basic; realm="\\"foobar\\""; x="a b"; y="c/d"'
+> fn | parse_ns_headers | foo=bar; Path=/; Domain=.example.com; Expires=Wed, 09 Feb 1994 22:23:32 GMT; secure; HttpOnly
+  [[('foo', 'bar'), ('path', '/'), ('domain', '.example.com'), ('expires', 760832612.0), ('secure', None), ('HttpOnly', None), ('version', '0')]]
+> fn | parse_ns_headers | =novalue; path=/
+  []
+> fn | parse_ns_headers | a=b; ; =c; Version="1"; MAX-AGE=60
+  [[('a', 'b'), ('version', '1'), ('max-age', '60')]]
+> fn | parse_ns_headers | lone; expires="09-Nov-2033 23:12:40 GMT"; expires=never
+  [[('lone', None), ('expires', 2015190760), ('expires', None), ('version', '0')]]
+> fn | parse_ns_headers | q="quoted; still"; Comment=hi | second=2
+  [[('q', '"quoted'), ('still"', None), ('Comment', 'hi'), ('version', '0')], [('second', '2'), ('version', '0')]]
+== domains
+> fn | domain_match | www.example.com | .example.com
+  True
+> fn | domain_match | example.com | .example.com
+  False
+> fn | domain_match | a.b.example.com | .example.com
+  True
+> fn | domain_match | WWW.Example.COM | www.example.com
+  True
+> fn | domain_match | 192.168.1.1 | .168.1.1
+  False
+> fn | domain_match | www.example.com | example.com
+  False
+> fn | domain_match | x.y.com | .com
+  True
+> fn | user_domain_match | ads.tracker.net | .tracker.net
+  True
+> fn | user_domain_match | tracker.net | .tracker.net
+  False
+> fn | user_domain_match | 10.0.0.1 | 10.0.0.1
+  True
+> fn | user_domain_match | 10.0.0.1 | .0.0.1
+  False
+> fn | is_HDN | example.com
+  True
+> fn | is_HDN | 10.0.0.1
+  False
+> fn | is_HDN | .example.com
+  False
+> fn | is_HDN | host9
+  True
+> fn | reach | www.acme.com
+  '.acme.com'
+> fn | reach | acme.com
+  'acme.com'
+> fn | reach | foo.local
+  '.local'
+> fn | reach | 192.168.0.1
+  '192.168.0.1'
+> fn | escape_path | /foo/bar baz/%7e%2fx
+  '/foo/bar%20baz/%7E%2Fx'
+> fn | escape_path | /café/a;b=c?d
+  '/caf%C3%A9/a;b=c%3Fd'
+== netscape cookies
+> now | 1700000000
+> jar | cookie
+> set | http://www.acme.com/acme/login | Set-Cookie: CUSTOMER=WILE_E_COYOTE; path=/; expires=Wed, 09-Nov-2033 23:12:40 GMT
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|  setting cookie: <Cookie CUSTOMER=WILE_E_COYOTE for www.acme.com/>
+> get | http://www.acme.com/acme/ammo
+  Cookie: CUSTOMER=WILE_E_COYOTE
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|    it's a match
+> set | http://www.acme.com/acme/pickitem | Set-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug|  setting cookie: <Cookie PART_NUMBER=ROCKET_LAUNCHER_0001 for www.acme.com/>
+> set | http://www.acme.com/acme/shipping | Set-Cookie: SHIPPING=FEDEX; path=/foo
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie SHIPPING=FEDEX
+  debug|  setting cookie: <Cookie SHIPPING=FEDEX for www.acme.com/foo>
+> get | http://www.acme.com/
+  Cookie: CUSTOMER=WILE_E_COYOTE; PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug|    it's a match
+  debug| - checking cookie path=/foo
+  debug|   / does not path-match /foo
+> get | http://www.acme.com/foo/bar
+  Cookie: SHIPPING=FEDEX; CUSTOMER=WILE_E_COYOTE; PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug|    it's a match
+  debug| - checking cookie path=/foo
+  debug|  - checking cookie SHIPPING=FEDEX
+  debug|    it's a match
+> set | http://www.acme.com/acme/login | Set-Cookie: sid=s1; Domain=acme.com | Set-Cookie: lang=en
+  debug| extract_cookies: 2 header(s)
+  debug|  - checking cookie sid=s1
+  debug|  setting cookie: <Cookie sid=s1 for .acme.com/acme>
+  debug|  - checking cookie lang=en
+  debug|  setting cookie: <Cookie lang=en for www.acme.com/acme>
+> get | http://api.acme.com/acme/x
+  Cookie: sid=s1
+  debug| add_cookie_header
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie sid=s1
+  debug|    it's a match
+> get | http://www.acme.com/acme/x | Cookie: preset=1
+  (no cookie header)
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie PART_NUMBER=ROCKET_LAUNCHER_0001
+  debug|    it's a match
+  debug| - checking cookie path=/foo
+  debug|   /acme/x does not path-match /foo
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie lang=en
+  debug|    it's a match
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie sid=s1
+  debug|    it's a match
+> set | http://www.acme.com/ | Set-Cookie: tld=1; Domain=.com | Set-Cookie: other=1; Domain=other.org | Set-Cookie: dots=1; domain=.www.acme.com
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie tld=1
+  debug|    non-local domain .com contains no embedded dot
+  debug|  - checking cookie other=1
+  debug|    effective request-host www.acme.com (even with added initial dot) does not end with .other.org
+  debug|  - checking cookie dots=1
+  debug|  setting cookie: <Cookie dots=1 for .www.acme.com/>
+> set | https://shop.acme.com/cart | Set-Cookie: cart=3; Secure; HttpOnly; Path=/cart | Set-Cookie: flag | Set-Cookie: dup=first; path=/; path=/ignored
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie cart=3
+  debug|  setting cookie: <Cookie cart=3 for shop.acme.com/cart>
+  debug|  - checking cookie flag=None
+  debug|  setting cookie: <Cookie flag for shop.acme.com/>
+  debug|  - checking cookie dup=first
+  debug|  setting cookie: <Cookie dup=first for shop.acme.com/>
+> get | http://shop.acme.com/cart
+  Cookie: flag; dup=first
+  debug| add_cookie_header
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|   /cart does not path-match /acme
+  debug| Checking shop.acme.com for cookies to return
+  debug| - checking cookie path=/cart
+  debug|  - checking cookie cart=3
+  debug|    secure cookie with non-secure request
+  debug|    not returning cookie
+  debug| - checking cookie path=/
+  debug|  - checking cookie flag=None
+  debug|    it's a match
+  debug|  - checking cookie dup=first
+  debug|    it's a match
+> get | https://shop.acme.com/cart/checkout
+  Cookie: cart=3; flag; dup=first
+  debug| add_cookie_header
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|   /cart/checkout does not path-match /acme
+  debug| Checking shop.acme.com for cookies to return
+  debug| - checking cookie path=/cart
+  debug|  - checking cookie cart=3
+  debug|    it's a match
+  debug| - checking cookie path=/
+  debug|  - checking cookie flag=None
+  debug|    it's a match
+  debug|  - checking cookie dup=first
+  debug|    it's a match
+> set | http://www.acme.com/ | Set-Cookie: bad=1; Max-Age=soon | Set-Cookie: short=1; Max-Age=60; Expires=Wed, 09-Nov-2033 23:12:40 GMT
+  debug| extract_cookies: 2 header(s)
+  debug|    missing or invalid (non-numeric) value for max-age attribute
+  debug|  - checking cookie short=1
+  debug|  setting cookie: <Cookie short=1 for www.acme.com/>
+> set | http://www.acme.com/ | Set-Cookie: PART_NUMBER=gone; path=/; Max-Age=0
+  debug| extract_cookies: 1 header(s)
+  debug| Expiring cookie, domain='www.acme.com', path='/', name='PART_NUMBER'
+> set | http://www.acme.com/acme/ | Set-Cookie: SHIPPING=x; path=/foo; expires=Thu, 01 Jan 1970 00:00:00 GMT
+  debug| extract_cookies: 1 header(s)
+  debug| Expiring cookie, domain='www.acme.com', path='/foo', name='SHIPPING'
+> list
+  <Cookie CUSTOMER=WILE_E_COYOTE for www.acme.com/>
+  <Cookie short=1 for www.acme.com/>
+  <Cookie lang=en for www.acme.com/acme>
+  <Cookie sid=s1 for .acme.com/acme>
+  <Cookie dots=1 for .www.acme.com/>
+  <Cookie cart=3 for shop.acme.com/cart>
+  <Cookie flag for shop.acme.com/>
+  <Cookie dup=first for shop.acme.com/>
+> len
+  8
+> now | 1700000100
+> get | http://www.acme.com/
+  Cookie: CUSTOMER=WILE_E_COYOTE; dots=1
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie CUSTOMER=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie short=1
+  debug|    cookie expired
+  debug|    not returning cookie
+  debug| - checking cookie path=/foo
+  debug|   / does not path-match /foo
+  debug| - checking cookie path=/acme
+  debug|   / does not path-match /acme
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|   / does not path-match /acme
+  debug| Checking .www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie dots=1
+  debug|    it's a match
+> list
+  <Cookie CUSTOMER=WILE_E_COYOTE for www.acme.com/>
+  <Cookie lang=en for www.acme.com/acme>
+  <Cookie sid=s1 for .acme.com/acme>
+  <Cookie dots=1 for .www.acme.com/>
+  <Cookie cart=3 for shop.acme.com/cart>
+  <Cookie flag for shop.acme.com/>
+  <Cookie dup=first for shop.acme.com/>
+> repr
+  Cookie(version=0, name='CUSTOMER', value='WILE_E_COYOTE', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=True, secure=False, expires=2015190760, discard=False, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='lang', value='en', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/acme', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='sid', value='s1', port=None, port_specified=False, domain='.acme.com', domain_specified=True, domain_initial_dot=False, path='/acme', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='dots', value='1', port=None, port_specified=False, domain='.www.acme.com', domain_specified=True, domain_initial_dot=True, path='/', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='cart', value='3', port=None, port_specified=False, domain='shop.acme.com', domain_specified=False, domain_initial_dot=False, path='/cart', path_specified=True, secure=True, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': None}, rfc2109=False)
+  Cookie(version=0, name='flag', value=None, port=None, port_specified=False, domain='shop.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='dup', value='first', port=None, port_specified=False, domain='shop.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+> clear | www.acme.com | /
+> clear | nowhere.com
+  ! KeyError: 'nowhere.com'
+> clear | .acme.com | / | nope
+  ! KeyError: '/'
+> clear_session
+> list
+== rfc 2965
+> now | 1700000000
+> jar | cookie | rfc2965=1
+> set | http://www.acme.com/acme/login | Set-Cookie2: Customer="WILE_E_COYOTE"; Version="1"; Path="/acme"
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug| - checking cookie path=/acme
+  debug|  setting cookie: <Cookie Customer=WILE_E_COYOTE for www.acme.com/acme>
+> get | http://www.acme.com/acme/pickitem
+  Cookie: $Version=1; Customer=WILE_E_COYOTE; $Path="/acme"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug|    it's a match
+> set | http://www.acme.com/acme/pickitem | Set-Cookie2: Part_Number="Rocket Launcher 0001"; Version="1"; Path="/acme"
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie Part_Number=Rocket Launcher 0001
+  debug| - checking cookie path=/acme
+  debug|  setting cookie: <Cookie Part_Number=Rocket Launcher 0001 for www.acme.com/acme>
+> set | http://www.acme.com/acme/shipping | Set-Cookie2: Shipping="FedEx"; Version="1"; Path="/acme"; Port="80,8080" | Set-Cookie: Shipping=old; path=/acme | Set-Cookie: legacy=1; path=/
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie Shipping=FedEx
+  debug| - checking cookie path=/acme
+  debug|  setting cookie: <Cookie Shipping=FedEx for www.acme.com:80,8080/acme>
+  debug|  - checking cookie legacy=1
+  debug|  setting cookie: <Cookie legacy=1 for www.acme.com/>
+> get | http://www.acme.com/acme/process
+  Cookie: $Version=1; Customer=WILE_E_COYOTE; $Path="/acme"; Part_Number=Rocket Launcher 0001; $Path="/acme"; Shipping=FedEx; $Path="/acme"; $Port="80,8080"; legacy=1
+  Cookie2: $Version="1"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie Part_Number=Rocket Launcher 0001
+  debug|    it's a match
+  debug|  - checking cookie Shipping=FedEx
+  debug|    it's a match
+  debug| - checking cookie path=/
+  debug|  - checking cookie legacy=1
+  debug|    it's a match
+> get | http://www.acme.com:8080/acme/process
+  Cookie: $Version=1; Customer=WILE_E_COYOTE; $Path="/acme"; Part_Number=Rocket Launcher 0001; $Path="/acme"; Shipping=FedEx; $Path="/acme"; $Port="80,8080"; legacy=1
+  Cookie2: $Version="1"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie Part_Number=Rocket Launcher 0001
+  debug|    it's a match
+  debug|  - checking cookie Shipping=FedEx
+  debug|    it's a match
+  debug| - checking cookie path=/
+  debug|  - checking cookie legacy=1
+  debug|    it's a match
+> get | http://www.acme.com:81/acme/process
+  Cookie: $Version=1; Customer=WILE_E_COYOTE; $Path="/acme"; Part_Number=Rocket Launcher 0001; $Path="/acme"; legacy=1
+  Cookie2: $Version="1"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie Part_Number=Rocket Launcher 0001
+  debug|    it's a match
+  debug|  - checking cookie Shipping=FedEx
+  debug|    request port 81 does not match cookie port 80,8080
+  debug|    not returning cookie
+  debug| - checking cookie path=/
+  debug|  - checking cookie legacy=1
+  debug|    it's a match
+> set | http://www.acme.com/acme/ | Set-Cookie2: nover=1; Path="/acme" | Set-Cookie2: wrongpath=1; Version=1; Path="/other" | Set-Cookie2: nodot=1; Version=1; Domain=".com" | Set-Cookie2: prefix=1; Version=1; Domain=".acme.com"
+  debug| extract_cookies: 4 header(s)
+  debug|  - checking cookie nover=1
+  debug|    Set-Cookie2 without version attribute (nover=1)
+  debug|  - checking cookie wrongpath=1
+  debug| - checking cookie path=/other
+  debug|   /acme/ does not path-match /other
+  debug|    path attribute /other is not a prefix of request path /acme/
+  debug|  - checking cookie nodot=1
+  debug|    non-local domain .com contains no embedded dot
+  debug|  - checking cookie prefix=1
+  debug|  setting cookie: <Cookie prefix=1 for .acme.com/acme/>
+> set | http://a.b.acme.com/ | Set-Cookie2: deep=1; Version=1; Domain=".acme.com" | Set-Cookie2: portless=1; Version=1; Port
+  debug| extract_cookies: 2 header(s)
+  debug|  - checking cookie deep=1
+  debug|    host prefix a.b for domain .acme.com contains a dot
+  debug|  - checking cookie portless=1
+  debug|  setting cookie: <Cookie portless=1 for a.b.acme.com:80/>
+> set | http://www.acme.com/ | Set-Cookie: v1="a b"; Version=1; Path=/
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie v1="a b"
+  debug| - checking cookie path=/
+  debug|  setting cookie: <Cookie v1="a b" for www.acme.com/>
+> get | http://www.acme.com/acme/x
+  Cookie: $Version=1; prefix=1; $Domain=".acme.com"; Customer=WILE_E_COYOTE; $Path="/acme"; Part_Number=Rocket Launcher 0001; $Path="/acme"; Shipping=FedEx; $Path="/acme"; $Port="80,8080"; legacy=1; v1=\"a b\"; $Path="/"
+  Cookie2: $Version="1"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/acme
+  debug|  - checking cookie Customer=WILE_E_COYOTE
+  debug|    it's a match
+  debug|  - checking cookie Part_Number=Rocket Launcher 0001
+  debug|    it's a match
+  debug|  - checking cookie Shipping=FedEx
+  debug|    it's a match
+  debug| - checking cookie path=/
+  debug|  - checking cookie legacy=1
+  debug|    it's a match
+  debug|  - checking cookie v1="a b"
+  debug|    it's a match
+  debug| Checking .acme.com for cookies to return
+  debug| - checking cookie path=/acme/
+  debug|  - checking cookie prefix=1
+  debug|    it's a match
+> repr
+  Cookie(version=1, name='Customer', value='WILE_E_COYOTE', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/acme', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=1, name='Part_Number', value='Rocket Launcher 0001', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/acme', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=1, name='Shipping', value='FedEx', port='80,8080', port_specified=True, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/acme', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='legacy', value='1', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=1, name='v1', value='"a b"', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=True)
+  Cookie(version=1, name='prefix', value='1', port=None, port_specified=False, domain='.acme.com', domain_specified=True, domain_initial_dot=True, path='/acme/', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=1, name='portless', value='1', port='80', port_specified=False, domain='a.b.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=False, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=False)
+> jar | cookie
+> set | http://www.acme.com/ | Set-Cookie: v1="a b"; Version=1; Path=/ | Set-Cookie2: ignored=1; Version="1"
+  debug| extract_cookies: 2 header(s)
+  debug|  - checking cookie ignored=1
+  debug|    RFC 2965 cookies are switched off
+  debug|  - checking cookie v1="a b"
+  debug|  setting cookie: <Cookie v1="a b" for www.acme.com/>
+> get | http://www.acme.com/
+  Cookie: v1="a b"
+  debug| add_cookie_header
+  debug| Checking www.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie v1="a b"
+  debug|    it's a match
+> repr
+  Cookie(version=0, name='v1', value='"a b"', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={}, rfc2109=True)
+== policies
+> now | 1700000000
+> jar | cookie | blocked_domains=.doubleclick.net,ads.acme.com | strict_ns_unverifiable=1
+> set | http://ad.doubleclick.net/pixel | origin=www.news.com | unverifiable=1 | Set-Cookie: id=1; Domain=.doubleclick.net
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie id=1
+  debug|    third-party Netscape cookie during unverifiable transaction
+> set | http://ads.acme.com/x | Set-Cookie: id=2
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie id=2
+  debug|    domain ads.acme.com is in user block-list
+> set | http://cdn.widgets.io/w.js | origin=www.news.com | unverifiable=1 | Set-Cookie: w=1
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie w=1
+  debug|    third-party Netscape cookie during unverifiable transaction
+> set | http://img.news.com/a.png | origin=www.news.com | unverifiable=1 | Set-Cookie: img=1; Domain=.news.com
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie img=1
+  debug|  setting cookie: <Cookie img=1 for .news.com/>
+> set | http://www.news.com/ | Set-Cookie: $dollar=1 | Set-Cookie: page=1
+  debug| extract_cookies: 2 header(s)
+  debug|  - checking cookie $dollar=1
+  debug|  setting cookie: <Cookie $dollar=1 for www.news.com/>
+  debug|  - checking cookie page=1
+  debug|  setting cookie: <Cookie page=1 for www.news.com/>
+> list
+  <Cookie img=1 for .news.com/>
+  <Cookie $dollar=1 for www.news.com/>
+  <Cookie page=1 for www.news.com/>
+> jar | cookie | allowed_domains=.news.com | strict_ns_set_initial_dollar=1 | strict_ns_set_path=1
+> set | http://www.news.com/a/b | Set-Cookie: $dollar=1 | Set-Cookie: p=1; path=/a | Set-Cookie: q=1; path=/z | Set-Cookie: r=1
+  debug| extract_cookies: 4 header(s)
+  debug|  - checking cookie $dollar=1
+  debug|    illegal name (starts with '$'): '$dollar'
+  debug|  - checking cookie p=1
+  debug| - checking cookie path=/a
+  debug|  setting cookie: <Cookie p=1 for www.news.com/a>
+  debug|  - checking cookie q=1
+  debug| - checking cookie path=/z
+  debug|   /a/b does not path-match /z
+  debug|    path attribute /z is not a prefix of request path /a/b
+  debug|  - checking cookie r=1
+  debug|  setting cookie: <Cookie r=1 for www.news.com/a>
+> set | http://www.blog.org/ | Set-Cookie: s=1
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie s=1
+  debug|    domain www.blog.org is not in user allow-list
+> list
+  <Cookie p=1 for www.news.com/a>
+  <Cookie r=1 for www.news.com/a>
+> jar | cookie | strict_domain=1 | strict_ns_domain=3
+> set | http://www.bbc.co.uk/ | Set-Cookie: cc=1; Domain=.co.uk | Set-Cookie: bbc=1; Domain=.bbc.co.uk | Set-Cookie: host=1
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie cc=1
+  debug|    country-code second level domain .co.uk
+  debug|  - checking cookie bbc=1
+  debug|  setting cookie: <Cookie bbc=1 for .bbc.co.uk/>
+  debug|  - checking cookie host=1
+  debug|  setting cookie: <Cookie host=1 for www.bbc.co.uk/>
+> set | http://a.www.example.com/ | Set-Cookie: deep=1; Domain=.example.com
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie deep=1
+  debug|    host prefix a.www for domain .example.com contains a dot
+> get | http://news.bbc.co.uk/
+  Cookie: bbc=1
+  debug| add_cookie_header
+  debug| Checking .bbc.co.uk for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie bbc=1
+  debug|    it's a match
+> get | http://www.bbc.co.uk/
+  Cookie: bbc=1; host=1
+  debug| add_cookie_header
+  debug| Checking .bbc.co.uk for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie bbc=1
+  debug|    it's a match
+  debug| Checking www.bbc.co.uk for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie host=1
+  debug|    it's a match
+> list
+  <Cookie bbc=1 for .bbc.co.uk/>
+  <Cookie host=1 for www.bbc.co.uk/>
+> jar | cookie | netscape=0
+> set | http://www.acme.com/ | Set-Cookie: off=1
+  debug| extract_cookies: 1 header(s)
+> len
+  0
+> jar | cookie | secure_protocols=https
+> set | wss://chat.acme.com/socket | Set-Cookie: ws=1; Secure
+  debug| extract_cookies: 1 header(s)
+  debug|  - checking cookie ws=1
+  debug|  setting cookie: <Cookie ws=1 for chat.acme.com/>
+> get | wss://chat.acme.com/socket
+  (no cookie header)
+  debug| add_cookie_header
+  debug| Checking chat.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie ws=1
+  debug|    secure cookie with non-secure request
+  debug|    not returning cookie
+> get | https://chat.acme.com/socket
+  Cookie: ws=1
+  debug| add_cookie_header
+  debug| Checking chat.acme.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie ws=1
+  debug|    it's a match
+> jar | cookie
+> set | http://localhost:8000/app | Set-Cookie: dev=1 | Set-Cookie: dom=1; Domain=localhost | Set-Cookie: loc=1; Domain=.localhost.local
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie dev=1
+  debug|  setting cookie: <Cookie dev=1 for localhost.local/>
+  debug|  - checking cookie dom=1
+  debug|  setting cookie: <Cookie dom=1 for .localhost/>
+  debug|  - checking cookie loc=1
+  debug|  setting cookie: <Cookie loc=1 for .localhost.local/>
+> get | http://localhost:9000/app/x
+  Cookie: dev=1; loc=1
+  debug| add_cookie_header
+  debug| Checking localhost.local for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie dev=1
+  debug|    it's a match
+  debug| Checking .localhost for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie dom=1
+  debug|    request-host localhost does not match Netscape cookie domain .localhost
+  debug|    not returning cookie
+  debug| Checking .localhost.local for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie loc=1
+  debug|    it's a match
+> set | http://192.168.1.20/ | Set-Cookie: ip=1 | Set-Cookie: ipdom=1; Domain=.168.1.20
+  debug| extract_cookies: 2 header(s)
+  debug|  - checking cookie ip=1
+  debug|  setting cookie: <Cookie ip=1 for 192.168.1.20/>
+  debug|  - checking cookie ipdom=1
+  debug|  setting cookie: <Cookie ipdom=1 for .168.1.20/>
+> get | http://192.168.1.20/
+  Cookie: ip=1; ipdom=1
+  debug| add_cookie_header
+  debug| Checking 192.168.1.20 for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie ip=1
+  debug|    it's a match
+  debug| Checking .168.1.20 for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie ipdom=1
+  debug|    it's a match
+> list
+  <Cookie dev=1 for localhost.local/>
+  <Cookie dom=1 for .localhost/>
+  <Cookie loc=1 for .localhost.local/>
+  <Cookie ip=1 for 192.168.1.20/>
+  <Cookie ipdom=1 for .168.1.20/>
+== files
+> now | 1700000000
+> jar | mozilla
+> load | data/cookies.txt | 0 | 0
+> list
+  <Cookie theme=dark for .example.com/>
+  <Cookie session=abc123 for .example.com/>
+  <Cookie flagonly for api.example.com/>
+> save | work/out.txt | 0 | 0
+  file| # Netscape HTTP Cookie File
+  file| # http://curl.haxx.se/rfc/cookie_spec.html
+  file| # This is a generated file!  Do not edit.
+  file|
+  file| .example.com	TRUE	/	FALSE	2000000000	theme	dark
+  file| #HttpOnly_.example.com	TRUE	/	TRUE	2000000000	session	abc123
+  file| api.example.com	FALSE	/	FALSE	2000000000		flagonly
+> save | work/all.txt | 1 | 1
+  file| # Netscape HTTP Cookie File
+  file| # http://curl.haxx.se/rfc/cookie_spec.html
+  file| # This is a generated file!  Do not edit.
+  file|
+  file| .example.com	TRUE	/	FALSE	2000000000	theme	dark
+  file| #HttpOnly_.example.com	TRUE	/	TRUE	2000000000	session	abc123
+  file| api.example.com	FALSE	/	FALSE	2000000000		flagonly
+> get | https://www.example.com/cart/1
+  Cookie: theme=dark; session=abc123
+  debug| add_cookie_header
+  debug| Checking .example.com for cookies to return
+  debug| - checking cookie path=/
+  debug|  - checking cookie theme=dark
+  debug|    it's a match
+  debug|  - checking cookie session=abc123
+  debug|    it's a match
+> jar | mozilla
+> load | data/cookies.txt | 1 | 1
+> len
+  6
+> clear_expired
+> len
+  5
+> load | data/not_cookies.txt | 0 | 0
+  ! LoadError: 'data/not_cookies.txt' does not look like a Netscape format cookies file
+> load | data/nope.txt | 0 | 0
+  ! FileNotFoundError: [Errno 2] No such file or directory: 'data/nope.txt'
+> save | - | 0 | 0
+  ! ValueError: a filename was not supplied (nor was the CookieJar instance initialised with one)
+> jar | mozilla
+> load | data/bad_cookies.txt | 1 | 1
+  warning| http.cookiejar bug!
+  ! LoadError: invalid Netscape format cookies file 'data/bad_cookies.txt': 'example.org\tTRUE\t/\tFALSE\t2000000000\tsecond\t2'
+> list
+  <Cookie first=1 for .example.com/>
+> revert | data/bad_cookies.txt | 1 | 1
+  warning| http.cookiejar bug!
+  ! LoadError: invalid Netscape format cookies file 'data/bad_cookies.txt': 'example.org\tTRUE\t/\tFALSE\t2000000000\tsecond\t2'
+> list
+  <Cookie first=1 for .example.com/>
+> revert | data/cookies.txt | 0 | 0
+> list
+  <Cookie theme=dark for .example.com/>
+  <Cookie session=abc123 for .example.com/>
+  <Cookie flagonly for api.example.com/>
+> jar | lwp
+> set | http://www.acme.com/app/login | Set-Cookie: sid="a b"; path=/app; HttpOnly | Set-Cookie: lang=en; Domain=.acme.com; Max-Age=86400; Comment=prefs | Set-Cookie: tok=1; port=80; Expires=Wed, 09-Nov-2033 23:12:40 GMT
+  debug| extract_cookies: 3 header(s)
+  debug|  - checking cookie sid="a b"
+  debug|  setting cookie: <Cookie sid="a b" for www.acme.com/app>
+  debug|  - checking cookie lang=en
+  debug|  setting cookie: <Cookie lang=en for .acme.com/app>
+  debug|  - checking cookie tok=1
+  debug|  setting cookie: <Cookie tok=1 for www.acme.com:80/app>
+> save | work/acme.lwp | 1 | 0
+  file| #LWP-Cookies-2.0
+  file| Set-Cookie3: sid="\"a b\""; path="/app"; domain=www.acme.com; path_spec; discard; HttpOnly=None; version=0
+  file| Set-Cookie3: tok=1; path="/app"; domain=www.acme.com; port=80; port_spec; expires="2033-11-09 23:12:40Z"; version=0
+  file| Set-Cookie3: lang=en; path="/app"; domain=.acme.com; domain_dot; expires="2023-11-15 22:13:20Z"; comment=prefs; version=0
+> save | work/acme2.lwp | 0 | 0
+  file| #LWP-Cookies-2.0
+  file| Set-Cookie3: tok=1; path="/app"; domain=www.acme.com; port=80; port_spec; expires="2033-11-09 23:12:40Z"; version=0
+  file| Set-Cookie3: lang=en; path="/app"; domain=.acme.com; domain_dot; expires="2023-11-15 22:13:20Z"; comment=prefs; version=0
+> jar | lwp
+> load | work/acme.lwp | 1 | 0
+> repr
+  Cookie(version=0, name='sid', value='"a b"', port=None, port_specified=False, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/app', path_specified=True, secure=False, expires=None, discard=True, comment=None, comment_url=None, rest={'HttpOnly': 'None'}, rfc2109=False)
+  Cookie(version=0, name='tok', value='1', port='80', port_specified=True, domain='www.acme.com', domain_specified=False, domain_initial_dot=False, path='/app', path_specified=False, secure=False, expires=2015190760, discard=False, comment=None, comment_url=None, rest={}, rfc2109=False)
+  Cookie(version=0, name='lang', value='en', port=None, port_specified=False, domain='.acme.com', domain_specified=True, domain_initial_dot=True, path='/app', path_specified=False, secure=False, expires=1700086400, discard=False, comment='prefs', comment_url=None, rest={}, rfc2109=False)
+> load | data/session.lwp | 0 | 0
+> list
+  <Cookie sid="a b" for www.acme.com/app>
+  <Cookie tok=1 for www.acme.com:80/app>
+  <Cookie v1=x for www.acme.com:80,8080/>
+  <Cookie lang=en for .acme.com/app>
+  <Cookie lang=en for .acme.com/>
+> load | data/bad.lwp | 1 | 1
+  warning| http.cookiejar bug!
+  ! LoadError: invalid Set-Cookie3 format file 'data/bad.lwp': 'frac=1; path="/"; domain=".acme.com"; expires="2033-05-18 03:33:20.5Z"; version=0'
+> load | data/cookies.txt | 0 | 0
+  ! LoadError: 'data/cookies.txt' does not look like a Set-Cookie3 (LWP) format file
+> jar | mozilla
+> load | data/session.lwp | 0 | 0
+  ! LoadError: 'data/session.lwp' does not look like a Netscape format cookies file
+== program: a login session that survives a restart
+GET https://shop.example.com/
+  Cookie: (none)
+  2 cookie header(s) back, jar holds 2
+GET https://shop.example.com/login
+  Cookie: visitor=v-1001; csrftoken=t-7
+  2 cookie header(s) back, jar holds 3
+GET https://shop.example.com/account/orders
+  Cookie: visitor=v-1001; csrftoken=t-8; sessionid=s-42
+  1 cookie header(s) back, jar holds 4
+GET http://shop.example.com/account/orders
+  Cookie: recent=o-9,o-8; visitor=v-1001
+  0 cookie header(s) back, jar holds 4
+saved work/session.txt with session cookies:
+  file| # Netscape HTTP Cookie File
+  file| # http://curl.haxx.se/rfc/cookie_spec.html
+  file| # This is a generated file!  Do not edit.
+  file|
+  file| .example.com	TRUE	/	FALSE	2145916800	visitor	v-1001
+  file| shop.example.com	FALSE	/	TRUE		csrftoken	t-8
+  file| shop.example.com	FALSE	/	TRUE		sessionid	s-42
+  file| shop.example.com	FALSE	/account	FALSE	1700003720	recent	o-9,o-8
+saved work/session.txt without them:
+  file| # Netscape HTTP Cookie File
+  file| # http://curl.haxx.se/rfc/cookie_spec.html
+  file| # This is a generated file!  Do not edit.
+  file|
+  file| .example.com	TRUE	/	FALSE	2145916800	visitor	v-1001
+  file| shop.example.com	FALSE	/account	FALSE	1700003720	recent	o-9,o-8
+restarted two hours later; loaded 1 cookie(s): visitor
+GET https://shop.example.com/account/orders
+  Cookie: visitor=v-1001
+  1 cookie header(s) back, jar holds 1
+GET https://shop.example.com/
+  Cookie: visitor=v-1001
+  0 cookie header(s) back, jar holds 1
+== program: a third-party cookie audit
+http://www.news.com/ on www.news.com (first-party): 2 of 2 kept
+http://img.news.com/logo.png on www.news.com (third-party): 1 of 1 kept
+http://ad.doubleclick.net/pixel on www.news.com (third-party): 0 of 1 kept
+  third-party Netscape cookie during unverifiable transaction
+http://cdn.widgets.io/w.js on www.news.com (third-party): 0 of 1 kept
+  third-party Netscape cookie during unverifiable transaction
+http://stats.news.com/hit on www.news.com (third-party): 1 of 1 kept
+http://www.shop.com/ on www.shop.com (first-party): 1 of 1 kept
+http://pixel.tracker.net/p on www.shop.com (third-party): 0 of 1 kept
+  third-party Netscape cookie during unverifiable transaction
+jar:
+  .news.com      cdn
+  .stats.news.com hit
+  www.news.com   consent edition
+  www.shop.com   basket

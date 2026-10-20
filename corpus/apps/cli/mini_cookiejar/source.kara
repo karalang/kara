@@ -1,0 +1,5656 @@
+// mini_cookiejar: Python 3.13's http.cookiejar, ported from
+// Lib/http/cookiejar.py: the date parsers (http2time with its strict and
+// loose formats and the two-digit year rule, iso2time, time2isoz and
+// time2netscape), the header parsers (split_header_words,
+// join_header_words, parse_ns_headers), the domain rules (domain_match,
+// user_domain_match, is_HDN, reach, escape_path), Cookie,
+// DefaultCookiePolicy with every set_ok_* and return_ok_* check and its
+// debug log, CookieJar (extract_cookies, add_cookie_header, the nested
+// domain/path/name store, clear and the session and expiry sweeps), and
+// the two file formats: MozillaCookieJar's cookies.txt and LWPCookieJar's
+// Set-Cookie3 lines, with load, save and revert.
+//
+// http.cookiejar is built on re, so this carries mini_re's regular
+// expression engine (Python 3.13's parser and an sre-style backtracking
+// matcher) and compiles the module's own patterns with it. Requests are
+// urllib.request.Request as the module sees one: the URL split into its
+// type, host and selector, an origin host and the unverifiable flag.
+//
+// data/jobs.tsv drives the jars, one op a line, on a clock the jobs set.
+// Then two programs run on the module: a login session saved to
+// cookies.txt and loaded again after a restart, and a third-party cookie
+// audit with a block list. expected.out is the output of oracle.py, which
+// runs the same jobs through http.cookiejar itself with its debug log on.
+
+// ------------------------------------------------------------ text
+
+fn chars(s: ref String) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for c in s.chars() {
+        out.push(c);
+    }
+    out
+}
+
+fn cut(v: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// s[lo:], with Python's clamping
+fn tail_from(s: ref String, lo: i64) -> String {
+    let v = chars(s);
+    if lo >= v.len() {
+        return String.new();
+    }
+    cut(v, if lo < 0 { 0 } else { lo }, v.len())
+}
+
+fn head_to(s: ref String, hi: i64) -> String {
+    let v = chars(s);
+    cut(v, 0, if hi > v.len() { v.len() } else if hi < 0 { 0 } else { hi })
+}
+
+fn clen(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+        first = false;
+    }
+    out
+}
+
+fn starts(s: ref String, p: Str) -> bool {
+    let a = chars(s);
+    let b = chars(p.to_string());
+    if b.len() > a.len() {
+        return false;
+    }
+    for i in 0..b.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends(s: ref String, p: ref String) -> bool {
+    let a = chars(s);
+    let b = chars(p);
+    if b.len() > a.len() {
+        return false;
+    }
+    let off = a.len() - b.len();
+    for i in 0..b.len() {
+        if a[off + i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends_s(s: ref String, p: Str) -> bool {
+    ends(s, p.to_string())
+}
+
+// str.find(sub, start); -1 when absent
+fn find_sub(s: ref String, sub: ref String, start: i64) -> i64 {
+    let a = chars(s);
+    let b = chars(sub);
+    let mut i = start;
+    while i + b.len() <= a.len() {
+        let mut ok = true;
+        for j in 0..b.len() {
+            if a[i + j] != b[j] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find_s(s: ref String, sub: Str) -> i64 {
+    find_sub(s, sub.to_string(), 0)
+}
+
+// str.rfind(sub, 0, end)
+fn rfind_sub(s: ref String, sub: ref String, end: i64) -> i64 {
+    let a = chars(s);
+    let b = chars(sub);
+    let mut i = (if end > a.len() { a.len() } else { end }) - b.len();
+    while i >= 0 {
+        let mut ok = true;
+        for j in 0..b.len() {
+            if a[i + j] != b[j] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn count_char(s: ref String, c: char) -> i64 {
+    let mut n = 0;
+    for d in s.chars() {
+        if d == c {
+            n += 1;
+        }
+    }
+    n
+}
+
+// The characters str.split() and str.strip() treat as whitespace.
+fn is_py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f
+        or n == 0x205f or n == 0x3000
+}
+
+fn strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and is_py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    cut(v, lo, hi)
+}
+
+fn lstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    while lo < v.len() and is_py_space(v[lo]) {
+        lo += 1;
+    }
+    cut(v, lo, v.len())
+}
+
+fn rstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut hi = v.len();
+    while hi > 0 and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    cut(v, 0, hi)
+}
+
+fn low(s: ref String) -> String {
+    s.to_lowercase()
+}
+
+// str.partition(sep) for a one-character separator
+fn partition(s: ref String, sep: char) -> (String, bool, String) {
+    let v = chars(s);
+    for i in 0..v.len() {
+        if v[i] == sep {
+            return (cut(v, 0, i), true, cut(v, i + 1, v.len()));
+        }
+    }
+    (s.clone(), false, String.new())
+}
+
+// str.partition(": ")
+fn partition_colon(s: ref String) -> (String, String) {
+    let i = find_s(s, ": ");
+    if i < 0 {
+        return (s.clone(), String.new());
+    }
+    (head_to(s, i), tail_from(s, i + 2))
+}
+
+// str.capitalize, for the ASCII header names urllib.request sees
+fn capitalize(s: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for c in s.chars() {
+        if first {
+            out.push_str(c.to_string().to_uppercase());
+        } else {
+            out.push_str(c.to_string().to_lowercase());
+        }
+        first = false;
+    }
+    out
+}
+
+fn pad0(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while clen(s) < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let mut w = clen(s);
+    while w < n {
+        out.push(' ');
+        w += 1;
+    }
+    out
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and v[j] < v[j - 1] {
+            let t = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn has(v: ref Vec[String], s: ref String) -> bool {
+    for x in v.iter() {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn strs(items: Str) -> Vec[String] {
+    split_on(items.to_string(), ' ')
+}
+
+// ------------------------------------------------------------ Python reprs
+
+fn pr(s: ref String) -> String {
+    repr_of(cp(s.as_str()))
+}
+
+fn pr_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(t) => pr(t),
+        None => "None".to_string(),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn cp(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+// ------------------------------------------------------------ exceptions
+
+// A Python exception: its type's name and str(e).
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+// int(s): surrounding whitespace, a sign, and single underscores between
+// the digits.
+fn py_int(s: ref String) -> Option[i64] {
+    let v = chars(strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    let mut n: i64 = 0;
+    let mut digits = 0;
+    let mut prev_us = false;
+    while i < v.len() {
+        let c = v[i];
+        if c == '_' {
+            if digits == 0 or prev_us {
+                return None;
+            }
+            prev_us = true;
+            i += 1;
+            continue;
+        }
+        if c < '0' or c > '9' {
+            return None;
+        }
+        n = n * 10 + ((c as i64) - ('0' as i64));
+        digits += 1;
+        prev_us = false;
+        i += 1;
+    }
+    if digits == 0 or prev_us {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn int_of(s: ref String) -> Result[i64, Exc] {
+    match py_int(s) {
+        Some(n) => Ok(n),
+        None => Err(exc("ValueError", f"invalid literal for int() with base 10: {pr(s)}")),
+    }
+}
+
+// int(float(s)), for the expiry times in a cookies.txt file
+fn int_float_of(s: ref String) -> Result[i64, Exc] {
+    match py_int(s) {
+        Some(n) => return Ok(n),
+        None => {}
+    }
+    match f64.parse(strip(s)) {
+        Ok(x) => Ok(x as i64),
+        Err(_) => Err(exc("ValueError", f"could not convert string to float: {pr(s)}")),
+    }
+}
+
+// ------------------------------------------------------------ re, as used
+
+struct Hit {
+    s: Vec[i64],
+    f: Found,
+}
+
+// pattern.search(s), or match (mode 1) or fullmatch (mode 2)
+fn rx_find(p: ref Program, s: ref String, mode: i64) -> Option[Hit] {
+    let v = cp(s.as_str());
+    let mut m = new_matcher(p, v);
+    match find(mut m, p, 0, false, mode) {
+        Some(f) => Some(Hit { s: v, f: f }),
+        None => None,
+    }
+}
+
+fn grp(h: ref Hit, g: i64) -> Option[String] {
+    let (a, b) = if g == 0 { (h.f.start, h.f.end) } else { h.f.spans[g - 1] };
+    if a < 0 {
+        return None;
+    }
+    Some(to_string(slice(h.s, a, b)))
+}
+
+fn grp_s(h: ref Hit, g: i64) -> String {
+    match grp(h, g) {
+        Some(t) => t,
+        None => String.new(),
+    }
+}
+
+// the string with the match taken out
+fn unmatched(h: ref Hit) -> String {
+    let mut v = slice(h.s, 0, h.f.start);
+    push_all(mut v, slice(h.s, h.f.end, h.s.len()));
+    to_string(v)
+}
+
+// pattern.sub(prefix + r"\1", s)
+fn sub_group1(p: ref Program, s: ref String, prefix: Str) -> String {
+    let v = cp(s.as_str());
+    let ms = all_matches(p, v, 0);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    for m in ms.iter() {
+        push_all(mut out, slice(v, i, m.start));
+        push_ascii(mut out, prefix);
+        let (a, b) = m.spans[0];
+        if a >= 0 {
+            push_all(mut out, slice(v, a, b));
+        }
+        i = m.end;
+    }
+    push_all(mut out, slice(v, i, v.len()));
+    to_string(out)
+}
+
+// pattern.sub("", s, 1)
+fn sub_first(p: ref Program, s: ref String) -> String {
+    match rx_find(p, s, 0) {
+        Some(h) => unmatched(h),
+        None => s.clone(),
+    }
+}
+
+fn searches(p: ref Program, s: ref String) -> bool {
+    rx_find(p, s, 0).is_some()
+}
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn group_text(s: ref Vec[i64], span: (i64, i64), out: mut ref Vec[i64]) {
+    let (a, b) = span;
+    if a < 0 {
+        push_ascii(mut out, "None");
+    } else {
+        str_repr(slice(s, a, b), mut out);
+    }
+}
+
+fn span_text(span: (i64, i64)) -> String {
+    let (a, b) = span;
+    f"({a}, {b})"
+}
+
+fn show_match(prog: ref Program, s: ref Vec[i64], found: ref Option[Found], out: mut ref Vec[i64]) {
+    let m = match found {
+        Some(m) => m,
+        None => {
+            push_ascii(mut out, "  None\n");
+            return;
+        }
+    };
+    push_ascii(mut out, f"  span={span_text((m.start, m.end))} match=");
+    str_repr(slice(s, m.start, m.end), mut out);
+    out.push(10);
+    if prog.groups > 0 {
+        push_ascii(mut out, "  groups=(");
+        let mut g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            group_text(s, m.spans[g], mut out);
+            g += 1;
+        }
+        if m.spans.len() == 1 {
+            push_ascii(mut out, ",");
+        }
+        push_ascii(mut out, ")\n  spans=[");
+        g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            push_ascii(mut out, span_text(m.spans[g]));
+            g += 1;
+        }
+        push_ascii(mut out, "]\n");
+    }
+    if prog.names.len() > 0 {
+        push_ascii(mut out, "  named=");
+        group_dict(prog, s, m, mut out);
+        out.push(10);
+    }
+}
+
+fn group_dict(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    out.push(123);
+    let mut k = 0;
+    while k < prog.names.len() {
+        if k > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (name, g) = ref prog.names[k];
+        str_repr(name, mut out);
+        push_ascii(mut out, ": ");
+        group_text(s, m.spans[g - 1], mut out);
+        k += 1;
+    }
+    out.push(125);
+}
+
+// findall's item: the match, the one group, or a tuple of the groups,
+// with '' for a group that did not take part.
+fn findall_item(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    if prog.groups == 0 {
+        str_repr(slice(s, m.start, m.end), mut out);
+        return;
+    }
+    if prog.groups > 1 {
+        out.push(40);
+    }
+    let mut g = 0;
+    while g < m.spans.len() {
+        if g > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (a, b) = m.spans[g];
+        if a < 0 {
+            push_ascii(mut out, "''");
+        } else {
+            str_repr(slice(s, a, b), mut out);
+        }
+        g += 1;
+    }
+    if prog.groups > 1 {
+        out.push(41);
+    }
+}
+
+// A replacement template: literal text and group numbers.
+enum Piece {
+    Text(Vec[i64]),
+    Group(i64),
+}
+
+// _parser.parse_template.
+fn parse_template(repl: ref Vec[i64], prog: ref Program) -> Result[Vec[Piece], ReErr] {
+    let mut s = new_tokenizer(repl)?;
+    let mut pieces: Vec[Piece] = Vec.new();
+    let mut literal: Vec[i64] = Vec.new();
+    loop {
+        let this = s.get()?;
+        if this.n == 0 {
+            break;
+        }
+        if this.n == 1 {
+            literal.push(this.a);
+            continue;
+        }
+        let c = this.b;
+        let mut index = -1;
+        let mut offset = 0;
+        if c == 103 {
+            if not s.take(60)? {
+                return Err(s.error("missing <".to_string(), 0));
+            }
+            let name = s.getuntil(62, "group name")?;
+            if not is_ascii_decimal(name) {
+                s.checkgroupname(name, 1)?;
+                let mut found = -1;
+                for (n, g) in prog.names.iter() {
+                    if same(n, name) {
+                        found = *g;
+                    }
+                }
+                if found < 0 {
+                    return Err(other_error("IndexError", f"unknown group name {repr_of(name)}"));
+                }
+                index = found;
+            } else {
+                if name.len() > 10 or digits_value(name, 0, 10) >= maxgroups() {
+                    return Err(s.error(f"invalid group reference {to_string(name)}", name.len() + 1));
+                }
+                index = digits_value(name, 0, 10);
+            }
+            offset = name.len() + 1;
+        } else if c == 48 {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_oct(s.next.a) {
+                text.push(s.get()?.a);
+                if s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                }
+            }
+            literal.push(digits_value(text, 1, 8) & 0xFF);
+            continue;
+        } else if is_dec(c) {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_dec(s.next.a) {
+                text.push(s.get()?.a);
+                if is_oct(c) and is_oct(text[2]) and s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                    let v = digits_value(text, 1, 8);
+                    if v > 0o377 {
+                        return Err(s.error(f"octal escape value {to_string(text)} outside of range 0-0o377", text.len()));
+                    }
+                    literal.push(v);
+                    continue;
+                }
+            }
+            index = digits_value(text, 1, 10);
+            offset = text.len() - 1;
+        } else {
+            let e = escape_value(this);
+            if e >= 0 {
+                literal.push(e);
+            } else if is_ascii_letter(c) {
+                return Err(s.error(f"bad escape {to_string(tok_text(this))}", 2));
+            } else {
+                literal.push(92);
+                literal.push(c);
+            }
+            continue;
+        }
+        if index > prog.groups {
+            return Err(s.error(f"invalid group reference {index}", offset));
+        }
+        pieces.push(Piece.Text(literal));
+        literal = Vec.new();
+        pieces.push(Piece.Group(index));
+    }
+    pieces.push(Piece.Text(literal));
+    Ok(pieces)
+}
+
+fn expand(pieces: ref Vec[Piece], s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    for piece in pieces.iter() {
+        match piece {
+            Piece.Text(t) => push_all(mut out, t),
+            Piece.Group(g) => {
+                let (a, b) = if *g == 0 { (m.start, m.end) } else { m.spans[*g - 1] };
+                if a >= 0 {
+                    push_all(mut out, slice(s, a, b));
+                }
+            }
+        }
+    }
+}
+
+
+// The module's regular expressions, as http/cookiejar.py writes them
+// (and urllib.request's two for splitting a URL), compiled once.
+struct Rx {
+    strict_date: Program,
+    weekday: Program,
+    loose_date: Program,
+    iso_date: Program,
+    timezone: Program,
+    token: Program,
+    quoted_value: Program,
+    value: Program,
+    escape: Program,
+    junk: Program,
+    join_token: Program,
+    join_escape: Program,
+    netscape_magic: Program,
+    lwp_magic: Program,
+    ipv4: Program,
+    cut_port: Program,
+    escaped_char: Program,
+    non_word: Program,
+    quote: Program,
+    spaces: Program,
+    url_type: Program,
+    url_host: Program,
+}
+
+fn pattern(src: Str, flags: i64) -> Program {
+    compile(cp(src), flags).unwrap()
+}
+
+fn new_rx() -> Rx {
+    Rx {
+        strict_date: pattern("^[SMTWF][a-z][a-z], (\\d\\d) ([JFMASOND][a-z][a-z]) (\\d\\d\\d\\d) (\\d\\d):(\\d\\d):(\\d\\d) GMT$", 256),
+        weekday: pattern("^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)[a-z]*,?\\s*", 258),
+        loose_date: pattern("^\n    (\\d\\d?)            # day\n       (?:\\s+|[-\\/])\n    (\\w+)              # month\n        (?:\\s+|[-\\/])\n    (\\d+)              # year\n    (?:\n          (?:\\s+|:)    # separator before clock\n       (\\d\\d?):(\\d\\d)  # hour:min\n       (?::(\\d\\d))?    # optional seconds\n    )?                 # optional clock\n       \\s*\n    (?:\n       ([-+]?\\d{2,4}|(?![APap][Mm]\\b)[A-Za-z]+) # timezone\n       \\s*\n    )?\n    (?:\n       \\(\\w+\\)         # ASCII representation of timezone in parens.\n       \\s*\n    )?$", 320),
+        iso_date: pattern("^\n    (\\d{4})              # year\n       [-\\/]?\n    (\\d\\d?)              # numerical month\n       [-\\/]?\n    (\\d\\d?)              # day\n   (?:\n         (?:\\s+|[-:Tt])  # separator before clock\n      (\\d\\d?):?(\\d\\d)    # hour:min\n      (?::?(\\d\\d(?:\\.\\d*)?))?  # optional seconds (and fractional)\n   )?                    # optional clock\n      \\s*\n   (?:\n      ([-+]?\\d\\d?:?(:?\\d\\d)?\n       |Z|z)             # timezone  (Z is \"zero meridian\", i.e. GMT)\n      \\s*\n   )?$", 320),
+        timezone: pattern("^([-+])?(\\d\\d?):?(\\d\\d)?$", 256),
+        token: pattern("^\\s*([^=\\s;,]+)", 0),
+        quoted_value: pattern("^\\s*=\\s*\\\"([^\\\"\\\\]*(?:\\\\.[^\\\"\\\\]*)*)\\\"", 0),
+        value: pattern("^\\s*=\\s*([^\\s;,]*)", 0),
+        escape: pattern("\\\\(.)", 0),
+        junk: pattern("^[=\\s;]*", 0),
+        join_token: pattern("[!#$%&'*+\\-.^_`|~0-9A-Za-z]+", 0),
+        join_escape: pattern("([\\\"\\\\])", 0),
+        netscape_magic: pattern("#( Netscape)? HTTP Cookie File", 258),
+        lwp_magic: pattern("^\\#LWP-Cookies-(\\d+\\.\\d+)", 256),
+        ipv4: pattern("\\.\\d+$", 256),
+        cut_port: pattern(":\\d+$", 256),
+        escaped_char: pattern("%([0-9a-fA-F][0-9a-fA-F])", 0),
+        non_word: pattern("\\W", 0),
+        quote: pattern("([\\\"\\\\])", 0),
+        spaces: pattern("\\s+", 0),
+        url_type: pattern("([^/:]+):(.*)", 16),
+        url_host: pattern("//([^/#?]*)(.*)", 16),
+    }
+}
+// ------------------------------------------------------------ the context
+
+// What the module reads from its surroundings: its compiled patterns,
+// the clock (time.time()), and the debug log and warnings it writes.
+struct Ctx {
+    rx: Rx,
+    now: i64,
+    log: Vec[String],
+    warnings: Vec[String],
+}
+
+fn debug(cx: mut ref Ctx, msg: own String) {
+    cx.log.push(msg);
+}
+
+// _warn_unhandled_exception: the first line of the warning it raises
+fn warn_bug(cx: mut ref Ctx) {
+    cx.warnings.push("http.cookiejar bug!".to_string());
+}
+
+// ------------------------------------------------------------ dates
+
+#[derive(Copy, Clone)]
+struct Time {
+    t: i64,
+    // http2time's strict path hands timegm a float second, so its
+    // result is a float
+    float: bool,
+}
+
+fn time_repr(t: Time) -> String {
+    if t.float { f"{t.t}.0" } else { f"{t.t}" }
+}
+
+fn opt_time_repr(t: ref Option[Time]) -> String {
+    match t {
+        Some(x) => time_repr(*x),
+        None => "None".to_string(),
+    }
+}
+
+fn day_names() -> Vec[String] {
+    strs("Mon Tue Wed Thu Fri Sat Sun")
+}
+
+fn month_names() -> Vec[String] {
+    strs("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec")
+}
+
+// MONTHS_LOWER.index(m); -1 when absent
+fn month_index(m: ref String) -> i64 {
+    let names = month_names();
+    for i in 0..names.len() {
+        if low(names[i]) == *m {
+            return i;
+        }
+    }
+    -1
+}
+
+// days since 1970-01-01 of a proleptic Gregorian date; the day may run
+// past the end of its month, as calendar.timegm allows
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = (if y2 >= 0 { y2 } else { y2 - 399 }) / 400;
+    let yoe = y2 - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468 + d - 1
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+struct Civil {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    weekday: i64,
+}
+
+// datetime.fromtimestamp(t, tz=UTC)
+fn utc(t: i64) -> Civil {
+    let days = floor_div(t, 86400);
+    let secs = t - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    Civil {
+        year: y,
+        month: m,
+        day: d,
+        hour: secs / 3600,
+        minute: (secs / 60) % 60,
+        second: secs % 60,
+        weekday: ((days % 7) + 7 + 3) % 7,
+    }
+}
+
+fn time2isoz(t: i64) -> String {
+    let c = utc(t);
+    f"{pad0(c.year, 4)}-{pad0(c.month, 2)}-{pad0(c.day, 2)} {pad0(c.hour, 2)}:{pad0(c.minute, 2)}:{pad0(c.second, 2)}Z"
+}
+
+fn time2netscape(t: i64) -> String {
+    let c = utc(t);
+    let days = day_names();
+    let months = month_names();
+    f"{days[c.weekday]}, {pad0(c.day, 2)}-{months[c.month - 1]}-{pad0(c.year, 4)} {pad0(c.hour, 2)}:{pad0(c.minute, 2)}:{pad0(c.second, 2)} GMT"
+}
+
+// _timegm: None outside the ranges it accepts
+fn timegm_checked(year: i64, month: i64, mday: i64, hour: i64, min: i64, sec: i64) -> Option[i64] {
+    if year >= 1970 and month >= 1 and month <= 12 and mday >= 1 and mday <= 31
+        and hour >= 0 and hour <= 24 and min >= 0 and min <= 59 and sec >= 0 and sec <= 61 {
+        return Some(days_from_civil(year, month, mday) * 86400 + hour * 3600 + min * 60 + sec);
+    }
+    None
+}
+
+fn offset_from_tz_string(cx: ref Ctx, tz: ref String) -> Option[i64] {
+    if *tz == "GMT" or *tz == "UTC" or *tz == "UT" or *tz == "Z" {
+        return Some(0);
+    }
+    match rx_find(cx.rx.timezone, tz, 0) {
+        Some(h) => {
+            let mut offset = 3600 * py_int(grp_s(h, 2)).unwrap();
+            match grp(h, 3) {
+                Some(m) => {
+                    if not m.is_empty() {
+                        offset = offset + 60 * py_int(m).unwrap();
+                    }
+                }
+                None => {}
+            }
+            if grp_s(h, 1) == "-" {
+                offset = -offset;
+            }
+            Some(offset)
+        }
+        None => None,
+    }
+}
+
+fn int_or_zero(s: ref Option[String]) -> Result[i64, Exc] {
+    match s {
+        Some(t) => int_of(t),
+        None => Ok(0),
+    }
+}
+
+fn str2time(cx: ref Ctx, day: ref String, mon: ref String, yr0: ref String, hr: ref Option[String],
+            min: ref Option[String], sec: ref Option[String], tz0: ref Option[String]) -> Result[Option[i64], Exc] {
+    let mut yr = int_of(yr0)?;
+    if yr > 9999 {
+        return Ok(None);
+    }
+    let mut month = month_index(low(mon)) + 1;
+    if month == 0 {
+        match py_int(mon) {
+            Some(i) => {
+                if i >= 1 and i <= 12 {
+                    month = i;
+                } else {
+                    return Ok(None);
+                }
+            }
+            None => return Ok(None),
+        }
+    }
+    let d = int_of(day)?;
+    let h = int_or_zero(hr)?;
+    let mi = int_or_zero(min)?;
+    let s = int_or_zero(sec)?;
+    if yr < 1000 {
+        let cur_yr = utc(cx.now).year;
+        let mut m = cur_yr % 100;
+        let tmp = yr;
+        yr = yr + cur_yr - m;
+        m = m - tmp;
+        if m > 50 or m < -50 {
+            if m > 0 {
+                yr = yr + 100;
+            } else {
+                yr = yr - 100;
+            }
+        }
+    }
+    match timegm_checked(yr, month, d, h, mi, s) {
+        Some(t) => {
+            let tz = match tz0 {
+                Some(z) => z.to_uppercase(),
+                None => "UTC".to_string(),
+            };
+            match offset_from_tz_string(cx, tz) {
+                Some(off) => Ok(Some(t - off)),
+                None => Ok(None),
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn http2time(cx: ref Ctx, text: ref String) -> Result[Option[Time], Exc] {
+    match rx_find(cx.rx.strict_date, text, 0) {
+        Some(h) => {
+            let m = low(grp_s(h, 2));
+            let i = month_index(m);
+            if i < 0 {
+                return Err(exc("ValueError", f"{pr(m)} is not in list"));
+            }
+            let t = timegm_checked(int_of(grp_s(h, 3))?, i + 1, int_of(grp_s(h, 1))?,
+                                   int_of(grp_s(h, 4))?, int_of(grp_s(h, 5))?, int_of(grp_s(h, 6))?);
+            return Ok(match t {
+                Some(x) => Some(Time { t: x, float: true }),
+                None => None,
+            });
+        }
+        None => {}
+    }
+    let s = sub_first(cx.rx.weekday, lstrip(text));
+    match rx_find(cx.rx.loose_date, s, 0) {
+        Some(h) => {
+            let t = str2time(cx, grp_s(h, 1), grp_s(h, 2), grp_s(h, 3), grp(h, 4), grp(h, 5), grp(h, 6), grp(h, 7))?;
+            Ok(match t {
+                Some(x) => Some(Time { t: x, float: false }),
+                None => None,
+            })
+        }
+        None => Ok(None),
+    }
+}
+
+fn iso2time(cx: ref Ctx, text: ref String) -> Result[Option[i64], Exc] {
+    let s = lstrip(text);
+    match rx_find(cx.rx.iso_date, s, 0) {
+        Some(h) => str2time(cx, grp_s(h, 3), grp_s(h, 2), grp_s(h, 1), grp(h, 4), grp(h, 5), grp(h, 6), grp(h, 7)),
+        None => Ok(None),
+    }
+}
+
+// ------------------------------------------------------------ headers
+
+#[derive(Clone)]
+enum Pv {
+    Nil,
+    S(String),
+    T(Time),
+    B(bool),
+}
+
+fn pv_repr(v: ref Pv) -> String {
+    match v {
+        Pv.Nil => "None".to_string(),
+        Pv.S(s) => pr(s),
+        Pv.T(t) => time_repr(*t),
+        Pv.B(b) => py_bool(*b),
+    }
+}
+
+fn pv_of(v: ref Option[String]) -> Pv {
+    match v {
+        Some(s) => Pv.S(s.clone()),
+        None => Pv.Nil,
+    }
+}
+
+fn is_nil(v: ref Pv) -> bool {
+    match v {
+        Pv.Nil => true,
+        _ => false,
+    }
+}
+
+fn split_header_words(cx: ref Ctx, values: ref Vec[String]) -> Vec[Vec[(String, Option[String])]] {
+    let mut result: Vec[Vec[(String, Option[String])]] = Vec.new();
+    for v in values.iter() {
+        let mut text = v.clone();
+        let mut pairs: Vec[(String, Option[String])] = Vec.new();
+        while not text.is_empty() {
+            match rx_find(cx.rx.token, text, 0) {
+                Some(h) => {
+                    text = unmatched(h);
+                    let name = grp_s(h, 1);
+                    let mut value: Option[String] = None;
+                    match rx_find(cx.rx.quoted_value, text, 0) {
+                        Some(q) => {
+                            text = unmatched(q);
+                            value = Some(sub_group1(cx.rx.escape, grp_s(q, 1), ""));
+                        }
+                        None => {
+                            match rx_find(cx.rx.value, text, 0) {
+                                Some(u) => {
+                                    text = unmatched(u);
+                                    value = Some(rstrip(grp_s(u, 1)));
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    pairs.push((name, value));
+                }
+                None => {
+                    let ls = lstrip(text);
+                    if starts(ls, ",") {
+                        text = tail_from(ls, 1);
+                        if not pairs.is_empty() {
+                            result.push(pairs);
+                            pairs = Vec.new();
+                        }
+                    } else {
+                        let rest = sub_first(cx.rx.junk, text);
+                        // the junk pattern always eats a character here
+                        text = if clen(rest) < clen(text) { rest } else { tail_from(text, 1) };
+                    }
+                }
+            }
+        }
+        if not pairs.is_empty() {
+            result.push(pairs);
+        }
+    }
+    result
+}
+
+fn words_repr(r: ref Vec[Vec[(String, Option[String])]]) -> String {
+    let mut lists: Vec[String] = Vec.new();
+    for pairs in r.iter() {
+        let mut items: Vec[String] = Vec.new();
+        for (k, v) in pairs.iter() {
+            items.push(f"({pr(k)}, {pr_opt(v)})");
+        }
+        lists.push(f"[{join(items, ", ")}]");
+    }
+    f"[{join(lists, ", ")}]"
+}
+
+fn join_header_words(cx: ref Ctx, lists: ref Vec[Vec[(String, Option[String])]]) -> String {
+    let mut headers: Vec[String] = Vec.new();
+    for pairs in lists.iter() {
+        let mut attr: Vec[String] = Vec.new();
+        for (k, v) in pairs.iter() {
+            match v {
+                Some(s) => {
+                    let mut val = s.clone();
+                    if rx_find(cx.rx.join_token, val, 2).is_none() {
+                        val = sub_group1(cx.rx.join_escape, val, "\\");
+                        val = f"\"{val}\"";
+                    }
+                    attr.push(f"{k}={val}");
+                }
+                None => attr.push(k.clone()),
+            }
+        }
+        if not attr.is_empty() {
+            headers.push(join(attr, "; "));
+        }
+    }
+    join(headers, ", ")
+}
+
+fn strip_quotes(text: ref String) -> String {
+    let mut t = text.clone();
+    if starts(t, "\"") {
+        t = tail_from(t, 1);
+    }
+    if ends_s(t, "\"") {
+        t = head_to(t, clen(t) - 1);
+    }
+    t
+}
+
+fn parse_ns_headers(cx: ref Ctx, ns_headers: ref Vec[String]) -> Result[Vec[Vec[(String, Pv)]], Exc] {
+    let known = strs("expires domain path secure version port max-age");
+    let mut result: Vec[Vec[(String, Pv)]] = Vec.new();
+    for ns_header in ns_headers.iter() {
+        let mut pairs: Vec[(String, Pv)] = Vec.new();
+        let mut version_set = false;
+        let params = split_on(ns_header, ';');
+        for ii in 0..params.len() {
+            let param = strip(params[ii]);
+            let (key0, sep, val0) = partition(param, '=');
+            let mut key = strip(key0);
+            if key.is_empty() {
+                if ii == 0 {
+                    break;
+                }
+                continue;
+            }
+            let mut val = if sep { Pv.S(strip(val0)) } else { Pv.Nil };
+            if ii != 0 {
+                let lc = low(key);
+                if has(known, lc) {
+                    key = lc;
+                }
+                if key == "version" {
+                    match val.clone() {
+                        Pv.S(s) => val = Pv.S(strip_quotes(s)),
+                        _ => {}
+                    }
+                    version_set = true;
+                } else if key == "expires" {
+                    match val.clone() {
+                        Pv.S(s) => {
+                            val = match http2time(cx, strip_quotes(s))? {
+                                Some(t) => Pv.T(t),
+                                None => Pv.Nil,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            pairs.push((key, val));
+        }
+        if not pairs.is_empty() {
+            if not version_set {
+                pairs.push(("version".to_string(), Pv.S("0".to_string())));
+            }
+            result.push(pairs);
+        }
+    }
+    Ok(result)
+}
+
+fn ns_repr(r: ref Vec[Vec[(String, Pv)]]) -> String {
+    let mut lists: Vec[String] = Vec.new();
+    for pairs in r.iter() {
+        let mut items: Vec[String] = Vec.new();
+        for (k, v) in pairs.iter() {
+            items.push(f"({pr(k)}, {pv_repr(v)})");
+        }
+        lists.push(f"[{join(items, ", ")}]");
+    }
+    f"[{join(lists, ", ")}]"
+}
+
+// ------------------------------------------------------------ domains
+
+fn is_hdn(cx: ref Ctx, text: ref String) -> bool {
+    if searches(cx.rx.ipv4, text) {
+        return false;
+    }
+    if text.is_empty() {
+        return false;
+    }
+    if starts(text, ".") or ends_s(text, ".") {
+        return false;
+    }
+    true
+}
+
+fn domain_match(cx: ref Ctx, a0: ref String, b0: ref String) -> bool {
+    let a = low(a0);
+    let b = low(b0);
+    if a == b {
+        return true;
+    }
+    if not is_hdn(cx, a) {
+        return false;
+    }
+    let i = rfind_sub(a, b, clen(a));
+    if i == -1 or i == 0 {
+        return false;
+    }
+    if not starts(b, ".") {
+        return false;
+    }
+    if not is_hdn(cx, tail_from(b, 1)) {
+        return false;
+    }
+    true
+}
+
+fn liberal_is_hdn(cx: ref Ctx, text: ref String) -> bool {
+    not searches(cx.rx.ipv4, text)
+}
+
+fn user_domain_match(cx: ref Ctx, a0: ref String, b0: ref String) -> bool {
+    let a = low(a0);
+    let b = low(b0);
+    if not (liberal_is_hdn(cx, a) and liberal_is_hdn(cx, b)) {
+        return a == b;
+    }
+    let initial_dot = starts(b, ".");
+    if initial_dot and ends(a, b) {
+        return true;
+    }
+    if not initial_dot and a == b {
+        return true;
+    }
+    false
+}
+
+fn reach(cx: ref Ctx, h: ref String) -> String {
+    let i = find_s(h, ".");
+    if i >= 0 {
+        let b = tail_from(h, i + 1);
+        let j = find_s(b, ".");
+        if is_hdn(cx, h) and (j >= 0 or b == "local") {
+            return f".{b}";
+        }
+    }
+    h.clone()
+}
+
+const HEX_UPPER: Str = "0123456789ABCDEF";
+
+fn is_hex_char(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+// urllib.parse.quote(path, HTTP_PATH_SAFE), then every %xx escape in
+// upper case
+fn escape_path(path: ref String) -> String {
+    let safe = chars("%/;:@&=+$,!~*'()_.-".to_string());
+    let digits = chars(HEX_UPPER.to_string());
+    let mut quoted = String.new();
+    for c in path.chars() {
+        let alnum = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9');
+        let mut is_safe = alnum;
+        for s in safe.iter() {
+            if *s == c {
+                is_safe = true;
+            }
+        }
+        if is_safe {
+            quoted.push(c);
+        } else {
+            for b in c.to_string().bytes() {
+                let n = b as i64;
+                quoted.push('%');
+                quoted.push(digits[n / 16]);
+                quoted.push(digits[n % 16]);
+            }
+        }
+    }
+    let v = chars(quoted);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '%' and i + 2 < v.len() + 0 and is_hex_char(v[i + 1]) and is_hex_char(v[i + 2]) {
+            out.push('%');
+            out.push_str(v[i + 1].to_string().to_uppercase());
+            out.push_str(v[i + 2].to_string().to_uppercase());
+            i += 3;
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ requests
+
+// urllib.request.HttpRequest, as far as the module looks at one.
+struct HttpRequest {
+    full_url: String,
+    fragment: Option[String],
+    rtype: String,
+    host: String,
+    origin_req_host: String,
+    unverifiable: bool,
+    headers: Vec[(String, String)],
+    unredirected: Vec[(String, String)],
+}
+
+fn dict_set(d: mut ref Vec[(String, String)], k: ref String, v: ref String) {
+    for i in 0..d.len() {
+        if d[i].0 == *k {
+            d[i] = (k.clone(), v.clone());
+            return;
+        }
+    }
+    d.push((k.clone(), v.clone()));
+}
+
+fn dict_get(d: ref Vec[(String, String)], k: Str) -> Option[String] {
+    for (a, b) in d.iter() {
+        if *a == k {
+            return Some(b.clone());
+        }
+    }
+    None
+}
+
+impl HttpRequest {
+    fn get_full_url(ref self) -> String {
+        match self.fragment {
+            Some(f) => f"{self.full_url}#{f}",
+            None => self.full_url.clone(),
+        }
+    }
+
+    fn has_header(ref self, name: Str) -> bool {
+        dict_get(self.headers, name).is_some() or dict_get(self.unredirected, name).is_some()
+    }
+
+    fn get_header(ref self, name: Str) -> String {
+        match dict_get(self.headers, name) {
+            Some(v) => v,
+            None => match dict_get(self.unredirected, name) {
+                Some(v) => v,
+                None => String.new(),
+            },
+        }
+    }
+
+    fn add_unredirected_header(mut ref self, key: Str, val: own String) {
+        dict_set(mut self.unredirected, capitalize(key.to_string()), val);
+    }
+}
+
+fn new_request(cx: ref Ctx, url: ref String, origin: Option[String], unverifiable: bool,
+               headers: ref Vec[(String, String)]) -> HttpRequest {
+    // _splittag
+    let mut full = url.clone();
+    let mut fragment: Option[String] = None;
+    let v = chars(url);
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        if v[i] == '#' {
+            full = cut(v, 0, i);
+            fragment = Some(cut(v, i + 1, v.len()));
+            break;
+        }
+        i -= 1;
+    }
+    // _splittype and _splithost
+    let (rtype, rest) = match rx_find(cx.rx.url_type, full, 1) {
+        Some(h) => (low(grp_s(h, 1)), grp_s(h, 2)),
+        None => (String.new(), full.clone()),
+    };
+    let host = match rx_find(cx.rx.url_host, rest, 1) {
+        Some(h) => grp_s(h, 1),
+        None => String.new(),
+    };
+    let mut req = HttpRequest {
+        full_url: full,
+        fragment: fragment,
+        rtype: rtype,
+        host: host,
+        origin_req_host: String.new(),
+        unverifiable: unverifiable,
+        headers: Vec.new(),
+        unredirected: Vec.new(),
+    };
+    for (k, val) in headers.iter() {
+        dict_set(mut req.headers, capitalize(k), val);
+    }
+    req.origin_req_host = match origin {
+        Some(o) => o.clone(),
+        None => request_host(cx, req),
+    };
+    req
+}
+
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+}
+
+fn is_scheme_char(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '+' or c == '-' or c == '.'
+}
+
+// urllib.parse.urlsplit, the parts the module uses
+fn urlsplit(url: ref String) -> Split {
+    let mut v = chars(url);
+    let mut scheme = String.new();
+    let mut colon = -1;
+    for i in 0..v.len() {
+        if v[i] == ':' {
+            colon = i;
+            break;
+        }
+    }
+    if colon > 0 and ((v[0] >= 'a' and v[0] <= 'z') or (v[0] >= 'A' and v[0] <= 'Z')) {
+        let mut ok = true;
+        for i in 0..colon {
+            if not is_scheme_char(v[i]) {
+                ok = false;
+            }
+        }
+        if ok {
+            scheme = low(cut(v, 0, colon));
+            v = chars(cut(v, colon + 1, v.len()));
+        }
+    }
+    let mut netloc = String.new();
+    if v.len() >= 2 and v[0] == '/' and v[1] == '/' {
+        let mut delim = v.len();
+        for i in 2..v.len() {
+            if v[i] == '/' or v[i] == '?' or v[i] == '#' {
+                delim = i;
+                break;
+            }
+        }
+        netloc = cut(v, 2, delim);
+        v = chars(cut(v, delim, v.len()));
+    }
+    let mut end = v.len();
+    for i in 0..v.len() {
+        if v[i] == '#' {
+            end = i;
+            break;
+        }
+    }
+    for i in 0..end {
+        if v[i] == '?' {
+            end = i;
+            break;
+        }
+    }
+    Split { scheme: scheme, netloc: netloc, path: cut(v, 0, end) }
+}
+
+fn request_host(cx: ref Ctx, req: ref HttpRequest) -> String {
+    let mut host = urlsplit(req.get_full_url()).netloc;
+    if host.is_empty() {
+        host = req.get_header("Host");
+    }
+    low(sub_first(cx.rx.cut_port, host))
+}
+
+fn eff_request_host(cx: ref Ctx, req: ref HttpRequest) -> (String, String) {
+    let req_host = request_host(cx, req);
+    let erhn = if find_s(req_host, ".") < 0 { f"{req_host}.local" } else { req_host.clone() };
+    (req_host, erhn)
+}
+
+fn request_path(req: ref HttpRequest) -> String {
+    let path = escape_path(urlsplit(req.get_full_url()).path);
+    if not starts(path, "/") {
+        return f"/{path}";
+    }
+    path
+}
+
+fn request_port(cx: mut ref Ctx, req: ref HttpRequest) -> Option[String] {
+    let i = find_s(req.host, ":");
+    if i >= 0 {
+        let port = tail_from(req.host, i + 1);
+        if py_int(port).is_none() {
+            debug(mut cx, f"nonnumeric port: '{port}'");
+            return None;
+        }
+        return Some(port);
+    }
+    Some("80".to_string())
+}
+
+fn is_third_party(cx: ref Ctx, req: ref HttpRequest) -> bool {
+    not domain_match(cx, request_host(cx, req), reach(cx, req.origin_req_host))
+}
+
+// ------------------------------------------------------------ cookies
+
+#[derive(Clone)]
+struct Cookie {
+    version: Option[i64],
+    name: String,
+    value: Option[String],
+    port: Option[String],
+    port_specified: bool,
+    domain: String,
+    domain_specified: bool,
+    domain_initial_dot: bool,
+    path: String,
+    path_specified: bool,
+    secure: bool,
+    expires: Option[i64],
+    discard: bool,
+    comment: Option[String],
+    comment_url: Option[String],
+    // the non-standard attributes, in the order they were set
+    rest: Vec[(String, Option[String])],
+    rfc2109: bool,
+}
+
+// a version that is None compares as 0 in the checks that reach it
+fn ver(c: ref Cookie) -> i64 {
+    match c.version {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn value_text(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => "None".to_string(),
+    }
+}
+
+impl Cookie {
+    fn is_expired(ref self, now: i64) -> bool {
+        match self.expires {
+            Some(e) => e <= now,
+            None => false,
+        }
+    }
+
+    fn has_nonstandard_attr(ref self, name: Str) -> bool {
+        for (k, _) in self.rest.iter() {
+            if *k == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn show(ref self) -> String {
+        let p = match self.port {
+            Some(port) => f":{port}",
+            None => String.new(),
+        };
+        let namevalue = match self.value {
+            Some(v) => f"{self.name}={v}",
+            None => self.name.clone(),
+        };
+        f"<Cookie {namevalue} for {self.domain}{p}{self.path}>"
+    }
+
+    fn repr(ref self) -> String {
+        let version = match self.version {
+            Some(v) => f"{v}",
+            None => "None".to_string(),
+        };
+        let expires = match self.expires {
+            Some(e) => f"{e}",
+            None => "None".to_string(),
+        };
+        let mut rest: Vec[String] = Vec.new();
+        for (k, v) in self.rest.iter() {
+            rest.push(f"{pr(k)}: {pr_opt(v)}");
+        }
+        let mut args: Vec[String] = Vec.new();
+        args.push(f"version={version}");
+        args.push(f"name={pr(self.name)}");
+        args.push(f"value={pr_opt(self.value)}");
+        args.push(f"port={pr_opt(self.port)}");
+        args.push(f"port_specified={py_bool(self.port_specified)}");
+        args.push(f"domain={pr(self.domain)}");
+        args.push(f"domain_specified={py_bool(self.domain_specified)}");
+        args.push(f"domain_initial_dot={py_bool(self.domain_initial_dot)}");
+        args.push(f"path={pr(self.path)}");
+        args.push(f"path_specified={py_bool(self.path_specified)}");
+        args.push(f"secure={py_bool(self.secure)}");
+        args.push(f"expires={expires}");
+        args.push(f"discard={py_bool(self.discard)}");
+        args.push(f"comment={pr_opt(self.comment)}");
+        args.push(f"comment_url={pr_opt(self.comment_url)}");
+        args.push(f"rest={{{join(rest, ", ")}}}");
+        args.push(f"rfc2109={py_bool(self.rfc2109)}");
+        f"Cookie({join(args, ", ")})"
+    }
+}
+
+// ------------------------------------------------------------ the policy
+
+struct Policy {
+    blocked_domains: Vec[String],
+    allowed_domains: Option[Vec[String]],
+    netscape: bool,
+    rfc2965: bool,
+    rfc2109_as_netscape: Option[bool],
+    hide_cookie2: bool,
+    strict_domain: bool,
+    strict_rfc2965_unverifiable: bool,
+    strict_ns_unverifiable: bool,
+    strict_ns_domain: i64,
+    strict_ns_set_initial_dollar: bool,
+    strict_ns_set_path: bool,
+    secure_protocols: Vec[String],
+    now: i64,
+}
+
+fn default_policy() -> Policy {
+    Policy {
+        blocked_domains: Vec.new(),
+        allowed_domains: None,
+        netscape: true,
+        rfc2965: false,
+        rfc2109_as_netscape: None,
+        hide_cookie2: false,
+        strict_domain: false,
+        strict_rfc2965_unverifiable: true,
+        strict_ns_unverifiable: false,
+        strict_ns_domain: 0,
+        strict_ns_set_initial_dollar: false,
+        strict_ns_set_path: false,
+        secure_protocols: strs("https wss"),
+        now: 0,
+    }
+}
+
+const DOMAIN_STRICT_NO_DOTS: i64 = 1;
+const DOMAIN_STRICT_NON_DOMAIN: i64 = 2;
+const DOMAIN_RFC2965_MATCH: i64 = 4;
+
+impl Policy {
+    fn is_blocked(ref self, cx: ref Ctx, domain: ref String) -> bool {
+        for b in self.blocked_domains.iter() {
+            if user_domain_match(cx, domain, b) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn is_not_allowed(ref self, cx: ref Ctx, domain: ref String) -> bool {
+        match self.allowed_domains {
+            Some(allowed) => {
+                for a in allowed.iter() {
+                    if user_domain_match(cx, domain, a) {
+                        return false;
+                    }
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn set_ok(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        debug(mut cx, f" - checking cookie {c.name}={value_text(c.value)}");
+        self.set_ok_version(mut cx, c) and self.set_ok_verifiability(mut cx, c, req)
+            and self.set_ok_name(mut cx, c) and self.set_ok_path(mut cx, c, req)
+            and self.set_ok_domain(mut cx, c, req) and self.set_ok_port(mut cx, c, req)
+    }
+
+    fn set_ok_version(ref self, cx: mut ref Ctx, c: ref Cookie) -> bool {
+        match c.version {
+            None => {
+                debug(mut cx, f"   Set-Cookie2 without version attribute ({c.name}={value_text(c.value)})");
+                return false;
+            }
+            Some(_) => {}
+        }
+        if ver(c) > 0 and not self.rfc2965 {
+            debug(mut cx, "   RFC 2965 cookies are switched off".to_string());
+            return false;
+        } else if ver(c) == 0 and not self.netscape {
+            debug(mut cx, "   Netscape cookies are switched off".to_string());
+            return false;
+        }
+        true
+    }
+
+    fn set_ok_verifiability(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if req.unverifiable and is_third_party(cx, req) {
+            if ver(c) > 0 and self.strict_rfc2965_unverifiable {
+                debug(mut cx, "   third-party RFC 2965 cookie during unverifiable transaction".to_string());
+                return false;
+            } else if ver(c) == 0 and self.strict_ns_unverifiable {
+                debug(mut cx, "   third-party Netscape cookie during unverifiable transaction".to_string());
+                return false;
+            }
+        }
+        true
+    }
+
+    fn set_ok_name(ref self, cx: mut ref Ctx, c: ref Cookie) -> bool {
+        if ver(c) == 0 and self.strict_ns_set_initial_dollar and starts(c.name, "$") {
+            debug(mut cx, f"   illegal name (starts with '$'): '{c.name}'");
+            return false;
+        }
+        true
+    }
+
+    fn set_ok_path(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if c.path_specified {
+            let req_path = request_path(req);
+            if (ver(c) > 0 or (ver(c) == 0 and self.strict_ns_set_path)) and not self.path_return_ok(mut cx, c.path, req) {
+                debug(mut cx, f"   path attribute {c.path} is not a prefix of request path {req_path}");
+                return false;
+            }
+        }
+        true
+    }
+
+    fn set_ok_domain(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if self.is_blocked(cx, c.domain) {
+            debug(mut cx, f"   domain {c.domain} is in user block-list");
+            return false;
+        }
+        if self.is_not_allowed(cx, c.domain) {
+            debug(mut cx, f"   domain {c.domain} is not in user allow-list");
+            return false;
+        }
+        if c.domain_specified {
+            let (req_host, erhn) = eff_request_host(cx, req);
+            let domain = c.domain.clone();
+            if self.strict_domain and count_char(domain, '.') >= 2 {
+                let i = rfind_sub(domain, ".".to_string(), clen(domain));
+                let j = rfind_sub(domain, ".".to_string(), i);
+                if j == 0 {
+                    let tld = tail_from(domain, i + 1);
+                    let sld = cut(chars(domain), j + 1, i);
+                    let slds = strs("co ac com edu org net gov mil int aero biz cat coop info jobs mobi museum name pro travel eu");
+                    if has(slds, low(sld)) and clen(tld) == 2 {
+                        debug(mut cx, f"   country-code second level domain {domain}");
+                        return false;
+                    }
+                }
+            }
+            let undotted = if starts(domain, ".") { tail_from(domain, 1) } else { domain.clone() };
+            let embedded_dots = find_s(undotted, ".") >= 0;
+            if not embedded_dots and not ends_s(erhn, ".local") {
+                debug(mut cx, f"   non-local domain {domain} contains no embedded dot");
+                return false;
+            }
+            if ver(c) == 0 {
+                if not (ends(erhn, domain) or ends(erhn, f"{undotted}.local"))
+                    and (not starts(erhn, ".") and not ends(f".{erhn}", domain)) {
+                    debug(mut cx, f"   effective request-host {erhn} (even with added initial dot) does not end with {domain}");
+                    return false;
+                }
+            }
+            if ver(c) > 0 or (self.strict_ns_domain & DOMAIN_RFC2965_MATCH) != 0 {
+                if not domain_match(cx, erhn, domain) {
+                    debug(mut cx, f"   effective request-host {erhn} does not domain-match {domain}");
+                    return false;
+                }
+            }
+            if ver(c) > 0 or (self.strict_ns_domain & DOMAIN_STRICT_NO_DOTS) != 0 {
+                let n = clen(domain);
+                let end = clen(req_host) - n;
+                let host_prefix = if n == 0 or end < 0 { String.new() } else { head_to(req_host, end) };
+                if find_s(host_prefix, ".") >= 0 and not searches(cx.rx.ipv4, req_host) {
+                    debug(mut cx, f"   host prefix {host_prefix} for domain {domain} contains a dot");
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn set_ok_port(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if c.port_specified {
+            let req_port = match request_port(mut cx, req) {
+                Some(p) => p,
+                None => "80".to_string(),
+            };
+            let port = value_text(c.port);
+            for p in split_on(port, ',').iter() {
+                if py_int(p).is_none() {
+                    debug(mut cx, f"   bad port {p} (not numeric)");
+                    return false;
+                }
+                if *p == req_port {
+                    return true;
+                }
+            }
+            debug(mut cx, f"   request port ({req_port}) not found in {port}");
+            return false;
+        }
+        true
+    }
+
+    fn return_ok(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        debug(mut cx, f" - checking cookie {c.name}={value_text(c.value)}");
+        self.return_ok_version(mut cx, c) and self.return_ok_verifiability(mut cx, c, req)
+            and self.return_ok_secure(mut cx, c, req) and self.return_ok_expires(mut cx, c)
+            and self.return_ok_port(mut cx, c, req) and self.return_ok_domain(mut cx, c, req)
+    }
+
+    fn return_ok_version(ref self, cx: mut ref Ctx, c: ref Cookie) -> bool {
+        if ver(c) > 0 and not self.rfc2965 {
+            debug(mut cx, "   RFC 2965 cookies are switched off".to_string());
+            return false;
+        } else if ver(c) == 0 and not self.netscape {
+            debug(mut cx, "   Netscape cookies are switched off".to_string());
+            return false;
+        }
+        true
+    }
+
+    fn return_ok_verifiability(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if req.unverifiable and is_third_party(cx, req) {
+            if ver(c) > 0 and self.strict_rfc2965_unverifiable {
+                debug(mut cx, "   third-party RFC 2965 cookie during unverifiable transaction".to_string());
+                return false;
+            } else if ver(c) == 0 and self.strict_ns_unverifiable {
+                debug(mut cx, "   third-party Netscape cookie during unverifiable transaction".to_string());
+                return false;
+            }
+        }
+        true
+    }
+
+    fn return_ok_secure(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        if c.secure and not has(self.secure_protocols, req.rtype) {
+            debug(mut cx, "   secure cookie with non-secure request".to_string());
+            return false;
+        }
+        true
+    }
+
+    fn return_ok_expires(ref self, cx: mut ref Ctx, c: ref Cookie) -> bool {
+        if c.is_expired(self.now) {
+            debug(mut cx, "   cookie expired".to_string());
+            return false;
+        }
+        true
+    }
+
+    fn return_ok_port(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        match c.port {
+            Some(port) => {
+                if port.is_empty() {
+                    return true;
+                }
+                let req_port = match request_port(mut cx, req) {
+                    Some(p) => p,
+                    None => "80".to_string(),
+                };
+                for p in split_on(port, ',').iter() {
+                    if *p == req_port {
+                        return true;
+                    }
+                }
+                debug(mut cx, f"   request port {req_port} does not match cookie port {port}");
+                false
+            }
+            None => true,
+        }
+    }
+
+    fn return_ok_domain(ref self, cx: mut ref Ctx, c: ref Cookie, req: ref HttpRequest) -> bool {
+        let (req_host, erhn) = eff_request_host(cx, req);
+        let domain = c.domain.clone();
+        let dotdomain = if not domain.is_empty() and not starts(domain, ".") { f".{domain}" } else { domain.clone() };
+        if ver(c) == 0 and (self.strict_ns_domain & DOMAIN_STRICT_NON_DOMAIN) != 0
+            and not c.domain_specified and domain != erhn {
+            debug(mut cx, "   cookie with unspecified domain does not string-compare equal to request domain".to_string());
+            return false;
+        }
+        if ver(c) > 0 and not domain_match(cx, erhn, domain) {
+            debug(mut cx, f"   effective request-host name {erhn} does not domain-match RFC 2965 cookie domain {domain}");
+            return false;
+        }
+        if ver(c) == 0 and not ends(f".{erhn}", dotdomain) {
+            debug(mut cx, f"   request-host {req_host} does not match Netscape cookie domain {domain}");
+            return false;
+        }
+        true
+    }
+
+    fn domain_return_ok(ref self, cx: mut ref Ctx, domain: ref String, req: ref HttpRequest) -> bool {
+        let (h0, e0) = eff_request_host(cx, req);
+        let req_host = if starts(h0, ".") { h0 } else { f".{h0}" };
+        let erhn = if starts(e0, ".") { e0 } else { f".{e0}" };
+        let dotdomain = if not domain.is_empty() and not starts(domain, ".") { f".{domain}" } else { domain.clone() };
+        if not (ends(req_host, dotdomain) or ends(erhn, dotdomain)) {
+            return false;
+        }
+        if self.is_blocked(cx, domain) {
+            debug(mut cx, f"   domain {domain} is in user block-list");
+            return false;
+        }
+        if self.is_not_allowed(cx, domain) {
+            debug(mut cx, f"   domain {domain} is not in user allow-list");
+            return false;
+        }
+        true
+    }
+
+    fn path_return_ok(ref self, cx: mut ref Ctx, path: ref String, req: ref HttpRequest) -> bool {
+        debug(mut cx, f"- checking cookie path={path}");
+        let req_path = request_path(req);
+        let pathlen = clen(path);
+        if req_path == *path {
+            return true;
+        }
+        if starts(req_path, path.as_str()) and (ends_s(path, "/") or cut(chars(req_path), pathlen, if pathlen + 1 > clen(req_path) { clen(req_path) } else { pathlen + 1 }) == "/") {
+            return true;
+        }
+        debug(mut cx, f"  {req_path} does not path-match {path}");
+        false
+    }
+}
+
+// ------------------------------------------------------------ the jar
+
+struct PathBucket {
+    path: String,
+    cookies: Vec[Cookie],
+}
+
+struct DomainBucket {
+    domain: String,
+    paths: Vec[PathBucket],
+}
+
+// A CookieJar, or one of its two file-backed kinds.
+const PLAIN: i64 = 0;
+const LWP: i64 = 1;
+const MOZILLA: i64 = 2;
+
+struct Jar {
+    kind: i64,
+    policy: Policy,
+    domains: Vec[DomainBucket],
+    filename: Option[String],
+}
+
+fn new_jar(kind: i64, policy: own Policy) -> Jar {
+    Jar { kind: kind, policy: policy, domains: Vec.new(), filename: None }
+}
+
+fn copy_domains(d: ref Vec[DomainBucket]) -> Vec[DomainBucket] {
+    let mut out: Vec[DomainBucket] = Vec.new();
+    for b in d.iter() {
+        let mut paths: Vec[PathBucket] = Vec.new();
+        for p in b.paths.iter() {
+            paths.push(PathBucket { path: p.path.clone(), cookies: p.cookies.clone() });
+        }
+        out.push(DomainBucket { domain: b.domain.clone(), paths: paths });
+    }
+    out
+}
+
+// One standard cookie-attribute: what a header gave it, or Absent.
+struct Tup {
+    name: String,
+    value: Option[String],
+    standard: Vec[(String, Pv)],
+    rest: Vec[(String, Option[String])],
+}
+
+fn std_get(t: ref Tup, k: Str) -> Option[Pv] {
+    for (a, b) in t.standard.iter() {
+        if *a == k {
+            return Some(b.clone());
+        }
+    }
+    None
+}
+
+fn pv_truthy(v: ref Pv) -> bool {
+    match v {
+        Pv.Nil => false,
+        Pv.S(s) => not s.is_empty(),
+        Pv.T(t) => t.t != 0,
+        Pv.B(b) => *b,
+    }
+}
+
+fn pv_str(v: ref Option[Pv]) -> Option[String] {
+    match v {
+        Some(Pv.S(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn is_value_attr(k: ref String) -> bool {
+    *k == "version" or *k == "expires" or *k == "max-age" or *k == "domain" or *k == "path"
+        or *k == "port" or *k == "comment" or *k == "commenturl"
+}
+
+fn is_boolean_attr(k: ref String) -> bool {
+    *k == "discard" or *k == "secure"
+}
+
+impl Jar {
+    fn all_cookies(ref self) -> Vec[Cookie] {
+        let mut out: Vec[Cookie] = Vec.new();
+        for d in self.domains.iter() {
+            for p in d.paths.iter() {
+                for c in p.cookies.iter() {
+                    out.push(c.clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn len(ref self) -> i64 {
+        self.all_cookies().len()
+    }
+
+    fn set_cookie(mut ref self, c: own Cookie) {
+        let mut di = -1;
+        for i in 0..self.domains.len() {
+            if self.domains[i].domain == c.domain {
+                di = i;
+            }
+        }
+        if di < 0 {
+            self.domains.push(DomainBucket { domain: c.domain.clone(), paths: Vec.new() });
+            di = self.domains.len() - 1;
+        }
+        let mut pi = -1;
+        for i in 0..self.domains[di].paths.len() {
+            if self.domains[di].paths[i].path == c.path {
+                pi = i;
+            }
+        }
+        if pi < 0 {
+            self.domains[di].paths.push(PathBucket { path: c.path.clone(), cookies: Vec.new() });
+            pi = self.domains[di].paths.len() - 1;
+        }
+        for i in 0..self.domains[di].paths[pi].cookies.len() {
+            if self.domains[di].paths[pi].cookies[i].name == c.name {
+                self.domains[di].paths[pi].cookies[i] = c;
+                return;
+            }
+        }
+        self.domains[di].paths[pi].cookies.push(c);
+    }
+
+    // clear(domain, path, name): a KeyError names the first key that is
+    // not there
+    fn clear(mut ref self, domain: ref Option[String], path: ref Option[String], name: ref Option[String]) -> Result[(), Exc] {
+        let d = match domain {
+            Some(d) => d.clone(),
+            None => {
+                self.domains = Vec.new();
+                return Ok(());
+            }
+        };
+        let mut di = -1;
+        for i in 0..self.domains.len() {
+            if self.domains[i].domain == d {
+                di = i;
+            }
+        }
+        if di < 0 {
+            return Err(exc("KeyError", pr(d)));
+        }
+        let p = match path {
+            Some(p) => p.clone(),
+            None => {
+                self.domains.remove(di);
+                return Ok(());
+            }
+        };
+        let mut pi = -1;
+        for i in 0..self.domains[di].paths.len() {
+            if self.domains[di].paths[i].path == p {
+                pi = i;
+            }
+        }
+        if pi < 0 {
+            return Err(exc("KeyError", pr(p)));
+        }
+        let n = match name {
+            Some(n) => n.clone(),
+            None => {
+                self.domains[di].paths.remove(pi);
+                return Ok(());
+            }
+        };
+        for i in 0..self.domains[di].paths[pi].cookies.len() {
+            if self.domains[di].paths[pi].cookies[i].name == n {
+                self.domains[di].paths[pi].cookies.remove(i);
+                return Ok(());
+            }
+        }
+        Err(exc("KeyError", pr(n)))
+    }
+
+    fn clear_one(mut ref self, c: ref Cookie) {
+        let _ = self.clear(Some(c.domain.clone()), Some(c.path.clone()), Some(c.name.clone()));
+    }
+
+    fn clear_session_cookies(mut ref self) {
+        for c in self.all_cookies().iter() {
+            if c.discard {
+                self.clear_one(c);
+            }
+        }
+    }
+
+    fn clear_expired_cookies(mut ref self, cx: ref Ctx) {
+        for c in self.all_cookies().iter() {
+            if c.is_expired(cx.now) {
+                self.clear_one(c);
+            }
+        }
+    }
+
+    fn cookies_for_domain(ref self, cx: mut ref Ctx, di: i64, req: ref HttpRequest) -> Vec[Cookie] {
+        let mut out: Vec[Cookie] = Vec.new();
+        let domain = self.domains[di].domain.clone();
+        if not self.policy.domain_return_ok(mut cx, domain, req) {
+            return out;
+        }
+        debug(mut cx, f"Checking {domain} for cookies to return");
+        for p in self.domains[di].paths.iter() {
+            if not self.policy.path_return_ok(mut cx, p.path, req) {
+                continue;
+            }
+            for c in p.cookies.iter() {
+                if not self.policy.return_ok(mut cx, c, req) {
+                    debug(mut cx, "   not returning cookie".to_string());
+                    continue;
+                }
+                debug(mut cx, "   it's a match".to_string());
+                out.push(c.clone());
+            }
+        }
+        out
+    }
+
+    fn cookies_for_request(ref self, cx: mut ref Ctx, req: ref HttpRequest) -> Vec[Cookie] {
+        let mut out: Vec[Cookie] = Vec.new();
+        for di in 0..self.domains.len() {
+            for c in self.cookies_for_domain(mut cx, di, req).into_iter() {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn add_cookie_header(mut ref self, cx: mut ref Ctx, req: mut ref HttpRequest) {
+        debug(mut cx, "add_cookie_header".to_string());
+        self.policy.now = cx.now;
+        let cookies = self.cookies_for_request(mut cx, req);
+        let attrs = cookie_attrs(cx, cookies);
+        if not attrs.is_empty() {
+            if not req.has_header("Cookie") {
+                req.add_unredirected_header("Cookie", join(attrs, "; "));
+            }
+        }
+        if self.policy.rfc2965 and not self.policy.hide_cookie2 and not req.has_header("Cookie2") {
+            for c in cookies.iter() {
+                if ver(c) != 1 {
+                    req.add_unredirected_header("Cookie2", "$Version=\"1\"".to_string());
+                    break;
+                }
+            }
+        }
+        self.clear_expired_cookies(cx);
+    }
+
+    fn normalized_cookie_tuples(ref self, cx: mut ref Ctx, attrs_set: ref Vec[Vec[(String, Pv)]]) -> Result[Vec[Tup], Exc] {
+        let mut out: Vec[Tup] = Vec.new();
+        for cookie_attrs in attrs_set.iter() {
+            let (name, value0) = cookie_attrs[0].clone();
+            let value = match value0 {
+                Pv.S(s) => Some(s),
+                _ => None,
+            };
+            let mut max_age_set = false;
+            let mut bad_cookie = false;
+            let mut standard: Vec[(String, Pv)] = Vec.new();
+            let mut rest: Vec[(String, Option[String])] = Vec.new();
+            for idx in 1..cookie_attrs.len() {
+                let (k0, v0) = cookie_attrs[idx].clone();
+                let mut k = k0;
+                let mut v = v0;
+                let lc = low(k);
+                if is_value_attr(lc) or is_boolean_attr(lc) {
+                    k = lc;
+                }
+                if is_boolean_attr(k) and is_nil(v) {
+                    v = Pv.B(true);
+                }
+                let mut seen = false;
+                for (a, _) in standard.iter() {
+                    if *a == k {
+                        seen = true;
+                    }
+                }
+                if seen {
+                    continue;
+                }
+                if k == "domain" {
+                    match v.clone() {
+                        Pv.Nil => {
+                            debug(mut cx, "   missing value for domain attribute".to_string());
+                            bad_cookie = true;
+                            break;
+                        }
+                        Pv.S(s) => v = Pv.S(low(s)),
+                        _ => {}
+                    }
+                }
+                if k == "expires" {
+                    if max_age_set {
+                        continue;
+                    }
+                    if is_nil(v) {
+                        debug(mut cx, "   missing or invalid value for expires attribute: treating as session cookie".to_string());
+                        continue;
+                    }
+                }
+                if k == "max-age" {
+                    max_age_set = true;
+                    let n = match v.clone() {
+                        Pv.S(s) => py_int(s),
+                        _ => return Err(exc("TypeError", "int() argument must be a string, a bytes-like object or a real number, not 'NoneType'".to_string())),
+                    };
+                    match n {
+                        Some(age) => {
+                            k = "expires".to_string();
+                            v = Pv.T(Time { t: self.policy.now + age, float: false });
+                        }
+                        None => {
+                            debug(mut cx, "   missing or invalid (non-numeric) value for max-age attribute".to_string());
+                            bad_cookie = true;
+                            break;
+                        }
+                    }
+                }
+                if is_value_attr(k) or is_boolean_attr(k) {
+                    if is_nil(v) and k != "port" and k != "comment" and k != "commenturl" {
+                        debug(mut cx, f"   missing value for {k} attribute");
+                        bad_cookie = true;
+                        break;
+                    }
+                    standard.push((k, v));
+                } else {
+                    let rv = match v {
+                        Pv.S(s) => Some(s),
+                        _ => None,
+                    };
+                    let mut replaced = false;
+                    for i in 0..rest.len() {
+                        if rest[i].0 == k {
+                            rest[i] = (k.clone(), rv.clone());
+                            replaced = true;
+                        }
+                    }
+                    if not replaced {
+                        rest.push((k, rv));
+                    }
+                }
+            }
+            if bad_cookie {
+                continue;
+            }
+            out.push(Tup { name: name, value: value, standard: standard, rest: rest });
+        }
+        Ok(out)
+    }
+
+    fn cookie_from_cookie_tuple(mut ref self, cx: mut ref Ctx, tup: ref Tup, req: ref HttpRequest) -> Result[Option[Cookie], Exc] {
+        let domain0 = std_get(tup, "domain");
+        let path0 = std_get(tup, "path");
+        let port0 = std_get(tup, "port");
+        let expires0 = std_get(tup, "expires");
+        let mut version: Option[i64] = None;
+        match std_get(tup, "version") {
+            Some(Pv.S(s)) => {
+                match py_int(s) {
+                    Some(n) => version = Some(n),
+                    None => return Ok(None),
+                }
+            }
+            _ => {}
+        }
+        let secure = match std_get(tup, "secure") {
+            Some(v) => pv_truthy(v),
+            None => false,
+        };
+        let mut discard = match std_get(tup, "discard") {
+            Some(v) => pv_truthy(v),
+            None => false,
+        };
+        let comment = pv_str(std_get(tup, "comment"));
+        let comment_url = pv_str(std_get(tup, "commenturl"));
+        let path_given = match pv_str(path0) {
+            Some(p) => if p.is_empty() { None } else { Some(p) },
+            None => None,
+        };
+        let mut path_specified = false;
+        let path = match path_given {
+            Some(p) => {
+                path_specified = true;
+                escape_path(p)
+            }
+            None => {
+                let mut p = request_path(req);
+                let v = chars(p);
+                let mut i = v.len() - 1;
+                while i >= 0 and v[i] != '/' {
+                    i -= 1;
+                }
+                if i != -1 {
+                    p = if version == Some(0) { cut(v, 0, i) } else { cut(v, 0, i + 1) };
+                }
+                if p.is_empty() {
+                    p = "/".to_string();
+                }
+                p
+            }
+        };
+        let domain_specified = domain0.is_some();
+        let mut domain_initial_dot = false;
+        let domain = match pv_str(domain0) {
+            Some(d) => {
+                domain_initial_dot = starts(d, ".");
+                if starts(d, ".") { d } else { f".{d}" }
+            }
+            None => {
+                let (_, erhn) = eff_request_host(cx, req);
+                erhn
+            }
+        };
+        let mut port_specified = false;
+        let port = match port0 {
+            Some(Pv.S(p)) => {
+                port_specified = true;
+                let mut q = String.new();
+                for ch in p.chars() {
+                    if not is_py_space(ch) {
+                        q.push(ch);
+                    }
+                }
+                Some(q)
+            }
+            Some(_) => request_port(mut cx, req),
+            None => None,
+        };
+        let expires = match expires0 {
+            None => {
+                discard = true;
+                None
+            }
+            Some(Pv.T(t)) => {
+                if t.t <= self.policy.now {
+                    let _ = self.clear(Some(domain.clone()), Some(path.clone()), Some(tup.name.clone()));
+                    debug(mut cx, f"Expiring cookie, domain='{domain}', path='{path}', name='{tup.name}'");
+                    return Ok(None);
+                }
+                Some(t.t)
+            }
+            Some(_) => return Err(exc("TypeError", "'<=' not supported between instances of 'str' and 'int'".to_string())),
+        };
+        Ok(Some(Cookie {
+            version: version,
+            name: tup.name.clone(),
+            value: tup.value.clone(),
+            port: port,
+            port_specified: port_specified,
+            domain: low(domain),
+            domain_specified: domain_specified,
+            domain_initial_dot: domain_initial_dot,
+            path: path,
+            path_specified: path_specified,
+            secure: secure,
+            expires: expires,
+            discard: discard,
+            comment: comment,
+            comment_url: comment_url,
+            rest: tup.rest.clone(),
+            rfc2109: false,
+        }))
+    }
+
+    fn cookies_from_attrs_set(mut ref self, cx: mut ref Ctx, attrs_set: ref Vec[Vec[(String, Pv)]], req: ref HttpRequest) -> Result[Vec[Cookie], Exc] {
+        let tuples = self.normalized_cookie_tuples(mut cx, attrs_set)?;
+        let mut out: Vec[Cookie] = Vec.new();
+        for t in tuples.iter() {
+            match self.cookie_from_cookie_tuple(mut cx, t, req)? {
+                Some(c) => out.push(c),
+                None => {}
+            }
+        }
+        Ok(out)
+    }
+
+    fn make_cookies(mut ref self, cx: mut ref Ctx, headers: ref Vec[(String, String)], req: ref HttpRequest) -> Vec[Cookie] {
+        let rfc2965_hdrs = get_all(headers, "set-cookie2");
+        let ns_hdrs = get_all(headers, "set-cookie");
+        self.policy.now = cx.now;
+        let rfc2965 = self.policy.rfc2965;
+        let netscape = self.policy.netscape;
+        if (rfc2965_hdrs.is_empty() and ns_hdrs.is_empty()) or (ns_hdrs.is_empty() and not rfc2965)
+            or (rfc2965_hdrs.is_empty() and not netscape) or (not netscape and not rfc2965) {
+            return Vec.new();
+        }
+        let words = split_header_words(cx, rfc2965_hdrs);
+        let mut attrs: Vec[Vec[(String, Pv)]] = Vec.new();
+        for pairs in words.iter() {
+            let mut a: Vec[(String, Pv)] = Vec.new();
+            for (k, v) in pairs.iter() {
+                a.push((k.clone(), pv_of(v)));
+            }
+            attrs.push(a);
+        }
+        let mut cookies = match self.cookies_from_attrs_set(mut cx, attrs, req) {
+            Ok(c) => c,
+            Err(_) => {
+                warn_bug(mut cx);
+                Vec.new()
+            }
+        };
+        if not ns_hdrs.is_empty() and netscape {
+            let parsed = parse_ns_headers(cx, ns_hdrs);
+            let mut ns_cookies = match parsed {
+                Ok(p) => match self.cookies_from_attrs_set(mut cx, p, req) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        warn_bug(mut cx);
+                        Vec.new()
+                    }
+                },
+                Err(_) => {
+                    warn_bug(mut cx);
+                    Vec.new()
+                }
+            };
+            // _process_rfc2109_cookies
+            let as_ns = match self.policy.rfc2109_as_netscape {
+                Some(b) => b,
+                None => not self.policy.rfc2965,
+            };
+            for i in 0..ns_cookies.len() {
+                if ns_cookies[i].version == Some(1) {
+                    ns_cookies[i].rfc2109 = true;
+                    if as_ns {
+                        ns_cookies[i].version = Some(0);
+                    }
+                }
+            }
+            for c in ns_cookies.iter() {
+                let mut keep = true;
+                if rfc2965 {
+                    for r in cookies.iter() {
+                        if r.domain == c.domain and r.path == c.path and r.name == c.name {
+                            keep = false;
+                        }
+                    }
+                }
+                if keep {
+                    cookies.push(c.clone());
+                }
+            }
+        }
+        cookies
+    }
+
+    fn extract_cookies(mut ref self, cx: mut ref Ctx, headers: ref Vec[(String, String)], req: ref HttpRequest) {
+        debug(mut cx, f"extract_cookies: {headers.len()} header(s)");
+        for c in self.make_cookies(mut cx, headers, req).into_iter() {
+            if self.policy.set_ok(mut cx, c, req) {
+                debug(mut cx, f" setting cookie: {c.show()}");
+                self.set_cookie(c);
+            }
+        }
+    }
+}
+
+fn get_all(headers: ref Vec[(String, String)], name: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for (k, v) in headers.iter() {
+        if low(k) == name {
+            out.push(v.clone());
+        }
+    }
+    out
+}
+
+// _cookie_attrs: longest path first (a stable sort), with the $Version,
+// $Path, $Domain and $Port attributes of RFC 2965 cookies
+fn cookie_attrs(cx: ref Ctx, cookies0: ref Vec[Cookie]) -> Vec[String] {
+    let mut cookies = cookies0.clone();
+    let mut i = 1;
+    while i < cookies.len() {
+        let mut j = i;
+        while j > 0 and clen(cookies[j].path) > clen(cookies[j - 1].path) {
+            let t = cookies[j].clone();
+            cookies[j] = cookies[j - 1].clone();
+            cookies[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+    let mut version_set = false;
+    let mut attrs: Vec[String] = Vec.new();
+    for c in cookies.iter() {
+        let version = ver(c);
+        if not version_set {
+            version_set = true;
+            if version > 0 {
+                attrs.push(f"$Version={version}");
+            }
+        }
+        match c.value {
+            None => attrs.push(c.name.clone()),
+            Some(v) => {
+                let value = if searches(cx.rx.non_word, v) and version > 0 { sub_group1(cx.rx.quote, v, "\\") } else { v.clone() };
+                attrs.push(f"{c.name}={value}");
+            }
+        }
+        if version > 0 {
+            if c.path_specified {
+                attrs.push(f"$Path=\"{c.path}\"");
+            }
+            if starts(c.domain, ".") {
+                let mut domain = c.domain.clone();
+                if not c.domain_initial_dot and starts(domain, ".") {
+                    domain = tail_from(domain, 1);
+                }
+                attrs.push(f"$Domain=\"{domain}\"");
+            }
+            match c.port {
+                Some(port) => {
+                    let mut p = "$Port".to_string();
+                    if c.port_specified {
+                        p = f"{p}=\"{port}\"";
+                    }
+                    attrs.push(p);
+                }
+                None => {}
+            }
+        }
+    }
+    attrs
+}
+
+// ------------------------------------------------------------ the files
+
+const MISSING_FILENAME_TEXT: Str = "a filename was not supplied (nor was the CookieJar instance initialised with one)";
+
+// f.readline() over the whole text: each line keeps its "\n"
+fn read_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        cur.push(c);
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn chomp(line: ref String) -> String {
+    if ends_s(line, "\n") { head_to(line, clen(line) - 1) } else { line.clone() }
+}
+
+fn lwp_cookie_str(cx: ref Ctx, c: ref Cookie) -> String {
+    let mut h: Vec[(String, Option[String])] = Vec.new();
+    h.push((c.name.clone(), c.value.clone()));
+    h.push(("path".to_string(), Some(c.path.clone())));
+    h.push(("domain".to_string(), Some(c.domain.clone())));
+    match c.port {
+        Some(p) => h.push(("port".to_string(), Some(p.clone()))),
+        None => {}
+    }
+    if c.path_specified {
+        h.push(("path_spec".to_string(), None));
+    }
+    if c.port_specified {
+        h.push(("port_spec".to_string(), None));
+    }
+    if c.domain_initial_dot {
+        h.push(("domain_dot".to_string(), None));
+    }
+    if c.secure {
+        h.push(("secure".to_string(), None));
+    }
+    match c.expires {
+        Some(e) => {
+            if e != 0 {
+                h.push(("expires".to_string(), Some(time2isoz(e))));
+            }
+        }
+        None => {}
+    }
+    if c.discard {
+        h.push(("discard".to_string(), None));
+    }
+    match c.comment {
+        Some(s) => {
+            if not s.is_empty() {
+                h.push(("comment".to_string(), Some(s.clone())));
+            }
+        }
+        None => {}
+    }
+    match c.comment_url {
+        Some(s) => {
+            if not s.is_empty() {
+                h.push(("commenturl".to_string(), Some(s.clone())));
+            }
+        }
+        None => {}
+    }
+    let mut keys: Vec[String] = Vec.new();
+    for (k, _) in c.rest.iter() {
+        keys.push(k.clone());
+    }
+    sort_strings(mut keys);
+    for k in keys.iter() {
+        for (a, b) in c.rest.iter() {
+            if a == k {
+                h.push((k.clone(), Some(value_text(b))));
+            }
+        }
+    }
+    let version = match c.version {
+        Some(v) => f"{v}",
+        None => "None".to_string(),
+    };
+    h.push(("version".to_string(), Some(version)));
+    let mut lists: Vec[Vec[(String, Option[String])]] = Vec.new();
+    lists.push(h);
+    join_header_words(cx, lists)
+}
+
+fn write_file(path: ref String, text: ref String) -> Result[(), Exc] {
+    match fs.write(path.clone(), text.clone()) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(exc("OSError", f"cannot write {pr(path)}")),
+    }
+}
+
+fn read_file(path: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {pr(path)}")),
+    }
+}
+
+// the values in a Set-Cookie3 line
+fn lwp_get(standard: ref Vec[(String, Pv)], k: Str) -> Pv {
+    for (a, b) in standard.iter() {
+        if *a == k {
+            return b.clone();
+        }
+    }
+    Pv.Nil
+}
+
+fn lwp_bool(standard: ref Vec[(String, Pv)], k: Str) -> bool {
+    pv_truthy(lwp_get(standard, k))
+}
+
+fn lwp_str(standard: ref Vec[(String, Pv)], k: Str) -> Option[String] {
+    match lwp_get(standard, k) {
+        Pv.S(s) => Some(s),
+        _ => None,
+    }
+}
+
+fn std_put(standard: mut ref Vec[(String, Pv)], k: ref String, v: own Pv) {
+    for i in 0..standard.len() {
+        if standard[i].0 == *k {
+            standard[i] = (k.clone(), v);
+            return;
+        }
+    }
+    standard.push((k.clone(), v));
+}
+
+impl Jar {
+    fn file_or(ref self, filename: ref Option[String]) -> Result[String, Exc] {
+        match filename {
+            Some(f) => Ok(f.clone()),
+            None => match self.filename {
+                Some(f) => Ok(f.clone()),
+                None => Err(exc("ValueError", MISSING_FILENAME_TEXT.to_string())),
+            },
+        }
+    }
+
+    fn save(ref self, cx: ref Ctx, filename: ref Option[String], ignore_discard: bool, ignore_expires: bool) -> Result[(), Exc] {
+        if self.kind == PLAIN {
+            return Err(exc("AttributeError", "'CookieJar' object has no attribute 'save'".to_string()));
+        }
+        let name = self.file_or(filename)?;
+        let mut out = String.new();
+        if self.kind == LWP {
+            out.push_str("#LWP-Cookies-2.0\n");
+            for c in self.all_cookies().iter() {
+                if not ignore_discard and c.discard {
+                    continue;
+                }
+                if not ignore_expires and c.is_expired(cx.now) {
+                    continue;
+                }
+                out.push_str(f"Set-Cookie3: {lwp_cookie_str(cx, c)}\n");
+            }
+        } else {
+            out.push_str("# Netscape HTTP Cookie File\n");
+            out.push_str("# http://curl.haxx.se/rfc/cookie_spec.html\n");
+            out.push_str("# This is a generated file!  Do not edit.\n\n");
+            for c in self.all_cookies().iter() {
+                let mut domain = c.domain.clone();
+                if not ignore_discard and c.discard {
+                    continue;
+                }
+                if not ignore_expires and c.is_expired(cx.now) {
+                    continue;
+                }
+                let secure = if c.secure { "TRUE" } else { "FALSE" };
+                let initial_dot = if starts(domain, ".") { "TRUE" } else { "FALSE" };
+                let expires = match c.expires {
+                    Some(e) => f"{e}",
+                    None => String.new(),
+                };
+                let (name, value) = match c.value {
+                    Some(v) => (c.name.clone(), v.clone()),
+                    None => (String.new(), c.name.clone()),
+                };
+                if c.has_nonstandard_attr("HTTPOnly") {
+                    domain = f"#HttpOnly_{domain}";
+                }
+                out.push_str(f"{domain}\t{initial_dot}\t{c.path}\t{secure}\t{expires}\t{name}\t{value}\n");
+            }
+        }
+        write_file(name, out)
+    }
+
+    fn load(mut ref self, cx: mut ref Ctx, filename: ref Option[String], ignore_discard: bool, ignore_expires: bool) -> Result[(), Exc] {
+        let name = self.file_or(filename)?;
+        let text = read_file(name)?;
+        let lines = read_lines(text);
+        if self.kind == LWP {
+            self.load_lwp(mut cx, name, lines, ignore_discard, ignore_expires)
+        } else {
+            self.load_mozilla(mut cx, name, lines, ignore_discard, ignore_expires)
+        }
+    }
+
+    fn load_mozilla(mut ref self, cx: mut ref Ctx, filename: ref String, lines: ref Vec[String], ignore_discard: bool, ignore_expires: bool) -> Result[(), Exc] {
+        let first = if lines.is_empty() { String.new() } else { lines[0].clone() };
+        if rx_find(cx.rx.netscape_magic, first, 1).is_none() {
+            return Err(exc("LoadError", f"{pr(filename)} does not look like a Netscape format cookies file"));
+        }
+        for li in 1..lines.len() {
+            let mut line = lines[li].clone();
+            let mut rest: Vec[(String, Option[String])] = Vec.new();
+            if starts(line, "#HttpOnly_") {
+                rest.push(("HTTPOnly".to_string(), Some(String.new())));
+                line = tail_from(line, 10);
+            }
+            line = chomp(line);
+            let st = strip(line);
+            if starts(st, "#") or starts(st, "$") or st.is_empty() {
+                continue;
+            }
+            match self.mozilla_cookie(cx, line, rest) {
+                Ok(c) => {
+                    if not ignore_discard and c.discard {
+                        continue;
+                    }
+                    if not ignore_expires and c.is_expired(cx.now) {
+                        continue;
+                    }
+                    self.set_cookie(c);
+                }
+                Err(_) => {
+                    warn_bug(mut cx);
+                    return Err(exc("LoadError", f"invalid Netscape format cookies file {pr(filename)}: {pr(line)}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn mozilla_cookie(ref self, cx: ref Ctx, line: ref String, rest: own Vec[(String, Option[String])]) -> Result[Cookie, Exc] {
+        let f = split_on(line, '\t');
+        if f.len() != 7 {
+            return Err(exc("ValueError", "wrong number of values to unpack".to_string()));
+        }
+        let domain = f[0].clone();
+        let secure = f[3] == "TRUE";
+        let domain_specified = f[1] == "TRUE";
+        let mut name = f[5].clone();
+        let mut value = Some(f[6].clone());
+        if name.is_empty() {
+            name = f[6].clone();
+            value = None;
+        }
+        let initial_dot = starts(domain, ".");
+        if domain_specified != initial_dot {
+            return Err(exc("AssertionError", String.new()));
+        }
+        let mut discard = false;
+        let mut expires: Option[i64] = None;
+        if f[4] == "0" or f[4].is_empty() {
+            discard = true;
+        } else {
+            expires = Some(int_float_of(f[4])?);
+        }
+        let _ = cx;
+        Ok(Cookie {
+            version: Some(0),
+            name: name,
+            value: value,
+            port: None,
+            port_specified: false,
+            domain: low(domain),
+            domain_specified: domain_specified,
+            domain_initial_dot: initial_dot,
+            path: f[2].clone(),
+            path_specified: false,
+            secure: secure,
+            expires: expires,
+            discard: discard,
+            comment: None,
+            comment_url: None,
+            rest: rest,
+            rfc2109: false,
+        })
+    }
+
+    fn load_lwp(mut ref self, cx: mut ref Ctx, filename: ref String, lines: ref Vec[String], ignore_discard: bool, ignore_expires: bool) -> Result[(), Exc] {
+        let first = if lines.is_empty() { String.new() } else { lines[0].clone() };
+        if rx_find(cx.rx.lwp_magic, first, 0).is_none() {
+            return Err(exc("LoadError", f"{pr(filename)} does not look like a Set-Cookie3 (LWP) format file"));
+        }
+        for li in 1..lines.len() {
+            if not starts(lines[li], "Set-Cookie3:") {
+                continue;
+            }
+            let line = strip(tail_from(lines[li], 12));
+            let mut one: Vec[String] = Vec.new();
+            one.push(line.clone());
+            for data in split_header_words(cx, one).iter() {
+                match self.lwp_cookie(cx, data) {
+                    Ok(c) => {
+                        if not ignore_discard and c.discard {
+                            continue;
+                        }
+                        if not ignore_expires and c.is_expired(cx.now) {
+                            continue;
+                        }
+                        self.set_cookie(c);
+                    }
+                    Err(_) => {
+                        warn_bug(mut cx);
+                        return Err(exc("LoadError", f"invalid Set-Cookie3 format file {pr(filename)}: {pr(line)}"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn lwp_cookie(ref self, cx: ref Ctx, data: ref Vec[(String, Option[String])]) -> Result[Cookie, Exc] {
+        let (name, value) = data[0].clone();
+        let mut standard: Vec[(String, Pv)] = Vec.new();
+        let mut rest: Vec[(String, Option[String])] = Vec.new();
+        let booleans = strs("port_spec path_spec domain_dot secure discard");
+        let values = strs("version port path domain expires comment commenturl");
+        for b in booleans.iter() {
+            standard.push((b.clone(), Pv.B(false)));
+        }
+        for idx in 1..data.len() {
+            let (k0, v) = data[idx].clone();
+            let lc = low(k0);
+            let k = if has(values, lc) or has(booleans, lc) { lc } else { k0 };
+            if has(booleans, k) {
+                let pv = match v {
+                    Some(s) => Pv.S(s),
+                    None => Pv.B(true),
+                };
+                std_put(mut standard, k, pv);
+            } else if has(values, k) {
+                std_put(mut standard, k, pv_of(v));
+            } else {
+                let mut replaced = false;
+                for i in 0..rest.len() {
+                    if rest[i].0 == k {
+                        rest[i] = (k.clone(), v.clone());
+                        replaced = true;
+                    }
+                }
+                if not replaced {
+                    rest.push((k, v));
+                }
+            }
+        }
+        let mut discard = lwp_bool(standard, "discard");
+        let expires = match lwp_str(standard, "expires") {
+            Some(e) => iso2time(cx, e)?,
+            None => None,
+        };
+        if expires.is_none() {
+            discard = true;
+        }
+        let domain = match lwp_str(standard, "domain") {
+            Some(d) => d,
+            None => return Err(exc("AttributeError", "'NoneType' object has no attribute 'startswith'".to_string())),
+        };
+        let domain_specified = starts(domain, ".");
+        let version = match lwp_str(standard, "version") {
+            Some(v) => Some(int_of(v)?),
+            None => None,
+        };
+        let port = lwp_str(standard, "port");
+        let port_specified = lwp_bool(standard, "port_spec");
+        if port.is_none() and port_specified {
+            return Err(exc("ValueError", "if port is None, port_specified must be false".to_string()));
+        }
+        Ok(Cookie {
+            version: version,
+            name: name,
+            value: value,
+            port: port,
+            port_specified: port_specified,
+            domain: low(domain),
+            domain_specified: domain_specified,
+            domain_initial_dot: lwp_bool(standard, "domain_dot"),
+            path: match lwp_str(standard, "path") {
+                Some(p) => p,
+                None => String.new(),
+            },
+            path_specified: lwp_bool(standard, "path_spec"),
+            secure: lwp_bool(standard, "secure"),
+            expires: expires,
+            discard: discard,
+            comment: lwp_str(standard, "comment"),
+            comment_url: lwp_str(standard, "commenturl"),
+            rest: rest,
+            rfc2109: false,
+        })
+    }
+
+    fn revert(mut ref self, cx: mut ref Ctx, filename: ref Option[String], ignore_discard: bool, ignore_expires: bool) -> Result[(), Exc] {
+        let name = self.file_or(filename)?;
+        let old_state = copy_domains(self.domains);
+        self.domains = Vec.new();
+        match self.load(mut cx, Some(name), ignore_discard, ignore_expires) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if e.kind == "LoadError" or e.kind == "FileNotFoundError" or e.kind == "OSError" {
+                    self.domains = old_state;
+                }
+                Err(e)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn read_tsv(path: Str) -> Result[Vec[Vec[String]], String] {
+    let text = match fs.read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Err(f"{path}: cannot read"),
+    };
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut lines = split_on(text, '\n');
+    lines.pop();
+    for line in lines.iter() {
+        out.push(split_on(line, '\t'));
+    }
+    Ok(out)
+}
+
+fn flush_log(cx: mut ref Ctx) {
+    for line in cx.log.iter() {
+        println(f"  debug| {line}");
+    }
+    cx.log.clear();
+}
+
+fn rest_of(f: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = from;
+    while i < f.len() {
+        out.push(f[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn is_opt_field(s: ref String) -> bool {
+    starts(s, "origin=") or starts(s, "unverifiable=")
+}
+
+fn header_pairs(fields: ref Vec[String]) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for f in fields.iter() {
+        if is_opt_field(f) {
+            continue;
+        }
+        out.push(partition_colon(f));
+    }
+    out
+}
+
+fn make_request(cx: ref Ctx, url: ref String, fields: ref Vec[String]) -> HttpRequest {
+    let mut origin: Option[String] = None;
+    let mut unverifiable = false;
+    let mut headers: Vec[(String, String)] = Vec.new();
+    for f in fields.iter() {
+        if starts(f, "origin=") {
+            origin = Some(tail_from(f, 7));
+        } else if starts(f, "unverifiable=") {
+            unverifiable = tail_from(f, 13) == "1";
+        } else {
+            let (k, v) = partition_colon(f);
+            dict_set(mut headers, k, v);
+        }
+    }
+    new_request(cx, url, origin, unverifiable, headers)
+}
+
+fn make_jar(fields: ref Vec[String]) -> Jar {
+    let mut p = default_policy();
+    for i in 1..fields.len() {
+        let (k, _, v) = partition(fields[i], '=');
+        let on = v == "1";
+        if k == "blocked_domains" {
+            p.blocked_domains = split_on(v, ',');
+        } else if k == "allowed_domains" {
+            p.allowed_domains = Some(split_on(v, ','));
+        } else if k == "secure_protocols" {
+            p.secure_protocols = split_on(v, ',');
+        } else if k == "strict_ns_domain" {
+            p.strict_ns_domain = py_int(v).unwrap();
+        } else if k == "netscape" {
+            p.netscape = on;
+        } else if k == "rfc2965" {
+            p.rfc2965 = on;
+        } else if k == "hide_cookie2" {
+            p.hide_cookie2 = on;
+        } else if k == "strict_domain" {
+            p.strict_domain = on;
+        } else if k == "strict_rfc2965_unverifiable" {
+            p.strict_rfc2965_unverifiable = on;
+        } else if k == "strict_ns_unverifiable" {
+            p.strict_ns_unverifiable = on;
+        } else if k == "strict_ns_set_initial_dollar" {
+            p.strict_ns_set_initial_dollar = on;
+        } else if k == "strict_ns_set_path" {
+            p.strict_ns_set_path = on;
+        } else if k == "rfc2109_as_netscape" {
+            p.rfc2109_as_netscape = Some(on);
+        }
+    }
+    let kind = if fields[0] == "lwp" { LWP } else if fields[0] == "mozilla" { MOZILLA } else { PLAIN };
+    new_jar(kind, p)
+}
+
+fn show_file(path: ref String) -> Result[(), Exc] {
+    let text = read_file(path)?;
+    let mut lines = split_on(text, '\n');
+    lines.pop();
+    for line in lines.iter() {
+        if line.is_empty() {
+            println("  file|");
+        } else {
+            println(f"  file| {line}");
+        }
+    }
+    if not ends_s(text, "\n") {
+        println("  file| (no newline at end)");
+    }
+    Ok(())
+}
+
+fn file_arg(f: ref String) -> Option[String] {
+    if *f == "-" { None } else { Some(f.clone()) }
+}
+
+fn run_fn(cx: ref Ctx, name: ref String, args: ref Vec[String]) -> Result[String, Exc] {
+    if *name == "http2time" {
+        return Ok(opt_time_repr(http2time(cx, args[0])?));
+    }
+    if *name == "iso2time" {
+        return Ok(match iso2time(cx, args[0])? {
+            Some(t) => f"{t}",
+            None => "None".to_string(),
+        });
+    }
+    if *name == "time2isoz" {
+        return Ok(pr(time2isoz(int_of(args[0])?)));
+    }
+    if *name == "time2netscape" {
+        return Ok(pr(time2netscape(int_of(args[0])?)));
+    }
+    if *name == "split_header_words" {
+        return Ok(words_repr(split_header_words(cx, args)));
+    }
+    if *name == "join_header_words" {
+        return Ok(pr(join_header_words(cx, split_header_words(cx, args))));
+    }
+    if *name == "parse_ns_headers" {
+        return Ok(ns_repr(parse_ns_headers(cx, args)?));
+    }
+    if *name == "domain_match" {
+        return Ok(py_bool(domain_match(cx, args[0], args[1])));
+    }
+    if *name == "user_domain_match" {
+        return Ok(py_bool(user_domain_match(cx, args[0], args[1])));
+    }
+    if *name == "is_HDN" {
+        return Ok(py_bool(is_hdn(cx, args[0])));
+    }
+    if *name == "reach" {
+        return Ok(pr(reach(cx, args[0])));
+    }
+    if *name == "escape_path" {
+        return Ok(pr(escape_path(args[0])));
+    }
+    Err(exc("ValueError", name.clone()))
+}
+
+fn opt_arg(f: ref Vec[String], i: i64) -> Option[String] {
+    if i < f.len() { Some(f[i].clone()) } else { None }
+}
+
+fn run_op(cx: mut ref Ctx, jar: mut ref Jar, f: ref Vec[String]) -> Result[(), Exc] {
+    let op = f[0].clone();
+    if op == "fn" {
+        let line = run_fn(cx, f[1], rest_of(f, 2))?;
+        println(f"  {line}");
+    } else if op == "set" {
+        let fields = rest_of(f, 2);
+        let req = make_request(cx, f[1], fields);
+        jar.extract_cookies(mut cx, header_pairs(fields), req);
+    } else if op == "get" {
+        let mut req = make_request(cx, f[1], rest_of(f, 2));
+        jar.add_cookie_header(mut cx, mut req);
+        let mut keys: Vec[String] = Vec.new();
+        for (k, _) in req.unredirected.iter() {
+            keys.push(k.clone());
+        }
+        sort_strings(mut keys);
+        for k in keys.iter() {
+            println(f"  {k}: {dict_get(req.unredirected, k.as_str()).unwrap()}");
+        }
+        if keys.is_empty() {
+            println("  (no cookie header)");
+        }
+    } else if op == "list" {
+        for c in jar.all_cookies().iter() {
+            println(f"  {c.show()}");
+        }
+    } else if op == "repr" {
+        for c in jar.all_cookies().iter() {
+            println(f"  {c.repr()}");
+        }
+    } else if op == "len" {
+        println(f"  {jar.len()}");
+    } else if op == "clear" {
+        jar.clear(opt_arg(f, 1), opt_arg(f, 2), opt_arg(f, 3))?;
+    } else if op == "clear_session" {
+        jar.clear_session_cookies();
+    } else if op == "clear_expired" {
+        jar.clear_expired_cookies(cx);
+    } else if op == "save" {
+        jar.save(cx, file_arg(f[1]), f[2] == "1", f[3] == "1")?;
+        show_file(f[1])?;
+    } else if op == "load" {
+        jar.load(mut cx, file_arg(f[1]), f[2] == "1", f[3] == "1")?;
+    } else if op == "revert" {
+        jar.revert(mut cx, file_arg(f[1]), f[2] == "1", f[3] == "1")?;
+    }
+    Ok(())
+}
+
+fn run_jobs(cx: mut ref Ctx) -> Result[(), String] {
+    let mut jar = new_jar(PLAIN, default_policy());
+    for f in read_tsv("data/jobs.tsv")?.iter() {
+        if f[0] == "job" {
+            println(f"== {f[1]}");
+            continue;
+        }
+        println(f"> {join(f, " | ")}");
+        if f[0] == "now" {
+            cx.now = py_int(f[1]).unwrap();
+            continue;
+        }
+        if f[0] == "jar" {
+            jar = make_jar(rest_of(f, 1));
+            continue;
+        }
+        cx.warnings.clear();
+        match run_op(mut cx, mut jar, f) {
+            Ok(_) => flush_log(mut cx),
+            Err(e) => {
+                flush_log(mut cx);
+                for w in cx.warnings.iter() {
+                    println(f"  warning| {w}");
+                }
+                println(f"  ! {e.kind}: {e.msg}");
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the programs
+
+fn ok_or_text(r: Result[(), Exc]) -> Result[(), String] {
+    match r {
+        Ok(_) => Ok(()),
+        Err(e) => Err(f"{e.kind}: {e.msg}"),
+    }
+}
+
+// A shop session: each response's cookies go into a MozillaCookieJar,
+// which is saved, and loaded again by the next process after a restart.
+fn login_program(cx: mut ref Ctx) -> Result[(), String] {
+    println("== program: a login session that survives a restart");
+    cx.now = 1700000000;
+    let mut jar = new_jar(MOZILLA, default_policy());
+    let mut url = String.new();
+    let none: Vec[(String, String)] = Vec.new();
+    for f in read_tsv("data/session.tsv")?.iter() {
+        if f[0] == "GET" {
+            url = f[1].clone();
+            let mut req = new_request(cx, url, None, false, none);
+            jar.add_cookie_header(mut cx, mut req);
+            println(f"GET {url}");
+            let sent = match dict_get(req.unredirected, "Cookie") {
+                Some(v) => v,
+                None => "(none)".to_string(),
+            };
+            println(f"  Cookie: {sent}");
+            cx.log.clear();
+        } else if f[0] == "RESP" {
+            let pairs = header_pairs(rest_of(f, 1));
+            let req = new_request(cx, url, None, false, none);
+            jar.extract_cookies(mut cx, pairs, req);
+            cx.log.clear();
+            println(f"  {pairs.len()} cookie header(s) back, jar holds {jar.len()}");
+            cx.now += 60;
+        } else if f[0] == "SAVE" {
+            let path = f[1].clone();
+            ok_or_text(jar.save(cx, Some(path.clone()), true, false))?;
+            println(f"saved {path} with session cookies:");
+            ok_or_text(show_file(path))?;
+            ok_or_text(jar.save(cx, Some(path.clone()), false, false))?;
+            println(f"saved {path} without them:");
+            ok_or_text(show_file(path))?;
+        } else if f[0] == "RESTART" {
+            cx.now += 3600 * 2;
+            jar = new_jar(MOZILLA, default_policy());
+            jar.filename = Some("work/session.txt".to_string());
+            ok_or_text(jar.load(mut cx, None, false, false))?;
+            let mut names: Vec[String] = Vec.new();
+            for c in jar.all_cookies().iter() {
+                names.push(c.name.clone());
+            }
+            println(f"restarted two hours later; loaded {jar.len()} cookie(s): {join(names, ", ")}");
+        }
+    }
+    Ok(())
+}
+
+// Which of a page's cookies, and of the cookies of what it pulls in from
+// other hosts, a jar with a block list and strict third-party rules keeps.
+fn audit_program(cx: mut ref Ctx) -> Result[(), String] {
+    println("== program: a third-party cookie audit");
+    cx.now = 1700000000;
+    let mut policy = default_policy();
+    policy.blocked_domains = strs(".doubleclick.net");
+    policy.strict_ns_unverifiable = true;
+    let mut jar = new_jar(PLAIN, policy);
+    let none: Vec[(String, String)] = Vec.new();
+    for f in read_tsv("data/audit.tsv")?.iter() {
+        let page = f[0].clone();
+        let url = f[1].clone();
+        let unverifiable = not starts(url, f"http://{page}/".as_str());
+        let req = new_request(cx, url, Some(page.clone()), unverifiable, none);
+        let before = jar.len();
+        jar.extract_cookies(mut cx, header_pairs(rest_of(f, 2)), req);
+        let mut reasons: Vec[String] = Vec.new();
+        for line in cx.log.iter() {
+            if starts(line, "   ") and not starts(line, "    ") {
+                reasons.push(strip(line));
+            }
+        }
+        cx.log.clear();
+        let kept = jar.len() - before;
+        let third = if req.unverifiable { "third-party" } else { "first-party" };
+        println(f"{url} on {page} ({third}): {kept} of {f.len() - 2} kept");
+        for r in reasons.iter() {
+            println(f"  {r}");
+        }
+    }
+    println("jar:");
+    let mut domains: Vec[String] = Vec.new();
+    let mut names: Vec[Vec[String]] = Vec.new();
+    for c in jar.all_cookies().iter() {
+        let mut found = -1;
+        for i in 0..domains.len() {
+            if domains[i] == c.domain {
+                found = i;
+            }
+        }
+        if found < 0 {
+            domains.push(c.domain.clone());
+            names.push(Vec.new());
+            found = domains.len() - 1;
+        }
+        names[found].push(c.name.clone());
+    }
+    let mut order = domains.clone();
+    sort_strings(mut order);
+    for d in order.iter() {
+        for i in 0..domains.len() {
+            if domains[i] == *d {
+                let mut n = names[i].clone();
+                sort_strings(mut n);
+                println(f"  {pad_right(d, 14)} {join(n, " ")}");
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the run
+
+fn dirname(p: ref String) -> String {
+    let i = rfind_sub(p, "/".to_string(), clen(p));
+    if i < 0 { ".".to_string() } else { head_to(p, i) }
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(_) => return Err(f"{p}: cannot write"),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(_) => return Err(f"{p}: cannot write"),
+        }
+    }
+    match fs.create_dir_all("work") {
+        Ok(_) => Ok(()),
+        Err(_) => Err("work: cannot create".to_string()),
+    }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut cx = Ctx { rx: new_rx(), now: 0, log: Vec.new(), warnings: Vec.new() };
+    run_jobs(mut cx)?;
+    login_program(mut cx)?;
+    audit_program(mut cx)
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("www.news.com\thttp://www.news.com/\tSet-Cookie: edition=uk\tSet-Cookie: consent=0; Max-Age=31536000\n");
+    t.push_str("www.news.com\thttp://img.news.com/logo.png\tSet-Cookie: cdn=a; Domain=.news.com\n");
+    t.push_str("www.news.com\thttp://ad.doubleclick.net/pixel\tSet-Cookie: IDE=x1; Domain=.doubleclick.net; Max-Age=600\n");
+    t.push_str("www.news.com\thttp://cdn.widgets.io/w.js\tSet-Cookie: wid=9\n");
+    t.push_str("www.news.com\thttp://stats.news.com/hit\tSet-Cookie: hit=1; Domain=.stats.news.com\n");
+    t.push_str("www.shop.com\thttp://www.shop.com/\tSet-Cookie: basket=0\n");
+    t.push_str("www.shop.com\thttp://pixel.tracker.net/p\tSet-Cookie: tid=5; Domain=.tracker.net\n");
+    v.push(DataFile { path: "audit.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("#LWP-Cookies-2.0\n");
+    t.push_str("Set-Cookie3: ok=1; path=\"/\"; domain=\".acme.com\"; expires=\"2033-05-18 03:33:20Z\"; version=0\n");
+    t.push_str("Set-Cookie3: frac=1; path=\"/\"; domain=\".acme.com\"; expires=\"2033-05-18 03:33:20.5Z\"; version=0\n");
+    v.push(DataFile { path: "bad.lwp".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# HTTP Cookie File\n");
+    t.push_str(".example.com\tTRUE\t/\tFALSE\t2000000000\tfirst\t1\n");
+    t.push_str("example.org\tTRUE\t/\tFALSE\t2000000000\tsecond\t2\n");
+    t.push_str(".example.com\tTRUE\t/\tFALSE\t2000000000\tthird\t3\n");
+    v.push(DataFile { path: "bad_cookies.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# Netscape HTTP Cookie File\n");
+    t.push_str("# https://curl.se/docs/http-cookies.html\n");
+    t.push_str("# This file was generated by libcurl! Edit at your own risk.\n");
+    t.push_str("\n");
+    t.push_str(".example.com\tTRUE\t/\tFALSE\t2000000000\ttheme\tdark\n");
+    t.push_str("#HttpOnly_.example.com\tTRUE\t/\tTRUE\t2000000000\tsession\tabc123\n");
+    t.push_str("www.example.com\tFALSE\t/cart\tFALSE\t0\tcart\t3-items\n");
+    t.push_str(".example.com\tTRUE\t/\tFALSE\t1600000000\told\texpired\n");
+    t.push_str("api.example.com\tFALSE\t/\tFALSE\t2000000000\t\tflagonly\n");
+    t.push_str("   \n");
+    t.push_str("$ignored\tline\n");
+    t.push_str("www.example.com\tFALSE\t/\tFALSE\t\tempty\t\n");
+    v.push(DataFile { path: "cookies.txt".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("job\tdates\n");
+    t.push_str("now\t1700000000\n");
+    t.push_str("fn\thttp2time\tWed, 09 Feb 1994 22:23:32 GMT\n");
+    t.push_str("fn\thttp2time\tThursday, 03-Feb-94 00:00:00 GMT\n");
+    t.push_str("fn\thttp2time\t03-Feb-30\n");
+    t.push_str("fn\thttp2time\t03-Feb-76\n");
+    t.push_str("fn\thttp2time\t08-Feb-1994 14:15:29 -0500\n");
+    t.push_str("fn\thttp2time\t08-Feb-1994 14:15:29 +05:30\n");
+    t.push_str("fn\thttp2time\t08-Feb-1994 14:15:29 +5\n");
+    t.push_str("fn\thttp2time\t  Mon,03 Feb 1994 10:00 UT\n");
+    t.push_str("fn\thttp2time\t9 Feb 1994 22:23:32 EST\n");
+    t.push_str("fn\thttp2time\t09-Feb-1994 22:23 (CET)\n");
+    t.push_str("fn\thttp2time\t09/Feb/1994:22:23:32 +0100\n");
+    t.push_str("fn\thttp2time\t9 2 1994\n");
+    t.push_str("fn\thttp2time\t9 13 1994\n");
+    t.push_str("fn\thttp2time\t31 Feb 2024\n");
+    t.push_str("fn\thttp2time\t28 Feb 2023 24:00:61\n");
+    t.push_str("fn\thttp2time\tFeb 09 1994\n");
+    t.push_str("fn\thttp2time\t09 Feb 94 3:30 PM\n");
+    t.push_str("fn\thttp2time\t1994-02-09\n");
+    t.push_str("fn\thttp2time\t1 Jan 1969\n");
+    t.push_str("fn\thttp2time\t1 Jan 12345\n");
+    t.push_str("fn\thttp2time\tSun, 06 Jxx 1994 08:49:37 GMT\n");
+    t.push_str("fn\thttp2time\tSun, 06 Nov 1994 08:49:37 gmt\n");
+    t.push_str("fn\thttp2time\tSunday,06-Nov-94 08:49:37\n");
+    t.push_str("fn\thttp2time\t\n");
+    t.push_str("fn\tiso2time\t1994-02-03 14:15:29 -0100\n");
+    t.push_str("fn\tiso2time\t1994-02-03T14:15:29Z\n");
+    t.push_str("fn\tiso2time\t19940203T141529Z\n");
+    t.push_str("fn\tiso2time\t1994-02-03\n");
+    t.push_str("fn\tiso2time\t1994-02-03 14:15:29 +05:30\n");
+    t.push_str("fn\tiso2time\t1994-02-03 14:15:29.5Z\n");
+    t.push_str("fn\tiso2time\t94-02-03\n");
+    t.push_str("fn\ttime2isoz\t784111777\n");
+    t.push_str("fn\ttime2isoz\t0\n");
+    t.push_str("fn\ttime2netscape\t784111777\n");
+    t.push_str("fn\ttime2netscape\t2000000000\n");
+    t.push_str("job\theaders\n");
+    t.push_str("fn\tsplit_header_words\tfoo=\"bar\"; port=\"80,81\"; discard, bar=baz\n");
+    t.push_str("fn\tsplit_header_words\ttext/html; charset=\"iso-8859-1\"\n");
+    t.push_str("fn\tsplit_header_words\tBasic realm=\"\\\"foo\\bar\\\"\"\n");
+    t.push_str("fn\tsplit_header_words\ta, b\tc=1;;d = 2 ;  e\n");
+    t.push_str("fn\tsplit_header_words\t=junk; x=; y=\"open\n");
+    t.push_str("fn\tsplit_header_words\t,, ,\n");
+    t.push_str("fn\tjoin_header_words\tfoo=\"bar\"; port=\"80,81\"; discard, bar=baz\n");
+    t.push_str("fn\tjoin_header_words\tBasic realm=\"\\\"foo\\bar\\\"\"; x=\"a b\"; y=c/d\n");
+    t.push_str("fn\tparse_ns_headers\tfoo=bar; Path=/; Domain=.example.com; Expires=Wed, 09 Feb 1994 22:23:32 GMT; secure; HttpOnly\n");
+    t.push_str("fn\tparse_ns_headers\t=novalue; path=/\n");
+    t.push_str("fn\tparse_ns_headers\ta=b; ; =c; Version=\"1\"; MAX-AGE=60\n");
+    t.push_str("fn\tparse_ns_headers\tlone; expires=\"09-Nov-2033 23:12:40 GMT\"; expires=never\n");
+    t.push_str("fn\tparse_ns_headers\tq=\"quoted; still\"; Comment=hi\tsecond=2\n");
+    t.push_str("job\tdomains\n");
+    t.push_str("fn\tdomain_match\twww.example.com\t.example.com\n");
+    t.push_str("fn\tdomain_match\texample.com\t.example.com\n");
+    t.push_str("fn\tdomain_match\ta.b.example.com\t.example.com\n");
+    t.push_str("fn\tdomain_match\tWWW.Example.COM\twww.example.com\n");
+    t.push_str("fn\tdomain_match\t192.168.1.1\t.168.1.1\n");
+    t.push_str("fn\tdomain_match\twww.example.com\texample.com\n");
+    t.push_str("fn\tdomain_match\tx.y.com\t.com\n");
+    t.push_str("fn\tuser_domain_match\tads.tracker.net\t.tracker.net\n");
+    t.push_str("fn\tuser_domain_match\ttracker.net\t.tracker.net\n");
+    t.push_str("fn\tuser_domain_match\t10.0.0.1\t10.0.0.1\n");
+    t.push_str("fn\tuser_domain_match\t10.0.0.1\t.0.0.1\n");
+    t.push_str("fn\tis_HDN\texample.com\n");
+    t.push_str("fn\tis_HDN\t10.0.0.1\n");
+    t.push_str("fn\tis_HDN\t.example.com\n");
+    t.push_str("fn\tis_HDN\thost9\n");
+    t.push_str("fn\treach\twww.acme.com\n");
+    t.push_str("fn\treach\tacme.com\n");
+    t.push_str("fn\treach\tfoo.local\n");
+    t.push_str("fn\treach\t192.168.0.1\n");
+    t.push_str("fn\tescape_path\t/foo/bar baz/%7e%2fx\n");
+    t.push_str("fn\tescape_path\t/café/a;b=c?d\n");
+    t.push_str("job\tnetscape cookies\n");
+    t.push_str("now\t1700000000\n");
+    t.push_str("jar\tcookie\n");
+    t.push_str("set\thttp://www.acme.com/acme/login\tSet-Cookie: CUSTOMER=WILE_E_COYOTE; path=/; expires=Wed, 09-Nov-2033 23:12:40 GMT\n");
+    t.push_str("get\thttp://www.acme.com/acme/ammo\n");
+    t.push_str("set\thttp://www.acme.com/acme/pickitem\tSet-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/\n");
+    t.push_str("set\thttp://www.acme.com/acme/shipping\tSet-Cookie: SHIPPING=FEDEX; path=/foo\n");
+    t.push_str("get\thttp://www.acme.com/\n");
+    t.push_str("get\thttp://www.acme.com/foo/bar\n");
+    t.push_str("set\thttp://www.acme.com/acme/login\tSet-Cookie: sid=s1; Domain=acme.com\tSet-Cookie: lang=en\n");
+    t.push_str("get\thttp://api.acme.com/acme/x\n");
+    t.push_str("get\thttp://www.acme.com/acme/x\tCookie: preset=1\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: tld=1; Domain=.com\tSet-Cookie: other=1; Domain=other.org\tSet-Cookie: dots=1; domain=.www.acme.com\n");
+    t.push_str("set\thttps://shop.acme.com/cart\tSet-Cookie: cart=3; Secure; HttpOnly; Path=/cart\tSet-Cookie: flag\tSet-Cookie: dup=first; path=/; path=/ignored\n");
+    t.push_str("get\thttp://shop.acme.com/cart\n");
+    t.push_str("get\thttps://shop.acme.com/cart/checkout\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: bad=1; Max-Age=soon\tSet-Cookie: short=1; Max-Age=60; Expires=Wed, 09-Nov-2033 23:12:40 GMT\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: PART_NUMBER=gone; path=/; Max-Age=0\n");
+    t.push_str("set\thttp://www.acme.com/acme/\tSet-Cookie: SHIPPING=x; path=/foo; expires=Thu, 01 Jan 1970 00:00:00 GMT\n");
+    t.push_str("list\n");
+    t.push_str("len\n");
+    t.push_str("now\t1700000100\n");
+    t.push_str("get\thttp://www.acme.com/\n");
+    t.push_str("list\n");
+    t.push_str("repr\n");
+    t.push_str("clear\twww.acme.com\t/\n");
+    t.push_str("clear\tnowhere.com\n");
+    t.push_str("clear\t.acme.com\t/\tnope\n");
+    t.push_str("clear_session\n");
+    t.push_str("list\n");
+    t.push_str("job\trfc 2965\n");
+    t.push_str("now\t1700000000\n");
+    t.push_str("jar\tcookie\trfc2965=1\n");
+    t.push_str("set\thttp://www.acme.com/acme/login\tSet-Cookie2: Customer=\"WILE_E_COYOTE\"; Version=\"1\"; Path=\"/acme\"\n");
+    t.push_str("get\thttp://www.acme.com/acme/pickitem\n");
+    t.push_str("set\thttp://www.acme.com/acme/pickitem\tSet-Cookie2: Part_Number=\"Rocket Launcher 0001\"; Version=\"1\"; Path=\"/acme\"\n");
+    t.push_str("set\thttp://www.acme.com/acme/shipping\tSet-Cookie2: Shipping=\"FedEx\"; Version=\"1\"; Path=\"/acme\"; Port=\"80,8080\"\tSet-Cookie: Shipping=old; path=/acme\tSet-Cookie: legacy=1; path=/\n");
+    t.push_str("get\thttp://www.acme.com/acme/process\n");
+    t.push_str("get\thttp://www.acme.com:8080/acme/process\n");
+    t.push_str("get\thttp://www.acme.com:81/acme/process\n");
+    t.push_str("set\thttp://www.acme.com/acme/\tSet-Cookie2: nover=1; Path=\"/acme\"\tSet-Cookie2: wrongpath=1; Version=1; Path=\"/other\"\tSet-Cookie2: nodot=1; Version=1; Domain=\".com\"\tSet-Cookie2: prefix=1; Version=1; Domain=\".acme.com\"\n");
+    t.push_str("set\thttp://a.b.acme.com/\tSet-Cookie2: deep=1; Version=1; Domain=\".acme.com\"\tSet-Cookie2: portless=1; Version=1; Port\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: v1=\"a b\"; Version=1; Path=/\n");
+    t.push_str("get\thttp://www.acme.com/acme/x\n");
+    t.push_str("repr\n");
+    t.push_str("jar\tcookie\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: v1=\"a b\"; Version=1; Path=/\tSet-Cookie2: ignored=1; Version=\"1\"\n");
+    t.push_str("get\thttp://www.acme.com/\n");
+    t.push_str("repr\n");
+    t.push_str("job\tpolicies\n");
+    t.push_str("now\t1700000000\n");
+    t.push_str("jar\tcookie\tblocked_domains=.doubleclick.net,ads.acme.com\tstrict_ns_unverifiable=1\n");
+    t.push_str("set\thttp://ad.doubleclick.net/pixel\torigin=www.news.com\tunverifiable=1\tSet-Cookie: id=1; Domain=.doubleclick.net\n");
+    t.push_str("set\thttp://ads.acme.com/x\tSet-Cookie: id=2\n");
+    t.push_str("set\thttp://cdn.widgets.io/w.js\torigin=www.news.com\tunverifiable=1\tSet-Cookie: w=1\n");
+    t.push_str("set\thttp://img.news.com/a.png\torigin=www.news.com\tunverifiable=1\tSet-Cookie: img=1; Domain=.news.com\n");
+    t.push_str("set\thttp://www.news.com/\tSet-Cookie: $dollar=1\tSet-Cookie: page=1\n");
+    t.push_str("list\n");
+    t.push_str("jar\tcookie\tallowed_domains=.news.com\tstrict_ns_set_initial_dollar=1\tstrict_ns_set_path=1\n");
+    t.push_str("set\thttp://www.news.com/a/b\tSet-Cookie: $dollar=1\tSet-Cookie: p=1; path=/a\tSet-Cookie: q=1; path=/z\tSet-Cookie: r=1\n");
+    t.push_str("set\thttp://www.blog.org/\tSet-Cookie: s=1\n");
+    t.push_str("list\n");
+    t.push_str("jar\tcookie\tstrict_domain=1\tstrict_ns_domain=3\n");
+    t.push_str("set\thttp://www.bbc.co.uk/\tSet-Cookie: cc=1; Domain=.co.uk\tSet-Cookie: bbc=1; Domain=.bbc.co.uk\tSet-Cookie: host=1\n");
+    t.push_str("set\thttp://a.www.example.com/\tSet-Cookie: deep=1; Domain=.example.com\n");
+    t.push_str("get\thttp://news.bbc.co.uk/\n");
+    t.push_str("get\thttp://www.bbc.co.uk/\n");
+    t.push_str("list\n");
+    t.push_str("jar\tcookie\tnetscape=0\n");
+    t.push_str("set\thttp://www.acme.com/\tSet-Cookie: off=1\n");
+    t.push_str("len\n");
+    t.push_str("jar\tcookie\tsecure_protocols=https\n");
+    t.push_str("set\twss://chat.acme.com/socket\tSet-Cookie: ws=1; Secure\n");
+    t.push_str("get\twss://chat.acme.com/socket\n");
+    t.push_str("get\thttps://chat.acme.com/socket\n");
+    t.push_str("jar\tcookie\n");
+    t.push_str("set\thttp://localhost:8000/app\tSet-Cookie: dev=1\tSet-Cookie: dom=1; Domain=localhost\tSet-Cookie: loc=1; Domain=.localhost.local\n");
+    t.push_str("get\thttp://localhost:9000/app/x\n");
+    t.push_str("set\thttp://192.168.1.20/\tSet-Cookie: ip=1\tSet-Cookie: ipdom=1; Domain=.168.1.20\n");
+    t.push_str("get\thttp://192.168.1.20/\n");
+    t.push_str("list\n");
+    t.push_str("job\tfiles\n");
+    t.push_str("now\t1700000000\n");
+    t.push_str("jar\tmozilla\n");
+    t.push_str("load\tdata/cookies.txt\t0\t0\n");
+    t.push_str("list\n");
+    t.push_str("save\twork/out.txt\t0\t0\n");
+    t.push_str("save\twork/all.txt\t1\t1\n");
+    t.push_str("get\thttps://www.example.com/cart/1\n");
+    t.push_str("jar\tmozilla\n");
+    t.push_str("load\tdata/cookies.txt\t1\t1\n");
+    t.push_str("len\n");
+    t.push_str("clear_expired\n");
+    t.push_str("len\n");
+    t.push_str("load\tdata/not_cookies.txt\t0\t0\n");
+    t.push_str("load\tdata/nope.txt\t0\t0\n");
+    t.push_str("save\t-\t0\t0\n");
+    t.push_str("jar\tmozilla\n");
+    t.push_str("load\tdata/bad_cookies.txt\t1\t1\n");
+    t.push_str("list\n");
+    t.push_str("revert\tdata/bad_cookies.txt\t1\t1\n");
+    t.push_str("list\n");
+    t.push_str("revert\tdata/cookies.txt\t0\t0\n");
+    t.push_str("list\n");
+    t.push_str("jar\tlwp\n");
+    t.push_str("set\thttp://www.acme.com/app/login\tSet-Cookie: sid=\"a b\"; path=/app; HttpOnly\tSet-Cookie: lang=en; Domain=.acme.com; Max-Age=86400; Comment=prefs\tSet-Cookie: tok=1; port=80; Expires=Wed, 09-Nov-2033 23:12:40 GMT\n");
+    t.push_str("save\twork/acme.lwp\t1\t0\n");
+    t.push_str("save\twork/acme2.lwp\t0\t0\n");
+    t.push_str("jar\tlwp\n");
+    t.push_str("load\twork/acme.lwp\t1\t0\n");
+    t.push_str("repr\n");
+    t.push_str("load\tdata/session.lwp\t0\t0\n");
+    t.push_str("list\n");
+    t.push_str("load\tdata/bad.lwp\t1\t1\n");
+    t.push_str("load\tdata/cookies.txt\t0\t0\n");
+    t.push_str("jar\tmozilla\n");
+    t.push_str("load\tdata/session.lwp\t0\t0\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\"cookies\": []}\n");
+    v.push(DataFile { path: "not_cookies.txt".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("#LWP-Cookies-2.0\n");
+    t.push_str("Set-Cookie3: lang=en; path=\"/\"; domain=\".acme.com\"; path_spec; domain_dot; expires=\"2033-05-18 03:33:20Z\"; version=0\n");
+    t.push_str("# a comment line is skipped\n");
+    t.push_str("Set-Cookie3: cart=\"3 items\"; path=\"/shop\"; domain=\"shop.acme.com\"; path_spec; discard; HttpOnly=None; version=0\n");
+    t.push_str("Set-Cookie3: old=1; path=\"/\"; domain=\".acme.com\"; expires=\"2020-01-01 00:00:00Z\"; version=0\n");
+    t.push_str("Set-Cookie3: v1=x; path=\"/\"; domain=\"www.acme.com\"; port=\"80,8080\"; port_spec; secure; expires=\"20330518T033320Z\"; Comment=\"x\"; version=1\n");
+    v.push(DataFile { path: "session.lwp".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("GET\thttps://shop.example.com/\n");
+    t.push_str("RESP\tSet-Cookie: visitor=v-1001; Domain=example.com; Path=/; Expires=Fri, 01 Jan 2038 00:00:00 GMT\tSet-Cookie: csrftoken=t-7; Path=/; Secure\n");
+    t.push_str("GET\thttps://shop.example.com/login\n");
+    t.push_str("RESP\tSet-Cookie: sessionid=s-42; Path=/; Secure; HttpOnly\tSet-Cookie: csrftoken=t-8; Path=/; Secure\n");
+    t.push_str("GET\thttps://shop.example.com/account/orders\n");
+    t.push_str("RESP\tSet-Cookie: recent=o-9,o-8; Path=/account; Max-Age=3600\n");
+    t.push_str("GET\thttp://shop.example.com/account/orders\n");
+    t.push_str("RESP\n");
+    t.push_str("SAVE\twork/session.txt\n");
+    t.push_str("RESTART\n");
+    t.push_str("GET\thttps://shop.example.com/account/orders\n");
+    t.push_str("RESP\tSet-Cookie: sessionid=; Path=/; Max-Age=0\n");
+    t.push_str("GET\thttps://shop.example.com/\n");
+    t.push_str("RESP\n");
+    v.push(DataFile { path: "session.tsv".to_string(), body: t });
+}
