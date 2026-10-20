@@ -875,19 +875,40 @@ fn main() {
 }
 "#;
 
+/// The first line `child` writes on stderr, and the rest of that stream. A
+/// child that says nothing for a minute is killed and the test fails, so a
+/// server that never announces its port cannot hang the suite.
+fn first_stderr_line(
+    child: &mut std::process::Child,
+) -> (String, std::io::BufReader<std::process::ChildStderr>) {
+    use std::io::BufRead;
+    let mut err = std::io::BufReader::new(child.stderr.take().expect("stderr"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = err.read_line(&mut line);
+        let _ = tx.send((line, err));
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(got) => got,
+        Err(_) => {
+            let _ = child.kill();
+            panic!("no line on stderr within 60s");
+        }
+    }
+}
+
 /// Starts a server program, sends it `requests(port)` once it prints its
 /// `BOUND_PORT` on stderr (B-2026-10-15-69), and stops it: the transcript
 /// of what came back.
 fn exchange(mut cmd: Command, requests: fn(u16) -> String) -> String {
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::Read;
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn the server");
-    let mut err = BufReader::new(child.stderr.take().expect("stderr"));
-    let mut line = String::new();
-    let _ = err.read_line(&mut line);
+    let (line, mut err) = first_stderr_line(&mut child);
     let Some(port) = line.trim().strip_prefix("BOUND_PORT=") else {
         let _ = child.kill();
         let mut rest = String::new();
@@ -1167,7 +1188,7 @@ const ANNOUNCED: &str = r#"fn main() {
 
 #[test]
 fn announce_port_hook_reports_a_bound_listener_on_both_backends() {
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{Read, Write};
     let dir = Scratch::new("announce_port");
     let karac = env!("CARGO_BIN_EXE_karac");
     let file = dir.path().join("announced.kara");
@@ -1179,9 +1200,7 @@ fn announce_port_hook_reports_a_bound_listener_on_both_backends() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn the listener");
-        let mut err = BufReader::new(child.stderr.take().expect("stderr"));
-        let mut line = String::new();
-        let _ = err.read_line(&mut line);
+        let (line, _err) = first_stderr_line(&mut child);
         let Some(port) = line.trim().strip_prefix("BOUND_PORT=") else {
             let _ = child.kill();
             panic!("the listener printed {line:?}, not its port");

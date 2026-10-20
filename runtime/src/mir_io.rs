@@ -459,7 +459,7 @@ unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
 ///
 /// # Safety
 /// `ptr`/`len` describe the address `karac_mir_tcp` was given.
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", unix))]
 unsafe fn announce_port(ptr: *mut u8, len: i64, fd: i64) {
     if std::env::var_os("KARAC_ANNOUNCE_PORT").is_none() {
         return;
@@ -476,6 +476,8 @@ unsafe fn announce_port(ptr: *mut u8, len: i64, fd: i64) {
     }
 }
 
+/// # Safety
+///
 /// `ptr` and `len` describe the address or buffer the op reads or writes,
 /// and `value` is writable.
 #[cfg(feature = "net")]
@@ -516,6 +518,7 @@ pub unsafe extern "C" fn karac_mir_tcp(
             0 | 1 if !parses() => (7, 0),
             0 => {
                 let bound = built(ev::tcp_bind(ptr, len, false));
+                #[cfg(unix)]
                 if bound.0 == -1 {
                     announce_port(ptr, len, bound.1);
                 }
