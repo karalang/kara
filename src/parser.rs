@@ -375,7 +375,27 @@ pub struct Parser {
     /// (Rust's `let (mut a, b)`) is then answered with the Kāra spelling
     /// and a fix that moves it there (B-2026-10-14-57).
     pub(crate) let_pattern: Option<(usize, bool)>,
+    /// Offsets of the `!`s already reported as a Rust macro call. Two
+    /// recognizers see the same `!` when recovery re-parses it (`expect` and
+    /// the prefix parser), and each reported it (B-2026-10-20-5).
+    pub(crate) macro_bangs_reported: rustc_hash::FxHashSet<usize>,
 }
+
+/// The Rust macros whose name is also a Kāra function, so deleting the `!`
+/// of `name!(...)` leaves a valid call. Any other macro has no such twin and
+/// its `!` must not be deleted (B-2026-10-20-5). A test resolves each name.
+pub const MACRO_FUNCTION_TWINS: &[&str] = &[
+    "println",
+    "print",
+    "eprintln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "todo",
+    "unreachable",
+    "dbg",
+];
 
 /// Reason an `impl Trait` type expression is rejected at the current
 /// parser position. Encoded as an enum (rather than a single
@@ -438,6 +458,7 @@ impl Parser {
             fix_edits: FxHashMap::default(),
             fix_diffs: FxHashMap::default(),
             let_pattern: None,
+            macro_bangs_reported: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -912,21 +933,16 @@ impl Parser {
             // prefix negation is preceded by an operator or keyword.
             if self.check(&Token::Bang) {
                 if let Some(name) = self.macro_call_name_before_bang(&found_span) {
-                    self.error_at(
-                        &format!(
-                            "Kāra has no macros; `{name}!(...)` is Rust syntax — call it as \
-                             `{name}(...)` and remove the `!`"
-                        ),
-                        found_span,
-                    );
-                    self.fix_edits.insert(
-                        crate::resolver::SpanKey::from_span(&found_span),
-                        crate::resolver::TextEdit {
-                            offset: found_span.offset,
-                            length: found_span.length,
-                            replacement: String::new(),
-                        },
-                    );
+                    self.report_macro_call(&name, found_span);
+                    // Read past the call, as if its name were the whole
+                    // expression, so the rest of the statement parses instead
+                    // of cascading (B-2026-10-20-5).
+                    self.advance();
+                    self.skip_bracketed_group();
+                    if self.check(expected) {
+                        self.advance();
+                        return Some(());
+                    }
                     return None;
                 }
             }
@@ -950,6 +966,143 @@ impl Parser {
     /// never by an identifier abutting it, so this cannot misfire on real
     /// negation; and `foo !bar` (identifier, space, negation) is excluded by
     /// the offsets not touching.
+    /// Report the Rust macro call whose `!` is the current token, once.
+    /// Both recognizers (`expect` and the prefix parser) come here, so the
+    /// message and the fix are the same whichever sees it first.
+    ///
+    /// The usual repair deletes the `!`, leaving an ordinary call, and that
+    /// is right only for the macros in [`MACRO_FUNCTION_TWINS`]. Deleting the
+    /// `!` of any other produced a call to an undefined name
+    /// (B-2026-10-20-5): `matches!` is rewritten to the `match` it stands
+    /// for, and the rest are named with no fix.
+    pub(crate) fn report_macro_call(&mut self, name: &str, bang_span: Span) {
+        if !self.macro_bangs_reported.insert(bang_span.offset) {
+            return;
+        }
+        let key = crate::resolver::SpanKey::from_span(&bang_span);
+        if name == "matches" {
+            self.error_at(
+                "Kāra has no macros, and `matches!` has no function twin: write \
+                 `match x { P => true, _ => false }`, or `if let P = x` in a condition",
+                bang_span,
+            );
+            if let Some(edits) = self.matches_macro_rewrite() {
+                self.fix_diffs.insert(key, edits);
+            }
+            return;
+        }
+        if !MACRO_FUNCTION_TWINS.contains(&name) {
+            let instead = match name {
+                "format" => "write an f-string, `f\"{x} and {y}\"`".to_string(),
+                "vec" => "write a list literal, `[a, b]`, or `Vec.new()`".to_string(),
+                _ => format!("there is no `{name}` function, so write it without the macro"),
+            };
+            self.error_at(
+                &format!("Kāra has no macros; `{name}!(...)` is Rust syntax: {instead}"),
+                bang_span,
+            );
+            return;
+        }
+        self.error_at(
+            &format!(
+                "Kāra has no macros; `{name}!(...)` is Rust syntax — call it as \
+                 `{name}(...)` and remove the `!`"
+            ),
+            bang_span,
+        );
+        self.fix_edits.insert(
+            key,
+            crate::resolver::TextEdit {
+                offset: bang_span.offset,
+                length: bang_span.length,
+                replacement: String::new(),
+            },
+        );
+    }
+
+    /// The edits that turn `matches!(x, P)` (the `!` being the current token)
+    /// into `match x { P => true, _ => false }`. A guard comes along as the
+    /// arm's guard, and a trailing comma is dropped. Anything else (no
+    /// pattern, a second argument, an unclosed call) gets no fix.
+    fn matches_macro_rewrite(&self) -> Option<Vec<crate::resolver::TextEdit>> {
+        let name = &self.tokens.get(self.pos.checked_sub(1)?)?.span;
+        let open = self.tokens.get(self.pos + 1)?;
+        if !matches!(open.token, Token::LeftParen) {
+            return None;
+        }
+        let mut depth = 0usize;
+        let mut commas = Vec::new();
+        let mut close = None;
+        for (i, t) in self.tokens.iter().enumerate().skip(self.pos + 1) {
+            match t.token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                Token::Comma if depth == 1 => commas.push(i),
+                Token::EOF => return None,
+                _ => {}
+            }
+        }
+        let close = close.filter(|&i| matches!(self.tokens[i].token, Token::RightParen))?;
+        let (comma, tail) = match commas.as_slice() {
+            [c] => (*c, close),
+            [c, t] if t + 1 == close => (*c, *t),
+            _ => return None,
+        };
+        if comma == self.pos + 2 || comma + 1 == tail {
+            return None;
+        }
+        let comma = &self.tokens[comma].span;
+        let tail = &self.tokens[tail].span;
+        let close = &self.tokens[close].span;
+        Some(vec![
+            crate::resolver::TextEdit {
+                offset: name.offset,
+                length: open.span.offset + open.span.length - name.offset,
+                replacement: "match ".to_string(),
+            },
+            crate::resolver::TextEdit {
+                offset: comma.offset,
+                length: comma.length,
+                replacement: " {".to_string(),
+            },
+            crate::resolver::TextEdit {
+                offset: tail.offset,
+                length: close.offset + close.length - tail.offset,
+                replacement: " => true, _ => false }".to_string(),
+            },
+        ])
+    }
+
+    /// Consume a bracketed group starting at the current token, through its
+    /// matching close (or to the end of input). A no-op on any other token.
+    pub(crate) fn skip_bracketed_group(&mut self) {
+        if !matches!(
+            self.peek_token_ref(),
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace
+        ) {
+            return;
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.peek_token_ref() {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => depth -= 1,
+                Token::EOF => return,
+                _ => {}
+            }
+            self.advance();
+            if depth == 0 {
+                return;
+            }
+        }
+    }
+
     pub(crate) fn macro_call_name_before_bang(&self, bang_span: &Span) -> Option<String> {
         let prev = self.tokens.get(self.pos.checked_sub(1)?)?;
         let Token::Identifier { name, .. } = &prev.token else {

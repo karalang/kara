@@ -990,27 +990,16 @@ impl super::Parser {
                 // never reaches here at all -- the postfix identifier path
                 // consumes it before prefix parsing.
                 if let Some(name) = self.macro_call_name_before_bang(&bang_span) {
-                    self.error(&format!(
-                        "Kāra has no macros; `{name}!(...)` is Rust syntax -- call it as \
-                         `{name}(...)` and remove the `!`"
-                    ));
-                    self.fix_edits.insert(
-                        crate::resolver::SpanKey::from_span(&bang_span),
-                        crate::resolver::TextEdit {
-                            offset: bang_span.offset,
-                            length: bang_span.length,
-                            replacement: String::new(),
-                        },
-                    );
+                    self.report_macro_call(&name, bang_span);
                     self.advance();
-                    let operand = self.parse_expr_bp(24)?;
+                    // The arguments are a macro's, not an expression's
+                    // (`matches!(x, P if g)` holds a pattern and a guard), so
+                    // parsing them only cascades. Skip the bracketed group.
+                    self.skip_bracketed_group();
                     return Some(Expr {
                         id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&start),
-                        kind: ExprKind::Unary {
-                            op: UnaryOp::Not,
-                            operand: Box::new(operand),
-                        },
+                        kind: ExprKind::Error,
                     });
                 }
                 self.error("the `!` operator is not used in Kāra; use `not` instead");

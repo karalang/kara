@@ -13476,7 +13476,7 @@ fn rust_macro_call_deletes_the_bang_rather_than_spelling_it_not() {
 #[test]
 fn rust_macro_in_value_position_is_recognized_too() {
     let src = "fn main() {\n\
-               let s = format!(\"{}\", 1);\n\
+               let s = dbg!(1);\n\
                println(s);\n\
                }";
     let result = karac::parse(src);
@@ -13494,6 +13494,108 @@ fn rust_macro_in_value_position_is_recognized_too() {
         .find(|e| e.replacement.is_empty() && e.length == 1)
         .expect("a delete edit for the `!`");
     assert_eq!(&src[edit.offset..edit.offset + edit.length], "!");
+}
+
+/// B-2026-10-20-5: `matches!` has no function twin, so deleting its `!` (the
+/// repair every other macro gets) left a call to an undefined `matches`, and
+/// `karac fix` traded one error for another. Its fix rewrites the call to the
+/// `match` it stands for, guard and trailing comma included. The same `!` was
+/// also reported twice when recovery re-parsed it in the prefix parser; each
+/// site is reported once.
+#[test]
+fn matches_macro_is_rewritten_to_a_match_and_reported_once() {
+    let src = "enum J { Null, Int(i64) }\n\
+               fn main() {\n\
+               let j = J.Int(3);\n\
+               if not matches!(j, J.Null) { println(\"a\"); }\n\
+               let b = matches!(j, J.Int(n) if n > 2);\n\
+               let c = matches!(j, J.Int(_) | J.Null,);\n\
+               println(b and c);\n\
+               }";
+    let result = karac::parse(src);
+    let reports = result
+        .errors
+        .iter()
+        .filter(|e| e.message.contains("no macros"))
+        .count();
+    assert_eq!(reports, 3, "one report per site; got: {:?}", result.errors);
+    assert!(
+        result
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("no macros"))
+            .all(|e| e.message.contains("`match x { P => true, _ => false }`")),
+        "the message names the Kāra spelling; got: {:?}",
+        result.errors
+    );
+    let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
+    edits.extend(result.fix_diffs.values().flatten().cloned());
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut repaired = src.to_string();
+    for e in edits {
+        repaired.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    for want in [
+        "if not match j { J.Null => true, _ => false } {",
+        "let b = match j { J.Int(n) if n > 2 => true, _ => false };",
+        "let c = match j { J.Int(_) | J.Null => true, _ => false };",
+    ] {
+        assert!(repaired.contains(want), "missing {want:?} in:\n{repaired}");
+    }
+    let reparsed = karac::parse(&repaired);
+    assert!(
+        reparsed.errors.is_empty(),
+        "the repaired source must parse; got: {:?}",
+        reparsed.errors
+    );
+    // Reading past each call is what lets the third site be reached at all:
+    // no cascade follows any of them.
+    assert_eq!(result.errors.len(), 3, "errors: {:?}", result.errors);
+}
+
+/// The `!`-deleting fix is only right for a macro whose name is a Kāra
+/// function. Each name in the twin list must resolve, and `format!` (which
+/// has none: Kāra writes an f-string) is named with no fix rather than
+/// rewritten to an undefined `format(...)` (B-2026-10-20-5).
+#[test]
+fn macro_bang_is_deleted_only_when_the_function_exists() {
+    let resolves = |name: &str| {
+        let src = format!("fn main() {{\n{name}(\"x\");\n}}");
+        let parsed = karac::parse(&src);
+        assert!(parsed.errors.is_empty(), "{name}: {:?}", parsed.errors);
+        !karac::resolve(&parsed.program)
+            .errors
+            .iter()
+            .any(|e| e.message.contains("undefined name"))
+    };
+    for name in karac::parser::MACRO_FUNCTION_TWINS {
+        assert!(
+            resolves(name),
+            "`{name}` is listed as a function but does not resolve"
+        );
+    }
+    assert!(
+        !resolves("format"),
+        "`format` resolves now: list it as a twin"
+    );
+
+    let src = "fn main() {\n\
+               let s = format!(\"{}\", 1);\n\
+               println(s);\n\
+               }";
+    let result = karac::parse(src);
+    let msgs: Vec<_> = result.errors.iter().map(|e| e.message.as_str()).collect();
+    assert_eq!(msgs.len(), 1, "one error, no cascade: {msgs:?}");
+    assert!(
+        msgs[0].contains("f-string"),
+        "names the Kāra spelling: {msgs:?}"
+    );
+    assert!(
+        result.fix_edits.is_empty() && result.fix_diffs.is_empty(),
+        "no fix that would leave an undefined `format`: {:?} {:?}",
+        result.fix_edits,
+        result.fix_diffs
+    );
 }
 
 /// B-2026-10-05-78: `|x: i64| -> f64 { .. }` is Rust's closure
