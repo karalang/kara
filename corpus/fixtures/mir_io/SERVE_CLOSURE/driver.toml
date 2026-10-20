@@ -1,0 +1,3 @@
+# The request tests/mir_io.rs sends.
+[[connection]]
+send = "GET /p HTTP/1.1\r\nConnection: close\r\n\r\n"

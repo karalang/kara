@@ -1,0 +1,26 @@
+=== connection 1 ===
+HTTP/1.1 200 OK
+X-Trace-Id: abc-123
+Content-Type: text/plain
+content-length: 45
+
+GET /a/b [] x=1 2 y=A flag= z= x-a:hi hosts=1HTTP/1.1 200 OK
+X-Trace-Id: abc-123
+Content-Type: text/plain
+content-length: 35
+
+POST /post [payload] no x-a hosts=1HTTP/1.1 200 OK
+X-Trace-Id: abc-123
+Content-Type: text/plain
+content-length: 30
+connection: close
+
+PUT /c [abcdef] no x-a hosts=1
+=== connection 2 ===
+HTTP/1.1 404 Not Found
+X-Trace-Id: abc-123
+Content-Type: text/plain
+content-length: 30
+connection: close
+
+GET /missing [] no x-a hosts=0

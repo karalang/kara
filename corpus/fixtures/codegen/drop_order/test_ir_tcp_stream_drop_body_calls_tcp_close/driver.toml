@@ -1,0 +1,7 @@
+# One connection that sends nothing: the program accepts it, prints the
+# stream's fd and ends by itself.
+wait = true
+stdout = true
+
+[[connection]]
+send = []

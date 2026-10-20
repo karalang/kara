@@ -1,0 +1,12 @@
+# The requests tests/mir_io.rs sends: three on one kept-alive connection
+# (a query and a header, a sized body, a chunked body that closes it), then
+# an HTTP/1.0 request on a second.
+[[connection]]
+send = [
+    "GET /a/b?x=1+2&y=%41&flag&&z= HTTP/1.1\r\nHost: h\r\nX-A: hi\r\n\r\n",
+    "POST /post HTTP/1.1\r\nHost: h\r\nContent-Length: 7\r\n\r\npayload",
+    "PUT /c HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n3;x=y\r\ndef\r\n0\r\n\r\n",
+]
+
+[[connection]]
+send = "GET /missing HTTP/1.0\r\n\r\n"

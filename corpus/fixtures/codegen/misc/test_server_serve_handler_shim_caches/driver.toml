@@ -1,0 +1,4 @@
+# One request, as test_server_serve_handler_smoke sends: the first
+# `Server.serve` answers it and never returns.
+[[connection]]
+send = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"

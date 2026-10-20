@@ -1,0 +1,6 @@
+# Its test connects once and sends nothing; the program then ends by itself.
+wait = true
+stdout = true
+
+[[connection]]
+send = []
