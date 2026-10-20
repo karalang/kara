@@ -5321,6 +5321,7 @@ impl<'a> Interp<'a> {
             handle,
             deadline: None,
             slept: false,
+            spans: self.active_spans.clone(),
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
@@ -10812,6 +10813,7 @@ impl<'a> Interp<'a> {
             handle: 0,
             deadline: None,
             slept: false,
+            spans: self.active_spans.clone(),
         });
         self.run_tasks(entry)
     }
@@ -10853,7 +10855,13 @@ impl<'a> Interp<'a> {
                 root: Root::Heap(slot),
                 path: Path::new(),
             };
-            let polled = self.call(&resume, vec![Value::Ref(at.clone())])?;
+            let outer = std::mem::replace(
+                &mut self.active_spans,
+                std::mem::take(&mut self.tasks[t].spans),
+            );
+            let polled = self.call(&resume, vec![Value::Ref(at.clone())]);
+            self.tasks[t].spans = std::mem::replace(&mut self.active_spans, outer);
+            let polled = polled?;
             // Tasks it spawned run after it, in spawn order.
             queue.extend(std::mem::take(&mut self.spawned));
             match polled {
@@ -12421,6 +12429,9 @@ struct TaskSlot {
     /// Its `__ready` waited the pause out, so the `sleep_ms` after it
     /// returns at once.
     slept: bool,
+    /// Its active span stack while it is not running (B-2026-10-20-37):
+    /// span context is per task, inherited from the spawner.
+    spans: Vec<i128>,
 }
 
 /// A spawned task's handle under the executor: its result once the task

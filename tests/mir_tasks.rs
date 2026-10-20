@@ -564,3 +564,47 @@ fn main() {
         "[info] after-resume span_id=7\n[info] outside\n42\n[info] owned span_id=9\ndrop 1\n2\n"
     );
 }
+
+/// B-2026-10-20-37: span context is per task. A task that runs while
+/// another is suspended inside `with_span` does not see that span, and a
+/// task spawned inside one inherits it.
+#[test]
+fn mir_tasks_span_context_is_per_task() {
+    let src = r#"
+fn a() -> i64 {
+    let s = Span.root("a", 7);
+    with_span(s, || { sleep_ms(50); Log.info("a-after"); 1 })
+}
+fn b() -> i64 {
+    sleep_ms(10);
+    Log.info("b-during");
+    2
+}
+fn child() -> i64 {
+    sleep_ms(1);
+    Log.info("child");
+    3
+}
+fn main() {
+    let g = TaskGroup.new();
+    let x = g.spawn(|| a());
+    let y = g.spawn(|| b());
+    println(x.join() + y.join());
+    let p = Span.root("p", 5);
+    let z = with_span(p, || { let h = g.spawn(|| child()); h.join() });
+    Log.info("after");
+    println(z);
+}
+"#;
+    let out = stdout_on_both("span_per_task", src);
+    assert_eq!(
+        out,
+        "[info] b-during
+[info] a-after span_id=7
+3
+[info] child span_id=5
+[info] after
+3
+"
+    );
+}

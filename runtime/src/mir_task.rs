@@ -51,6 +51,9 @@ struct Task {
     /// at once.
     slept: bool,
     wait: Wait,
+    /// Its active span stack, swapped into the thread's while it runs: span
+    /// context is per task, inherited from the spawner.
+    spans: Vec<i64>,
 }
 
 #[derive(Default)]
@@ -160,6 +163,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             deadline: None,
             slept: false,
             wait: Wait::None,
+            spans: crate::mir::current_spans(),
         });
         e.progress += 1;
     });
@@ -188,8 +192,10 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             return;
         };
         let before = EXEC.with(|e| e.borrow().progress);
+        let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
         // SAFETY: the task has not answered 1 yet.
         let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+        t.spans = crate::mir::swap_spans(outer);
         let (after, cur) = EXEC.with(|e| {
             let mut e = e.borrow_mut();
             (e.progress, e.cur.take())

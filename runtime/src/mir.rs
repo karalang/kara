@@ -1082,6 +1082,16 @@ thread_local! {
     static SPANS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
 }
 
+/// A copy of the thread's active span stack, for a task being spawned.
+pub(crate) fn current_spans() -> Vec<i64> {
+    SPANS.with(|s| s.borrow().clone())
+}
+
+/// Installs `spans` as the thread's active span stack, returning the old one.
+pub(crate) fn swap_spans(spans: Vec<i64>) -> Vec<i64> {
+    SPANS.with(|s| std::mem::replace(&mut *s.borrow_mut(), spans))
+}
+
 /// Makes the span `id` active.
 #[no_mangle]
 pub extern "C" fn karac_mir_span_push(id: i64) {
