@@ -3538,11 +3538,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.test_pattern(pattern, &place, st, fail)?;
                 let matched = self.cur;
                 self.cur = fail;
+                // The initializer's temporaries drop before the else block
+                // runs (core semantics §7.4), so it leaves through none.
+                let temps = std::mem::take(self.scopes.last_mut().expect("the statement's scope"));
+                self.exit_entries(&temps, false)?;
                 self.push_scope();
                 let t = self.unit();
                 let tmp = self.temp(t);
                 self.block_into(else_block, Place::local(tmp))?;
                 self.pop_scope()?;
+                *self.scopes.last_mut().expect("the statement's scope") = temps;
                 // The else block diverges (the type checker requires it).
                 self.diverge(TerminatorKind::Unreachable);
                 self.cur = matched;
