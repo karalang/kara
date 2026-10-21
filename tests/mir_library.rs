@@ -1114,3 +1114,33 @@ fn main() {
 "#;
     assert_runs(src, "1 1\nzed 3\n3 2\ntrue\n");
 }
+
+/// A baked module is appended for a program that names one of its words as
+/// a token, not for one whose text merely contains it (B-2026-10-21-57): a
+/// longer name (`MidiParser`), a string literal or a comment does not bring
+/// `std.cli` in, so a program's own `struct Env` does not meet cli.kara's
+/// `reads(Env)`. A word in an `f"..."` hole is still a use.
+#[test]
+fn a_baked_module_is_appended_for_a_token_not_a_substring() {
+    let src = r#"
+struct Env { names: Vec[String] }
+impl Env { fn put(mut ref self, name: ref String) { self.names.push(name.clone()); } }
+fn count(env: ref Env) -> i64 { env.names.len() }
+fn step(env: mut ref Env) -> Result[bool, String] { env.put("a".to_string()); Ok(true) }
+fn main() {
+    let mut env = Env { names: Vec.new() };
+    if step(mut env).unwrap() { println(f"{count(env)} Parser"); }
+}
+"#;
+    assert_runs(src, "1 Parser\n");
+    let cli = |src: &str| {
+        karac::mir::lower::library_source(src)
+            .0
+            .contains("CliError")
+    };
+    assert!(!cli(
+        "// A MidiParser reads Args.\nstruct MidiParser { pos: i64 }\nfn main() { println(\"Parser() and Arg\"); }\n"
+    ));
+    assert!(cli("fn main() { let p = Parser.new(\"t\"); }\n"));
+    assert!(cli(r#"fn main() { println(f"{Parser.new("t").name}"); }"#));
+}

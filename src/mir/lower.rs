@@ -16735,12 +16735,21 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // The v2 `std.regex` (B-2026-10-14-63); legacy keeps
         // runtime/stdlib/regex.kara.
         REGEX_SOURCE,
-        &["Regex"],
+        &["Regex", "RegexError"],
         &["Regex"],
     ),
     (
         include_str!("../../runtime/stdlib/tracing.kara"),
-        &["Log", "Span", "Exporter", "with_span"],
+        &[
+            "Log",
+            "LogEvent",
+            "Span",
+            "SpanField",
+            "Exporter",
+            "NoOpExporter",
+            "StdoutExporter",
+            "with_span",
+        ],
         &[],
     ),
     (
@@ -16777,7 +16786,7 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // keeps them `#[compiler_builtin]` in runtime/stdlib/json.kara. A
         // program's own `Json` is not the library's.
         JSON_SOURCE,
-        &["Json"],
+        &["Json", "JsonError"],
         &["Json"],
     ),
 ];
@@ -16789,7 +16798,15 @@ const JSON_SOURCE: &str = include_str!("../../runtime/stdlib/source/json.kara");
 /// users.
 const PROCESS_SOURCE: &str = include_str!("../../runtime/stdlib/source/process.kara");
 // A program's own `Child` or `Stdio` is not a use (`names_baked`).
-const PROCESS_WORDS: &[&str] = &["Command", "Child", "Stdio", "ExitStatus"];
+const PROCESS_WORDS: &[&str] = &[
+    "Command",
+    "Child",
+    "ChildStdin",
+    "ChildStdout",
+    "ChildStderr",
+    "Stdio",
+    "ExitStatus",
+];
 
 /// The v2 `std.regex`.
 const REGEX_SOURCE: &str = include_str!("../../runtime/stdlib/source/regex.kara");
@@ -16811,13 +16828,14 @@ const NET_WORDS: &[&str] = &[
 /// (B-2026-10-15-6, B-2026-10-15-18, B-2026-10-14-63).
 pub fn uses_v2_library_module(src: &str) -> bool {
     let ours = declared_names(src);
+    let toks = token_texts(src);
     BAKED_SOURCES
         .iter()
         .filter(|(text, _, _)| {
             [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE, JSON_SOURCE].contains(text)
         })
         .any(|(text, words, owners)| {
-            names_baked(src, &ours, words) && !defines_a_baked_type(&ours, text, owners)
+            names_baked(&toks, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
 }
 
@@ -16919,14 +16937,56 @@ fn declared_names(text: &str) -> Vec<String> {
     names
 }
 
-/// Whether `src` names a baked module: it uses one of the module's `words`
+/// Whether a program, as its [`token_texts`], names a baked module: it uses one of the module's `words`
 /// that it does not declare itself. A tree's own `struct Child` is not a
 /// use of `std.process`, where a program that builds the library's `Child`
 /// without a `Command` is one.
-fn names_baked(src: &str, ours: &[String], words: &[&str]) -> bool {
-    words
-        .iter()
-        .any(|w| src.contains(w) && !ours.iter().any(|o| o == w))
+///
+/// A word is matched against the program's tokens, so a longer name
+/// (`MidiParser`), a string literal (`"Parser()"`) or a comment is not a use
+/// of `Parser` (B-2026-10-21-57). A word of several tokens (`Env.`,
+/// `Serialize for`) matches them in a row, and the holes of an `f"..."`
+/// string count as program text.
+fn names_baked(toks: &[String], ours: &[String], words: &[&str]) -> bool {
+    words.iter().any(|w| {
+        let want = token_texts(w);
+        !want.is_empty()
+            && toks.windows(want.len()).any(|run| run == want.as_slice())
+            && !ours.iter().any(|o| o == w)
+    })
+}
+
+/// The source text of each token of `src`, outside literals and comments.
+/// A literal leaves an empty entry, so no word runs across it.
+fn token_texts(src: &str) -> Vec<String> {
+    use crate::token::{InterpolationPart, Token};
+    let mut out = Vec::new();
+    for t in crate::tokenize(src) {
+        match &t.token {
+            Token::EOF => break,
+            Token::InterpolatedStringLiteral(parts) => {
+                for part in parts {
+                    if let InterpolationPart::Expr { raw, .. } = part {
+                        out.push(String::new());
+                        out.extend(token_texts(raw));
+                    }
+                }
+                out.push(String::new());
+            }
+            Token::StringLiteral(_)
+            | Token::ByteStringLiteral(_)
+            | Token::CStringLiteral { .. }
+            | Token::CharLiteral(_)
+            | Token::ByteLiteral(_)
+            | Token::DocComment(_)
+            | Token::ModuleDocComment(_) => out.push(String::new()),
+            _ => {
+                let end = t.span.offset + t.span.length;
+                out.push(src.get(t.span.offset..end).unwrap_or("").to_string());
+            }
+        }
+    }
+    out
 }
 
 /// The appended library's `#[compiler_builtin]` functions are stdlib items,
@@ -16964,13 +17024,14 @@ pub fn library_source(src: &str) -> (String, usize) {
     let src = renamed.as_str();
     let user_len = src.len();
     let ours = declared_names(src);
+    let toks = token_texts(src);
     // Baked modules whose bodies are Kāra, for a program that names them
     // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
     // `PriorityQueue`'s is appended. Most programs do not, and they are long.
     let baked: Vec<&str> = BAKED_SOURCES
         .iter()
         .filter(|(text, words, owners)| {
-            names_baked(src, &ours, words) && !defines_a_baked_type(&ours, text, owners)
+            names_baked(&toks, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
         .map(|(text, _, _)| *text)
         .collect();
