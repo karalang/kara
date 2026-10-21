@@ -1,0 +1,63 @@
+// Benchmark for #825: Friends Of Appropriate Ages -- the ★ arm (counts by age).
+//
+// The people counted by age once, and every pair of ages tested with the
+// statement's three conditions: each pair that passes adds one request
+// from every person of the first age to every person of the second, but
+// for a person and themself.
+
+fn asks(x: i64, y: i64) -> bool {
+    not (2 * y <= x + 14 or y > x or (y > 100 and x < 100))
+}
+
+fn num_friend_requests(ages: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(121, 0);
+    for a in ages.iter() {
+        count[a] += 1;
+    }
+    let mut requests = 0;
+    for x in 1..121 {
+        if count[x] == 0 {
+            continue;
+        }
+        for y in 1..121 {
+            if count[y] > 0 and asks(x, y) {
+                requests += count[x] * count[y];
+                if x == y {
+                    requests -= count[x];
+                }
+            }
+        }
+    }
+    requests
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 lists of 20,000 random ages from 1 to 120, LeetCode's largest,
+    // drawn once. Each round answers the next one.
+    let count = 64;
+    let rounds = 50000;
+    let mut seed: i64 = 825;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut ages: Vec[i64] = Vec.new();
+        for _ in 0..20000 {
+            ages.push(1 + next_random(mut seed) % 120);
+        }
+        lists.push(ages);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let r = num_friend_requests(lists[round % count]);
+        total += r;
+        checksum = (checksum * 131 + r) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} lists: total {total}, checksum {checksum}");
+}

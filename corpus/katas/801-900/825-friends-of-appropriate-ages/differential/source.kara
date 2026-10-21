@@ -1,0 +1,202 @@
+// LeetCode #825: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random lists of ages,
+// against the statement read person by person.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn asks_star(x: i64, y: i64) -> bool {
+    not (2 * y <= x + 14 or y > x or (y > 100 and x < 100))
+}
+
+fn num_friend_requests_star(ages: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(121, 0);
+    for a in ages.iter() {
+        count[a] += 1;
+    }
+    let mut requests = 0;
+    for x in 1..121 {
+        if count[x] == 0 {
+            continue;
+        }
+        for y in 1..121 {
+            if count[y] > 0 and asks_star(x, y) {
+                requests += count[x] * count[y];
+                if x == y {
+                    requests -= count[x];
+                }
+            }
+        }
+    }
+    requests
+}
+
+// ---- prefix-sum arm -------------------------------------------------
+
+fn num_friend_requests_prefix(ages: Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(121, 0);
+    for a in ages.iter() {
+        count[a] += 1;
+    }
+    // at_most[a]: the people aged a or younger
+    let mut at_most: Vec[i64] = Vec.filled(121, 0);
+    for a in 1..121 {
+        at_most[a] = at_most[a - 1] + count[a];
+    }
+    let mut requests = 0;
+    for x in 15..121 {
+        let in_range = at_most[x] - at_most[x / 2 + 7];
+        // everyone in the range but themself
+        requests += count[x] * (in_range - 1);
+    }
+    requests
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn num_friend_requests_sorted(ages: Vec[i64]) -> i64 {
+    let mut sorted = ages.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut requests = 0;
+    let mut low = 0;
+    let mut high = 0;
+    for i in 0..n {
+        let x = sorted[i];
+        while low < n and sorted[low] < x / 2 + 8 {
+            low += 1;
+        }
+        while high < n and sorted[high] <= x {
+            high += 1;
+        }
+        // people low..high, the asker among them if it is in range
+        if high > low {
+            requests += high - low - 1;
+        }
+    }
+    requests
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn num_friend_requests_iter(ages: Vec[i64]) -> i64 {
+    let count = ages.iter().fold(Vec.filled(121, 0), |c, a| {
+        let mut c = c;
+        c[a] += 1;
+        c
+    });
+    (15..121).map(|x| count[x] * ((x / 2 + 8..x + 1).map(|y| count[y]).sum() - 1)).sum()
+}
+
+// ---- the statement, person by person --------------------------------------
+
+// The statement read literally: every ordered pair of two different
+// people, with the half age in floating point as it is written.
+fn statement(ages: Vec[i64]) -> i64 {
+    let n = ages.len();
+    let mut requests = 0;
+    for x in 0..n {
+        for y in 0..n {
+            if x == y {
+                continue;
+            }
+            let ax = ages[x];
+            let ay = ages[y];
+            let refuses = ay as f64 <= 0.5 * ax as f64 + 7.0 or ay > ax or (ay > 100 and ax < 100);
+            if not refuses {
+                requests += 1;
+            }
+        }
+    }
+    requests
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, ages: Vec[i64]) -> i64 {
+    if arm == 0 {
+        num_friend_requests_star(ages)
+    } else if arm == 1 {
+        num_friend_requests_prefix(ages)
+    } else if arm == 2 {
+        num_friend_requests_sorted(ages)
+    } else {
+        num_friend_requests_iter(ages)
+    }
+}
+
+fn main() {
+    let names = ["star", "prefix", "sorted", "iter"];
+    let properties = ["answer", "reversed", "a person under 15 added", "everyone twice"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 825;
+    for case in 0..800 {
+        let kind = case / 200;
+        let n = 1 + next_random(mut seed) % 40;
+        let mut ages: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let age = if kind == 0 {
+                // any age
+                1 + next_random(mut seed) % 120
+            } else if kind == 1 {
+                // around the edges: 14 and 15, where asking starts, and
+                // 99 to 101, where the third condition sits
+                let edges = [13, 14, 15, 16, 28, 29, 30, 31, 99, 100, 101, 102];
+                edges[next_random(mut seed) % 12]
+            } else if kind == 2 {
+                // a few ages, each many times
+                20 + 10 * (next_random(mut seed) % 4)
+            } else {
+                // young people beside the oldest
+                if next_random(mut seed) % 2 == 0 { 1 + next_random(mut seed) % 14 } else { 95 + next_random(mut seed) % 26 }
+            };
+            ages.push(age);
+        }
+        let want = statement(ages.clone());
+        let mut reversed = ages.clone();
+        reversed.reverse();
+        let mut young = ages.clone();
+        young.insert(next_random(mut seed) % (n + 1), 1 + next_random(mut seed) % 14);
+        let mut twice = ages.clone();
+        twice.extend(ages.clone());
+        // a person and their copy ask each other when they would ask
+        // someone their own age, which is everyone 15 or older
+        let mut fifteen = 0;
+        for a in ages.iter() {
+            if a >= 15 {
+                fifteen += 1;
+            }
+        }
+        for arm in 0..4 {
+            let got = answer(arm, ages.clone());
+            let oks = [
+                got == want,
+                answer(arm, reversed.clone()) == got,
+                answer(arm, young.clone()) == got,
+                answer(arm, twice.clone()) == 4 * got + 2 * fifteen,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {ages} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"800 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, prefix {by_arm[1]}, sorted {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, a person under 15 added {by_property[2]}, everyone twice {by_property[3]}");
+}

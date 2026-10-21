@@ -1,0 +1,57 @@
+// LeetCode #825: Friends Of Appropriate Ages -- an iterator chain.
+//
+// The ages counted with a fold, and for each age from 15 a `sum` over its
+// range x / 2 + 8 to x, less the asker, times the people of that age.
+// O(n + A^2).
+
+fn num_friend_requests(ages: Vec[i64]) -> i64 {
+    let count = ages.iter().fold(Vec.filled(121, 0), |c, a| {
+        let mut c = c;
+        c[a] += 1;
+        c
+    });
+    (15..121).map(|x| count[x] * ((x / 2 + 8..x + 1).map(|y| count[y]).sum() - 1)).sum()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ages: Vec[i64]) {
+    println(f"{ages} -> {num_friend_requests(ages.clone())}");
+}
+
+fn main() {
+    show([16, 16]);
+    show([16, 17, 18]);
+    show([20, 30, 100, 110, 120]);
+    show([1]);
+    show([14, 14, 14]);
+    show([15, 15]);
+    show([99, 101, 100]);
+    show([120, 60, 67, 68, 37, 38]);
+    // LeetCode's largest, 20,000 people: random ages, and everyone 120.
+    let mut seed = 825;
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        random.push(1 + next_random(mut seed) % 120);
+    }
+    println(f"20000 random ages -> {num_friend_requests(random)}");
+    println(f"20000 aged 120 -> {num_friend_requests(Vec.filled(20000, 120))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let mut ages: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            ages.push(1 + next_random(mut seed) % 120);
+        }
+        let r = num_friend_requests(ages);
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"300 random lists: total {total}, checksum {check}");
+}

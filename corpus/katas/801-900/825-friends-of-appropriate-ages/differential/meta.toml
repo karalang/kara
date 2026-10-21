@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/825-friends-of-appropriate-ages/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "e996a71f5"
+extracted_src = "84faa26f"
+model_rev = "583cfb0d"
+model_src = "84faa26f"
