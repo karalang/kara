@@ -1,0 +1,349 @@
+// LeetCode #835: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random pairs of images,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn largest_overlap_star(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let n = img1.len();
+    let mut ones1: Vec[(i64, i64)] = Vec.new();
+    let mut ones2: Vec[(i64, i64)] = Vec.new();
+    for r in 0..n {
+        for c in 0..n {
+            if img1[r][c] == 1 {
+                ones1.push((r, c));
+            }
+            if img2[r][c] == 1 {
+                ones2.push((r, c));
+            }
+        }
+    }
+    let width = 2 * n - 1;
+    let mut votes = Vec.filled(width * width, 0);
+    let mut best = 0;
+    for (r1, c1) in ones1 {
+        for (r2, c2) in ones2 {
+            let k = (r2 - r1 + n - 1) * width + (c2 - c1 + n - 1);
+            votes[k] += 1;
+            if votes[k] > best {
+                best = votes[k];
+            }
+        }
+    }
+    best
+}
+
+// ---- every-shift arm ------------------------------------------------
+
+fn largest_overlap_brute(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let n = img1.len();
+    let mut best = 0;
+    for dr in (1 - n)..n {
+        for dc in (1 - n)..n {
+            let mut overlap = 0;
+            for r in 0..n {
+                let r2 = r + dr;
+                if r2 >= 0 and r2 < n {
+                    for c in 0..n {
+                        let c2 = c + dc;
+                        if c2 >= 0 and c2 < n and img1[r][c] == 1 and img2[r2][c2] == 1 {
+                            overlap += 1;
+                        }
+                    }
+                }
+            }
+            if overlap > best {
+                best = overlap;
+            }
+        }
+    }
+    best
+}
+
+// ---- bit-mask arm ---------------------------------------------------
+
+fn masks(img: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut rows: Vec[i64] = Vec.new();
+    for row in img {
+        let mut m = 0;
+        for c in 0..row.len() {
+            if row[c] == 1 {
+                m |= 1 << c;
+            }
+        }
+        rows.push(m);
+    }
+    rows
+}
+
+fn largest_overlap_bits(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let n = img1.len();
+    let a = masks(img1);
+    let b = masks(img2);
+    let full = (1 << n) - 1;
+    let mut best = 0;
+    for dr in (1 - n)..n {
+        for dc in (1 - n)..n {
+            let mut overlap = 0;
+            for r in 0..n {
+                let r2 = r + dr;
+                if r2 >= 0 and r2 < n {
+                    let moved = if dc >= 0 { (a[r] << dc) & full } else { a[r] >> -dc };
+                    overlap += (moved & b[r2]).count_ones() as i64;
+                }
+            }
+            if overlap > best {
+                best = overlap;
+            }
+        }
+    }
+    best
+}
+
+// ---- map arm --------------------------------------------------------
+
+fn ones(img: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..img.len() {
+        for c in 0..img[r].len() {
+            if img[r][c] == 1 {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+fn largest_overlap_map(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let ones2 = ones(img2);
+    let mut votes: Map[(i64, i64), i64] = Map.new();
+    for (r1, c1) in ones(img1) {
+        for (r2, c2) in ones2 {
+            let shift = (r2 - r1, c2 - c1);
+            votes[shift] = votes.get(shift).unwrap_or(0) + 1;
+        }
+    }
+    let mut best = 0;
+    for (_, count) in votes {
+        if count > best {
+            best = count;
+        }
+    }
+    best
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: for every shift, the first image is
+// translated into a fresh square, the cells moved outside it dropped,
+// and the cells holding a one in both it and the second image counted.
+fn statement(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let n = img1.len();
+    let mut best = 0;
+    for dr in (1 - n)..n {
+        for dc in (1 - n)..n {
+            let mut moved: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..n {
+                moved.push(Vec.filled(n, 0));
+            }
+            for r in 0..n {
+                for c in 0..n {
+                    let (r2, c2) = (r + dr, c + dc);
+                    if r2 >= 0 and r2 < n and c2 >= 0 and c2 < n {
+                        moved[r2][c2] = img1[r][c];
+                    }
+                }
+            }
+            let mut overlap = 0;
+            for r in 0..n {
+                for c in 0..n {
+                    if moved[r][c] == 1 and img2[r][c] == 1 {
+                        overlap += 1;
+                    }
+                }
+            }
+            if overlap > best {
+                best = overlap;
+            }
+        }
+    }
+    best
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        largest_overlap_star(img1, img2)
+    } else if arm == 1 {
+        largest_overlap_brute(img1, img2)
+    } else if arm == 2 {
+        largest_overlap_bits(img1, img2)
+    } else {
+        largest_overlap_map(img1, img2)
+    }
+}
+
+// an n by n image, each cell a one with chance `percent` in 100
+fn random_image(seed: mut ref i64, n: i64, percent: i64) -> Vec[Vec[i64]] {
+    let mut img: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+        }
+        img.push(row);
+    }
+    img
+}
+
+// an n by n image of zeros with `k` ones at random cells
+fn sparse_image(seed: mut ref i64, n: i64, k: i64) -> Vec[Vec[i64]] {
+    let mut img: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        img.push(Vec.filled(n, 0));
+    }
+    for _ in 0..k {
+        let r = next_random(mut seed) % n;
+        let c = next_random(mut seed) % n;
+        img[r][c] = 1;
+    }
+    img
+}
+
+// the image moved by (dr, dc), the cells leaving the square dropped, and
+// then each cell flipped with chance `noise` in 100
+fn shifted(seed: mut ref i64, img: Vec[Vec[i64]], dr: i64, dc: i64, noise: i64) -> Vec[Vec[i64]] {
+    let n = img.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            let (r1, c1) = (r - dr, c - dc);
+            let mut x = if r1 >= 0 and r1 < n and c1 >= 0 and c1 < n { img[r1][c1] } else { 0 };
+            if next_random(mut seed) % 100 < noise {
+                x = 1 - x;
+            }
+            row.push(x);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// the image with rows and columns exchanged
+fn transposed(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = img.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(img[c][r]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// the image turned half a turn
+fn turned(img: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = img.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(img[n - 1 - r][n - 1 - c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn count_ones(img: Vec[Vec[i64]]) -> i64 {
+    let mut k = 0;
+    for row in img {
+        for x in row {
+            k += x;
+        }
+    }
+    k
+}
+
+// no more than either image's ones, at least the overlap with no shift,
+// and at least 1 when both images hold a one
+fn bounds_hold(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]], got: i64) -> bool {
+    let n = img1.len();
+    let (k1, k2) = (count_ones(img1), count_ones(img2));
+    let mut still = 0;
+    for r in 0..n {
+        for c in 0..n {
+            still += img1[r][c] * img2[r][c];
+        }
+    }
+    let least = if k1 > 0 and k2 > 0 and still == 0 { 1 } else { still };
+    got >= least and got <= k1 and got <= k2
+}
+
+fn main() {
+    let names = ["star", "brute", "bits", "map"];
+    let properties = ["answer", "swapped", "transposed", "turned", "bounds"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 835;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = if kind == 0 { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 10 };
+        let (img1, img2) = if kind == 0 or kind == 1 {
+            // small images, and images up to 10 by 10, at any density
+            let percent = next_random(mut seed) % 101;
+            (random_image(mut seed, n, percent), random_image(mut seed, n, percent))
+        } else if kind == 2 {
+            // a few ones each, so the best shift may reach a corner
+            let k1 = next_random(mut seed) % 4;
+            let k2 = next_random(mut seed) % 4;
+            (sparse_image(mut seed, n, k1), sparse_image(mut seed, n, k2))
+        } else {
+            // the second image the first moved, with a little noise
+            let percent = next_random(mut seed) % 101;
+            let img = random_image(mut seed, n, percent);
+            let dr = next_random(mut seed) % (2 * n - 1) - (n - 1);
+            let dc = next_random(mut seed) % (2 * n - 1) - (n - 1);
+            let noise = next_random(mut seed) % 6;
+            let moved = shifted(mut seed, img, dr, dc, noise);
+            (img, moved)
+        };
+        let want = statement(img1, img2);
+        for arm in 0..4 {
+            let got = answer(arm, img1, img2);
+            let oks = [
+                got == want,
+                answer(arm, img2, img1) == got,
+                answer(arm, transposed(img1), transposed(img2)) == got,
+                answer(arm, turned(img1), turned(img2)) == got,
+                bounds_hold(img1, img2, got),
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: img1 = {img1}, img2 = {img2} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, brute {by_arm[1]}, bits {by_arm[2]}, map {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, swapped {by_property[1]}, transposed {by_property[2]}, turned {by_property[3]}, bounds {by_property[4]}");
+}

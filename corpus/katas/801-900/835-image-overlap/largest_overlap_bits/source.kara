@@ -1,0 +1,101 @@
+// LeetCode #835: Image Overlap -- rows as bit masks.
+//
+// Each row becomes an integer with bit c set for a one in column c. A
+// shift moves the first image's rows down by `dr` and their bits left by
+// `dc`, the bits leaving the square cut off by a mask, and the overlap is
+// the ones counted in each shifted row ANDed with the row it lands on.
+// O(n^3) word operations.
+
+fn masks(img: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut rows: Vec[i64] = Vec.new();
+    for row in img {
+        let mut m = 0;
+        for c in 0..row.len() {
+            if row[c] == 1 {
+                m |= 1 << c;
+            }
+        }
+        rows.push(m);
+    }
+    rows
+}
+
+fn largest_overlap(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
+    let n = img1.len();
+    let a = masks(img1);
+    let b = masks(img2);
+    let full = (1 << n) - 1;
+    let mut best = 0;
+    for dr in (1 - n)..n {
+        for dc in (1 - n)..n {
+            let mut overlap = 0;
+            for r in 0..n {
+                let r2 = r + dr;
+                if r2 >= 0 and r2 < n {
+                    let moved = if dc >= 0 { (a[r] << dc) & full } else { a[r] >> -dc };
+                    overlap += (moved & b[r2]).count_ones() as i64;
+                }
+            }
+            if overlap > best {
+                best = overlap;
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// an n by n image, each cell a one with chance `percent` in 100
+fn random_image(seed: mut ref i64, n: i64, percent: i64) -> Vec[Vec[i64]] {
+    let mut img: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < percent { 1 } else { 0 });
+        }
+        img.push(row);
+    }
+    img
+}
+
+fn show(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) {
+    println(f"img1 = {img1}, img2 = {img2} -> {largest_overlap(img1, img2)}");
+}
+
+fn main() {
+    show([[1, 1, 0], [0, 1, 0], [0, 1, 0]], [[0, 0, 0], [0, 1, 1], [0, 0, 1]]);
+    show([[1]], [[1]]);
+    show([[0]], [[0]]);
+    show([[1, 1, 1], [1, 1, 1], [1, 1, 1]], [[1, 1, 1], [1, 1, 1], [1, 1, 1]]);
+    show([[1, 0, 0], [0, 0, 0], [0, 0, 0]], [[0, 0, 0], [0, 0, 0], [0, 0, 1]]);
+    show([[0, 0, 0], [0, 0, 0], [0, 0, 1]], [[1, 0, 0], [0, 0, 0], [0, 0, 0]]);
+    show([[1, 0], [0, 1]], [[0, 1], [1, 0]]);
+    show([[1, 1], [1, 1]], [[0, 0], [0, 0]]);
+    show([[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0]], [[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+    show([[1, 0, 1], [0, 1, 0], [1, 0, 1]], [[0, 1, 0], [1, 0, 1], [0, 1, 0]]);
+    // LeetCode's largest, 30 by 30, at three densities
+    let mut seed = 835;
+    for percent in [50, 5, 95] {
+        let img1 = random_image(mut seed, 30, percent);
+        let img2 = random_image(mut seed, 30, percent);
+        println(f"30 by 30 at {percent}% ones -> {largest_overlap(img1, img2)}");
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let n = 1 + next_random(mut seed) % 30;
+        let percent = next_random(mut seed) % 101;
+        let img1 = random_image(mut seed, n, percent);
+        let img2 = random_image(mut seed, n, percent);
+        let x = largest_overlap(img1, img2);
+        total += x;
+        check = (check * 1000003 + x) % 1000000007;
+    }
+    println(f"100 random pairs: overlaps total {total}, checksum {check}");
+}
