@@ -1,0 +1,3517 @@
+// mini_dictdiffer: dictdiffer 0.9.0, the library that diffs and patches
+// nested dicts, lists and sets the way configuration tools, audit logs
+// and sync jobs use it:
+// - diff() with ignore, path_limit, expand, tolerance,
+//   absolute_tolerance, dot_notation and node, and its yield order;
+// - patch(), swap() and revert(), with the errors Python raises on a
+//   patch that does not fit, and dot_lookup();
+// - the three-way Merger with ConflictFinder, Resolver (actions per
+//   path, cascading to shorter paths, WildcardDict keys), manual picks
+//   and Unifier;
+// - three programs: a deployment drift check that patches the deployed
+//   configs to the desired ones, a three-way settings merge with a
+//   policy file and picks, and a schema history kept as a JSON Lines
+//   change log that is replayed forwards and undone.
+//
+// The inputs are data/jobs.jsonl and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs and
+// programs through dictdiffer itself (the copy in dictdiffer/).
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 97 { c - 87 } else { c - 48 }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let d = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < d.len() {
+        out.push((hex_val(d[i] as i64) * 16 + hex_val(d[i + 1] as i64)) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.exists("data/out".to_string()) {
+        if let Err(e) = fs.remove_dir_all("data/out".to_string()) {
+            return Err(f"cannot clear data/out: {e}");
+        }
+    }
+    for file in data_files() {
+        let mut dir = "data".to_string();
+        let parts: Vec[Str] = file.path.split("/").collect();
+        let mut i = 0;
+        while i + 1 < parts.len() {
+            dir = f"{dir}/{parts[i]}";
+            i += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        let p = f"data/{file.path}";
+        let r = if file.hex { fs.write_bytes(p.clone(), unhex(file.body)) } else { fs.write(p.clone(), file.body.clone()) };
+        if let Err(e) = r {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(failure(e));
+    }
+}
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+// ------------------------------------------------------------ Python values
+
+// A value the jobs build: what json.loads gives, plus the tuples diff()
+// yields and the sets a job writes as {"$set": [...]}.
+#[derive(Clone)]
+enum V {
+    None,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[V]),
+    Tuple(Vec[V]),
+    Dict(Vec[Item]),
+    Set(Vec[V]),
+}
+
+#[derive(Clone)]
+struct Item {
+    key: V,
+    val: V,
+}
+
+fn s(text: Str) -> V {
+    V.Str(text.to_string())
+}
+
+fn tup(items: own Vec[V]) -> V {
+    V.Tuple(items)
+}
+
+fn type_name(v: ref V) -> Str {
+    match v {
+        V.None => "NoneType",
+        V.Bool(_) => "bool",
+        V.Int(_) => "int",
+        V.Float(_) => "float",
+        V.Str(_) => "str",
+        V.List(_) => "list",
+        V.Tuple(_) => "tuple",
+        V.Dict(_) => "dict",
+        V.Set(_) => "set",
+    }
+}
+
+fn is_num(v: ref V) -> bool {
+    match v {
+        V.Bool(_) => true,
+        V.Int(_) => true,
+        V.Float(_) => true,
+        _ => false,
+    }
+}
+
+fn as_f64(v: ref V) -> f64 {
+    match v {
+        V.Bool(b) => if *b { 1.0 } else { 0.0 },
+        V.Int(n) => *n as f64,
+        V.Float(x) => *x,
+        _ => 0.0,
+    }
+}
+
+fn int_like(v: ref V) -> Option[i64] {
+    match v {
+        V.Bool(b) => Some(if *b { 1 } else { 0 }),
+        V.Int(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn is_nan(v: ref V) -> bool {
+    match v {
+        V.Float(x) => x.is_nan(),
+        _ => false,
+    }
+}
+
+// a == b. Inside a container Python checks identity first, and every NaN
+// here is json's one NaN object, so there NaN equals NaN (`inner`).
+fn py_eq(a: ref V, b: ref V, inner: bool) -> bool {
+    if is_num(a) and is_num(b) {
+        if let (Some(x), Some(y)) = (int_like(a), int_like(b)) {
+            return x == y;
+        }
+        if inner and is_nan(a) and is_nan(b) {
+            return true;
+        }
+        return as_f64(a) == as_f64(b);
+    }
+    match (a, b) {
+        (V.None, V.None) => true,
+        (V.Str(x), V.Str(y)) => *x == *y,
+        (V.List(x), V.List(y)) => seq_eq(x, y),
+        (V.Tuple(x), V.Tuple(y)) => seq_eq(x, y),
+        (V.Dict(x), V.Dict(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            for it in x.iter() {
+                match dict_find(y, it.key) {
+                    Some(i) => {
+                        if not py_eq(it.val, y[i].val, true) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            true
+        }
+        (V.Set(x), V.Set(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            for e in x.iter() {
+                if not contains(y, e) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn seq_eq(x: ref Vec[V], y: ref Vec[V]) -> bool {
+    if x.len() != y.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < x.len() {
+        if not py_eq(x[i], y[i], true) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// `x in items`, for a list or a set.
+fn contains(items: ref Vec[V], x: ref V) -> bool {
+    for e in items.iter() {
+        if py_eq(e, x, true) {
+            return true;
+        }
+    }
+    false
+}
+
+fn dict_find(items: ref Vec[Item], key: ref V) -> Option[i64] {
+    let mut i = 0;
+    while i < items.len() {
+        if py_eq(items[i].key, key, true) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+// d[key] = val: a new key goes at the end, an old one keeps its place.
+fn dict_set(items: mut ref Vec[Item], key: own V, val: own V) {
+    match dict_find(items, key) {
+        Some(i) => items[i].val = val,
+        None => items.push(Item { key: key, val: val }),
+    }
+}
+
+fn set_of(items: ref Vec[V]) -> Vec[V] {
+    let mut out: Vec[V] = Vec.new();
+    for x in items.iter() {
+        if not contains(out, x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn set_minus(a: ref Vec[V], b: ref Vec[V]) -> Vec[V] {
+    let mut out: Vec[V] = Vec.new();
+    for x in a.iter() {
+        if not contains(b, x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------- repr
+
+fn float_repr(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+        i += 1;
+    }
+    out
+}
+
+// repr(), except that a set's items are sorted so the output is stable.
+fn fmt(v: ref V) -> String {
+    match v {
+        V.None => "None".to_string(),
+        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Int(n) => f"{n}",
+        V.Float(x) => float_repr(*x),
+        V.Str(t) => str_repr(t),
+        V.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(fmt(x));
+            }
+            f"[{join(parts, ", ")}]"
+        }
+        V.Tuple(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(fmt(x));
+            }
+            if parts.len() == 1 { f"({parts[0]},)" } else { f"({join(parts, ", ")})" }
+        }
+        V.Dict(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for it in items.iter() {
+                parts.push(f"{fmt(it.key)}: {fmt(it.val)}");
+            }
+            f"{{{join(parts, ", ")}}}"
+        }
+        V.Set(items) => {
+            if items.len() == 0 {
+                return "set()".to_string();
+            }
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(fmt(x));
+            }
+            parts.sort();
+            f"{{{join(parts, ", ")}}}"
+        }
+    }
+}
+
+// str(v), which differs from repr only for a str.
+fn py_str(v: ref V) -> String {
+    match v {
+        V.Str(t) => t.clone(),
+        _ => fmt(v),
+    }
+}
+
+// Whether str.isprintable() holds for one code point, for the ones these
+// programs meet: the C0 and C1 controls, DEL, no-break space and the
+// soft hyphen are not.
+fn printable(cp: i64) -> bool {
+    not (cp < 0x20 or (cp >= 0x7F and cp <= 0xA0) or cp == 0xAD)
+}
+
+fn str_repr(t: ref String) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in t.chars() {
+        if c == '\'' {
+            has_single = true;
+        } else if c == '"' {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in t.chars() {
+        let cp = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(cp) {
+            out.push_str("\\x");
+            out.push_str(hex_n(cp, 2));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// ------------------------------------------------------------- errors
+
+fn key_error(k: ref V) -> Exc {
+    exc("KeyError", fmt(k))
+}
+
+fn type_error(msg: own String) -> Exc {
+    exc("TypeError", msg)
+}
+
+fn is_py_space(c: char) -> bool {
+    let cp = c as i64;
+    (cp >= 9 and cp <= 13) or (cp >= 28 and cp <= 32) or cp == 133 or cp == 160
+}
+
+// int(text): surrounding whitespace, a sign, and single underscores
+// between digits.
+fn parse_py_int(t: ref String) -> Option[i64] {
+    let cs: Vec[char] = t.chars().collect();
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and is_py_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (cs[lo] == '-' or cs[lo] == '+') {
+        neg = cs[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let mut n = 0;
+    let mut prev_digit = false;
+    let mut i = lo;
+    while i < hi {
+        let c = cs[i];
+        if c >= '0' and c <= '9' {
+            n = n * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < hi {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if not prev_digit {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+// int(v).
+fn py_int(v: ref V) -> Result[i64, Exc] {
+    match v {
+        V.Int(n) => Ok(*n),
+        V.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        V.Float(x) => {
+            if x.is_nan() {
+                return Err(exc("ValueError", "cannot convert float NaN to integer".to_string()));
+            }
+            if x.is_infinite() {
+                return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
+            }
+            Ok(*x as i64)
+        }
+        V.Str(t) => match parse_py_int(t) {
+            Some(n) => Ok(n),
+            None => Err(exc("ValueError", f"invalid literal for int() with base 10: {str_repr(t)}")),
+        },
+        _ => Err(type_error(f"int() argument must be a string, a bytes-like object or a real number, not '{type_name(v)}'")),
+    }
+}
+
+// The items of `for x in v`, and of unpacking v.
+fn py_iter(v: ref V) -> Result[Vec[V], Exc] {
+    match v {
+        V.List(items) => Ok(items.clone()),
+        V.Tuple(items) => Ok(items.clone()),
+        V.Set(items) => Ok(items.clone()),
+        V.Dict(items) => {
+            let mut out: Vec[V] = Vec.new();
+            for it in items.iter() {
+                out.push(it.key.clone());
+            }
+            Ok(out)
+        }
+        V.Str(t) => {
+            let mut out: Vec[V] = Vec.new();
+            for c in t.chars() {
+                out.push(V.Str(c.to_string()));
+            }
+            Ok(out)
+        }
+        _ => Err(type_error(f"'{type_name(v)}' object is not iterable")),
+    }
+}
+
+// a, b, ... = v, with n names.
+fn unpack(v: ref V, n: i64) -> Result[Vec[V], Exc] {
+    let items = match v {
+        V.None => return Err(type_error(f"cannot unpack non-iterable {type_name(v)} object")),
+        V.Bool(_) => return Err(type_error(f"cannot unpack non-iterable {type_name(v)} object")),
+        V.Int(_) => return Err(type_error(f"cannot unpack non-iterable {type_name(v)} object")),
+        V.Float(_) => return Err(type_error(f"cannot unpack non-iterable {type_name(v)} object")),
+        _ => py_iter(v)?,
+    };
+    if items.len() < n {
+        return Err(exc("ValueError", f"not enough values to unpack (expected {n}, got {items.len()})"));
+    }
+    if items.len() > n {
+        return Err(exc("ValueError", f"too many values to unpack (expected {n})"));
+    }
+    Ok(items)
+}
+
+// ------------------------------------------------------------- json
+
+// json.loads with an object_hook that turns {"$set": [...]} into a set.
+fn from_j(j: ref J) -> V {
+    from_j_hook(j, true)
+}
+
+// json.loads, with the $set object_hook when `hook`.
+fn from_j_hook(j: ref J, hook: bool) -> V {
+    match j {
+        J.Null => V.None,
+        J.Bool(b) => V.Bool(*b),
+        J.Int(t) => V.Int(str_int(t)),
+        J.Float(x) => V.Float(*x),
+        J.Str(t) => V.Str(t.clone()),
+        J.Arr(items) => {
+            let mut out: Vec[V] = Vec.new();
+            for x in items.iter() {
+                out.push(from_j_hook(x, hook));
+            }
+            V.List(out)
+        }
+        J.Obj(members) => {
+            let mut out: Vec[Item] = Vec.new();
+            for m in members.iter() {
+                out.push(Item { key: V.Str(m.key.clone()), val: from_j_hook(m.val, hook) });
+            }
+            if hook and members.len() == 1 and members[0].key == "$set" {
+                return match out[0].val {
+                    V.List(items) => V.Set(set_of(items)),
+                    other => V.Set(set_of(py_iter(other).unwrap_or(Vec.new()))),
+                };
+            }
+            V.Dict(out)
+        }
+    }
+}
+
+fn str_int(t: ref String) -> i64 {
+    let n: Option[i64] = t.parse();
+    n.unwrap_or(0)
+}
+
+fn loads_v(text: ref String) -> Result[V, Exc] {
+    Ok(from_j_hook(loads_str(text)?, false))
+}
+
+// json.dumps's text of a str, with ensure_ascii.
+fn json_str(t: ref String, out: mut ref String) {
+    out.push('"');
+    for c in t.chars() {
+        let cp = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if cp == 8 {
+            out.push_str("\\b");
+        } else if cp == 12 {
+            out.push_str("\\f");
+        } else if cp < 0x20 or cp > 0x7E {
+            if cp >= 0x10000 {
+                let v = cp - 0x10000;
+                out.push_str(f"\\u{hex_n(0xD800 + (v >> 10), 4)}\\u{hex_n(0xDC00 + (v & 0x3FF), 4)}");
+            } else {
+                out.push_str(f"\\u{hex_n(cp, 4)}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+}
+
+fn json_float(x: f64) -> String {
+    if x.is_nan() {
+        "NaN".to_string()
+    } else if x.is_infinite() {
+        if x > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+    } else {
+        f"{x}"
+    }
+}
+
+// The text of a dict key: json.dumps turns a non-str key into a str.
+fn json_key(k: ref V) -> Result[String, Exc] {
+    match k {
+        V.Str(t) => Ok(t.clone()),
+        V.Int(n) => Ok(f"{n}"),
+        V.Float(x) => Ok(json_float(*x)),
+        V.Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        V.None => Ok("null".to_string()),
+        _ => Err(type_error(f"keys must be str, int, float, bool or None, not {type_name(k)}")),
+    }
+}
+
+fn json_newline(indent: i64, level: i64, out: mut ref String) {
+    out.push('\n');
+    let mut i = 0;
+    while i < indent * level {
+        out.push(' ');
+        i += 1;
+    }
+}
+
+// json.dumps(v, indent=indent, sort_keys=sort_keys); indent < 0 is the
+// default one-line form.
+fn json_enc(v: ref V, indent: i64, sort_keys: bool, level: i64, out: mut ref String) -> Result[(), Exc] {
+    match v {
+        V.None => out.push_str("null"),
+        V.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        V.Int(n) => out.push_str(f"{n}"),
+        V.Float(x) => out.push_str(json_float(*x)),
+        V.Str(t) => json_str(t, mut out),
+        V.List(items) => json_seq(items, indent, sort_keys, level, mut out)?,
+        V.Tuple(items) => json_seq(items, indent, sort_keys, level, mut out)?,
+        V.Dict(items) => {
+            if items.len() == 0 {
+                out.push_str("{}");
+                return Ok(());
+            }
+            let mut keyed: Vec[(String, i64)] = Vec.new();
+            let mut i = 0;
+            while i < items.len() {
+                keyed.push((json_key(items[i].key)?, i));
+                i += 1;
+            }
+            if sort_keys {
+                let mut a = 1;
+                while a < keyed.len() {
+                    let mut b = a;
+                    while b > 0 and keyed[b].0 < keyed[b - 1].0 {
+                        let t = keyed[b].clone();
+                        keyed[b] = keyed[b - 1].clone();
+                        keyed[b - 1] = t;
+                        b -= 1;
+                    }
+                    a += 1;
+                }
+            }
+            out.push('{');
+            let mut first = true;
+            for (k, idx) in keyed.iter() {
+                if not first {
+                    out.push(',');
+                    if indent < 0 {
+                        out.push(' ');
+                    }
+                }
+                first = false;
+                if indent >= 0 {
+                    json_newline(indent, level + 1, mut out);
+                }
+                json_str(k, mut out);
+                out.push_str(": ");
+                json_enc(items[*idx].val, indent, sort_keys, level + 1, mut out)?;
+            }
+            if indent >= 0 {
+                json_newline(indent, level, mut out);
+            }
+            out.push('}');
+        }
+        V.Set(_) => return Err(type_error("Object of type set is not JSON serializable".to_string())),
+    }
+    Ok(())
+}
+
+fn json_seq(items: ref Vec[V], indent: i64, sort_keys: bool, level: i64, out: mut ref String) -> Result[(), Exc] {
+    if items.len() == 0 {
+        out.push_str("[]");
+        return Ok(());
+    }
+    out.push('[');
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 {
+            out.push(',');
+            if indent < 0 {
+                out.push(' ');
+            }
+        }
+        if indent >= 0 {
+            json_newline(indent, level + 1, mut out);
+        }
+        json_enc(items[i], indent, sort_keys, level + 1, mut out)?;
+        i += 1;
+    }
+    if indent >= 0 {
+        json_newline(indent, level, mut out);
+    }
+    out.push(']');
+    Ok(())
+}
+
+fn dumps(v: ref V, indent: i64, sort_keys: bool) -> Result[String, Exc] {
+    let mut out = String.new();
+    json_enc(v, indent, sort_keys, 0, mut out)?;
+    Ok(out)
+}
+// ------------------------------------------------------------- diff
+
+const EPSILON: f64 = 2.220446049250313e-16;
+const FINAL: Str = "!@#$FINAL";
+
+// utils.PathLimit: the limits as a tree of dicts, each limit's last key
+// holding FINAL: True.
+fn path_limit(paths: ref Vec[V]) -> Result[V, Exc] {
+    let mut root: Vec[Item] = Vec.new();
+    for p in paths.iter() {
+        let keys = py_iter(p)?;
+        limit_insert(mut root, keys, 0);
+    }
+    Ok(V.Dict(root))
+}
+
+fn limit_insert(node: mut ref Vec[Item], keys: ref Vec[V], i: i64) {
+    if i == keys.len() {
+        dict_set(mut node, s(FINAL), V.Bool(true));
+        return;
+    }
+    let idx = match dict_find(node, keys[i]) {
+        Some(j) => j,
+        None => {
+            node.push(Item { key: keys[i].clone(), val: V.Dict(Vec.new()) });
+            node.len() - 1
+        }
+    };
+    if let V.Dict(child) = node[idx].val {
+        let mut c = child.clone();
+        limit_insert(mut c, keys, i + 1);
+        node[idx].val = V.Dict(c);
+    }
+}
+
+fn path_is_limit(tree: ref V, path: ref Vec[V]) -> bool {
+    let mut containing = tree.clone();
+    for key in path.iter() {
+        let next = match containing {
+            V.Dict(items) => match dict_find(items, key) {
+                Some(i) => items[i].val.clone(),
+                None => match dict_find(items, s("*")) {
+                    Some(i) => items[i].val.clone(),
+                    None => return false,
+                },
+            },
+            _ => return false,
+        };
+        containing = next;
+    }
+    match containing {
+        V.Dict(items) => match dict_find(items, s(FINAL)) {
+            Some(i) => match items[i].val {
+                V.Bool(b) => b,
+                _ => true,
+            },
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+struct Opts {
+    ignore: Option[Vec[V]],
+    limit: Option[V],
+    expand: bool,
+    tolerance: f64,
+    abs_tol: f64,
+    dot: bool,
+    node: Vec[V],
+}
+
+fn default_opts() -> Opts {
+    Opts { ignore: None, limit: None, expand: false, tolerance: EPSILON, abs_tol: 0.0, dot: true, node: Vec.new() }
+}
+
+fn tol_of(v: ref V) -> f64 {
+    match v {
+        V.None => 0.0,
+        _ => as_f64(v),
+    }
+}
+
+fn truthy(v: ref V) -> bool {
+    match v {
+        V.None => false,
+        V.Bool(b) => *b,
+        V.Int(n) => *n != 0,
+        V.Float(x) => *x != 0.0,
+        V.Str(t) => t.len() > 0,
+        V.List(x) => x.len() > 0,
+        V.Tuple(x) => x.len() > 0,
+        V.Dict(x) => x.len() > 0,
+        V.Set(x) => x.len() > 0,
+    }
+}
+
+// diff()'s keyword arguments, as `name=value` for the job's output too.
+fn diff_opts(o: ref V) -> Result[(Opts, Vec[String]), Exc] {
+    let mut opts = default_opts();
+    let mut shown: Vec[String] = Vec.new();
+    let items = match o {
+        V.Dict(items) => items.clone(),
+        _ => Vec.new(),
+    };
+    let mut ignore: Option[V] = None;
+    for name in vec!["ignore", "path_limit", "expand", "tolerance", "absolute_tolerance", "dot_notation", "node"] {
+        if let Some(i) = dict_find(items, s(name)) {
+            let v = items[i].val.clone();
+            shown.push(f"{name}={fmt(v)}");
+            if name == "ignore" {
+                ignore = Some(v);
+            } else if name == "path_limit" {
+                opts.limit = Some(path_limit(py_iter(v)?)?);
+            } else if name == "expand" {
+                opts.expand = truthy(v);
+            } else if name == "tolerance" {
+                opts.tolerance = tol_of(v);
+            } else if name == "absolute_tolerance" {
+                opts.abs_tol = tol_of(v);
+            } else if name == "dot_notation" {
+                opts.dot = truthy(v);
+            } else {
+                opts.node = py_iter(v)?;
+            }
+        }
+    }
+    if let Some(v) = ignore {
+        opts.ignore = Some(ignore_set(v, opts.dot)?);
+    }
+    Ok((opts, shown))
+}
+
+// diff()'s _process_ignore_value over every ignored key.
+fn ignore_set(v: ref V, dot: bool) -> Result[Vec[V], Exc] {
+    let mut out: Vec[V] = Vec.new();
+    for x in py_iter(v)?.iter() {
+        let p = match x {
+            V.Int(_) => tup(vec![x.clone()]),
+            V.Bool(_) => tup(vec![x.clone()]),
+            V.List(items) => tup(items.clone()),
+            V.Str(_) => if dot { x.clone() } else { tup(vec![x.clone()]) },
+            _ => x.clone(),
+        };
+        out.push(p);
+    }
+    Ok(out)
+}
+
+// diff()'s dotted(): "a.b" when every key is a str without a dot.
+fn dotted(o: ref Opts, node: ref Vec[V], as_tuple: bool) -> V {
+    if o.dot {
+        let mut plain = true;
+        let mut parts: Vec[String] = Vec.new();
+        for k in node.iter() {
+            match k {
+                V.Str(t) => {
+                    if t.contains(".") {
+                        plain = false;
+                    }
+                    parts.push(t.clone());
+                }
+                _ => plain = false,
+            }
+        }
+        if plain {
+            return V.Str(join(parts, "."));
+        }
+    }
+    if as_tuple { V.Tuple(node.clone()) } else { V.List(node.clone()) }
+}
+
+fn with_key(node: ref Vec[V], key: ref V) -> Vec[V] {
+    let mut out = node.clone();
+    out.push(key.clone());
+    out
+}
+
+fn ignored(o: ref Opts, node: ref Vec[V], key: ref V) -> bool {
+    match o.ignore {
+        None => false,
+        Some(ign) => {
+            let path = with_key(node, key);
+            contains(ign, dotted(o, path, true)) or contains(ign, V.Tuple(path))
+        }
+    }
+}
+
+// math.isclose.
+fn isclose(a: f64, b: f64, rel: f64, abs_tol: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.is_infinite() or b.is_infinite() {
+        return false;
+    }
+    let d = (b - a).abs();
+    d <= (rel * b).abs() or d <= (rel * a).abs() or d <= abs_tol
+}
+
+fn are_different(a: ref V, b: ref V, o: ref Opts) -> bool {
+    if py_eq(a, b, false) {
+        return false;
+    }
+    let an = is_nan(a);
+    let bn = is_nan(b);
+    if an or bn {
+        return not (an and bn);
+    }
+    if is_num(a) and is_num(b) {
+        return not isclose(as_f64(a), as_f64(b), o.tolerance, o.abs_tol);
+    }
+    true
+}
+
+fn patch3(action: Str, node: own V, changes: own V) -> V {
+    tup(vec![s(action), node, changes])
+}
+
+fn pair(k: ref V, v: ref V) -> V {
+    tup(vec![k.clone(), v.clone()])
+}
+
+fn empty_like(v: ref V) -> V {
+    match v {
+        V.List(_) => V.List(Vec.new()),
+        V.Dict(_) => V.Dict(Vec.new()),
+        V.Set(_) => V.Set(Vec.new()),
+        _ => V.None,
+    }
+}
+
+fn is_container(v: ref V) -> bool {
+    match v {
+        V.List(_) => true,
+        V.Dict(_) => true,
+        V.Set(_) => true,
+        _ => false,
+    }
+}
+
+fn get_item(v: ref V, key: ref V) -> V {
+    match v {
+        V.Dict(items) => match dict_find(items, key) {
+            Some(i) => items[i].val.clone(),
+            None => V.None,
+        },
+        V.List(items) => items[int_like(key).unwrap_or(0)].clone(),
+        _ => V.None,
+    }
+}
+
+// diff()'s _diff_recursive, appending what it yields to `out`.
+fn diff_rec(a: ref V, b: ref V, node: ref Vec[V], o: ref Opts, out: mut ref Vec[V]) {
+    let dotted_node = dotted(o, node, false);
+    let mut intersection: Vec[V] = Vec.new();
+    let mut addition: Vec[V] = Vec.new();
+    let mut deletion: Vec[V] = Vec.new();
+    match (a, b) {
+        (V.Dict(x), V.Dict(y)) => {
+            for it in x.iter() {
+                if dict_find(y, it.key).is_some() and not ignored(o, node, it.key) {
+                    intersection.push(it.key.clone());
+                }
+            }
+            for it in y.iter() {
+                if dict_find(x, it.key).is_none() and not ignored(o, node, it.key) {
+                    addition.push(it.key.clone());
+                }
+            }
+            for it in x.iter() {
+                if dict_find(y, it.key).is_none() and not ignored(o, node, it.key) {
+                    deletion.push(it.key.clone());
+                }
+            }
+        }
+        (V.List(x), V.List(y)) => {
+            let m = if x.len() < y.len() { x.len() } else { y.len() };
+            let mut i = 0;
+            while i < m {
+                intersection.push(V.Int(i));
+                i += 1;
+            }
+            while i < y.len() {
+                addition.push(V.Int(i));
+                i += 1;
+            }
+            let mut j = x.len() - 1;
+            while j >= m {
+                deletion.push(V.Int(j));
+                j -= 1;
+            }
+        }
+        (V.Set(x), V.Set(y)) => {
+            let added = set_minus(y, x);
+            if added.len() > 0 {
+                out.push(patch3("add", dotted_node.clone(), V.List(vec![pair(V.Int(0), V.Set(added))])));
+            }
+            let removed = set_minus(x, y);
+            if removed.len() > 0 {
+                out.push(patch3("remove", dotted_node, V.List(vec![pair(V.Int(0), V.Set(removed))])));
+            }
+            return;
+        }
+        _ => {
+            if are_different(a, b, o) {
+                out.push(patch3("change", dotted_node, tup(vec![a.clone(), b.clone()])));
+            }
+            return;
+        }
+    }
+    for key in intersection.iter() {
+        let path = with_key(node, key);
+        let limited = match o.limit {
+            Some(t) => path_is_limit(t, path),
+            None => false,
+        };
+        if limited {
+            out.push(patch3("change", V.List(path), tup(vec![get_item(a, key), get_item(b, key)])));
+        } else {
+            diff_rec(get_item(a, key), get_item(b, key), path, o, mut out);
+        }
+    }
+    if addition.len() > 0 {
+        match o.limit {
+            Some(t) => {
+                let mut collect: Vec[V] = Vec.new();
+                let mut later: Vec[V] = Vec.new();
+                for key in addition.iter() {
+                    let val = get_item(b, key);
+                    let path = with_key(node, key);
+                    if not is_container(val) or path_is_limit(t, path) {
+                        collect.push(pair(key, val));
+                    } else {
+                        collect.push(pair(key, empty_like(val)));
+                        diff_rec(empty_like(val), val, path, o, mut later);
+                    }
+                }
+                if o.expand {
+                    for c in collect.iter() {
+                        out.push(patch3("add", dotted_node.clone(), V.List(vec![c.clone()])));
+                    }
+                } else {
+                    out.push(patch3("add", dotted_node.clone(), V.List(collect)));
+                }
+                for p in later.iter() {
+                    out.push(p.clone());
+                }
+            }
+            None => {
+                if o.expand {
+                    for key in addition.iter() {
+                        out.push(patch3("add", dotted_node.clone(), V.List(vec![pair(key, get_item(b, key))])));
+                    }
+                } else {
+                    let mut collect: Vec[V] = Vec.new();
+                    for key in addition.iter() {
+                        collect.push(pair(key, get_item(b, key)));
+                    }
+                    out.push(patch3("add", dotted_node.clone(), V.List(collect)));
+                }
+            }
+        }
+    }
+    if deletion.len() > 0 {
+        if o.expand {
+            for key in deletion.iter() {
+                out.push(patch3("remove", dotted_node.clone(), V.List(vec![pair(key, get_item(a, key))])));
+            }
+        } else {
+            let mut collect: Vec[V] = Vec.new();
+            for key in deletion.iter() {
+                collect.push(pair(key, get_item(a, key)));
+            }
+            out.push(patch3("remove", dotted_node, V.List(collect)));
+        }
+    }
+}
+
+fn diff(a: ref V, b: ref V, o: ref Opts) -> Vec[V] {
+    let mut out: Vec[V] = Vec.new();
+    diff_rec(a, b, o.node, o, mut out);
+    out
+}
+// -------------------------------------------------- patch, swap, revert
+
+// dot_lookup's keys: a str split on dots, or a list; "", [] and None are
+// the root.
+fn lookup_keys(lookup: ref V, parent: bool) -> Result[Vec[V], Exc] {
+    let mut keys = match lookup {
+        V.None => return Ok(Vec.new()),
+        V.Str(t) => {
+            if t.len() == 0 {
+                return Ok(Vec.new());
+            }
+            let mut out: Vec[V] = Vec.new();
+            for part in t.split(".") {
+                out.push(V.Str(part.to_string()));
+            }
+            out
+        }
+        V.List(items) => {
+            if items.len() == 0 {
+                return Ok(Vec.new());
+            }
+            items.clone()
+        }
+        _ => return Err(type_error("lookup must be string or list".to_string())),
+    };
+    if parent {
+        keys.pop();
+    }
+    Ok(keys)
+}
+
+// An index into a sequence of n items, negative ones from the end.
+fn seq_index(n: i64, i: i64, msg: Str) -> Result[i64, Exc] {
+    let j = if i < 0 { i + n } else { i };
+    if j < 0 or j >= n {
+        return Err(exc("IndexError", msg.to_string()));
+    }
+    Ok(j)
+}
+
+fn int_key(key: ref V, what: Str) -> Result[i64, Exc] {
+    match int_like(key) {
+        Some(n) => Ok(n),
+        None => Err(type_error(f"{what} indices must be integers or slices, not {type_name(key)}")),
+    }
+}
+
+// s[key] for a str: one character.
+fn str_item(t: ref String, key: ref V) -> Result[V, Exc] {
+    let n = match int_like(key) {
+        Some(n) => n,
+        None => return Err(type_error(f"string indices must be integers, not '{type_name(key)}'")),
+    };
+    let cs: Vec[char] = t.chars().collect();
+    let j = seq_index(cs.len(), n, "string index out of range")?;
+    Ok(V.Str(cs[j].to_string()))
+}
+
+// value[key], one step of dot_lookup, with the int() it does for a list.
+fn lookup_step(value: ref V, key: ref V) -> Result[V, Exc] {
+    match value {
+        V.Dict(items) => match dict_find(items, key) {
+            Some(i) => Ok(items[i].val.clone()),
+            None => Err(key_error(key)),
+        },
+        V.List(items) => {
+            let i = py_int(key)?;
+            Ok(items[seq_index(items.len(), i, "list index out of range")?].clone())
+        }
+        V.Tuple(items) => {
+            let i = int_key(key, "tuple")?;
+            Ok(items[seq_index(items.len(), i, "tuple index out of range")?].clone())
+        }
+        V.Str(t) => str_item(t, key),
+        _ => Err(type_error(f"'{type_name(value)}' object is not subscriptable")),
+    }
+}
+
+fn dot_lookup(source: ref V, lookup: ref V, parent: bool) -> Result[V, Exc] {
+    let keys = lookup_keys(lookup, parent)?;
+    let mut value = source.clone();
+    for k in keys.iter() {
+        value = lookup_step(value, k)?;
+    }
+    Ok(value)
+}
+
+// What patch() does at the end of a lookup.
+enum Op {
+    Add(V, V),
+    Change(V, V),
+    Remove(V, V),
+}
+
+// dest[key] = value.
+fn assign(dest: ref V, key: ref V, value: ref V) -> Result[V, Exc] {
+    match dest {
+        V.Dict(items) => {
+            let mut c = items.clone();
+            dict_set(mut c, key.clone(), value.clone());
+            Ok(V.Dict(c))
+        }
+        V.List(items) => {
+            let i = int_key(key, "list")?;
+            let j = seq_index(items.len(), i, "list assignment index out of range")?;
+            let mut c = items.clone();
+            c[j] = value.clone();
+            Ok(V.List(c))
+        }
+        _ => Err(type_error(f"'{type_name(dest)}' object does not support item assignment")),
+    }
+}
+
+// del dest[key].
+fn delete(dest: ref V, key: ref V) -> Result[V, Exc] {
+    match dest {
+        V.Dict(items) => match dict_find(items, key) {
+            Some(i) => {
+                let mut c = items.clone();
+                c.remove(i);
+                Ok(V.Dict(c))
+            }
+            None => Err(key_error(key)),
+        },
+        V.List(items) => {
+            let i = int_key(key, "list")?;
+            let j = seq_index(items.len(), i, "list assignment index out of range")?;
+            let mut c = items.clone();
+            c.remove(j);
+            Ok(V.List(c))
+        }
+        V.Str(_) => Err(type_error("'str' object doesn't support item deletion".to_string())),
+        V.Tuple(_) => Err(type_error("'tuple' object doesn't support item deletion".to_string())),
+        _ => Err(type_error(f"'{type_name(dest)}' object does not support item deletion")),
+    }
+}
+
+fn last_node(node: ref V) -> Result[V, Exc] {
+    match node {
+        V.Str(t) => {
+            let parts: Vec[Str] = t.split(".").collect();
+            Ok(V.Str(parts[parts.len() - 1].to_string()))
+        }
+        V.List(items) => {
+            if items.len() == 0 {
+                return Err(exc("IndexError", "list index out of range".to_string()));
+            }
+            Ok(items[items.len() - 1].clone())
+        }
+        _ => Err(type_error(f"'{type_name(node)}' object is not subscriptable")),
+    }
+}
+
+fn apply_op(dest: ref V, op: ref Op) -> Result[V, Exc] {
+    match op {
+        Op.Add(key, value) => match dest {
+            V.List(items) => {
+                let i = match int_like(key) {
+                    Some(n) => n,
+                    None => return Err(type_error(f"'{type_name(key)}' object cannot be interpreted as an integer")),
+                };
+                let n = items.len();
+                let mut j = if i < 0 { i + n } else { i };
+                if j < 0 {
+                    j = 0;
+                }
+                if j > n {
+                    j = n;
+                }
+                let mut c = items.clone();
+                c.insert(j, value.clone());
+                Ok(V.List(c))
+            }
+            V.Set(items) => match value {
+                V.Set(more) => {
+                    let mut c = items.clone();
+                    for x in more.iter() {
+                        if not contains(c, x) {
+                            c.push(x.clone());
+                        }
+                    }
+                    Ok(V.Set(c))
+                }
+                _ => Err(type_error(f"unsupported operand type(s) for |=: 'set' and '{type_name(value)}'")),
+            },
+            _ => assign(dest, key, value),
+        },
+        Op.Change(node, changes) => {
+            let mut last = last_node(node)?;
+            if let V.List(_) = dest {
+                last = V.Int(py_int(last)?);
+            }
+            let kv = unpack(changes, 2)?;
+            assign(dest, last, kv[1])
+        }
+        Op.Remove(key, value) => match dest {
+            V.Set(items) => match value {
+                V.Set(less) => Ok(V.Set(set_minus(items, less))),
+                _ => Err(type_error(f"unsupported operand type(s) for -=: 'set' and '{type_name(value)}'")),
+            },
+            _ => delete(dest, key),
+        },
+    }
+}
+
+// Applies op at the end of keys, rebuilding the containers on the way.
+fn apply_at(dest: ref V, keys: ref Vec[V], i: i64, op: ref Op) -> Result[V, Exc] {
+    if i == keys.len() {
+        return apply_op(dest, op);
+    }
+    match dest {
+        V.Dict(items) => match dict_find(items, keys[i]) {
+            Some(j) => {
+                let child = apply_at(items[j].val, keys, i + 1, op)?;
+                let mut c = items.clone();
+                c[j].val = child;
+                Ok(V.Dict(c))
+            }
+            None => Err(key_error(keys[i])),
+        },
+        V.List(items) => {
+            let k = py_int(keys[i])?;
+            let j = seq_index(items.len(), k, "list index out of range")?;
+            let child = apply_at(items[j], keys, i + 1, op)?;
+            let mut c = items.clone();
+            c[j] = child;
+            Ok(V.List(c))
+        }
+        V.Tuple(items) => {
+            let k = int_key(keys[i], "tuple")?;
+            let j = seq_index(items.len(), k, "tuple index out of range")?;
+            let child = apply_at(items[j], keys, i + 1, op)?;
+            let mut c = items.clone();
+            c[j] = child;
+            Ok(V.Tuple(c))
+        }
+        V.Str(t) => {
+            // A str's item is a new str, so whatever the op does to it is lost.
+            let ch = str_item(t, keys[i])?;
+            apply_at(ch, keys, i + 1, op)?;
+            Ok(dest.clone())
+        }
+        _ => Err(type_error(f"'{type_name(dest)}' object is not subscriptable")),
+    }
+}
+
+fn action_of(v: ref V) -> Result[String, Exc] {
+    match v {
+        V.Str(t) => {
+            if t == "add" or t == "remove" or t == "change" {
+                return Ok(t.clone());
+            }
+            Err(key_error(v))
+        }
+        V.List(_) => Err(type_error("unhashable type: 'list'".to_string())),
+        V.Dict(_) => Err(type_error("unhashable type: 'dict'".to_string())),
+        V.Set(_) => Err(type_error("unhashable type: 'set'".to_string())),
+        _ => Err(key_error(v)),
+    }
+}
+
+fn patch_one(dest: ref V, p: ref V) -> Result[V, Exc] {
+    let parts = unpack(p, 3)?;
+    let action = action_of(parts[0])?;
+    let node = parts[1].clone();
+    let mut out = dest.clone();
+    if action == "change" {
+        let keys = lookup_keys(node, true)?;
+        return apply_at(out, keys, 0, Op.Change(node.clone(), parts[2].clone()));
+    }
+    for c in py_iter(parts[2])?.iter() {
+        let kv = unpack(c, 2)?;
+        let keys = lookup_keys(node, false)?;
+        let op = if action == "add" { Op.Add(kv[0].clone(), kv[1].clone()) } else { Op.Remove(kv[0].clone(), kv[1].clone()) };
+        out = apply_at(out, keys, 0, op)?;
+    }
+    Ok(out)
+}
+
+// patch(diff_result, destination), on a copy.
+fn patch(d: ref V, dest: ref V) -> Result[V, Exc] {
+    let mut out = dest.clone();
+    for p in py_iter(d)?.iter() {
+        out = patch_one(out, p)?;
+    }
+    Ok(out)
+}
+
+fn py_reversed(v: ref V) -> Result[Vec[V], Exc] {
+    match v {
+        V.List(_) => {}
+        V.Tuple(_) => {}
+        V.Str(_) => {}
+        _ => return Err(type_error(f"'{type_name(v)}' object is not reversible")),
+    }
+    let mut items = py_iter(v)?;
+    items.reverse();
+    Ok(items)
+}
+
+fn swap_one(p: ref V) -> Result[V, Exc] {
+    let parts = unpack(p, 3)?;
+    let action = action_of(parts[0])?;
+    if action == "add" {
+        return Ok(patch3("remove", parts[1].clone(), V.List(py_reversed(parts[2])?)));
+    }
+    if action == "remove" {
+        return Ok(patch3("add", parts[1].clone(), parts[2].clone()));
+    }
+    let fs = unpack(parts[2], 2)?;
+    Ok(patch3("change", parts[1].clone(), tup(vec![fs[1].clone(), fs[0].clone()])))
+}
+
+fn swap(d: ref V) -> Result[V, Exc] {
+    let mut out: Vec[V] = Vec.new();
+    for p in py_iter(d)?.iter() {
+        out.push(swap_one(p)?);
+    }
+    Ok(V.List(out))
+}
+
+// revert() patches with swap()'s generator, so each patch is swapped just
+// before it is applied.
+fn revert(d: ref V, dest: ref V) -> Result[V, Exc] {
+    let mut out = dest.clone();
+    for p in py_iter(d)?.iter() {
+        out = patch_one(out, swap_one(p)?)?;
+    }
+    Ok(out)
+}
+
+// patch() puts the patch's own value into the result, so an empty
+// container that diff() made for a path_limit (`('add', '', [('a',
+// {})])`) is the very object later patches add into: by the end it holds
+// what they added, in the diff as well as in the result. This writes
+// that back into the diff the way the shared object would show it.
+fn patch_alias(d: ref V, dest: ref V) -> Result[(V, V), Exc] {
+    let result = patch(d, dest)?;
+    let entries = items_of(d);
+    let mut out_entries: Vec[V] = Vec.new();
+    let mut pi = 0;
+    while pi < entries.len() {
+        let parts = items_of(entries[pi]);
+        if parts.len() == 3 and py_eq(parts[0], s("add"), true) {
+            let keys = lookup_keys(parts[1], false)?;
+            let mut changes: Vec[V] = Vec.new();
+            for c in items_of(parts[2]).iter() {
+                let kv = items_of(c);
+                if kv.len() == 2 and is_container(kv[1]) {
+                    let mut path = keys.clone();
+                    path.push(kv[0].clone());
+                    let now = match dot_lookup(result, V.List(path), false) {
+                        Ok(v) => if type_name(v) == type_name(kv[1]) { v } else { kv[1].clone() },
+                        Err(_) => kv[1].clone(),
+                    };
+                    changes.push(pair(kv[0], now));
+                } else {
+                    changes.push(c.clone());
+                }
+            }
+            let rebuilt = match parts[2] {
+                V.Tuple(_) => V.Tuple(changes),
+                _ => V.List(changes),
+            };
+            let entry = vec![parts[0].clone(), parts[1].clone(), rebuilt];
+            out_entries.push(match entries[pi] {
+                V.List(_) => V.List(entry),
+                _ => V.Tuple(entry),
+            });
+        } else {
+            out_entries.push(entries[pi].clone());
+        }
+        pi += 1;
+    }
+    let new_d = match d {
+        V.List(_) => V.List(out_entries),
+        V.Tuple(_) => V.Tuple(out_entries),
+        _ => d.clone(),
+    };
+    Ok((result, new_d))
+}
+// ------------------------------------------------------------- merge
+
+// utils.get_path: a patch's node split into keys, plus the key of its
+// first change for an add or a remove.
+fn get_path(p: ref V) -> Result[Vec[V], Exc] {
+    let parts = py_iter(p)?;
+    let mut keys: Vec[V] = match parts[1] {
+        V.Str(t) => {
+            if t.len() == 0 {
+                Vec.new()
+            } else {
+                let mut out: Vec[V] = Vec.new();
+                for part in t.split(".") {
+                    out.push(V.Str(part.to_string()));
+                }
+                out
+            }
+        }
+        other => py_iter(other)?,
+    };
+    if not py_eq(parts[0], s("change"), true) {
+        let changes = py_iter(parts[2])?;
+        let first = py_iter(changes[0])?;
+        keys.push(first[0].clone());
+    }
+    Ok(keys)
+}
+
+fn path_eq(a: ref Vec[V], b: ref Vec[V]) -> bool {
+    seq_eq(a, b)
+}
+
+// utils.is_super_path: a's keys start b's.
+fn is_super_path(a: ref Vec[V], b: ref Vec[V]) -> bool {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let mut i = 0;
+    while i < n {
+        if i < a.len() {
+            if i >= b.len() {
+                if not py_eq(a[i], V.None, true) {
+                    return false;
+                }
+            } else if not py_eq(a[i], b[i], true) {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
+fn py_lt(a: ref V, b: ref V) -> Result[bool, Exc] {
+    if is_num(a) and is_num(b) {
+        if let (Some(x), Some(y)) = (int_like(a), int_like(b)) {
+            return Ok(x < y);
+        }
+        return Ok(as_f64(a) < as_f64(b));
+    }
+    match (a, b) {
+        (V.Str(x), V.Str(y)) => Ok(*x < *y),
+        _ => Err(type_error(f"'<' not supported between instances of '{type_name(a)}' and '{type_name(b)}'")),
+    }
+}
+
+// a < b for two tuples of keys.
+fn path_lt(a: ref Vec[V], b: ref Vec[V]) -> Result[bool, Exc] {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if not py_eq(a[i], b[i], true) {
+            return py_lt(a[i], b[i]);
+        }
+        i += 1;
+    }
+    Ok(a.len() < b.len())
+}
+
+#[derive(Clone)]
+struct Conflict {
+    first: V,
+    second: V,
+    take: String,
+}
+
+impl Conflict {
+    fn take_patch(ref self) -> Result[V, Exc] {
+        if self.take.len() == 0 {
+            return Err(exc("Exception", "Take attribute not set.".to_string()));
+        }
+        Ok(if self.take == "f" { self.first.clone() } else { self.second.clone() })
+    }
+}
+
+fn is_conflict(p1: ref V, p2: ref V) -> Result[bool, Exc] {
+    let a = get_path(p1)?;
+    let b = get_path(p2)?;
+    if path_eq(a, b) {
+        return Ok(true);
+    }
+    let k1 = py_iter(p1)?;
+    let k2 = py_iter(p2)?;
+    if is_super_path(a, b) and py_eq(k1[0], s("remove"), true) {
+        return Ok(true);
+    }
+    if is_super_path(b, a) and py_eq(k2[0], s("remove"), true) {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+// A resolution action, looked up by a path: take "f" or "s", "decline"
+// (return False) or "stop" (NoFurtherResolutionException).
+#[derive(Clone)]
+struct Action {
+    path: Vec[V],
+    what: String,
+}
+
+struct Actions {
+    items: Vec[Action],
+    wildcard: bool,
+}
+
+impl Actions {
+    fn exact(ref self, key: ref Vec[V]) -> Option[String] {
+        for a in self.items.iter() {
+            if path_eq(a.path, key) {
+                return Some(a.what.clone());
+            }
+        }
+        None
+    }
+
+    // The keys of the entries ending in `mark`, without it.
+    fn marked(ref self, mark: Str, prefix: ref Vec[V]) -> bool {
+        for a in self.items.iter() {
+            let n = a.path.len();
+            if n > 0 and py_eq(a.path[n - 1], s(mark), true) {
+                let mut head = a.path.clone();
+                head.pop();
+                if path_eq(head, prefix) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    // actions[key], as a dict or as a WildcardDict.
+    fn get(ref self, key: ref Vec[V]) -> Option[String] {
+        if let Some(w) = self.exact(key) {
+            return Some(w);
+        }
+        if not self.wildcard {
+            return None;
+        }
+        let mut head = key.clone();
+        head.pop();
+        if self.marked("+", head) {
+            let mut k = head.clone();
+            k.push(s("+"));
+            return self.exact(k);
+        }
+        let mut i = 1;
+        while i <= key.len() {
+            let mut prefix = key.clone();
+            let mut j = 0;
+            while j < i {
+                prefix.pop();
+                j += 1;
+            }
+            if self.marked("*", prefix) {
+                let mut k = prefix.clone();
+                k.push(s("*"));
+                return self.exact(k);
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
+struct Merger {
+    first_patches: Vec[V],
+    second_patches: Vec[V],
+    conflicts: Vec[Conflict],
+    unresolved: Vec[i64],
+    unified: Vec[V],
+}
+
+fn unresolved_exc() -> Exc {
+    exc("UnresolvedConflictsException", "The unresolved conflicts are stored in the *content* attribute of this exception or in the *unresolved_conflicts* attribute of the dictdiffer.merge.Merger object.".to_string())
+}
+
+fn new_merger(lca: ref V, first: ref V, second: ref V, limits: ref Vec[V]) -> Result[Merger, Exc] {
+    let mut o = default_opts();
+    o.limit = Some(path_limit(limits)?);
+    o.expand = true;
+    Ok(Merger {
+        first_patches: diff(lca, first, o),
+        second_patches: diff(lca, second, o),
+        conflicts: Vec.new(),
+        unresolved: Vec.new(),
+        unified: Vec.new(),
+    })
+}
+
+impl Merger {
+    fn find_conflicts(mut ref self) -> Result[(), Exc] {
+        for p1 in self.first_patches.iter() {
+            for p2 in self.second_patches.iter() {
+                if is_conflict(p1, p2)? {
+                    self.conflicts.push(Conflict { first: p1.clone(), second: p2.clone(), take: String.new() });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve(mut ref self, actions: ref Actions) -> Result[(), Exc] {
+        let mut ci = 0;
+        while ci < self.conflicts.len() {
+            let c = self.conflicts[ci].clone();
+            let a = get_path(c.first)?;
+            let b = get_path(c.second)?;
+            let path = if a.len() <= b.len() { a } else { b };
+            if py_eq(c.first, c.second, true) {
+                self.conflicts[ci].take = "f".to_string();
+                ci += 1;
+                continue;
+            }
+            let mut done = false;
+            let mut n = path.len();
+            while n >= 1 {
+                let mut sub = path.clone();
+                while sub.len() > n {
+                    sub.pop();
+                }
+                if let Some(what) = actions.get(sub) {
+                    if what == "stop" {
+                        self.unresolved.push(ci);
+                        done = true;
+                        break;
+                    }
+                    if what != "decline" {
+                        self.conflicts[ci].take = what;
+                        done = true;
+                        break;
+                    }
+                }
+                n -= 1;
+            }
+            if not done {
+                self.unresolved.push(ci);
+            }
+            ci += 1;
+        }
+        Ok(())
+    }
+
+    // Merger.run up to the exception, which the caller sees as
+    // unresolved conflicts left over.
+    fn run(mut ref self, actions: ref Actions) -> Result[(), Exc] {
+        self.find_conflicts()?;
+        self.resolve(actions)?;
+        if self.unresolved.len() == 0 {
+            self.unify()?;
+        }
+        Ok(())
+    }
+
+    fn continue_run(mut ref self, picks: ref Vec[String]) -> Result[(), Exc] {
+        if picks.len() != self.unresolved.len() {
+            return Err(unresolved_exc());
+        }
+        let mut i = 0;
+        while i < picks.len() {
+            let ci = self.unresolved[i];
+            self.conflicts[ci].take = picks[i].clone();
+            i += 1;
+        }
+        self.unresolved = Vec.new();
+        self.unify()
+    }
+
+    // Unifier.unify: both lists sorted by path, keeping a conflicting
+    // patch only if its conflict took it.
+    fn unify(mut ref self) -> Result[(), Exc] {
+        let mut all: Vec[V] = self.first_patches.clone();
+        for p in self.second_patches.iter() {
+            all.push(p.clone());
+        }
+        let mut keyed: Vec[(Vec[V], V)] = Vec.new();
+        for p in all.iter() {
+            keyed.push((get_path(p)?, p.clone()));
+        }
+        let mut a = 1;
+        while a < keyed.len() {
+            let mut b = a;
+            while b > 0 and path_lt(keyed[b].0, keyed[b - 1].0)? {
+                let t = keyed[b].clone();
+                keyed[b] = keyed[b - 1].clone();
+                keyed[b - 1] = t;
+                b -= 1;
+            }
+            a += 1;
+        }
+        let mut out: Vec[V] = Vec.new();
+        for (_, p) in keyed.iter() {
+            let mut found: i64 = -1;
+            let mut ci = 0;
+            while ci < self.conflicts.len() {
+                if py_eq(self.conflicts[ci].first, p, true) {
+                    found = ci;
+                }
+                if py_eq(self.conflicts[ci].second, p, true) {
+                    found = ci;
+                }
+                ci += 1;
+            }
+            if found >= 0 {
+                if not py_eq(self.conflicts[found].take_patch()?, p, true) {
+                    continue;
+                }
+            }
+            out.push(p.clone());
+        }
+        self.unified = out;
+        Ok(())
+    }
+}
+// ------------------------------------------------------------------ jobs
+
+struct Env {
+    names: Vec[String],
+    vals: Vec[V],
+}
+
+impl Env {
+    fn get(ref self, name: ref String) -> Result[V, Exc] {
+        let mut i = 0;
+        while i < self.names.len() {
+            if self.names[i] == *name {
+                return Ok(self.vals[i].clone());
+            }
+            i += 1;
+        }
+        Err(key_error(V.Str(name.clone())))
+    }
+
+    fn put(mut ref self, name: ref String, v: own V) {
+        let mut i = 0;
+        while i < self.names.len() {
+            if self.names[i] == *name {
+                self.vals[i] = v;
+                return;
+            }
+            i += 1;
+        }
+        self.names.push(name.clone());
+        self.vals.push(v);
+    }
+}
+
+fn text_of(v: ref V) -> String {
+    match v {
+        V.Str(t) => t.clone(),
+        _ => fmt(v),
+    }
+}
+
+fn field(v: ref V, name: Str) -> V {
+    match v {
+        V.Dict(items) => match dict_find(items, s(name)) {
+            Some(i) => items[i].val.clone(),
+            None => V.None,
+        },
+        _ => V.None,
+    }
+}
+
+fn items_of(v: ref V) -> Vec[V] {
+    py_iter(v).unwrap_or(Vec.new())
+}
+
+fn py_bool(b: bool) -> Str {
+    if b { "True" } else { "False" }
+}
+
+fn run_merge(env: ref Env, st: ref Vec[V]) -> Result[(), Exc] {
+    let o = st[4].clone();
+    let mut actions = Actions { items: Vec.new(), wildcard: truthy(field(o, "wildcard")) };
+    for a in items_of(field(o, "actions")).iter() {
+        let parts = items_of(a);
+        let path = items_of(parts[0]);
+        let what = text_of(parts[1]);
+        let mut replaced = false;
+        let mut i = 0;
+        while i < actions.items.len() {
+            if path_eq(actions.items[i].path, path) {
+                actions.items[i].what = what.clone();
+                replaced = true;
+            }
+            i += 1;
+        }
+        if not replaced {
+            actions.items.push(Action { path: path, what: what });
+        }
+    }
+    let lca = env.get(text_of(st[1]))?;
+    let first = env.get(text_of(st[2]))?;
+    let second = env.get(text_of(st[3]))?;
+    let mut mg = new_merger(lca, first, second, items_of(field(o, "path_limits")))?;
+    mg.run(actions)?;
+    if mg.unresolved.len() > 0 {
+        println(f"  unresolved: {mg.unresolved.len()}");
+        for ci in mg.unresolved.iter() {
+            let c = mg.conflicts[*ci].clone();
+            println(f"    {fmt(c.first)} vs {fmt(c.second)}");
+        }
+        let picks_v = field(o, "picks");
+        if let V.None = picks_v {
+            println("  merge stops");
+            return Ok(());
+        }
+        let mut picks: Vec[String] = Vec.new();
+        for p in items_of(picks_v).iter() {
+            picks.push(text_of(p));
+        }
+        println(f"  picks: {join(picks, " ")}");
+        mg.continue_run(picks)?;
+    }
+    println(f"  first patches: {fmt(V.List(mg.first_patches.clone()))}");
+    println(f"  second patches: {fmt(V.List(mg.second_patches.clone()))}");
+    for c in mg.conflicts.iter() {
+        println(f"  conflict: {fmt(c.first)} vs {fmt(c.second)}, took {c.take}");
+    }
+    let unified = V.List(mg.unified.clone());
+    println(f"  unified: {fmt(unified)}");
+    println(f"  merged: {fmt(patch(unified, lca)?)}");
+    Ok(())
+}
+
+fn step(st: ref Vec[V], env: mut ref Env) -> Result[(), Exc] {
+    let op = text_of(st[0]);
+    if op == "val" {
+        let name = text_of(st[1]);
+        env.put(name, st[2].clone());
+        println(f"  {name} = {fmt(st[2])}");
+    } else if op == "diff" {
+        let (o, shown) = diff_opts(st[4])?;
+        let a = text_of(st[2]);
+        let b = text_of(st[3]);
+        let d = diff(env.get(a)?, env.get(b)?, o);
+        let mut args = vec![a.clone(), b.clone()];
+        for x in shown.iter() {
+            args.push(x.clone());
+        }
+        println(f"  {text_of(st[1])} = diff({join(args, ", ")}):");
+        for p in d.iter() {
+            println(f"    {fmt(p)}");
+        }
+        env.put(text_of(st[1]), V.List(d));
+    } else if op == "patch" or op == "revert" {
+        let d = text_of(st[2]);
+        let dest = text_of(st[3]);
+        let r = if op == "patch" {
+            let (r, shared) = patch_alias(env.get(d)?, env.get(dest)?)?;
+            env.put(d, shared);
+            r
+        } else {
+            revert(env.get(d)?, env.get(dest)?)?
+        };
+        println(f"  {text_of(st[1])} = {op}({d}, {dest}) = {fmt(r)}");
+        env.put(text_of(st[1]), r);
+    } else if op == "swap" {
+        let d = text_of(st[2]);
+        let r = swap(env.get(d)?)?;
+        println(f"  {text_of(st[1])} = swap({d}) = {fmt(r)}");
+        env.put(text_of(st[1]), r);
+    } else if op == "eq" {
+        let a = text_of(st[1]);
+        let b = text_of(st[2]);
+        println(f"  {a} == {b}: {py_bool(py_eq(env.get(a)?, env.get(b)?, false))}");
+    } else if op == "show" {
+        let a = text_of(st[1]);
+        println(f"  {a} = {fmt(env.get(a)?)}");
+    } else if op == "lookup" {
+        let x = text_of(st[1]);
+        let k = text_of(st[2]);
+        let parent = truthy(st[3]);
+        let r = dot_lookup(env.get(x)?, env.get(k)?, parent)?;
+        println(f"  dot_lookup({x}, {k}{if parent { ", parent=True" } else { "" }}) = {fmt(r)}");
+    } else if op == "merge" {
+        run_merge(env, st)?;
+    }
+    Ok(())
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}".replace("\n", "\\n")
+}
+
+fn io_exc(e: ref IoError) -> Exc {
+    exc("OSError", f"{e}")
+}
+
+fn read_text(p: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(p.clone()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn run_jobs() -> Result[(), Exc] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(io_exc(e));
+    }
+    let text = read_text("data/jobs.jsonl".to_string())?;
+    for line in text.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let j = from_j_hook(loads_str(line.to_string())?, true);
+        println(f"== {text_of(field(j, "name"))}");
+        let mut env = Env { names: Vec.new(), vals: Vec.new() };
+        for st in items_of(field(j, "steps")).iter() {
+            let parts = items_of(st);
+            if let Err(e) = step(parts, mut env) {
+                println(f"  {text_of(parts[0])}: error {err_line(e)}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+// ------------------------------------------------------------- programs
+
+fn load(p: ref String) -> Result[V, Exc] {
+    loads_v(read_text(p)?)
+}
+
+fn write_text(p: ref String, text: ref String) -> Result[(), Exc] {
+    match fs.write(p.clone(), text.clone()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn parent_dir(p: ref String) -> String {
+    let parts: Vec[Str] = p.split("/").collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(parts[i]);
+        i += 1;
+    }
+    out
+}
+
+fn make_dirs(p: ref String) -> Result[(), Exc] {
+    match fs.create_dir_all(p.clone()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn save(p: ref String, v: ref V) -> Result[(), Exc] {
+    make_dirs(parent_dir(p))?;
+    write_text(p, f"{dumps(v, 2, false)?}\n")
+}
+
+fn list_dir(p: Str) -> Result[Vec[String], Exc] {
+    match fs.read_dir(p.to_string()) {
+        Ok(names) => {
+            let mut names = names;
+            names.sort();
+            Ok(names)
+        }
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+// The name without its last five characters (".json").
+fn stem(name: ref String) -> String {
+    let cs: Vec[char] = name.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i + 5 < cs.len() {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn where(node: ref V, key: Option[V]) -> String {
+    let mut parts: Vec[V] = match node {
+        V.Str(t) => {
+            let mut out: Vec[V] = Vec.new();
+            if t.len() > 0 {
+                for part in t.split(".") {
+                    out.push(V.Str(part.to_string()));
+                }
+            }
+            out
+        }
+        other => items_of(other),
+    };
+    if let Some(k) = key {
+        parts.push(k.clone());
+    }
+    let mut texts: Vec[String] = Vec.new();
+    for p in parts.iter() {
+        texts.push(py_str(p));
+    }
+    f"/{join(texts, "/")}"
+}
+
+fn describe(p: ref V) -> Result[Vec[String], Exc] {
+    let parts = unpack(p, 3)?;
+    let action = text_of(parts[0]);
+    let mut out: Vec[String] = Vec.new();
+    if action == "change" {
+        let c = items_of(parts[2]);
+        out.push(f"change {where(parts[1], None)}: {fmt(c[0])} -> {fmt(c[1])}");
+        return Ok(out);
+    }
+    for c in items_of(parts[2]).iter() {
+        let kv = unpack(c, 2)?;
+        out.push(f"{action} {where(parts[1], Some(kv[0].clone()))}: {fmt(kv[1])}");
+    }
+    Ok(out)
+}
+
+fn drift_opts() -> Opts {
+    let mut o = default_opts();
+    o.ignore = Some(vec![s("metadata.updated_at"), s("metadata.deployed_by")]);
+    o.abs_tol = 0.001;
+    o
+}
+
+fn drift() -> Result[(), Exc] {
+    println("== program: drift");
+    let mut names: Vec[String] = Vec.new();
+    for dir in vec!["data/desired", "data/deployed"] {
+        for n in list_dir(dir)?.iter() {
+            let st = stem(n);
+            if not names.contains(st) {
+                names.push(st);
+            }
+        }
+    }
+    names.sort();
+    let o = drift_opts();
+    for name in names.iter() {
+        let want = f"data/desired/{name}.json";
+        let have = f"data/deployed/{name}.json";
+        if not fs.exists(have.clone()) {
+            println(f"{name}: not deployed");
+            continue;
+        }
+        if not fs.exists(want.clone()) {
+            println(f"{name}: not in the desired state, would be deleted");
+            continue;
+        }
+        let desired = load(want)?;
+        let deployed = load(have)?;
+        let changes = diff(deployed, desired, o);
+        if changes.len() == 0 {
+            println(f"{name}: in sync");
+            continue;
+        }
+        let mut lines: Vec[String] = Vec.new();
+        for p in changes.iter() {
+            for x in describe(p)?.iter() {
+                lines.push(x.clone());
+            }
+        }
+        println(f"{name}: {lines.len()} differences");
+        for x in lines.iter() {
+            println(f"  {x}");
+        }
+        let d = V.List(changes);
+        let fixed = patch(d, deployed)?;
+        save(f"data/out/drift/{name}.json", fixed)?;
+        let left = diff(fixed, desired, o);
+        let back = py_eq(revert(d, fixed)?, deployed, false);
+        println(f"  after the patch: {left.len()} differences; reverting gives the deployed file back: {py_bool(back)}");
+    }
+    for name in list_dir("data/out/drift")?.iter() {
+        let text = read_text(f"data/out/drift/{name}")?;
+        println(f"-- data/out/drift/{name} ({text.chars().count()} bytes)");
+        print(text);
+    }
+    Ok(())
+}
+
+fn who_label(take: ref String) -> Str {
+    if *take == "f" { "ours" } else { "theirs" }
+}
+
+fn settings_merge() -> Result[(), Exc] {
+    println("== program: settings merge");
+    let base = load("data/merge/base.json".to_string())?;
+    let ours = load("data/merge/ours.json".to_string())?;
+    let theirs = load("data/merge/theirs.json".to_string())?;
+    let mut actions = Actions { items: Vec.new(), wildcard: true };
+    for raw in read_text("data/merge/policy.txt".to_string())?.lines() {
+        let line = raw.trim();
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let words: Vec[Str] = line.split_whitespace().collect();
+        if words.len() != 2 {
+            return Err(exc("ValueError", f"too many values to unpack (expected 2)"));
+        }
+        let mut path: Vec[V] = Vec.new();
+        for part in words[0].split(".") {
+            path.push(V.Str(part.to_string()));
+        }
+        let what = if words[1] == "ask" { "stop".to_string() } else { words[1].to_string() };
+        actions.items.push(Action { path: path, what: what });
+    }
+    let mut picks: Vec[String] = Vec.new();
+    for w in read_text("data/merge/picks.txt".to_string())?.split_whitespace() {
+        picks.push(w.to_string());
+    }
+    let mut mg = new_merger(base, ours, theirs, Vec.new())?;
+    mg.run(actions)?;
+    if mg.unresolved.len() == 0 {
+        println("no conflicts left for picks.txt");
+    } else {
+        println(f"{mg.unresolved.len()} conflicts need a pick:");
+        let mut i = 0;
+        while i < mg.unresolved.len() and i < picks.len() {
+            let c = mg.conflicts[mg.unresolved[i]].clone();
+            println(f"  ours {fmt(c.first)}");
+            println(f"  theirs {fmt(c.second)}");
+            println(f"  picked {who_label(picks[i])}");
+            i += 1;
+        }
+        mg.continue_run(picks)?;
+    }
+    for c in mg.conflicts.iter() {
+        let a = get_path(c.first)?;
+        let b = get_path(c.second)?;
+        let node = if a.len() <= b.len() { a } else { b };
+        println(f"conflict at {where(V.List(node), None)}: took {who_label(c.take)}");
+    }
+    println(f"{mg.unified.len()} patches applied:");
+    for p in mg.unified.iter() {
+        for x in describe(p)?.iter() {
+            println(f"  {x}");
+        }
+    }
+    let merged = patch(V.List(mg.unified.clone()), base)?;
+    save("data/out/merged.json".to_string(), merged)?;
+    print(read_text("data/out/merged.json".to_string())?);
+    Ok(())
+}
+
+fn version_number(name: ref String) -> i64 {
+    let cs: Vec[char] = name.chars().collect();
+    let mut t = String.new();
+    let mut i = 1;
+    while i + 5 < cs.len() {
+        t.push(cs[i]);
+        i += 1;
+    }
+    match parse_py_int(t) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn history() -> Result[(), Exc] {
+    println("== program: schema history");
+    let mut names = list_dir("data/history")?;
+    let mut a = 1;
+    while a < names.len() {
+        let mut b = a;
+        while b > 0 and version_number(names[b]) < version_number(names[b - 1]) {
+            let t = names[b].clone();
+            names[b] = names[b - 1].clone();
+            names[b - 1] = t;
+            b -= 1;
+        }
+        a += 1;
+    }
+    let mut versions: Vec[V] = Vec.new();
+    for n in names.iter() {
+        versions.push(load(f"data/history/{n}")?);
+    }
+    make_dirs("data/out".to_string())?;
+    let mut log_text = String.new();
+    let o = default_opts();
+    let mut i = 1;
+    while i < versions.len() {
+        let ps = diff(versions[i - 1], versions[i], o);
+        let entry = V.Dict(vec![
+            Item { key: s("from"), val: V.Str(stem(names[i - 1])) },
+            Item { key: s("to"), val: V.Str(stem(names[i])) },
+            Item { key: s("patches"), val: V.List(ps) },
+        ]);
+        log_text.push_str(dumps(entry, -1, false)?);
+        log_text.push('\n');
+        i += 1;
+    }
+    write_text("data/out/changes.jsonl".to_string(), log_text)?;
+    let mut log: Vec[V] = Vec.new();
+    for line in read_text("data/out/changes.jsonl".to_string())?.lines() {
+        log.push(loads_v(line.to_string())?);
+    }
+    for entry in log.iter() {
+        println(dumps(entry, -1, false)?);
+    }
+    let mut state = versions[0].clone();
+    let mut k = 0;
+    while k < log.len() {
+        let entry = log[k].clone();
+        let ps = field(entry, "patches");
+        state = patch(ps, state)?;
+        let to = text_of(field(entry, "to"));
+        println(f"{text_of(field(entry, "from"))} -> {to}: {items_of(ps).len()} patches, matches {to}: {py_bool(py_eq(state, versions[k + 1], false))}");
+        k += 1;
+    }
+    let mut k = log.len() - 1;
+    while k >= 0 {
+        let entry = log[k].clone();
+        state = revert(field(entry, "patches"), state)?;
+        let from = text_of(field(entry, "from"));
+        println(f"undo {text_of(field(entry, "to"))} -> {from}: matches {from}: {py_bool(py_eq(state, versions[k], false))}");
+        k -= 1;
+    }
+    println(f"back at v1: {dumps(state, -1, true)?}");
+    Ok(())
+}
+
+fn run() -> Result[(), Exc] {
+    run_jobs()?;
+    drift()?;
+    settings_merge()?;
+    history()?;
+    Ok(())
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-19T23:41:07Z\",\n");
+    t.push_str("    \"deployed_by\": \"oncall\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/api:1.14.1\",\n");
+    t.push_str("    \"replicas\": 2,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 0.5000000000000001,\n");
+    t.push_str("      \"memory\": \"512Mi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"LOG_LEVEL\": \"debug\",\n");
+    t.push_str("      \"DB_POOL\": 20,\n");
+    t.push_str("      \"FEATURE_X\": false,\n");
+    t.push_str("      \"HOTFIX\": \"1\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"http\",\n");
+    t.push_str("        \"port\": 8080\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"metrics\",\n");
+    t.push_str("        \"port\": 9091\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"healthcheck\": {\n");
+    t.push_str("      \"path\": \"/healthz\",\n");
+    t.push_str("      \"interval\": 10\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "deployed/api.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2025-01-02T03:04:05Z\",\n");
+    t.push_str("    \"deployed_by\": \"bob\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/cron:1.0.0\",\n");
+    t.push_str("    \"replicas\": 1,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 0.1,\n");
+    t.push_str("      \"memory\": \"64Mi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"SCHEDULE\": \"*/5 * * * *\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": []\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "deployed/cron.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"frontend\",\n");
+    t.push_str("      \"tier\": \"edge\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-09-30T17:02:44Z\",\n");
+    t.push_str("    \"deployed_by\": \"ann\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/web:4.9.3\",\n");
+    t.push_str("    \"replicas\": 2,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 0.25,\n");
+    t.push_str("      \"memory\": \"256Mi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"API_URL\": \"http://api:8080\",\n");
+    t.push_str("      \"LEGACY_COOKIES\": true\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"http\",\n");
+    t.push_str("        \"port\": 80\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "deployed/web.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"jobs\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-18T10:12:00Z\",\n");
+    t.push_str("    \"deployed_by\": \"ci\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/worker:2.3.0\",\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 1,\n");
+    t.push_str("      \"memory\": \"1Gi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"QUEUE\": \"jobs\",\n");
+    t.push_str("      \"CONCURRENCY\": 8\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": []\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "deployed/worker.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-20T08:00:00Z\",\n");
+    t.push_str("    \"deployed_by\": \"ci\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/api:1.14.2\",\n");
+    t.push_str("    \"replicas\": 3,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 0.5,\n");
+    t.push_str("      \"memory\": \"512Mi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"LOG_LEVEL\": \"info\",\n");
+    t.push_str("      \"DB_POOL\": 20,\n");
+    t.push_str("      \"FEATURE_X\": false\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"http\",\n");
+    t.push_str("        \"port\": 8080\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"metrics\",\n");
+    t.push_str("        \"port\": 9090\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"healthcheck\": {\n");
+    t.push_str("      \"path\": \"/healthz\",\n");
+    t.push_str("      \"interval\": 10\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "desired/api.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"data\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-20T08:00:00Z\",\n");
+    t.push_str("    \"deployed_by\": \"ci\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/search:0.9.0\",\n");
+    t.push_str("    \"replicas\": 1,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 2.0,\n");
+    t.push_str("      \"memory\": \"4Gi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {},\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"http\",\n");
+    t.push_str("        \"port\": 9200\n");
+    t.push_str("      }\n");
+    t.push_str("    ]\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "desired/search.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"frontend\",\n");
+    t.push_str("      \"tier\": \"edge\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-20T08:00:00Z\",\n");
+    t.push_str("    \"deployed_by\": \"ci\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/web:5.0.0\",\n");
+    t.push_str("    \"replicas\": 2,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 0.25,\n");
+    t.push_str("      \"memory\": \"256Mi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"API_URL\": \"http://api:8080\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"http\",\n");
+    t.push_str("        \"port\": 80\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"name\": \"https\",\n");
+    t.push_str("        \"port\": 443\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"autoscale\": {\n");
+    t.push_str("      \"min\": 2,\n");
+    t.push_str("      \"max\": 6,\n");
+    t.push_str("      \"target_cpu\": 0.7\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "desired/web.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"team\": \"platform\",\n");
+    t.push_str("      \"tier\": \"jobs\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"updated_at\": \"2026-10-20T08:00:00Z\",\n");
+    t.push_str("    \"deployed_by\": \"ci\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"image\": \"registry.example/worker:2.3.0\",\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"resources\": {\n");
+    t.push_str("      \"cpu\": 1.0,\n");
+    t.push_str("      \"memory\": \"1Gi\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"env\": {\n");
+    t.push_str("      \"QUEUE\": \"jobs\",\n");
+    t.push_str("      \"CONCURRENCY\": 8\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": []\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "desired/worker.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders\",\n");
+    t.push_str("  \"columns\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"id\",\n");
+    t.push_str("      \"type\": \"int\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"total\",\n");
+    t.push_str("      \"type\": \"decimal\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"indexes\": [],\n");
+    t.push_str("  \"owner\": \"sales\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/v1.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders\",\n");
+    t.push_str("  \"columns\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"id\",\n");
+    t.push_str("      \"type\": \"int\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"total\",\n");
+    t.push_str("      \"type\": \"decimal\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"created\",\n");
+    t.push_str("      \"type\": \"timestamp\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"indexes\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"cols\": [\n");
+    t.push_str("        \"created\"\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"unique\": false\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"owner\": \"sales\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/v2.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders\",\n");
+    t.push_str("  \"columns\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"id\",\n");
+    t.push_str("      \"type\": \"int\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"total\",\n");
+    t.push_str("      \"type\": \"numeric(12,2)\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"created\",\n");
+    t.push_str("      \"type\": \"timestamp\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"indexes\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"cols\": [\n");
+    t.push_str("        \"created\"\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"unique\": false\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"owner\": \"finance\",\n");
+    t.push_str("  \"comment\": \"customer orders\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/v3.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders\",\n");
+    t.push_str("  \"columns\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"order_id\",\n");
+    t.push_str("      \"type\": \"bigint\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"total\",\n");
+    t.push_str("      \"type\": \"numeric(12,2)\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"created\",\n");
+    t.push_str("      \"type\": \"timestamp\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"indexes\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"cols\": [\n");
+    t.push_str("        \"created\"\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"unique\": true\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"owner\": \"finance\"\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/v4.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"name\": \"orders\",\n");
+    t.push_str("  \"columns\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"order_id\",\n");
+    t.push_str("      \"type\": \"bigint\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"name\": \"total\",\n");
+    t.push_str("      \"type\": \"numeric(12,2)\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"indexes\": [],\n");
+    t.push_str("  \"owner\": \"finance\",\n");
+    t.push_str("  \"partition\": {\n");
+    t.push_str("    \"by\": \"range\",\n");
+    t.push_str("    \"cols\": [\n");
+    t.push_str("      \"created\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/v5.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"name\": \"change a value\", \"steps\": [[\"val\", \"a\", {\"a\": \"b\"}], [\"val\", \"b\", {\"a\": \"c\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add a nested dict\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"a\": {\"b\": \"c\"}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add a nested dict, path_limit empty\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"a\": {\"b\": \"c\"}}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": []}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add a nested dict, path_limit a\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"a\": {\"b\": \"c\"}}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": [[\"a\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add a nested dict, path_limit a.b\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"a\": {\"b\": \"c\"}}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": [[\"a\", \"b\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add to a list\", \"steps\": [[\"val\", \"a\", {\"fruits\": []}], [\"val\", \"b\", {\"fruits\": [\"apple\", \"mango\"]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"add to a list, expanded\", \"steps\": [[\"val\", \"a\", {\"fruits\": []}], [\"val\", \"b\", {\"fruits\": [\"apple\", \"mango\"]}], [\"diff\", \"d\", \"a\", \"b\", {\"expand\": true}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"shrink a list\", \"steps\": [[\"val\", \"a\", {\"n\": [1, 2, 3, 4]}], [\"val\", \"b\", {\"n\": [1]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"shrink a list, expanded\", \"steps\": [[\"val\", \"a\", {\"n\": [1, 2, 3, 4]}], [\"val\", \"b\", {\"n\": [5]}], [\"diff\", \"d\", \"a\", \"b\", {\"expand\": true}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"change inside a dict\", \"steps\": [[\"val\", \"a\", {\"a\": {\"x\": 1}}], [\"val\", \"b\", {\"a\": {\"x\": 2}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"no dot notation\", \"steps\": [[\"val\", \"a\", {\"a\": {\"x\": 1}}], [\"val\", \"b\", {\"a\": {\"x\": 2}}], [\"diff\", \"d\", \"a\", \"b\", {\"dot_notation\": false}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"a key with a dot\", \"steps\": [[\"val\", \"a\", {\"a.b\": {\"c\": 1}}], [\"val\", \"b\", {\"a.b\": {\"c\": 2}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"list of dicts\", \"steps\": [[\"val\", \"a\", {\"items\": [{\"sku\": \"A1\", \"qty\": 2}, {\"sku\": \"B2\", \"qty\": 1}]}], [\"val\", \"b\", {\"items\": [{\"sku\": \"A1\", \"qty\": 3}, {\"sku\": \"B2\", \"qty\": 1, \"gift\": true}]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"root lists\", \"steps\": [[\"val\", \"a\", [1, 2, 3]], [\"val\", \"b\", [1, 5, 3, 7]], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"root list of dicts\", \"steps\": [[\"val\", \"a\", [{\"id\": 1}]], [\"val\", \"b\", [{\"id\": 1}, {\"id\": 2, \"tags\": []}]], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"root scalars\", \"steps\": [[\"val\", \"a\", 1], [\"val\", \"b\", 2], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"root scalars equal\", \"steps\": [[\"val\", \"a\", \"x\"], [\"val\", \"b\", \"x\"], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"dict becomes a list\", \"steps\": [[\"val\", \"a\", {\"a\": {\"x\": 1}}], [\"val\", \"b\", {\"a\": [1]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"list becomes a string\", \"steps\": [[\"val\", \"a\", {\"a\": [1]}], [\"val\", \"b\", {\"a\": \"1\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"int and float equal\", \"steps\": [[\"val\", \"a\", {\"n\": 1, \"m\": 2.0}], [\"val\", \"b\", {\"n\": 1.0, \"m\": 2}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"bool and int equal\", \"steps\": [[\"val\", \"a\", {\"t\": true, \"f\": false}], [\"val\", \"b\", {\"t\": 1, \"f\": 0}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"bool and int differ\", \"steps\": [[\"val\", \"a\", {\"t\": true}], [\"val\", \"b\", {\"t\": 2}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"int and string differ\", \"steps\": [[\"val\", \"a\", {\"n\": 1}], [\"val\", \"b\", {\"n\": \"1\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"none and zero\", \"steps\": [[\"val\", \"a\", {\"n\": null}], [\"val\", \"b\", {\"n\": 0}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"none and none\", \"steps\": [[\"val\", \"a\", {\"n\": null}], [\"val\", \"b\", {\"n\": null}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"strings are values\", \"steps\": [[\"val\", \"a\", {\"s\": \"abc\"}], [\"val\", \"b\", {\"s\": \"abd\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"float noise hidden\", \"steps\": [[\"val\", \"a\", {\"x\": 0.30000000000000004}], [\"val\", \"b\", {\"x\": 0.3}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"float noise, no tolerance\", \"steps\": [[\"val\", \"a\", {\"x\": 0.30000000000000004}], [\"val\", \"b\", {\"x\": 0.3}], [\"diff\", \"d\", \"a\", \"b\", {\"tolerance\": null}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"relative tolerance\", \"steps\": [[\"val\", \"a\", {\"x\": 100, \"y\": 100}], [\"val\", \"b\", {\"x\": 100.5, \"y\": 102}], [\"diff\", \"d\", \"a\", \"b\", {\"tolerance\": 0.01}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"absolute tolerance\", \"steps\": [[\"val\", \"a\", {\"x\": 1.0, \"y\": 0.0}], [\"val\", \"b\", {\"x\": 1.4, \"y\": 0.6}], [\"diff\", \"d\", \"a\", \"b\", {\"tolerance\": null, \"absolute_tolerance\": 0.5}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"both tolerances\", \"steps\": [[\"val\", \"a\", {\"x\": 0.001}], [\"val\", \"b\", {\"x\": 0.0015}], [\"diff\", \"d\", \"a\", \"b\", {\"tolerance\": 0.1, \"absolute_tolerance\": 0.001}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"nan equals nan\", \"steps\": [[\"val\", \"a\", {\"x\": NaN, \"y\": [NaN]}], [\"val\", \"b\", {\"x\": NaN, \"y\": [NaN]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"nan and a number\", \"steps\": [[\"val\", \"a\", {\"x\": NaN, \"y\": 1.0}], [\"val\", \"b\", {\"x\": 1.0, \"y\": NaN}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"infinity\", \"steps\": [[\"val\", \"a\", {\"x\": Infinity, \"y\": -Infinity, \"z\": Infinity}], [\"val\", \"b\", {\"x\": Infinity, \"y\": Infinity, \"z\": 1e+308}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"big floats\", \"steps\": [[\"val\", \"a\", {\"x\": 1e+300}], [\"val\", \"b\", {\"x\": 1.0000000000000002e+300}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"sets of ints\", \"steps\": [[\"val\", \"a\", {\"s\": {\"$set\": [1, 2, 3]}}], [\"val\", \"b\", {\"s\": {\"$set\": [2, 3, 4]}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"sets of strings\", \"steps\": [[\"val\", \"a\", {\"tags\": {\"$set\": [\"db\", \"web\"]}}], [\"val\", \"b\", {\"tags\": {\"$set\": [\"web\", \"cache\", \"edge\"]}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"set added whole\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"s\": {\"$set\": [1, 2]}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"set added, path_limit empty\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"s\": {\"$set\": [1, 2]}, \"l\": [1, {\"k\": {\"$set\": [3]}}]}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": []}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"set grows only\", \"steps\": [[\"val\", \"a\", {\"s\": {\"$set\": [1]}}], [\"val\", \"b\", {\"s\": {\"$set\": [1, 2]}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a key\", \"steps\": [[\"val\", \"a\", {\"a\": 1, \"b\": 2}], [\"val\", \"b\", {\"a\": 3, \"b\": 4}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"a\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a dotted key\", \"steps\": [[\"val\", \"a\", {\"a\": {\"b\": 1, \"c\": 2}}], [\"val\", \"b\", {\"a\": {\"b\": 3, \"c\": 4}}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"a.b\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a key path list\", \"steps\": [[\"val\", \"a\", {\"a\": {\"b\": 1, \"c\": 2}}], [\"val\", \"b\", {\"a\": {\"b\": 3, \"c\": 4}}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [[\"a\", \"c\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a whole subtree\", \"steps\": [[\"val\", \"a\", {\"a\": {\"b\": 1}, \"z\": 1}], [\"val\", \"b\", {\"a\": {\"b\": 2}, \"z\": 2}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"a\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore an added key\", \"steps\": [[\"val\", \"a\", {\"a\": 1}], [\"val\", \"b\", {\"a\": 1, \"secret\": \"x\"}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"secret\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a removed key\", \"steps\": [[\"val\", \"a\", {\"a\": 1, \"old\": 2}], [\"val\", \"b\", {\"a\": 1}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"old\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a list index does nothing\", \"steps\": [[\"val\", \"a\", [1, 2]], [\"val\", \"b\", [3, 4]], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [0]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore inside a list\", \"steps\": [[\"val\", \"a\", {\"l\": [{\"a\": 1, \"b\": 1}]}], [\"val\", \"b\", {\"l\": [{\"a\": 2, \"b\": 2}]}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [[\"l\", 0, \"a\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a dotted key, no dot notation\", \"steps\": [[\"val\", \"a\", {\"a.b\": 1, \"a\": {\"b\": 1}}], [\"val\", \"b\", {\"a.b\": 2, \"a\": {\"b\": 2}}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [\"a.b\"], \"dot_notation\": false}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore a key with a dot\", \"steps\": [[\"val\", \"a\", {\"a.b\": 1, \"a\": {\"b\": 1}}], [\"val\", \"b\", {\"a.b\": 2, \"a\": {\"b\": 2}}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": [[\"a.b\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"ignore as a set\", \"steps\": [[\"val\", \"a\", {\"a\": 1, \"b\": 2}], [\"val\", \"b\", {\"a\": 3, \"b\": 4}], [\"diff\", \"d\", \"a\", \"b\", {\"ignore\": {\"$set\": [\"b\"]}}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"node prefix\", \"steps\": [[\"val\", \"a\", {\"a\": 1}], [\"val\", \"b\", {\"a\": 2}], [\"diff\", \"d\", \"a\", \"b\", {\"node\": [\"root\"]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"node prefix with an index\", \"steps\": [[\"val\", \"a\", {\"a\": 1}], [\"val\", \"b\", {\"a\": 2, \"b\": 3}], [\"diff\", \"d\", \"a\", \"b\", {\"node\": [\"items\", 0]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"path_limit wildcard\", \"steps\": [[\"val\", \"a\", {\"a\": {\"x\": {\"y\": 1}}, \"b\": {\"x\": {\"y\": 1}}}], [\"val\", \"b\", {\"a\": {\"x\": {\"y\": 2}}, \"b\": {\"x\": {\"y\": 2}}}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": [[\"*\", \"x\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"path_limit stops recursion\", \"steps\": [[\"val\", \"a\", {\"a\": {\"b\": {\"c\": 1, \"d\": 1}}}], [\"val\", \"b\", {\"a\": {\"b\": {\"c\": 2, \"d\": 2}}}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": [[\"a\", \"b\"]]}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"path_limit with lists\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {\"a\": [1, [2, 3], {\"b\": []}]}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": []}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"path_limit and expand\", \"steps\": [[\"val\", \"a\", {\"a\": 1}], [\"val\", \"b\", {\"a\": 1, \"b\": {\"c\": 1}, \"d\": 2}], [\"diff\", \"d\", \"a\", \"b\", {\"path_limit\": [], \"expand\": true}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"removals keep order\", \"steps\": [[\"val\", \"a\", {\"a\": 1, \"b\": 2, \"c\": 3}], [\"val\", \"b\", {\"b\": 2}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"additions keep order\", \"steps\": [[\"val\", \"a\", {\"b\": 2}], [\"val\", \"b\", {\"c\": 3, \"b\": 2, \"a\": 1}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"deep mix\", \"steps\": [[\"val\", \"a\", {\"svc\": {\"ports\": [80, 443], \"env\": {\"A\": \"1\"}, \"on\": true}}], [\"val\", \"b\", {\"svc\": {\"ports\": [8080], \"env\": {\"A\": \"1\", \"B\": \"2\"}, \"on\": false}}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"empty to empty\", \"steps\": [[\"val\", \"a\", {}], [\"val\", \"b\", {}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"unicode\", \"steps\": [[\"val\", \"a\", {\"name\": \"caf\\u00e9\"}], [\"val\", \"b\", {\"name\": \"caf\\u00e9 \\u2603\", \"emoji\": \"\\ud83d\\ude00\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"quotes in strings\", \"steps\": [[\"val\", \"a\", {\"q\": \"it's\"}], [\"val\", \"b\", {\"q\": \"say \\\"hi\\\"\\n\"}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"eq\", \"p\", \"b\"], [\"swap\", \"s\", \"d\"], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"patch a list insert past the end\", \"steps\": [[\"val\", \"x\", {\"servers\": [\"a\", \"b\"]}], [\"val\", \"d\", [[\"add\", \"servers\", [[5, \"c\"], [0, \"z\"]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a negative insert\", \"steps\": [[\"val\", \"x\", {\"l\": [1, 2, 3]}], [\"val\", \"d\", [[\"add\", \"l\", [[-1, 9], [-10, 0]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a dotted path through a list\", \"steps\": [[\"val\", \"x\", {\"items\": [{\"qty\": 1}, {\"qty\": 2}]}], [\"val\", \"d\", [[\"change\", \"items.0.qty\", [1, 5]], [\"change\", \"items.-1.qty\", [2, 7]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a list item by text index\", \"steps\": [[\"val\", \"x\", {\"tags\": [\"a\", \"b\", \"c\"]}], [\"val\", \"d\", [[\"change\", \"tags.01\", [\"b\", \"B\"]], [\"change\", \"tags.-1\", [\"c\", \"C\"]], [\"change\", \"tags. 0\", [\"a\", \"A\"]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a change on a missing key adds it\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"change\", \"b\", [null, 2]], [\"change\", \"c.d\", [0, 1]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch ignores the old value\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"change\", \"a\", [99, 2]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a remove of a missing key\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"remove\", \"\", [[\"a\", 1], [\"b\", 2]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch an add under a missing key\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"add\", \"b.c\", [[\"d\", 1]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a remove past a list's end\", \"steps\": [[\"val\", \"x\", {\"l\": [1]}], [\"val\", \"d\", [[\"remove\", \"l\", [[3, 1]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a change past a list's end\", \"steps\": [[\"val\", \"x\", {\"l\": [1]}], [\"val\", \"d\", [[\"change\", \"l.4\", [1, 2]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a list index that is not a number\", \"steps\": [[\"val\", \"x\", {\"l\": [{\"a\": 1}]}], [\"val\", \"d\", [[\"change\", \"l.first.a\", [1, 2]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch an unknown action\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"move\", \"a\", [\"b\"]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a short entry\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"change\", \"a\"]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a long entry\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"change\", \"a\", [1, 2], \"extra\"]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch a change without two values\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"change\", \"a\", [1, 2, 3]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch into a string\", \"steps\": [[\"val\", \"x\", {\"s\": \"abc\"}], [\"val\", \"d\", [[\"add\", \"s\", [[\"k\", 1]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch into a number\", \"steps\": [[\"val\", \"x\", {\"n\": 5}], [\"val\", \"d\", [[\"change\", \"n.k\", [1, 2]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch at the root\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"d\", [[\"add\", \"\", [[\"b\", 2]]], [\"remove\", \"\", [[\"a\", 1]]], [\"add\", [], [[\"c\", 3]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch with a path list\", \"steps\": [[\"val\", \"x\", {\"a.b\": {\"c\": [1, 2]}}], [\"val\", \"d\", [[\"change\", [\"a.b\", \"c\", 1], [2, 3]], [\"add\", [\"a.b\", \"c\"], [[0, 0]]]]], [\"patch\", \"p\", \"d\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch keeps the original\", \"steps\": [[\"val\", \"x\", {\"a\": [1]}], [\"val\", \"d\", [[\"add\", \"a\", [[1, 2]]]]], [\"patch\", \"p\", \"d\", \"x\"], [\"show\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"patch the same diff twice\", \"steps\": [[\"val\", \"a\", {\"l\": [1]}], [\"val\", \"b\", {\"l\": [1, 2]}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"patch\", \"p\", \"d\", \"a\"], [\"patch\", \"q\", \"d\", \"p\"]]}\n");
+    t.push_str("{\"name\": \"swap reverses additions\", \"steps\": [[\"val\", \"d\", [[\"add\", \"a.b.c\", [[\"a\", \"b\"], [\"c\", \"d\"]]], [\"change\", \"x\", [\"old\", \"new\"]], [\"remove\", \"\", [[\"z\", 1]]]]], [\"swap\", \"s\", \"d\"], [\"swap\", \"t\", \"s\"]]}\n");
+    t.push_str("{\"name\": \"revert a list removal\", \"steps\": [[\"val\", \"a\", [1, 2, 3]], [\"val\", \"b\", [1]], [\"diff\", \"d\", \"a\", \"b\", {}], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"revert in the wrong order\", \"steps\": [[\"val\", \"a\", {\"l\": [1, 2, 3]}], [\"val\", \"b\", {\"l\": [9]}], [\"diff\", \"d\", \"a\", \"b\", {\"expand\": true}], [\"revert\", \"r\", \"d\", \"b\"], [\"eq\", \"r\", \"a\"]]}\n");
+    t.push_str("{\"name\": \"revert onto something else\", \"steps\": [[\"val\", \"a\", {\"a\": 1}], [\"val\", \"b\", {\"a\": 2, \"b\": 3}], [\"val\", \"c\", {\"x\": 0}], [\"diff\", \"d\", \"a\", \"b\", {}], [\"revert\", \"r\", \"d\", \"c\"]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" in {\\\"a\\\": {\\\"b\\\": \\\"hello\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": \"hello\"}}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" parent in {\\\"a\\\": {\\\"b\\\": \\\"hello\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": \"hello\"}}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", true]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"\\\" in {\\\"a\\\": {\\\"b\\\": \\\"hello\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": \"hello\"}}], [\"val\", \"k\", \"\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup [] in {\\\"a\\\": {\\\"b\\\": \\\"hello\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": \"hello\"}}], [\"val\", \"k\", []], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup null in {\\\"a\\\": {\\\"b\\\": \\\"hello\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": \"hello\"}}], [\"val\", \"k\", null], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.1.b\\\" in {\\\"a\\\": [{\\\"b\\\": 1}, {\\\"b\\\": 2}]}\", \"steps\": [[\"val\", \"x\", {\"a\": [{\"b\": 1}, {\"b\": 2}]}], [\"val\", \"k\", \"a.1.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup [\\\"a\\\", \\\"-1\\\"] in {\\\"a\\\": [{\\\"b\\\": 1}, {\\\"b\\\": 2}]}\", \"steps\": [[\"val\", \"x\", {\"a\": [{\"b\": 1}, {\"b\": 2}]}], [\"val\", \"k\", [\"a\", \"-1\"]], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup [\\\"a\\\", 1] in {\\\"a\\\": \\\"xyz\\\"}\", \"steps\": [[\"val\", \"x\", {\"a\": \"xyz\"}], [\"val\", \"k\", [\"a\", 1]], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.1\\\" in {\\\"a\\\": \\\"xyz\\\"}\", \"steps\": [[\"val\", \"x\", {\"a\": \"xyz\"}], [\"val\", \"k\", \"a.1\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.c\\\" in {\\\"a\\\": {\\\"b\\\": 1}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"b\": 1}}], [\"val\", \"k\", \"a.c\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.3\\\" in {\\\"a\\\": [1]}\", \"steps\": [[\"val\", \"x\", {\"a\": [1]}], [\"val\", \"k\", \"a.3\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.x\\\" in {\\\"a\\\": [1]}\", \"steps\": [[\"val\", \"x\", {\"a\": [1]}], [\"val\", \"k\", \"a.x\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" in {\\\"a\\\": 5}\", \"steps\": [[\"val\", \"x\", {\"a\": 5}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" in {\\\"a\\\": null}\", \"steps\": [[\"val\", \"x\", {\"a\": null}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" in {\\\"a\\\": true}\", \"steps\": [[\"val\", \"x\", {\"a\": true}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup [\\\"a\\\", 1] in {\\\"a\\\": {\\\"1\\\": \\\"str key\\\"}}\", \"steps\": [[\"val\", \"x\", {\"a\": {\"1\": \"str key\"}}], [\"val\", \"k\", [\"a\", 1]], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup 5 in {\\\"a\\\": 1}\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"k\", 5], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a\\\" parent in {\\\"a\\\": 1}\", \"steps\": [[\"val\", \"x\", {\"a\": 1}], [\"val\", \"k\", \"a\"], [\"lookup\", \"x\", \"k\", true]]}\n");
+    t.push_str("{\"name\": \"dot_lookup \\\"a.b\\\" in {\\\"a.b\\\": 1}\", \"steps\": [[\"val\", \"x\", {\"a.b\": 1}], [\"val\", \"k\", \"a.b\"], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"dot_lookup [\\\"a.b\\\"] in {\\\"a.b\\\": 1}\", \"steps\": [[\"val\", \"x\", {\"a.b\": 1}], [\"val\", \"k\", [\"a.b\"]], [\"lookup\", \"x\", \"k\", false]]}\n");
+    t.push_str("{\"name\": \"merge without conflicts\", \"steps\": [[\"val\", \"lca\", {}], [\"val\", \"first\", {\"foo\": \"bar\"}], [\"val\", \"second\", {\"bar\": \"foo\"}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge the same change\", \"steps\": [[\"val\", \"lca\", {\"a\": 1}], [\"val\", \"first\", {\"a\": 2}], [\"val\", \"second\", {\"a\": 2}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a conflict, picked\", \"steps\": [[\"val\", \"lca\", {\"a\": 1}], [\"val\", \"first\", {\"a\": 2}], [\"val\", \"second\", {\"a\": 3}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"s\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a conflict, unpicked\", \"steps\": [[\"val\", \"lca\", {\"a\": 1}], [\"val\", \"first\", {\"a\": 2}], [\"val\", \"second\", {\"a\": 3}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a conflict, too many picks\", \"steps\": [[\"val\", \"lca\", {\"a\": 1}], [\"val\", \"first\", {\"a\": 2}], [\"val\", \"second\", {\"a\": 3}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"s\", \"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a conflict, an action takes first\", \"steps\": [[\"val\", \"lca\", {\"a\": 1, \"b\": 1}], [\"val\", \"first\", {\"a\": 2, \"b\": 2}], [\"val\", \"second\", {\"a\": 3, \"b\": 3}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"a\"], \"f\"], [[\"b\"], \"s\"]], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a cascading action\", \"steps\": [[\"val\", \"lca\", {\"a\": {\"b\": {\"c\": 1}}}], [\"val\", \"first\", {\"a\": {\"b\": {\"c\": 2}}}], [\"val\", \"second\", {\"a\": {\"b\": {\"c\": 3}}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"a\"], \"s\"]], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge an action that declines\", \"steps\": [[\"val\", \"lca\", {\"a\": {\"b\": 1}}], [\"val\", \"first\", {\"a\": {\"b\": 2}}], [\"val\", \"second\", {\"a\": {\"b\": 3}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"a\", \"b\"], \"decline\"], [[\"a\"], \"f\"]], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge an action that stops\", \"steps\": [[\"val\", \"lca\", {\"a\": {\"b\": 1}}], [\"val\", \"first\", {\"a\": {\"b\": 2}}], [\"val\", \"second\", {\"a\": {\"b\": 3}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"a\", \"b\"], \"stop\"], [[\"a\"], \"f\"]], \"path_limits\": [], \"picks\": [\"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge remove against a change below\", \"steps\": [[\"val\", \"lca\", {\"a\": {\"b\": 1}, \"z\": 0}], [\"val\", \"first\", {\"z\": 0}], [\"val\", \"second\", {\"a\": {\"b\": 2}, \"z\": 0}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge a change below against a remove\", \"steps\": [[\"val\", \"lca\", {\"a\": {\"b\": 1}}], [\"val\", \"first\", {\"a\": {\"b\": 2}}], [\"val\", \"second\", {}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"s\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge list additions\", \"steps\": [[\"val\", \"lca\", {\"l\": [1]}], [\"val\", \"first\", {\"l\": [1, 2]}], [\"val\", \"second\", {\"l\": [1, 3]}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge list additions on both sides of a key\", \"steps\": [[\"val\", \"lca\", {\"l\": [1], \"m\": [1]}], [\"val\", \"first\", {\"l\": [1, 2]}], [\"val\", \"second\", {\"m\": [1, 3], \"l\": [1]}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge wildcard actions\", \"steps\": [[\"val\", \"lca\", {\"users\": {\"ann\": {\"role\": \"dev\"}, \"bob\": {\"role\": \"dev\"}}, \"theme\": \"light\"}], [\"val\", \"first\", {\"users\": {\"ann\": {\"role\": \"lead\"}, \"bob\": {\"role\": \"ops\"}}, \"theme\": \"dark\"}], [\"val\", \"second\", {\"users\": {\"ann\": {\"role\": \"admin\"}, \"bob\": {\"role\": \"qa\"}}, \"theme\": \"blue\"}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"users\", \"*\"], \"s\"], [[\"theme\"], \"f\"]], \"path_limits\": [], \"picks\": null, \"wildcard\": true}]]}\n");
+    t.push_str("{\"name\": \"merge plus wildcard\", \"steps\": [[\"val\", \"lca\", {\"p\": {\"x\": 1, \"y\": {\"z\": 1}}}], [\"val\", \"first\", {\"p\": {\"x\": 2, \"y\": {\"z\": 2}}}], [\"val\", \"second\", {\"p\": {\"x\": 3, \"y\": {\"z\": 3}}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"p\", \"+\"], \"f\"]], \"path_limits\": [], \"picks\": [\"s\"], \"wildcard\": true}]]}\n");
+    t.push_str("{\"name\": \"merge star at the root\", \"steps\": [[\"val\", \"lca\", {\"a\": 1, \"b\": {\"c\": 1}}], [\"val\", \"first\", {\"a\": 2, \"b\": {\"c\": 2}}], [\"val\", \"second\", {\"a\": 3, \"b\": {\"c\": 3}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [[[\"*\"], \"s\"]], \"path_limits\": [], \"picks\": null, \"wildcard\": true}]]}\n");
+    t.push_str("{\"name\": \"merge with path limits\", \"steps\": [[\"val\", \"lca\", {\"cfg\": {\"a\": 1, \"b\": 1}}], [\"val\", \"first\", {\"cfg\": {\"a\": 2, \"b\": 1}}], [\"val\", \"second\", {\"cfg\": {\"a\": 1, \"b\": 2}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [[\"cfg\"]], \"picks\": [\"s\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge additions of the same key\", \"steps\": [[\"val\", \"lca\", {}], [\"val\", \"first\", {\"k\": {\"a\": 1}}], [\"val\", \"second\", {\"k\": {\"a\": 1}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge additions that differ\", \"steps\": [[\"val\", \"lca\", {}], [\"val\", \"first\", {\"k\": 1}], [\"val\", \"second\", {\"k\": 2}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge sets\", \"steps\": [[\"val\", \"lca\", {\"s\": {\"$set\": [1]}}], [\"val\", \"first\", {\"s\": {\"$set\": [1, 2]}}], [\"val\", \"second\", {\"s\": {\"$set\": [1, 3]}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge many\", \"steps\": [[\"val\", \"lca\", {\"a\": 1, \"b\": 2, \"c\": [1, 2], \"d\": {\"e\": 1}}], [\"val\", \"first\", {\"a\": 10, \"b\": 2, \"c\": [1, 2, 3], \"d\": {\"e\": 1, \"f\": 2}}], [\"val\", \"second\", {\"a\": 1, \"b\": 20, \"c\": [1], \"d\": {}}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": [\"s\", \"f\"], \"wildcard\": false}]]}\n");
+    t.push_str("{\"name\": \"merge identical removals\", \"steps\": [[\"val\", \"lca\", {\"a\": 1, \"b\": 2}], [\"val\", \"first\", {\"b\": 2}], [\"val\", \"second\", {\"b\": 2}], [\"merge\", \"lca\", \"first\", \"second\", {\"actions\": [], \"path_limits\": [], \"picks\": null, \"wildcard\": false}]]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"version\": 3,\n");
+    t.push_str("  \"theme\": \"light\",\n");
+    t.push_str("  \"editor\": {\n");
+    t.push_str("    \"font\": \"Fira Code\",\n");
+    t.push_str("    \"size\": 13,\n");
+    t.push_str("    \"tabs\": 4,\n");
+    t.push_str("    \"wrap\": false\n");
+    t.push_str("  },\n");
+    t.push_str("  \"plugins\": [\n");
+    t.push_str("    \"git\",\n");
+    t.push_str("    \"lint\"\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"users\": {\n");
+    t.push_str("    \"ann\": {\n");
+    t.push_str("      \"role\": \"dev\",\n");
+    t.push_str("      \"email\": \"ann@example.org\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"bob\": {\n");
+    t.push_str("      \"role\": \"dev\",\n");
+    t.push_str("      \"email\": \"bob@example.org\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"telemetry\": true\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "merge/base.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"version\": 3,\n");
+    t.push_str("  \"theme\": \"dark\",\n");
+    t.push_str("  \"editor\": {\n");
+    t.push_str("    \"font\": \"Fira Code\",\n");
+    t.push_str("    \"size\": 14,\n");
+    t.push_str("    \"tabs\": 4,\n");
+    t.push_str("    \"wrap\": true\n");
+    t.push_str("  },\n");
+    t.push_str("  \"plugins\": [\n");
+    t.push_str("    \"git\",\n");
+    t.push_str("    \"lint\",\n");
+    t.push_str("    \"format\"\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"users\": {\n");
+    t.push_str("    \"ann\": {\n");
+    t.push_str("      \"role\": \"lead\",\n");
+    t.push_str("      \"email\": \"ann@example.org\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"bob\": {\n");
+    t.push_str("      \"role\": \"dev\",\n");
+    t.push_str("      \"email\": \"bob@example.org\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"cid\": {\n");
+    t.push_str("      \"role\": \"dev\",\n");
+    t.push_str("      \"email\": \"cid@example.org\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"telemetry\": true\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "merge/ours.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("s\n");
+    t.push_str("f\n");
+    v.push(DataFile { path: "merge/picks.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# path (dotted, * and + as wildcards) and who wins: f ours, s theirs,\n");
+    t.push_str("# ask to leave it for picks.txt\n");
+    t.push_str("users.* s\n");
+    t.push_str("version s\n");
+    t.push_str("plugins ask\n");
+    t.push_str("editor.size ask\n");
+    v.push(DataFile { path: "merge/policy.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"version\": 4,\n");
+    t.push_str("  \"theme\": \"dark\",\n");
+    t.push_str("  \"editor\": {\n");
+    t.push_str("    \"font\": \"Fira Code\",\n");
+    t.push_str("    \"size\": 15,\n");
+    t.push_str("    \"tabs\": 2,\n");
+    t.push_str("    \"wrap\": false\n");
+    t.push_str("  },\n");
+    t.push_str("  \"plugins\": [\n");
+    t.push_str("    \"git\",\n");
+    t.push_str("    \"lint\",\n");
+    t.push_str("    \"test\"\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"users\": {\n");
+    t.push_str("    \"ann\": {\n");
+    t.push_str("      \"role\": \"admin\",\n");
+    t.push_str("      \"email\": \"ann@example.org\"\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "merge/theirs.json".to_string(), hex: false, body: t });
+}

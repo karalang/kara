@@ -1,0 +1,1205 @@
+== change a value
+  a = {'a': 'b'}
+  b = {'a': 'c'}
+  d = diff(a, b):
+    ('change', 'a', ('b', 'c'))
+  p = patch(d, a) = {'a': 'c'}
+  p == b: True
+  s = swap(d) = [('change', 'a', ('c', 'b'))]
+  r = revert(d, b) = {'a': 'b'}
+  r == a: True
+== add a nested dict
+  a = {}
+  b = {'a': {'b': 'c'}}
+  d = diff(a, b):
+    ('add', '', [('a', {'b': 'c'})])
+  p = patch(d, a) = {'a': {'b': 'c'}}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', {'b': 'c'})])]
+  r = revert(d, b) = {}
+  r == a: True
+== add a nested dict, path_limit empty
+  a = {}
+  b = {'a': {'b': 'c'}}
+  d = diff(a, b, path_limit=[]):
+    ('add', '', [('a', {})])
+    ('add', 'a', [('b', 'c')])
+  p = patch(d, a) = {'a': {'b': 'c'}}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', {'b': 'c'})]), ('remove', 'a', [('b', 'c')])]
+  revert: error KeyError: 'a'
+== add a nested dict, path_limit a
+  a = {}
+  b = {'a': {'b': 'c'}}
+  d = diff(a, b, path_limit=[['a']]):
+    ('add', '', [('a', {'b': 'c'})])
+  p = patch(d, a) = {'a': {'b': 'c'}}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', {'b': 'c'})])]
+  r = revert(d, b) = {}
+  r == a: True
+== add a nested dict, path_limit a.b
+  a = {}
+  b = {'a': {'b': 'c'}}
+  d = diff(a, b, path_limit=[['a', 'b']]):
+    ('add', '', [('a', {})])
+    ('add', 'a', [('b', 'c')])
+  p = patch(d, a) = {'a': {'b': 'c'}}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', {'b': 'c'})]), ('remove', 'a', [('b', 'c')])]
+  revert: error KeyError: 'a'
+== add to a list
+  a = {'fruits': []}
+  b = {'fruits': ['apple', 'mango']}
+  d = diff(a, b):
+    ('add', 'fruits', [(0, 'apple'), (1, 'mango')])
+  p = patch(d, a) = {'fruits': ['apple', 'mango']}
+  p == b: True
+  s = swap(d) = [('remove', 'fruits', [(1, 'mango'), (0, 'apple')])]
+  r = revert(d, b) = {'fruits': []}
+  r == a: True
+== add to a list, expanded
+  a = {'fruits': []}
+  b = {'fruits': ['apple', 'mango']}
+  d = diff(a, b, expand=True):
+    ('add', 'fruits', [(0, 'apple')])
+    ('add', 'fruits', [(1, 'mango')])
+  p = patch(d, a) = {'fruits': ['apple', 'mango']}
+  p == b: True
+  s = swap(d) = [('remove', 'fruits', [(0, 'apple')]), ('remove', 'fruits', [(1, 'mango')])]
+  revert: error IndexError: list assignment index out of range
+== shrink a list
+  a = {'n': [1, 2, 3, 4]}
+  b = {'n': [1]}
+  d = diff(a, b):
+    ('remove', 'n', [(3, 4), (2, 3), (1, 2)])
+  p = patch(d, a) = {'n': [1]}
+  p == b: True
+  s = swap(d) = [('add', 'n', [(3, 4), (2, 3), (1, 2)])]
+  r = revert(d, b) = {'n': [1, 2, 4, 3]}
+  r == a: False
+== shrink a list, expanded
+  a = {'n': [1, 2, 3, 4]}
+  b = {'n': [5]}
+  d = diff(a, b, expand=True):
+    ('change', ['n', 0], (1, 5))
+    ('remove', 'n', [(3, 4)])
+    ('remove', 'n', [(2, 3)])
+    ('remove', 'n', [(1, 2)])
+  p = patch(d, a) = {'n': [5]}
+  p == b: True
+  s = swap(d) = [('change', ['n', 0], (5, 1)), ('add', 'n', [(3, 4)]), ('add', 'n', [(2, 3)]), ('add', 'n', [(1, 2)])]
+  r = revert(d, b) = {'n': [1, 2, 4, 3]}
+  r == a: False
+== change inside a dict
+  a = {'a': {'x': 1}}
+  b = {'a': {'x': 2}}
+  d = diff(a, b):
+    ('change', 'a.x', (1, 2))
+  p = patch(d, a) = {'a': {'x': 2}}
+  p == b: True
+  s = swap(d) = [('change', 'a.x', (2, 1))]
+  r = revert(d, b) = {'a': {'x': 1}}
+  r == a: True
+== no dot notation
+  a = {'a': {'x': 1}}
+  b = {'a': {'x': 2}}
+  d = diff(a, b, dot_notation=False):
+    ('change', ['a', 'x'], (1, 2))
+  p = patch(d, a) = {'a': {'x': 2}}
+  p == b: True
+  s = swap(d) = [('change', ['a', 'x'], (2, 1))]
+  r = revert(d, b) = {'a': {'x': 1}}
+  r == a: True
+== a key with a dot
+  a = {'a.b': {'c': 1}}
+  b = {'a.b': {'c': 2}}
+  d = diff(a, b):
+    ('change', ['a.b', 'c'], (1, 2))
+  p = patch(d, a) = {'a.b': {'c': 2}}
+  p == b: True
+  s = swap(d) = [('change', ['a.b', 'c'], (2, 1))]
+  r = revert(d, b) = {'a.b': {'c': 1}}
+  r == a: True
+== list of dicts
+  a = {'items': [{'sku': 'A1', 'qty': 2}, {'sku': 'B2', 'qty': 1}]}
+  b = {'items': [{'sku': 'A1', 'qty': 3}, {'sku': 'B2', 'qty': 1, 'gift': True}]}
+  d = diff(a, b):
+    ('change', ['items', 0, 'qty'], (2, 3))
+    ('add', ['items', 1], [('gift', True)])
+  p = patch(d, a) = {'items': [{'sku': 'A1', 'qty': 3}, {'sku': 'B2', 'qty': 1, 'gift': True}]}
+  p == b: True
+  s = swap(d) = [('change', ['items', 0, 'qty'], (3, 2)), ('remove', ['items', 1], [('gift', True)])]
+  r = revert(d, b) = {'items': [{'sku': 'A1', 'qty': 2}, {'sku': 'B2', 'qty': 1}]}
+  r == a: True
+== root lists
+  a = [1, 2, 3]
+  b = [1, 5, 3, 7]
+  d = diff(a, b):
+    ('change', [1], (2, 5))
+    ('add', '', [(3, 7)])
+  p = patch(d, a) = [1, 5, 3, 7]
+  p == b: True
+  s = swap(d) = [('change', [1], (5, 2)), ('remove', '', [(3, 7)])]
+  r = revert(d, b) = [1, 2, 3]
+  r == a: True
+== root list of dicts
+  a = [{'id': 1}]
+  b = [{'id': 1}, {'id': 2, 'tags': []}]
+  d = diff(a, b):
+    ('add', '', [(1, {'id': 2, 'tags': []})])
+  p = patch(d, a) = [{'id': 1}, {'id': 2, 'tags': []}]
+  p == b: True
+  s = swap(d) = [('remove', '', [(1, {'id': 2, 'tags': []})])]
+  r = revert(d, b) = [{'id': 1}]
+  r == a: True
+== root scalars
+  a = 1
+  b = 2
+  d = diff(a, b):
+    ('change', '', (1, 2))
+  patch: error TypeError: 'int' object does not support item assignment
+== root scalars equal
+  a = 'x'
+  b = 'x'
+  d = diff(a, b):
+  p = patch(d, a) = 'x'
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = 'x'
+  r == a: True
+== dict becomes a list
+  a = {'a': {'x': 1}}
+  b = {'a': [1]}
+  d = diff(a, b):
+    ('change', 'a', ({'x': 1}, [1]))
+  p = patch(d, a) = {'a': [1]}
+  p == b: True
+  s = swap(d) = [('change', 'a', ([1], {'x': 1}))]
+  r = revert(d, b) = {'a': {'x': 1}}
+  r == a: True
+== list becomes a string
+  a = {'a': [1]}
+  b = {'a': '1'}
+  d = diff(a, b):
+    ('change', 'a', ([1], '1'))
+  p = patch(d, a) = {'a': '1'}
+  p == b: True
+  s = swap(d) = [('change', 'a', ('1', [1]))]
+  r = revert(d, b) = {'a': [1]}
+  r == a: True
+== int and float equal
+  a = {'n': 1, 'm': 2.0}
+  b = {'n': 1.0, 'm': 2}
+  d = diff(a, b):
+  p = patch(d, a) = {'n': 1, 'm': 2.0}
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = {'n': 1.0, 'm': 2}
+  r == a: True
+== bool and int equal
+  a = {'t': True, 'f': False}
+  b = {'t': 1, 'f': 0}
+  d = diff(a, b):
+  p = patch(d, a) = {'t': True, 'f': False}
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = {'t': 1, 'f': 0}
+  r == a: True
+== bool and int differ
+  a = {'t': True}
+  b = {'t': 2}
+  d = diff(a, b):
+    ('change', 't', (True, 2))
+  p = patch(d, a) = {'t': 2}
+  p == b: True
+  s = swap(d) = [('change', 't', (2, True))]
+  r = revert(d, b) = {'t': True}
+  r == a: True
+== int and string differ
+  a = {'n': 1}
+  b = {'n': '1'}
+  d = diff(a, b):
+    ('change', 'n', (1, '1'))
+  p = patch(d, a) = {'n': '1'}
+  p == b: True
+  s = swap(d) = [('change', 'n', ('1', 1))]
+  r = revert(d, b) = {'n': 1}
+  r == a: True
+== none and zero
+  a = {'n': None}
+  b = {'n': 0}
+  d = diff(a, b):
+    ('change', 'n', (None, 0))
+  p = patch(d, a) = {'n': 0}
+  p == b: True
+  s = swap(d) = [('change', 'n', (0, None))]
+  r = revert(d, b) = {'n': None}
+  r == a: True
+== none and none
+  a = {'n': None}
+  b = {'n': None}
+  d = diff(a, b):
+  p = patch(d, a) = {'n': None}
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = {'n': None}
+  r == a: True
+== strings are values
+  a = {'s': 'abc'}
+  b = {'s': 'abd'}
+  d = diff(a, b):
+    ('change', 's', ('abc', 'abd'))
+  p = patch(d, a) = {'s': 'abd'}
+  p == b: True
+  s = swap(d) = [('change', 's', ('abd', 'abc'))]
+  r = revert(d, b) = {'s': 'abc'}
+  r == a: True
+== float noise hidden
+  a = {'x': 0.30000000000000004}
+  b = {'x': 0.3}
+  d = diff(a, b):
+  p = patch(d, a) = {'x': 0.30000000000000004}
+  p == b: False
+  s = swap(d) = []
+  r = revert(d, b) = {'x': 0.3}
+  r == a: False
+== float noise, no tolerance
+  a = {'x': 0.30000000000000004}
+  b = {'x': 0.3}
+  d = diff(a, b, tolerance=None):
+    ('change', 'x', (0.30000000000000004, 0.3))
+  p = patch(d, a) = {'x': 0.3}
+  p == b: True
+  s = swap(d) = [('change', 'x', (0.3, 0.30000000000000004))]
+  r = revert(d, b) = {'x': 0.30000000000000004}
+  r == a: True
+== relative tolerance
+  a = {'x': 100, 'y': 100}
+  b = {'x': 100.5, 'y': 102}
+  d = diff(a, b, tolerance=0.01):
+    ('change', 'y', (100, 102))
+  p = patch(d, a) = {'x': 100, 'y': 102}
+  p == b: False
+  s = swap(d) = [('change', 'y', (102, 100))]
+  r = revert(d, b) = {'x': 100.5, 'y': 100}
+  r == a: False
+== absolute tolerance
+  a = {'x': 1.0, 'y': 0.0}
+  b = {'x': 1.4, 'y': 0.6}
+  d = diff(a, b, tolerance=None, absolute_tolerance=0.5):
+    ('change', 'y', (0.0, 0.6))
+  p = patch(d, a) = {'x': 1.0, 'y': 0.6}
+  p == b: False
+  s = swap(d) = [('change', 'y', (0.6, 0.0))]
+  r = revert(d, b) = {'x': 1.4, 'y': 0.0}
+  r == a: False
+== both tolerances
+  a = {'x': 0.001}
+  b = {'x': 0.0015}
+  d = diff(a, b, tolerance=0.1, absolute_tolerance=0.001):
+  p = patch(d, a) = {'x': 0.001}
+  p == b: False
+  s = swap(d) = []
+  r = revert(d, b) = {'x': 0.0015}
+  r == a: False
+== nan equals nan
+  a = {'x': nan, 'y': [nan]}
+  b = {'x': nan, 'y': [nan]}
+  d = diff(a, b):
+  p = patch(d, a) = {'x': nan, 'y': [nan]}
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = {'x': nan, 'y': [nan]}
+  r == a: True
+== nan and a number
+  a = {'x': nan, 'y': 1.0}
+  b = {'x': 1.0, 'y': nan}
+  d = diff(a, b):
+    ('change', 'x', (nan, 1.0))
+    ('change', 'y', (1.0, nan))
+  p = patch(d, a) = {'x': 1.0, 'y': nan}
+  p == b: True
+  s = swap(d) = [('change', 'x', (1.0, nan)), ('change', 'y', (nan, 1.0))]
+  r = revert(d, b) = {'x': nan, 'y': 1.0}
+  r == a: True
+== infinity
+  a = {'x': inf, 'y': -inf, 'z': inf}
+  b = {'x': inf, 'y': inf, 'z': 1e+308}
+  d = diff(a, b):
+    ('change', 'y', (-inf, inf))
+    ('change', 'z', (inf, 1e+308))
+  p = patch(d, a) = {'x': inf, 'y': inf, 'z': 1e+308}
+  p == b: True
+  s = swap(d) = [('change', 'y', (inf, -inf)), ('change', 'z', (1e+308, inf))]
+  r = revert(d, b) = {'x': inf, 'y': -inf, 'z': inf}
+  r == a: True
+== big floats
+  a = {'x': 1e+300}
+  b = {'x': 1.0000000000000002e+300}
+  d = diff(a, b):
+  p = patch(d, a) = {'x': 1e+300}
+  p == b: False
+  s = swap(d) = []
+  r = revert(d, b) = {'x': 1.0000000000000002e+300}
+  r == a: False
+== sets of ints
+  a = {'s': {1, 2, 3}}
+  b = {'s': {2, 3, 4}}
+  d = diff(a, b):
+    ('add', 's', [(0, {4})])
+    ('remove', 's', [(0, {1})])
+  p = patch(d, a) = {'s': {2, 3, 4}}
+  p == b: True
+  s = swap(d) = [('remove', 's', [(0, {4})]), ('add', 's', [(0, {1})])]
+  r = revert(d, b) = {'s': {1, 2, 3}}
+  r == a: True
+== sets of strings
+  a = {'tags': {'db', 'web'}}
+  b = {'tags': {'cache', 'edge', 'web'}}
+  d = diff(a, b):
+    ('add', 'tags', [(0, {'cache', 'edge'})])
+    ('remove', 'tags', [(0, {'db'})])
+  p = patch(d, a) = {'tags': {'cache', 'edge', 'web'}}
+  p == b: True
+  s = swap(d) = [('remove', 'tags', [(0, {'cache', 'edge'})]), ('add', 'tags', [(0, {'db'})])]
+  r = revert(d, b) = {'tags': {'db', 'web'}}
+  r == a: True
+== set added whole
+  a = {}
+  b = {'s': {1, 2}}
+  d = diff(a, b):
+    ('add', '', [('s', {1, 2})])
+  p = patch(d, a) = {'s': {1, 2}}
+  p == b: True
+  s = swap(d) = [('remove', '', [('s', {1, 2})])]
+  r = revert(d, b) = {}
+  r == a: True
+== set added, path_limit empty
+  a = {}
+  b = {'s': {1, 2}, 'l': [1, {'k': {3}}]}
+  d = diff(a, b, path_limit=[]):
+    ('add', '', [('s', set()), ('l', [])])
+    ('add', 's', [(0, {1, 2})])
+    ('add', 'l', [(0, 1), (1, {})])
+    ('add', ['l', 1], [('k', set())])
+    ('add', ['l', 1, 'k'], [(0, {3})])
+  p = patch(d, a) = {'s': {1, 2}, 'l': [1, {'k': {3}}]}
+  p == b: True
+  s = swap(d) = [('remove', '', [('l', [1, {'k': {3}}]), ('s', {1, 2})]), ('remove', 's', [(0, {1, 2})]), ('remove', 'l', [(1, {'k': {3}}), (0, 1)]), ('remove', ['l', 1], [('k', {3})]), ('remove', ['l', 1, 'k'], [(0, {3})])]
+  revert: error KeyError: 's'
+== set grows only
+  a = {'s': {1}}
+  b = {'s': {1, 2}}
+  d = diff(a, b):
+    ('add', 's', [(0, {2})])
+  p = patch(d, a) = {'s': {1, 2}}
+  p == b: True
+  s = swap(d) = [('remove', 's', [(0, {2})])]
+  r = revert(d, b) = {'s': {1}}
+  r == a: True
+== ignore a key
+  a = {'a': 1, 'b': 2}
+  b = {'a': 3, 'b': 4}
+  d = diff(a, b, ignore=['a']):
+    ('change', 'b', (2, 4))
+  p = patch(d, a) = {'a': 1, 'b': 4}
+  p == b: False
+  s = swap(d) = [('change', 'b', (4, 2))]
+  r = revert(d, b) = {'a': 3, 'b': 2}
+  r == a: False
+== ignore a dotted key
+  a = {'a': {'b': 1, 'c': 2}}
+  b = {'a': {'b': 3, 'c': 4}}
+  d = diff(a, b, ignore=['a.b']):
+    ('change', 'a.c', (2, 4))
+  p = patch(d, a) = {'a': {'b': 1, 'c': 4}}
+  p == b: False
+  s = swap(d) = [('change', 'a.c', (4, 2))]
+  r = revert(d, b) = {'a': {'b': 3, 'c': 2}}
+  r == a: False
+== ignore a key path list
+  a = {'a': {'b': 1, 'c': 2}}
+  b = {'a': {'b': 3, 'c': 4}}
+  d = diff(a, b, ignore=[['a', 'c']]):
+    ('change', 'a.b', (1, 3))
+  p = patch(d, a) = {'a': {'b': 3, 'c': 2}}
+  p == b: False
+  s = swap(d) = [('change', 'a.b', (3, 1))]
+  r = revert(d, b) = {'a': {'b': 1, 'c': 4}}
+  r == a: False
+== ignore a whole subtree
+  a = {'a': {'b': 1}, 'z': 1}
+  b = {'a': {'b': 2}, 'z': 2}
+  d = diff(a, b, ignore=['a']):
+    ('change', 'z', (1, 2))
+  p = patch(d, a) = {'a': {'b': 1}, 'z': 2}
+  p == b: False
+  s = swap(d) = [('change', 'z', (2, 1))]
+  r = revert(d, b) = {'a': {'b': 2}, 'z': 1}
+  r == a: False
+== ignore an added key
+  a = {'a': 1}
+  b = {'a': 1, 'secret': 'x'}
+  d = diff(a, b, ignore=['secret']):
+  p = patch(d, a) = {'a': 1}
+  p == b: False
+  s = swap(d) = []
+  r = revert(d, b) = {'a': 1, 'secret': 'x'}
+  r == a: False
+== ignore a removed key
+  a = {'a': 1, 'old': 2}
+  b = {'a': 1}
+  d = diff(a, b, ignore=['old']):
+  p = patch(d, a) = {'a': 1, 'old': 2}
+  p == b: False
+  s = swap(d) = []
+  r = revert(d, b) = {'a': 1}
+  r == a: False
+== ignore a list index does nothing
+  a = [1, 2]
+  b = [3, 4]
+  d = diff(a, b, ignore=[0]):
+    ('change', [0], (1, 3))
+    ('change', [1], (2, 4))
+  p = patch(d, a) = [3, 4]
+  p == b: True
+  s = swap(d) = [('change', [0], (3, 1)), ('change', [1], (4, 2))]
+  r = revert(d, b) = [1, 2]
+  r == a: True
+== ignore inside a list
+  a = {'l': [{'a': 1, 'b': 1}]}
+  b = {'l': [{'a': 2, 'b': 2}]}
+  d = diff(a, b, ignore=[['l', 0, 'a']]):
+    ('change', ['l', 0, 'b'], (1, 2))
+  p = patch(d, a) = {'l': [{'a': 1, 'b': 2}]}
+  p == b: False
+  s = swap(d) = [('change', ['l', 0, 'b'], (2, 1))]
+  r = revert(d, b) = {'l': [{'a': 2, 'b': 1}]}
+  r == a: False
+== ignore a dotted key, no dot notation
+  a = {'a.b': 1, 'a': {'b': 1}}
+  b = {'a.b': 2, 'a': {'b': 2}}
+  d = diff(a, b, ignore=['a.b'], dot_notation=False):
+    ('change', ['a', 'b'], (1, 2))
+  p = patch(d, a) = {'a.b': 1, 'a': {'b': 2}}
+  p == b: False
+  s = swap(d) = [('change', ['a', 'b'], (2, 1))]
+  r = revert(d, b) = {'a.b': 2, 'a': {'b': 1}}
+  r == a: False
+== ignore a key with a dot
+  a = {'a.b': 1, 'a': {'b': 1}}
+  b = {'a.b': 2, 'a': {'b': 2}}
+  d = diff(a, b, ignore=[['a.b']]):
+    ('change', 'a.b', (1, 2))
+  p = patch(d, a) = {'a.b': 1, 'a': {'b': 2}}
+  p == b: False
+  s = swap(d) = [('change', 'a.b', (2, 1))]
+  r = revert(d, b) = {'a.b': 2, 'a': {'b': 1}}
+  r == a: False
+== ignore as a set
+  a = {'a': 1, 'b': 2}
+  b = {'a': 3, 'b': 4}
+  d = diff(a, b, ignore={'b'}):
+    ('change', 'a', (1, 3))
+  p = patch(d, a) = {'a': 3, 'b': 2}
+  p == b: False
+  s = swap(d) = [('change', 'a', (3, 1))]
+  r = revert(d, b) = {'a': 1, 'b': 4}
+  r == a: False
+== node prefix
+  a = {'a': 1}
+  b = {'a': 2}
+  d = diff(a, b, node=['root']):
+    ('change', 'root.a', (1, 2))
+  patch: error KeyError: 'root'
+== node prefix with an index
+  a = {'a': 1}
+  b = {'a': 2, 'b': 3}
+  d = diff(a, b, node=['items', 0]):
+    ('change', ['items', 0, 'a'], (1, 2))
+    ('add', ['items', 0], [('b', 3)])
+  patch: error KeyError: 'items'
+== path_limit wildcard
+  a = {'a': {'x': {'y': 1}}, 'b': {'x': {'y': 1}}}
+  b = {'a': {'x': {'y': 2}}, 'b': {'x': {'y': 2}}}
+  d = diff(a, b, path_limit=[['*', 'x']]):
+    ('change', ['a', 'x'], ({'y': 1}, {'y': 2}))
+    ('change', ['b', 'x'], ({'y': 1}, {'y': 2}))
+  p = patch(d, a) = {'a': {'x': {'y': 2}}, 'b': {'x': {'y': 2}}}
+  p == b: True
+  s = swap(d) = [('change', ['a', 'x'], ({'y': 2}, {'y': 1})), ('change', ['b', 'x'], ({'y': 2}, {'y': 1}))]
+  r = revert(d, b) = {'a': {'x': {'y': 1}}, 'b': {'x': {'y': 1}}}
+  r == a: True
+== path_limit stops recursion
+  a = {'a': {'b': {'c': 1, 'd': 1}}}
+  b = {'a': {'b': {'c': 2, 'd': 2}}}
+  d = diff(a, b, path_limit=[['a', 'b']]):
+    ('change', ['a', 'b'], ({'c': 1, 'd': 1}, {'c': 2, 'd': 2}))
+  p = patch(d, a) = {'a': {'b': {'c': 2, 'd': 2}}}
+  p == b: True
+  s = swap(d) = [('change', ['a', 'b'], ({'c': 2, 'd': 2}, {'c': 1, 'd': 1}))]
+  r = revert(d, b) = {'a': {'b': {'c': 1, 'd': 1}}}
+  r == a: True
+== path_limit with lists
+  a = {}
+  b = {'a': [1, [2, 3], {'b': []}]}
+  d = diff(a, b, path_limit=[]):
+    ('add', '', [('a', [])])
+    ('add', 'a', [(0, 1), (1, []), (2, {})])
+    ('add', ['a', 1], [(0, 2), (1, 3)])
+    ('add', ['a', 2], [('b', [])])
+  p = patch(d, a) = {'a': [1, [2, 3], {'b': []}]}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', [1, [2, 3], {'b': []}])]), ('remove', 'a', [(2, {'b': []}), (1, [2, 3]), (0, 1)]), ('remove', ['a', 1], [(1, 3), (0, 2)]), ('remove', ['a', 2], [('b', [])])]
+  revert: error KeyError: 'a'
+== path_limit and expand
+  a = {'a': 1}
+  b = {'a': 1, 'b': {'c': 1}, 'd': 2}
+  d = diff(a, b, path_limit=[], expand=True):
+    ('add', '', [('b', {})])
+    ('add', '', [('d', 2)])
+    ('add', 'b', [('c', 1)])
+  p = patch(d, a) = {'a': 1, 'b': {'c': 1}, 'd': 2}
+  p == b: True
+  s = swap(d) = [('remove', '', [('b', {'c': 1})]), ('remove', '', [('d', 2)]), ('remove', 'b', [('c', 1)])]
+  revert: error KeyError: 'b'
+== removals keep order
+  a = {'a': 1, 'b': 2, 'c': 3}
+  b = {'b': 2}
+  d = diff(a, b):
+    ('remove', '', [('a', 1), ('c', 3)])
+  p = patch(d, a) = {'b': 2}
+  p == b: True
+  s = swap(d) = [('add', '', [('a', 1), ('c', 3)])]
+  r = revert(d, b) = {'b': 2, 'a': 1, 'c': 3}
+  r == a: True
+== additions keep order
+  a = {'b': 2}
+  b = {'c': 3, 'b': 2, 'a': 1}
+  d = diff(a, b):
+    ('add', '', [('c', 3), ('a', 1)])
+  p = patch(d, a) = {'b': 2, 'c': 3, 'a': 1}
+  p == b: True
+  s = swap(d) = [('remove', '', [('a', 1), ('c', 3)])]
+  r = revert(d, b) = {'b': 2}
+  r == a: True
+== deep mix
+  a = {'svc': {'ports': [80, 443], 'env': {'A': '1'}, 'on': True}}
+  b = {'svc': {'ports': [8080], 'env': {'A': '1', 'B': '2'}, 'on': False}}
+  d = diff(a, b):
+    ('change', ['svc', 'ports', 0], (80, 8080))
+    ('remove', 'svc.ports', [(1, 443)])
+    ('add', 'svc.env', [('B', '2')])
+    ('change', 'svc.on', (True, False))
+  p = patch(d, a) = {'svc': {'ports': [8080], 'env': {'A': '1', 'B': '2'}, 'on': False}}
+  p == b: True
+  s = swap(d) = [('change', ['svc', 'ports', 0], (8080, 80)), ('add', 'svc.ports', [(1, 443)]), ('remove', 'svc.env', [('B', '2')]), ('change', 'svc.on', (False, True))]
+  r = revert(d, b) = {'svc': {'ports': [80, 443], 'env': {'A': '1'}, 'on': True}}
+  r == a: True
+== empty to empty
+  a = {}
+  b = {}
+  d = diff(a, b):
+  p = patch(d, a) = {}
+  p == b: True
+  s = swap(d) = []
+  r = revert(d, b) = {}
+  r == a: True
+== unicode
+  a = {'name': 'café'}
+  b = {'name': 'café ☃', 'emoji': '😀'}
+  d = diff(a, b):
+    ('change', 'name', ('café', 'café ☃'))
+    ('add', '', [('emoji', '😀')])
+  p = patch(d, a) = {'name': 'café ☃', 'emoji': '😀'}
+  p == b: True
+  s = swap(d) = [('change', 'name', ('café ☃', 'café')), ('remove', '', [('emoji', '😀')])]
+  r = revert(d, b) = {'name': 'café'}
+  r == a: True
+== quotes in strings
+  a = {'q': "it's"}
+  b = {'q': 'say "hi"\n'}
+  d = diff(a, b):
+    ('change', 'q', ("it's", 'say "hi"\n'))
+  p = patch(d, a) = {'q': 'say "hi"\n'}
+  p == b: True
+  s = swap(d) = [('change', 'q', ('say "hi"\n', "it's"))]
+  r = revert(d, b) = {'q': "it's"}
+  r == a: True
+== patch a list insert past the end
+  x = {'servers': ['a', 'b']}
+  d = [['add', 'servers', [[5, 'c'], [0, 'z']]]]
+  p = patch(d, x) = {'servers': ['z', 'a', 'b', 'c']}
+== patch a negative insert
+  x = {'l': [1, 2, 3]}
+  d = [['add', 'l', [[-1, 9], [-10, 0]]]]
+  p = patch(d, x) = {'l': [0, 1, 2, 9, 3]}
+== patch a dotted path through a list
+  x = {'items': [{'qty': 1}, {'qty': 2}]}
+  d = [['change', 'items.0.qty', [1, 5]], ['change', 'items.-1.qty', [2, 7]]]
+  p = patch(d, x) = {'items': [{'qty': 5}, {'qty': 7}]}
+== patch a list item by text index
+  x = {'tags': ['a', 'b', 'c']}
+  d = [['change', 'tags.01', ['b', 'B']], ['change', 'tags.-1', ['c', 'C']], ['change', 'tags. 0', ['a', 'A']]]
+  p = patch(d, x) = {'tags': ['A', 'B', 'C']}
+== patch a change on a missing key adds it
+  x = {'a': 1}
+  d = [['change', 'b', [None, 2]], ['change', 'c.d', [0, 1]]]
+  patch: error KeyError: 'c'
+== patch ignores the old value
+  x = {'a': 1}
+  d = [['change', 'a', [99, 2]]]
+  p = patch(d, x) = {'a': 2}
+== patch a remove of a missing key
+  x = {'a': 1}
+  d = [['remove', '', [['a', 1], ['b', 2]]]]
+  patch: error KeyError: 'b'
+== patch an add under a missing key
+  x = {'a': 1}
+  d = [['add', 'b.c', [['d', 1]]]]
+  patch: error KeyError: 'b'
+== patch a remove past a list's end
+  x = {'l': [1]}
+  d = [['remove', 'l', [[3, 1]]]]
+  patch: error IndexError: list assignment index out of range
+== patch a change past a list's end
+  x = {'l': [1]}
+  d = [['change', 'l.4', [1, 2]]]
+  patch: error IndexError: list assignment index out of range
+== patch a list index that is not a number
+  x = {'l': [{'a': 1}]}
+  d = [['change', 'l.first.a', [1, 2]]]
+  patch: error ValueError: invalid literal for int() with base 10: 'first'
+== patch an unknown action
+  x = {'a': 1}
+  d = [['move', 'a', ['b']]]
+  patch: error KeyError: 'move'
+== patch a short entry
+  x = {'a': 1}
+  d = [['change', 'a']]
+  patch: error ValueError: not enough values to unpack (expected 3, got 2)
+== patch a long entry
+  x = {'a': 1}
+  d = [['change', 'a', [1, 2], 'extra']]
+  patch: error ValueError: too many values to unpack (expected 3)
+== patch a change without two values
+  x = {'a': 1}
+  d = [['change', 'a', [1, 2, 3]]]
+  patch: error ValueError: too many values to unpack (expected 2)
+== patch into a string
+  x = {'s': 'abc'}
+  d = [['add', 's', [['k', 1]]]]
+  patch: error TypeError: 'str' object does not support item assignment
+== patch into a number
+  x = {'n': 5}
+  d = [['change', 'n.k', [1, 2]]]
+  patch: error TypeError: 'int' object does not support item assignment
+== patch at the root
+  x = {'a': 1}
+  d = [['add', '', [['b', 2]]], ['remove', '', [['a', 1]]], ['add', [], [['c', 3]]]]
+  p = patch(d, x) = {'b': 2, 'c': 3}
+== patch with a path list
+  x = {'a.b': {'c': [1, 2]}}
+  d = [['change', ['a.b', 'c', 1], [2, 3]], ['add', ['a.b', 'c'], [[0, 0]]]]
+  p = patch(d, x) = {'a.b': {'c': [0, 1, 3]}}
+== patch keeps the original
+  x = {'a': [1]}
+  d = [['add', 'a', [[1, 2]]]]
+  p = patch(d, x) = {'a': [1, 2]}
+  x = {'a': [1]}
+== patch the same diff twice
+  a = {'l': [1]}
+  b = {'l': [1, 2]}
+  d = diff(a, b):
+    ('add', 'l', [(1, 2)])
+  p = patch(d, a) = {'l': [1, 2]}
+  q = patch(d, p) = {'l': [1, 2, 2]}
+== swap reverses additions
+  d = [['add', 'a.b.c', [['a', 'b'], ['c', 'd']]], ['change', 'x', ['old', 'new']], ['remove', '', [['z', 1]]]]
+  s = swap(d) = [('remove', 'a.b.c', [['c', 'd'], ['a', 'b']]), ('change', 'x', ('new', 'old')), ('add', '', [['z', 1]])]
+  t = swap(s) = [('add', 'a.b.c', [['c', 'd'], ['a', 'b']]), ('change', 'x', ('old', 'new')), ('remove', '', [['z', 1]])]
+== revert a list removal
+  a = [1, 2, 3]
+  b = [1]
+  d = diff(a, b):
+    ('remove', '', [(2, 3), (1, 2)])
+  r = revert(d, b) = [1, 2, 3]
+  r == a: True
+== revert in the wrong order
+  a = {'l': [1, 2, 3]}
+  b = {'l': [9]}
+  d = diff(a, b, expand=True):
+    ('change', ['l', 0], (1, 9))
+    ('remove', 'l', [(2, 3)])
+    ('remove', 'l', [(1, 2)])
+  r = revert(d, b) = {'l': [1, 2, 3]}
+  r == a: True
+== revert onto something else
+  a = {'a': 1}
+  b = {'a': 2, 'b': 3}
+  c = {'x': 0}
+  d = diff(a, b):
+    ('change', 'a', (1, 2))
+    ('add', '', [('b', 3)])
+  revert: error KeyError: 'b'
+== dot_lookup "a.b" in {"a": {"b": "hello"}}
+  x = {'a': {'b': 'hello'}}
+  k = 'a.b'
+  dot_lookup(x, k) = 'hello'
+== dot_lookup "a.b" parent in {"a": {"b": "hello"}}
+  x = {'a': {'b': 'hello'}}
+  k = 'a.b'
+  dot_lookup(x, k, parent=True) = {'b': 'hello'}
+== dot_lookup "" in {"a": {"b": "hello"}}
+  x = {'a': {'b': 'hello'}}
+  k = ''
+  dot_lookup(x, k) = {'a': {'b': 'hello'}}
+== dot_lookup [] in {"a": {"b": "hello"}}
+  x = {'a': {'b': 'hello'}}
+  k = []
+  dot_lookup(x, k) = {'a': {'b': 'hello'}}
+== dot_lookup null in {"a": {"b": "hello"}}
+  x = {'a': {'b': 'hello'}}
+  k = None
+  dot_lookup(x, k) = {'a': {'b': 'hello'}}
+== dot_lookup "a.1.b" in {"a": [{"b": 1}, {"b": 2}]}
+  x = {'a': [{'b': 1}, {'b': 2}]}
+  k = 'a.1.b'
+  dot_lookup(x, k) = 2
+== dot_lookup ["a", "-1"] in {"a": [{"b": 1}, {"b": 2}]}
+  x = {'a': [{'b': 1}, {'b': 2}]}
+  k = ['a', '-1']
+  dot_lookup(x, k) = {'b': 2}
+== dot_lookup ["a", 1] in {"a": "xyz"}
+  x = {'a': 'xyz'}
+  k = ['a', 1]
+  dot_lookup(x, k) = 'y'
+== dot_lookup "a.1" in {"a": "xyz"}
+  x = {'a': 'xyz'}
+  k = 'a.1'
+  lookup: error TypeError: string indices must be integers, not 'str'
+== dot_lookup "a.c" in {"a": {"b": 1}}
+  x = {'a': {'b': 1}}
+  k = 'a.c'
+  lookup: error KeyError: 'c'
+== dot_lookup "a.3" in {"a": [1]}
+  x = {'a': [1]}
+  k = 'a.3'
+  lookup: error IndexError: list index out of range
+== dot_lookup "a.x" in {"a": [1]}
+  x = {'a': [1]}
+  k = 'a.x'
+  lookup: error ValueError: invalid literal for int() with base 10: 'x'
+== dot_lookup "a.b" in {"a": 5}
+  x = {'a': 5}
+  k = 'a.b'
+  lookup: error TypeError: 'int' object is not subscriptable
+== dot_lookup "a.b" in {"a": null}
+  x = {'a': None}
+  k = 'a.b'
+  lookup: error TypeError: 'NoneType' object is not subscriptable
+== dot_lookup "a.b" in {"a": true}
+  x = {'a': True}
+  k = 'a.b'
+  lookup: error TypeError: 'bool' object is not subscriptable
+== dot_lookup ["a", 1] in {"a": {"1": "str key"}}
+  x = {'a': {'1': 'str key'}}
+  k = ['a', 1]
+  lookup: error KeyError: 1
+== dot_lookup 5 in {"a": 1}
+  x = {'a': 1}
+  k = 5
+  lookup: error TypeError: lookup must be string or list
+== dot_lookup "a" parent in {"a": 1}
+  x = {'a': 1}
+  k = 'a'
+  dot_lookup(x, k, parent=True) = {'a': 1}
+== dot_lookup "a.b" in {"a.b": 1}
+  x = {'a.b': 1}
+  k = 'a.b'
+  lookup: error KeyError: 'a'
+== dot_lookup ["a.b"] in {"a.b": 1}
+  x = {'a.b': 1}
+  k = ['a.b']
+  dot_lookup(x, k) = 1
+== merge without conflicts
+  lca = {}
+  first = {'foo': 'bar'}
+  second = {'bar': 'foo'}
+  first patches: [('add', '', [('foo', 'bar')])]
+  second patches: [('add', '', [('bar', 'foo')])]
+  unified: [('add', '', [('bar', 'foo')]), ('add', '', [('foo', 'bar')])]
+  merged: {'bar': 'foo', 'foo': 'bar'}
+== merge the same change
+  lca = {'a': 1}
+  first = {'a': 2}
+  second = {'a': 2}
+  first patches: [('change', 'a', (1, 2))]
+  second patches: [('change', 'a', (1, 2))]
+  conflict: ('change', 'a', (1, 2)) vs ('change', 'a', (1, 2)), took f
+  unified: [('change', 'a', (1, 2)), ('change', 'a', (1, 2))]
+  merged: {'a': 2}
+== merge a conflict, picked
+  lca = {'a': 1}
+  first = {'a': 2}
+  second = {'a': 3}
+  unresolved: 1
+    ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3))
+  picks: s
+  first patches: [('change', 'a', (1, 2))]
+  second patches: [('change', 'a', (1, 3))]
+  conflict: ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3)), took s
+  unified: [('change', 'a', (1, 3))]
+  merged: {'a': 3}
+== merge a conflict, unpicked
+  lca = {'a': 1}
+  first = {'a': 2}
+  second = {'a': 3}
+  unresolved: 1
+    ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3))
+  merge stops
+== merge a conflict, too many picks
+  lca = {'a': 1}
+  first = {'a': 2}
+  second = {'a': 3}
+  unresolved: 1
+    ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3))
+  picks: s f
+  merge: error UnresolvedConflictsException: The unresolved conflicts are stored in the *content* attribute of this exception or in the *unresolved_conflicts* attribute of the dictdiffer.merge.Merger object.
+== merge a conflict, an action takes first
+  lca = {'a': 1, 'b': 1}
+  first = {'a': 2, 'b': 2}
+  second = {'a': 3, 'b': 3}
+  first patches: [('change', 'a', (1, 2)), ('change', 'b', (1, 2))]
+  second patches: [('change', 'a', (1, 3)), ('change', 'b', (1, 3))]
+  conflict: ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3)), took f
+  conflict: ('change', 'b', (1, 2)) vs ('change', 'b', (1, 3)), took s
+  unified: [('change', 'a', (1, 2)), ('change', 'b', (1, 3))]
+  merged: {'a': 2, 'b': 3}
+== merge a cascading action
+  lca = {'a': {'b': {'c': 1}}}
+  first = {'a': {'b': {'c': 2}}}
+  second = {'a': {'b': {'c': 3}}}
+  first patches: [('change', 'a.b.c', (1, 2))]
+  second patches: [('change', 'a.b.c', (1, 3))]
+  conflict: ('change', 'a.b.c', (1, 2)) vs ('change', 'a.b.c', (1, 3)), took s
+  unified: [('change', 'a.b.c', (1, 3))]
+  merged: {'a': {'b': {'c': 3}}}
+== merge an action that declines
+  lca = {'a': {'b': 1}}
+  first = {'a': {'b': 2}}
+  second = {'a': {'b': 3}}
+  first patches: [('change', 'a.b', (1, 2))]
+  second patches: [('change', 'a.b', (1, 3))]
+  conflict: ('change', 'a.b', (1, 2)) vs ('change', 'a.b', (1, 3)), took f
+  unified: [('change', 'a.b', (1, 2))]
+  merged: {'a': {'b': 2}}
+== merge an action that stops
+  lca = {'a': {'b': 1}}
+  first = {'a': {'b': 2}}
+  second = {'a': {'b': 3}}
+  unresolved: 1
+    ('change', 'a.b', (1, 2)) vs ('change', 'a.b', (1, 3))
+  picks: f
+  first patches: [('change', 'a.b', (1, 2))]
+  second patches: [('change', 'a.b', (1, 3))]
+  conflict: ('change', 'a.b', (1, 2)) vs ('change', 'a.b', (1, 3)), took f
+  unified: [('change', 'a.b', (1, 2))]
+  merged: {'a': {'b': 2}}
+== merge remove against a change below
+  lca = {'a': {'b': 1}, 'z': 0}
+  first = {'z': 0}
+  second = {'a': {'b': 2}, 'z': 0}
+  unresolved: 1
+    ('remove', '', [('a', {'b': 1})]) vs ('change', 'a.b', (1, 2))
+  picks: f
+  first patches: [('remove', '', [('a', {'b': 1})])]
+  second patches: [('change', 'a.b', (1, 2))]
+  conflict: ('remove', '', [('a', {'b': 1})]) vs ('change', 'a.b', (1, 2)), took f
+  unified: [('remove', '', [('a', {'b': 1})])]
+  merged: {'z': 0}
+== merge a change below against a remove
+  lca = {'a': {'b': 1}}
+  first = {'a': {'b': 2}}
+  second = {}
+  unresolved: 1
+    ('change', 'a.b', (1, 2)) vs ('remove', '', [('a', {'b': 1})])
+  picks: s
+  first patches: [('change', 'a.b', (1, 2))]
+  second patches: [('remove', '', [('a', {'b': 1})])]
+  conflict: ('change', 'a.b', (1, 2)) vs ('remove', '', [('a', {'b': 1})]), took s
+  unified: [('remove', '', [('a', {'b': 1})])]
+  merged: {}
+== merge list additions
+  lca = {'l': [1]}
+  first = {'l': [1, 2]}
+  second = {'l': [1, 3]}
+  unresolved: 1
+    ('add', 'l', [(1, 2)]) vs ('add', 'l', [(1, 3)])
+  picks: f
+  first patches: [('add', 'l', [(1, 2)])]
+  second patches: [('add', 'l', [(1, 3)])]
+  conflict: ('add', 'l', [(1, 2)]) vs ('add', 'l', [(1, 3)]), took f
+  unified: [('add', 'l', [(1, 2)])]
+  merged: {'l': [1, 2]}
+== merge list additions on both sides of a key
+  lca = {'l': [1], 'm': [1]}
+  first = {'l': [1, 2]}
+  second = {'m': [1, 3], 'l': [1]}
+  unresolved: 1
+    ('remove', '', [('m', [1])]) vs ('add', 'm', [(1, 3)])
+  merge stops
+== merge wildcard actions
+  lca = {'users': {'ann': {'role': 'dev'}, 'bob': {'role': 'dev'}}, 'theme': 'light'}
+  first = {'users': {'ann': {'role': 'lead'}, 'bob': {'role': 'ops'}}, 'theme': 'dark'}
+  second = {'users': {'ann': {'role': 'admin'}, 'bob': {'role': 'qa'}}, 'theme': 'blue'}
+  first patches: [('change', 'users.ann.role', ('dev', 'lead')), ('change', 'users.bob.role', ('dev', 'ops')), ('change', 'theme', ('light', 'dark'))]
+  second patches: [('change', 'users.ann.role', ('dev', 'admin')), ('change', 'users.bob.role', ('dev', 'qa')), ('change', 'theme', ('light', 'blue'))]
+  conflict: ('change', 'users.ann.role', ('dev', 'lead')) vs ('change', 'users.ann.role', ('dev', 'admin')), took s
+  conflict: ('change', 'users.bob.role', ('dev', 'ops')) vs ('change', 'users.bob.role', ('dev', 'qa')), took s
+  conflict: ('change', 'theme', ('light', 'dark')) vs ('change', 'theme', ('light', 'blue')), took f
+  unified: [('change', 'theme', ('light', 'dark')), ('change', 'users.ann.role', ('dev', 'admin')), ('change', 'users.bob.role', ('dev', 'qa'))]
+  merged: {'users': {'ann': {'role': 'admin'}, 'bob': {'role': 'qa'}}, 'theme': 'dark'}
+== merge plus wildcard
+  lca = {'p': {'x': 1, 'y': {'z': 1}}}
+  first = {'p': {'x': 2, 'y': {'z': 2}}}
+  second = {'p': {'x': 3, 'y': {'z': 3}}}
+  first patches: [('change', 'p.x', (1, 2)), ('change', 'p.y.z', (1, 2))]
+  second patches: [('change', 'p.x', (1, 3)), ('change', 'p.y.z', (1, 3))]
+  conflict: ('change', 'p.x', (1, 2)) vs ('change', 'p.x', (1, 3)), took f
+  conflict: ('change', 'p.y.z', (1, 2)) vs ('change', 'p.y.z', (1, 3)), took f
+  unified: [('change', 'p.x', (1, 2)), ('change', 'p.y.z', (1, 2))]
+  merged: {'p': {'x': 2, 'y': {'z': 2}}}
+== merge star at the root
+  lca = {'a': 1, 'b': {'c': 1}}
+  first = {'a': 2, 'b': {'c': 2}}
+  second = {'a': 3, 'b': {'c': 3}}
+  first patches: [('change', 'a', (1, 2)), ('change', 'b.c', (1, 2))]
+  second patches: [('change', 'a', (1, 3)), ('change', 'b.c', (1, 3))]
+  conflict: ('change', 'a', (1, 2)) vs ('change', 'a', (1, 3)), took s
+  conflict: ('change', 'b.c', (1, 2)) vs ('change', 'b.c', (1, 3)), took s
+  unified: [('change', 'a', (1, 3)), ('change', 'b.c', (1, 3))]
+  merged: {'a': 3, 'b': {'c': 3}}
+== merge with path limits
+  lca = {'cfg': {'a': 1, 'b': 1}}
+  first = {'cfg': {'a': 2, 'b': 1}}
+  second = {'cfg': {'a': 1, 'b': 2}}
+  unresolved: 1
+    ('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 2, 'b': 1})) vs ('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 1, 'b': 2}))
+  picks: s
+  first patches: [('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 2, 'b': 1}))]
+  second patches: [('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 1, 'b': 2}))]
+  conflict: ('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 2, 'b': 1})) vs ('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 1, 'b': 2})), took s
+  unified: [('change', ['cfg'], ({'a': 1, 'b': 1}, {'a': 1, 'b': 2}))]
+  merged: {'cfg': {'a': 1, 'b': 2}}
+== merge additions of the same key
+  lca = {}
+  first = {'k': {'a': 1}}
+  second = {'k': {'a': 1}}
+  first patches: [('add', '', [('k', {})]), ('add', 'k', [('a', 1)])]
+  second patches: [('add', '', [('k', {})]), ('add', 'k', [('a', 1)])]
+  conflict: ('add', '', [('k', {})]) vs ('add', '', [('k', {})]), took f
+  conflict: ('add', 'k', [('a', 1)]) vs ('add', 'k', [('a', 1)]), took f
+  unified: [('add', '', [('k', {})]), ('add', '', [('k', {})]), ('add', 'k', [('a', 1)]), ('add', 'k', [('a', 1)])]
+  merged: {'k': {'a': 1}}
+== merge additions that differ
+  lca = {}
+  first = {'k': 1}
+  second = {'k': 2}
+  unresolved: 1
+    ('add', '', [('k', 1)]) vs ('add', '', [('k', 2)])
+  picks: f
+  first patches: [('add', '', [('k', 1)])]
+  second patches: [('add', '', [('k', 2)])]
+  conflict: ('add', '', [('k', 1)]) vs ('add', '', [('k', 2)]), took f
+  unified: [('add', '', [('k', 1)])]
+  merged: {'k': 1}
+== merge sets
+  lca = {'s': {1}}
+  first = {'s': {1, 2}}
+  second = {'s': {1, 3}}
+  unresolved: 1
+    ('add', 's', [(0, {2})]) vs ('add', 's', [(0, {3})])
+  picks: f
+  first patches: [('add', 's', [(0, {2})])]
+  second patches: [('add', 's', [(0, {3})])]
+  conflict: ('add', 's', [(0, {2})]) vs ('add', 's', [(0, {3})]), took f
+  unified: [('add', 's', [(0, {2})])]
+  merged: {'s': {1, 2}}
+== merge many
+  lca = {'a': 1, 'b': 2, 'c': [1, 2], 'd': {'e': 1}}
+  first = {'a': 10, 'b': 2, 'c': [1, 2, 3], 'd': {'e': 1, 'f': 2}}
+  second = {'a': 1, 'b': 20, 'c': [1], 'd': {}}
+  first patches: [('change', 'a', (1, 10)), ('add', 'c', [(2, 3)]), ('add', 'd', [('f', 2)])]
+  second patches: [('change', 'b', (2, 20)), ('remove', 'c', [(1, 2)]), ('remove', 'd', [('e', 1)])]
+  unified: [('change', 'a', (1, 10)), ('change', 'b', (2, 20)), ('remove', 'c', [(1, 2)]), ('add', 'c', [(2, 3)]), ('remove', 'd', [('e', 1)]), ('add', 'd', [('f', 2)])]
+  merged: {'a': 10, 'b': 20, 'c': [1, 3], 'd': {'f': 2}}
+== merge identical removals
+  lca = {'a': 1, 'b': 2}
+  first = {'b': 2}
+  second = {'b': 2}
+  first patches: [('remove', '', [('a', 1)])]
+  second patches: [('remove', '', [('a', 1)])]
+  conflict: ('remove', '', [('a', 1)]) vs ('remove', '', [('a', 1)]), took f
+  unified: [('remove', '', [('a', 1)]), ('remove', '', [('a', 1)])]
+  merge: error KeyError: 'a'
+== program: drift
+api: 5 differences
+  change /spec/image: 'registry.example/api:1.14.1' -> 'registry.example/api:1.14.2'
+  change /spec/replicas: 2 -> 3
+  change /spec/env/LOG_LEVEL: 'debug' -> 'info'
+  remove /spec/env/HOTFIX: '1'
+  change /spec/ports/1/port: 9091 -> 9090
+  after the patch: 0 differences; reverting gives the deployed file back: True
+cron: not in the desired state, would be deleted
+search: not deployed
+web: 4 differences
+  change /spec/image: 'registry.example/web:4.9.3' -> 'registry.example/web:5.0.0'
+  remove /spec/env/LEGACY_COOKIES: True
+  add /spec/ports/1: {'name': 'https', 'port': 443}
+  add /spec/autoscale: {'min': 2, 'max': 6, 'target_cpu': 0.7}
+  after the patch: 0 differences; reverting gives the deployed file back: True
+worker: in sync
+-- data/out/drift/api.json (666 bytes)
+{
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "team": "platform",
+      "tier": "backend"
+    },
+    "updated_at": "2026-10-19T23:41:07Z",
+    "deployed_by": "oncall"
+  },
+  "spec": {
+    "image": "registry.example/api:1.14.2",
+    "replicas": 3,
+    "resources": {
+      "cpu": 0.5000000000000001,
+      "memory": "512Mi"
+    },
+    "env": {
+      "LOG_LEVEL": "info",
+      "DB_POOL": 20,
+      "FEATURE_X": false
+    },
+    "ports": [
+      {
+        "name": "http",
+        "port": 8080
+      },
+      {
+        "name": "metrics",
+        "port": 9090
+      }
+    ],
+    "healthcheck": {
+      "path": "/healthz",
+      "interval": 10
+    }
+  }
+}
+-- data/out/drift/web.json (609 bytes)
+{
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "team": "frontend",
+      "tier": "edge"
+    },
+    "updated_at": "2026-09-30T17:02:44Z",
+    "deployed_by": "ann"
+  },
+  "spec": {
+    "image": "registry.example/web:5.0.0",
+    "replicas": 2,
+    "resources": {
+      "cpu": 0.25,
+      "memory": "256Mi"
+    },
+    "env": {
+      "API_URL": "http://api:8080"
+    },
+    "ports": [
+      {
+        "name": "http",
+        "port": 80
+      },
+      {
+        "name": "https",
+        "port": 443
+      }
+    ],
+    "autoscale": {
+      "min": 2,
+      "max": 6,
+      "target_cpu": 0.7
+    }
+  }
+}
+== program: settings merge
+2 conflicts need a pick:
+  ours ('change', 'editor.size', (13, 14))
+  theirs ('change', 'editor.size', (13, 15))
+  picked theirs
+  ours ('add', 'plugins', [(2, 'format')])
+  theirs ('add', 'plugins', [(2, 'test')])
+  picked ours
+conflict at /theme: took ours
+conflict at /editor/size: took theirs
+conflict at /plugins/2: took ours
+conflict at /users/ann/role: took theirs
+13 patches applied:
+  change /editor/size: 13 -> 15
+  change /editor/tabs: 4 -> 2
+  change /editor/wrap: False -> True
+  add /plugins/2: 'format'
+  remove /telemetry: True
+  change /theme: 'light' -> 'dark'
+  change /theme: 'light' -> 'dark'
+  change /users/ann/role: 'dev' -> 'admin'
+  remove /users/bob: {'role': 'dev', 'email': 'bob@example.org'}
+  add /users/cid: {}
+  add /users/cid/email: 'cid@example.org'
+  add /users/cid/role: 'dev'
+  change /version: 3 -> 4
+{
+  "version": 4,
+  "theme": "dark",
+  "editor": {
+    "font": "Fira Code",
+    "size": 15,
+    "tabs": 2,
+    "wrap": true
+  },
+  "plugins": [
+    "git",
+    "lint",
+    "format"
+  ],
+  "users": {
+    "ann": {
+      "role": "admin",
+      "email": "ann@example.org"
+    },
+    "cid": {
+      "email": "cid@example.org",
+      "role": "dev"
+    }
+  }
+}
+== program: schema history
+{"from": "v1", "to": "v2", "patches": [["add", "columns", [[2, {"name": "created", "type": "timestamp"}]]], ["add", "indexes", [[0, {"cols": ["created"], "unique": false}]]]]}
+{"from": "v2", "to": "v3", "patches": [["change", ["columns", 1, "type"], ["decimal", "numeric(12,2)"]], ["change", "owner", ["sales", "finance"]], ["add", "", [["comment", "customer orders"]]]]}
+{"from": "v3", "to": "v4", "patches": [["change", ["columns", 0, "name"], ["id", "order_id"]], ["change", ["columns", 0, "type"], ["int", "bigint"]], ["change", ["indexes", 0, "unique"], [false, true]], ["remove", "", [["comment", "customer orders"]]]]}
+{"from": "v4", "to": "v5", "patches": [["remove", "columns", [[2, {"name": "created", "type": "timestamp"}]]], ["remove", "indexes", [[0, {"cols": ["created"], "unique": true}]]], ["add", "", [["partition", {"by": "range", "cols": ["created"]}]]]]}
+v1 -> v2: 2 patches, matches v2: True
+v2 -> v3: 3 patches, matches v3: True
+v3 -> v4: 4 patches, matches v4: True
+v4 -> v5: 3 patches, matches v5: True
+undo v5 -> v4: matches v4: True
+undo v4 -> v3: matches v3: True
+undo v3 -> v2: matches v2: True
+undo v2 -> v1: matches v1: True
+back at v1: {"columns": [{"name": "id", "type": "int"}, {"name": "total", "type": "decimal"}], "indexes": [], "name": "orders", "owner": "sales"}
