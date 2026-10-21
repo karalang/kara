@@ -286,6 +286,30 @@ fn fallible_twins_report_out_of_memory() {
     );
 }
 
+/// B-2026-10-21-78: the IR handed to the JIT has had scalar replacement, so
+/// one long function reaches instruction selection without a stack slot per
+/// temporary (which made `__mir-llvm-run` grow faster than quadratically).
+#[test]
+fn jit_ir_has_its_stack_slots_replaced() {
+    let mut src = String::from("fn main() {\n    let mut t = String.new();\n");
+    for i in 0..300 {
+        src += &format!("    t.push_str(\"x{i}\");\n");
+    }
+    src += "    println(t.len());\n}\n";
+    let lowered = karac::mir::lower::build_source(&src).expect("build");
+    let allocas = |ir: &str| ir.matches(" = alloca ").count();
+    let plain = karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
+    let jit =
+        karac::codegen::mir::compile_mir_ir_for_jit(&lowered.program, &lowered.tys).expect("IR");
+    assert!(allocas(&plain) > 300, "{}", allocas(&plain));
+    assert!(
+        allocas(&jit) * 10 < allocas(&plain),
+        "{} vs {}",
+        allocas(&jit),
+        allocas(&plain)
+    );
+}
+
 /// B-2026-10-21-67: `cbrt` and the inverse hyperbolic functions lower on
 /// compiled MIR, at either float width, as the interpreter computes them.
 #[test]

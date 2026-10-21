@@ -148,7 +148,7 @@ pub fn parse_args(args: &[String]) -> Command {
             crate::mir::interp::set_source_name(path);
             let ir = crate::mir::lower::build_source(&src).and_then(|l| {
                 crate::mir::lower::compiled_check(&l)?;
-                crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
+                crate::codegen::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
                     .map_err(|e| format!("llvm: {e}"))
             });
             let ir = ir.unwrap_or_else(|e| {

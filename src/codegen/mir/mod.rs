@@ -121,6 +121,27 @@ pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
     Ok(module.print_to_string().to_string())
 }
 
+/// [`compile_mir_ir`] with scalar replacement run first, for the JIT, which
+/// otherwise generates code from the unoptimised IR: instruction selection
+/// on one long function's thousands of stack slots grows faster than
+/// quadratically (B-2026-10-21-78), and `sroa` removes them in linear time.
+/// `KARAC_MIR_JIT_SROA=0` leaves the IR as built.
+pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> {
+    let llcx = Context::create();
+    let module = compile_mir(&llcx, "main", program, tys)?;
+    if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
+        let tm = super::create_target_machine()?;
+        module
+            .run_passes(
+                "function(sroa)",
+                &tm,
+                inkwell::passes::PassBuilderOptions::create(),
+            )
+            .map_err(|e| format!("sroa: {}", e.to_string()))?;
+    }
+    Ok(module.print_to_string().to_string())
+}
+
 /// The backend's state: the LLVM handles, the program being compiled, and
 /// the body being lowered.
 pub struct Cx<'ctx, 'p> {
