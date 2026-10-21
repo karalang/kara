@@ -1,0 +1,584 @@
+== write parcels
+  closed
+  len 6 shapeType 5 bbox [1000.0, 1000.0, 4600.0, 1600.0] zbox None mbox None
+  shp 1588 bytes adler32 0777f572
+  shx 148 bytes adler32 e8cb0b68
+  dbf 635 bytes adler32 658167b3
+== write roads
+  closed
+  len 4 shapeType 23 bbox [1000.0, 900.0, 4600.0, 1700.0] zbox None mbox [-1e+39, 1600.0]
+  shp 680 bytes adler32 b01762f9
+  shx 132 bytes adler32 210c0e07
+  dbf 245 bytes adler32 43951f96
+== write wells
+  closed
+  len 5 shapeType 11 bbox [1100.0, 1100.0, 3500.0, 3500.0] zbox [70.5, 101.0] mbox [-1e+39, 12.5]
+  shp 320 bytes adler32 67cf2dc9
+  shx 140 bytes adler32 a4800e68
+  dbf 276 bytes adler32 e39f1fe6
+== write sensors
+  line 12 record ! ValueError: "could not convert string to float: '12 extra'"
+  closed
+  len 4 shapeType 8 bbox [1050.0, 1050.0, 5100.0, 5100.0] zbox None mbox None
+  shp 436 bytes adler32 74d6381b
+  shx 132 bytes adler32 914d0a05
+  dbf 126 bytes adler32 1e6d0a6d
+== write patches
+  closed
+  len 1 shapeType 31 bbox [990.0, 990.0, 1020.0, 1020.0] zbox [0.0, 9.0] mbox [-1e+39, -1e+39]
+  shp 488 bytes adler32 cddf5f0c
+  shx 108 bytes adler32 6ad110da
+  dbf 76 bytes adler32 93160502
+== write geo
+  closed
+  len 3 shapeType 5 bbox [0.0, 0.0, 50.0, 10.0] zbox None mbox None
+  shp 552 bytes adler32 a7b1102b
+  shx 124 bytes adler32 d1230433
+  dbf 98 bytes adler32 4c670b9a
+== write linegeo
+  line 7 geo ! Exception: "The shape's type (1) must match the type of the shapefile (3)."
+  closed
+  len 3 shapeType 3 bbox [0.0, 0.0, 10.0, 5.0] zbox None mbox None
+  shp 336 bytes adler32 22a608c4
+  shx 116 bytes adler32 aa8d0318
+  dbf 98 bytes adler32 49820bb7
+== write mistakes
+  line 9 record ! ValueError: "could not convert string to float: 'abc'"
+  line 10 record ! ShapefileException: 'Date values must be either a datetime.date object, a list, a YYYYMMDD string, or a missing value.'
+  line 11 record ! TypeError: "int() argument must be a string, a bytes-like object or a real number, not 'datetime.date'"
+  line 14 multipoint ! Exception: "The shape's type (8) must match the type of the shapefile (1)."
+  line 17 close ! ShapefileException: 'When saving both the dbf and shp file, the number of records (6) must correspond with the number of shapes (4)'
+  closed
+  len 6 shapeType 1 bbox [1.0, 1.0, 8.0, 8.0] zbox None mbox None
+  shp 216 bytes adler32 583408a8
+  shx 140 bytes adler32 d9f80632
+  dbf 242 bytes adler32 51c619a7
+== write owners
+  closed
+  len 2 shapeType 1 bbox [0.0, 0.0, 1.0, 1.0] zbox None mbox None
+  shp 156 bytes adler32 aa850641
+  shx 116 bytes adler32 ff03043c
+  dbf 129 bytes adler32 6c69122f
+== write unbalanced
+  closed
+  len 4 shapeType 1 bbox [1.0, 2.0, 3.0, 4.0] zbox None mbox None
+  shp 180 bytes adler32 5b6505aa
+  shx 132 bytes adler32 4e090493
+  dbf 81 bytes adler32 82f4044f
+== write nofields
+  line 2 close ! ShapefileException: 'Shapefile dbf file must contain at least one field.'
+  len 0 shapeType 3 bbox None zbox None mbox None
+  shp 100 bytes adler32 643f0152
+  shx 100 bytes adler32 643f0152
+  dbf 0 bytes adler32 00000001
+== write empty
+  line 3 poly ! Exception: "Cannot create bbox. Expected a valid shape with at least one point. Got a shape of type '5' and 0 points."
+  closed
+  len 1 shapeType 5 bbox None zbox None mbox None
+  shp 112 bytes adler32 76d20160
+  shx 100 bytes adler32 65eb0158
+  dbf 69 bytes adler32 59180263
+== info out/parcels
+  shapefile Reader
+      6 shapes (type 'POLYGON')
+      6 records (8 fields)
+  type POLYGON (5) bbox [1000.0, 1000.0, 4600.0, 1600.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 6 numRecords 6 numShapes 6
+  fields [('DeletionFlag', 'C', 1, 0), ['PARCEL_ID', 'C', 8, 0], ['OWNER', 'C', 24, 0], ['AREA_HA', 'F', 10, 3], ['VALUE', 'N', 9, 0], ['SURVEYED', 'D', 8, 0], ['ACTIVE', 'L', 1, 0], ['ZONE', 'C', 2, 0]]
+== shapes out/parcels
+  Shape #0: POLYGON
+    bbox [1000.0, 1000.0, 1250.0, 1200.0]
+    parts [0]
+    points [(1000.0, 1000.0), (1000.0, 1200.0), (1250.0, 1200.0), (1250.0, 1000.0), (1000.0, 1000.0)]
+  Shape #1: POLYGON
+    bbox [1300.0, 1000.0, 1600.25, 1250.5]
+    parts [0, 5]
+    points [(1300.0, 1000.0), (1300.0, 1250.5), (1600.25, 1250.5), (1600.25, 1000.0), (1300.0, 1000.0), (1350.0, 1050.0), (1450.0, 1050.0), (1450.0, 1150.0), (1350.0, 1150.0), (1350.0, 1050.0)]
+  Shape #2: POLYGON
+    bbox [2000.0, 1000.0, 2900.0, 1600.0]
+    parts [0, 5, 10, 15, 20, 25]
+    points [(2000.0, 1000.0), (2000.0, 1600.0), (2600.0, 1600.0), (2600.0, 1000.0), (2000.0, 1000.0), (2100.0, 1100.0), (2500.0, 1100.0), (2500.0, 1500.0), (2100.0, 1500.0), (2100.0, 1100.0), (2200.0, 1200.0), (2200.0, 1400.0), (2400.0, 1400.0), (2400.0, 1200.0), (2200.0, 1200.0), (2250.0, 1250.0), (2350.0, 1250.0), (2350.0, 1350.0), (2250.0, 1350.0), (2250.0, 1250.0), (2700.0, 1000.0), (2700.0, 1300.0), (2900.0, 1300.0), (2900.0, 1000.0), (2700.0, 1000.0), (2750.0, 1050.0), (2850.0, 1050.0), (2850.0, 1150.0), (2750.0, 1150.0), (2750.0, 1050.0)]
+  Shape #3: POLYGON
+    bbox [3000.0, 1000.0, 3100.0, 1100.0]
+    parts [0]
+    points [(3000.0, 1000.0), (3100.0, 1000.0), (3100.0, 1100.0), (3000.0, 1100.0), (3000.0, 1000.0)]
+  Shape #4: POLYGON
+    bbox [3200.0, 1000.1, 3300.3, 1100.2]
+    parts [0]
+    points [(3200.0, 1000.1), (3200.0, 1100.2), (3300.3, 1100.2), (3300.3, 1000.1), (3200.0, 1000.1)]
+  Shape #5: POLYGON
+    bbox [4000.0, 1000.0, 4600.0, 1100.0]
+    parts [0, 5, 10]
+    points [(4000.0, 1000.0), (4000.0, 1100.0), (4100.0, 1100.0), (4100.0, 1000.0), (4000.0, 1000.0), (4200.0, 1000.0), (4200.0, 1100.0), (4300.0, 1100.0), (4300.0, 1000.0), (4200.0, 1000.0), (4500.0, 1000.0), (4600.0, 1000.0), (4600.0, 1100.0), (4500.0, 1100.0), (4500.0, 1000.0)]
+== records out/parcels
+  Record #0: ['AV-0001', 'Hollins Farm Ltd', 5.0, 420000, datetime.date(2026, 3, 1), True, 'AG']
+  Record #1: ['AV-0002', 'Zoë Lefèvre', 6.502, 125000, '20260230', False, 'R1']
+  Record #2: ['AV-0003', 'Marsh Island Trust', 28.0, 999000000, 'notadate', None, 'AG']
+  Record #3: ['AV-0004', 'Allotment Society', None, None, None, None, 'CM']
+  Record #4: ['AV-0005', "St Wilfrid's Glebe", None, -875, '2026-3-1', None, 'CH']
+  Record #5: ['AV-0006', 'Crown Estate', 2.0, None, None, False, 'AG']
+== geojson out/parcels
+  FeatureCollection bbox [1000.0, 1000.0, 4600.0, 1600.0]
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0001", "OWNER": "Hollins Farm Ltd", "AREA_HA": 5.0, "VALUE": 420000, "SURVEYED": "20260301", "ACTIVE": true, "ZONE": "AG"}, "geometry": {"type": "Polygon", "coordinates": [[[1000.0, 1000.0], [1000.0, 1200.0], [1250.0, 1200.0], [1250.0, 1000.0], [1000.0, 1000.0]]]}}
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0002", "OWNER": "Zo\u00eb Lef\u00e8vre", "AREA_HA": 6.502, "VALUE": 125000, "SURVEYED": "20260230", "ACTIVE": false, "ZONE": "R1"}, "geometry": {"type": "Polygon", "coordinates": [[[1300.0, 1000.0], [1300.0, 1250.5], [1600.25, 1250.5], [1600.25, 1000.0], [1300.0, 1000.0]], [[1350.0, 1050.0], [1450.0, 1050.0], [1450.0, 1150.0], [1350.0, 1150.0], [1350.0, 1050.0]]]}}
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0003", "OWNER": "Marsh Island Trust", "AREA_HA": 28.0, "VALUE": 999000000, "SURVEYED": "notadate", "ACTIVE": null, "ZONE": "AG"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[2000.0, 1000.0], [2000.0, 1600.0], [2600.0, 1600.0], [2600.0, 1000.0], [2000.0, 1000.0]], [[2100.0, 1100.0], [2500.0, 1100.0], [2500.0, 1500.0], [2100.0, 1500.0], [2100.0, 1100.0]]], [[[2200.0, 1200.0], [2200.0, 1400.0], [2400.0, 1400.0], [2400.0, 1200.0], [2200.0, 1200.0]], [[2250.0, 1250.0], [2350.0, 1250.0], [2350.0, 1350.0], [2250.0, 1350.0], [2250.0, 1250.0]]], [[[2700.0, 1000.0], [2700.0, 1300.0], [2900.0, 1300.0], [2900.0, 1000.0], [2700.0, 1000.0]], [[2750.0, 1050.0], [2850.0, 1050.0], [2850.0, 1150.0], [2750.0, 1150.0], [2750.0, 1050.0]]]]}}
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0004", "OWNER": "Allotment Society", "AREA_HA": null, "VALUE": null, "SURVEYED": null, "ACTIVE": null, "ZONE": "CM"}, "geometry": {"type": "Polygon", "coordinates": [[[3000.0, 1000.0], [3100.0, 1000.0], [3100.0, 1100.0], [3000.0, 1100.0], [3000.0, 1000.0]]]}}
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0005", "OWNER": "St Wilfrid's Glebe", "AREA_HA": null, "VALUE": -875, "SURVEYED": "2026-3-1", "ACTIVE": null, "ZONE": "CH"}, "geometry": {"type": "Polygon", "coordinates": [[[3200.0, 1000.1], [3200.0, 1100.2], [3300.3, 1100.2], [3300.3, 1000.1], [3200.0, 1000.1]]]}}
+  {"type": "Feature", "properties": {"PARCEL_ID": "AV-0006", "OWNER": "Crown Estate", "AREA_HA": 2.0, "VALUE": null, "SURVEYED": null, "ACTIVE": false, "ZONE": "AG"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[4000.0, 1000.0], [4000.0, 1100.0], [4100.0, 1100.0], [4100.0, 1000.0], [4000.0, 1000.0]]], [[[4200.0, 1000.0], [4200.0, 1100.0], [4300.0, 1100.0], [4300.0, 1000.0], [4200.0, 1000.0]]], [[[4500.0, 1000.0], [4600.0, 1000.0], [4600.0, 1100.0], [4500.0, 1100.0], [4500.0, 1000.0]]]]}}
+== info out/roads
+  shapefile Reader
+      4 shapes (type 'POLYLINEM')
+      4 records (4 fields)
+  type POLYLINEM (23) bbox [1000.0, 900.0, 4600.0, 1700.0] zbox [0.0, 0.0] mbox [None, 1600.0]
+  len 4 numRecords 4 numShapes 4
+  fields [('DeletionFlag', 'C', 1, 0), ['ROAD', 'C', 6, 0], ['NAME', 'C', 20, 0], ['LANES', 'N', 2, 0]]
+== shapes out/roads
+  Shape #0: POLYLINEM
+    bbox [1000.0, 990.0, 2600.0, 990.0]
+    parts [0]
+    points [(1000.0, 990.0), (1600.0, 990.0), (2600.0, 990.0)]
+    m [0.0, 600.0, 1600.0]
+  Shape #1: POLYLINEM
+    bbox [1625.0, 900.0, 2000.0, 1700.0]
+    parts [0, 2]
+    points [(1625.0, 900.0), (1625.0, 1300.0), (1625.0, 1300.0), (2000.0, 1700.0)]
+    m [0.0, 400.0, 400.0, None]
+  Shape #2: POLYLINEM
+    bbox [3000.0, 950.0, 3400.0, 950.0]
+    parts [0]
+    points [(3000.0, 950.0), (3400.0, 950.0)]
+    m [None, None]
+  Shape #3: POLYLINEM
+    bbox [4000.0, 950.0, 4600.0, 950.0]
+    parts [0]
+    points [(4000.0, 950.0), (4300.0, 950.0), (4600.0, 950.0)]
+    m [7.0, None, 12.25]
+== records out/roads
+  Record #0: ['B1290', 'Vale Road', 2]
+  Record #1: ['C31', 'Mill Lane', 1]
+  Record #2: ['U12', 'Church Walk', 12]
+  Record #3: ['U13', 'Glebe Track', None]
+== geojson out/roads
+  FeatureCollection bbox [1000.0, 900.0, 4600.0, 1700.0]
+  {"type": "Feature", "properties": {"ROAD": "B1290", "NAME": "Vale Road", "LANES": 2}, "geometry": {"type": "LineString", "coordinates": [[1000.0, 990.0], [1600.0, 990.0], [2600.0, 990.0]]}}
+  {"type": "Feature", "properties": {"ROAD": "C31", "NAME": "Mill Lane", "LANES": 1}, "geometry": {"type": "MultiLineString", "coordinates": [[[1625.0, 900.0], [1625.0, 1300.0]], [[1625.0, 1300.0], [2000.0, 1700.0]]]}}
+  {"type": "Feature", "properties": {"ROAD": "U12", "NAME": "Church Walk", "LANES": 12}, "geometry": {"type": "LineString", "coordinates": [[3000.0, 950.0], [3400.0, 950.0]]}}
+  {"type": "Feature", "properties": {"ROAD": "U13", "NAME": "Glebe Track", "LANES": null}, "geometry": {"type": "LineString", "coordinates": [[4000.0, 950.0], [4300.0, 950.0], [4600.0, 950.0]]}}
+== info out/wells
+  shapefile Reader
+      5 shapes (type 'POINTZ')
+      5 records (5 fields)
+  type POINTZ (11) bbox [1100.0, 1100.0, 3500.0, 3500.0] zbox [70.5, 101.0] mbox [None, 12.5]
+  len 5 numRecords 5 numShapes 5
+  fields [('DeletionFlag', 'C', 1, 0), ['WELL', 'C', 6, 0], ['DEPTH_M', 'F', 7, 2], ['LICENSED', 'L', 1, 0], ['DRILLED', 'D', 8, 0]]
+== shapes out/wells
+  Shape #0: POINTZ
+    parts []
+    points [[1100.0, 1100.0]]
+    z [88.5]
+    m [None]
+  Shape #1: POINTZ
+    parts []
+    points [[1500.0, 1200.0]]
+    z [90.25]
+    m [None]
+  Shape #2: POINTZ
+    parts []
+    points [[2300.0, 1300.0]]
+    z [72.0]
+    m [12.5]
+  Shape #3: POINTZ
+    parts []
+    points [[2220.0, 1220.0]]
+    z [70.5]
+    m [None]
+  Shape #4: POINTZ
+    parts []
+    points [[3500.0, 3500.0]]
+    z [101.0]
+    m [None]
+== records out/wells
+  Record #0: ['BH-01', 42.12, True, datetime.date(1998, 6, 14)]
+  Record #1: ['BH-02', 18.0, True, datetime.date(2004, 11, 2)]
+  Record #2: ['BH-03', 30.5, None, '20101301']
+  Record #3: ['BH-04', 10.0, False, None]
+  Record #4: ['BH-05', -3.5, None, None]
+== geojson out/wells
+  FeatureCollection bbox [1100.0, 1100.0, 3500.0, 3500.0]
+  {"type": "Feature", "properties": {"WELL": "BH-01", "DEPTH_M": 42.12, "LICENSED": true, "DRILLED": "19980614"}, "geometry": {"type": "Point", "coordinates": [1100.0, 1100.0]}}
+  {"type": "Feature", "properties": {"WELL": "BH-02", "DEPTH_M": 18.0, "LICENSED": true, "DRILLED": "20041102"}, "geometry": {"type": "Point", "coordinates": [1500.0, 1200.0]}}
+  {"type": "Feature", "properties": {"WELL": "BH-03", "DEPTH_M": 30.5, "LICENSED": null, "DRILLED": "20101301"}, "geometry": {"type": "Point", "coordinates": [2300.0, 1300.0]}}
+  {"type": "Feature", "properties": {"WELL": "BH-04", "DEPTH_M": 10.0, "LICENSED": false, "DRILLED": null}, "geometry": {"type": "Point", "coordinates": [2220.0, 1220.0]}}
+  {"type": "Feature", "properties": {"WELL": "BH-05", "DEPTH_M": -3.5, "LICENSED": null, "DRILLED": null}, "geometry": {"type": "Point", "coordinates": [3500.0, 3500.0]}}
+== info out/sensors
+  shapefile Reader
+      4 shapes (type 'MULTIPOINT')
+      4 records (3 fields)
+  type MULTIPOINT (8) bbox [1050.0, 1050.0, 5100.0, 5100.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 4 numRecords 4 numShapes 4
+  fields [('DeletionFlag', 'C', 1, 0), ['CLUSTER', 'C', 4, 0], ['PROBES', 'N', 3, 0]]
+== shapes out/sensors
+  Shape #0: MULTIPOINT
+    bbox [1050.0, 1050.0, 1200.0, 1150.0]
+    parts []
+    points [(1050.0, 1050.0), (1100.0, 1150.0), (1200.0, 1050.0)]
+  Shape #1: MULTIPOINT
+    bbox [2050.0, 1050.0, 2450.0, 1450.0]
+    parts []
+    points [(2050.0, 1050.0), (2450.0, 1450.0), (2230.0, 1230.0)]
+  Shape #2: MULTIPOINT
+    bbox [2800.0, 1100.0, 2800.0, 1100.0]
+    parts []
+    points [(2800.0, 1100.0)]
+  Shape #3: MULTIPOINT
+    bbox [5000.0, 5000.0, 5100.0, 5100.0]
+    parts []
+    points [(5000.0, 5000.0), (5100.0, 5100.0)]
+== geojson out/sensors
+! error: 'unpack requires a buffer of 8 bytes'
+== info out/patches
+  shapefile Reader
+      1 shapes (type 'MULTIPATCH')
+      1 records (2 fields)
+  type MULTIPATCH (31) bbox [990.0, 990.0, 1020.0, 1020.0] zbox [0.0, 0.0] mbox [None, None]
+  len 1 numRecords 1 numShapes 1
+  fields [('DeletionFlag', 'C', 1, 0), ['PART', 'C', 10, 0]]
+== shapes out/patches
+  Shape #0: MULTIPATCH
+    bbox [990.0, 990.0, 1020.0, 1020.0]
+    parts [0, 4]
+    partTypes [0, 2]
+    points [(1000.0, 1000.0), (1010.0, 1000.0), (1000.0, 1010.0), (1010.0, 1010.0), (990.0, 990.0), (990.0, 1020.0), (1020.0, 1020.0), (1020.0, 990.0), (990.0, 990.0)]
+    z [5.0, 5.0, 9.0, 9.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    m [None, None, None, None, None, None, None, None, None]
+== geojson out/patches
+! Exception: 'Shape type "MULTIPATCH" cannot be represented as GeoJSON.'
+== info out/geo
+  shapefile Reader
+      3 shapes (type 'POLYGON')
+      3 records (2 fields)
+  type POLYGON (5) bbox [0.0, 0.0, 50.0, 10.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 3 numRecords 3 numShapes 3
+  fields [('DeletionFlag', 'C', 1, 0), ['SRC', 'C', 10, 0]]
+== shapes out/geo
+  Shape #0: NULL
+    parts []
+    points []
+  Shape #1: POLYGON
+    bbox [0.0, 0.0, 10.0, 10.0]
+    parts [0, 5]
+    points [(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0), (2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0)]
+  Shape #2: POLYGON
+    bbox [20.0, 0.0, 50.0, 10.0]
+    parts [0, 5]
+    points [(20.0, 0.0), (20.0, 10.0), (30.0, 10.0), (30.0, 0.0), (20.0, 0.0), (40.0, 0.0), (40.0, 10.0), (50.0, 10.0), (50.0, 0.0), (40.0, 0.0)]
+== geojson out/geo
+  FeatureCollection bbox [0.0, 0.0, 50.0, 10.0]
+  {"type": "Feature", "properties": {"SRC": "empty"}, "geometry": null}
+  {"type": "Feature", "properties": {"SRC": "ccw-poly"}, "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.0, 10.0], [10.0, 10.0], [10.0, 0.0], [0.0, 0.0]], [[2.0, 2.0], [4.0, 2.0], [4.0, 4.0], [2.0, 4.0], [2.0, 2.0]]]}}
+  {"type": "Feature", "properties": {"SRC": "multi"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[20.0, 0.0], [20.0, 10.0], [30.0, 10.0], [30.0, 0.0], [20.0, 0.0]]], [[[40.0, 0.0], [40.0, 10.0], [50.0, 10.0], [50.0, 0.0], [40.0, 0.0]]]]}}
+== info out/linegeo
+  shapefile Reader
+      3 shapes (type 'POLYLINE')
+      3 records (2 fields)
+  type POLYLINE (3) bbox [0.0, 0.0, 10.0, 5.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 3 numRecords 3 numShapes 3
+  fields [('DeletionFlag', 'C', 1, 0), ['SRC', 'C', 10, 0]]
+== shapes out/linegeo
+  Shape #0: POLYLINE
+    bbox [0.0, 0.0, 10.0, 5.0]
+    parts [0]
+    points [(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)]
+  Shape #1: POLYLINE
+    bbox [0.0, 0.0, 3.0, 3.0]
+    parts [0, 2]
+    points [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]
+! error: 'unpack requires a buffer of 4 bytes'
+== geojson out/linegeo
+! error: 'unpack requires a buffer of 4 bytes'
+== info out/mistakes
+  shapefile Reader
+      6 shapes (type 'POINT')
+      6 records (5 fields)
+  type POINT (1) bbox [1.0, 1.0, 8.0, 8.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 6 numRecords 6 numShapes 6
+  fields [('DeletionFlag', 'C', 1, 0), ['ID', 'N', 4, 0], ['NAME', 'C', 8, 0], ['WHEN', 'D', 8, 0], ['OK', 'L', 1, 0]]
+== shapes out/mistakes
+  Shape #0: POINT
+    parts []
+    points [[1.0, 1.0]]
+  Shape #1: POINT
+    parts []
+    points [[5.0, 5.0]]
+! KeyError: '67108864'
+== records out/mistakes
+! UnicodeDecodeError: "'utf-8' codec can't decode byte 0xc3 in position 1: unexpected end of data"
+== info out/owners
+! UnicodeDecodeError: "'utf-8' codec can't decode byte 0xc3 in position 9: unexpected end of data"
+== info out/owners replace
+  shapefile Reader
+      2 shapes (type 'POINT')
+      2 records (3 fields)
+  type POINT (1) bbox [0.0, 0.0, 1.0, 1.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 2 numRecords 2 numShapes 2
+  fields [('DeletionFlag', 'C', 1, 0), ['Propriét�', 'C', 3, 0], ['NOTE', 'C', 12, 0]]
+== records out/owners replace
+  Record #0: ['Zo�', 'ok']
+  Record #1: ['Ana', 'façade nord']
+== info out/unbalanced
+  shapefile Reader
+      4 shapes (type 'POINT')
+      4 records (2 fields)
+  type POINT (1) bbox [1.0, 2.0, 3.0, 4.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 4 numRecords 4 numShapes 4
+  fields [('DeletionFlag', 'C', 1, 0), ['ID', 'N', 3, 0]]
+== records out/unbalanced
+  Record #0: [None]
+  Record #1: [9]
+  Record #2: [10]
+  Record #3: [11]
+== info out/empty
+  shapefile Reader
+      1 shapes (type 'POLYGON')
+      1 records (2 fields)
+  type POLYGON (5) bbox [0.0, 0.0, 0.0, 0.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 1 numRecords 1 numShapes 1
+  fields [('DeletionFlag', 'C', 1, 0), ['ID', 'N', 3, 0]]
+== shapes out/empty
+! error: 'unpack requires a buffer of 32 bytes'
+== records out/empty
+  Record #0: [1]
+== fields out/parcels OWNER,VALUE
+  Record #0: ['Hollins Farm Ltd', 420000]
+  Record #1: ['Zoë Lefèvre', 125000]
+  Record #2: ['Marsh Island Trust', 999000000]
+  Record #3: ['Allotment Society', None]
+  Record #4: ["St Wilfrid's Glebe", -875]
+  Record #5: ['Crown Estate', None]
+== fields out/parcels ACTIVE,ACTIVE
+  Record #0: [True]
+  Record #1: [False]
+  Record #2: [None]
+  Record #3: [None]
+  Record #4: [None]
+  Record #5: [False]
+== fields out/parcels DeletionFlag
+! ValueError: '"DeletionFlag" is not a valid field name'
+== fields out/parcels HEIGHT
+! ValueError: '"HEIGHT" is not a valid field name'
+== get out/parcels 1 PARCEL_ID .OWNER 0 6 -1 .HEIGHT HEIGHT
+  Record #1: ['AV-0002', 'Zoë Lefèvre', 6.502, 125000, '20260230', False, 'R1']
+  PARCEL_ID = 'AV-0002'
+  .OWNER = 'Zoë Lefèvre'
+  0 = 'AV-0002'
+  6 = 'R1'
+  -1 = 'R1'
+  .HEIGHT ! AttributeError: 'HEIGHT is not a field name'
+  HEIGHT ! IndexError: '"HEIGHT" is not a field name and not an int'
+== get out/parcels -2 ZONE
+  Record #4: ['AV-0005', "St Wilfrid's Glebe", None, -875, '2026-3-1', None, 'CH']
+  ZONE = 'CH'
+== get out/parcels 6 ZONE
+! IndexError: 'Shape or Record index out of range.'
+== get out/parcels -7 ZONE
+! IndexError: 'Shape or Record index out of range.'
+== get out/parcels -6 ZONE
+! IndexError: 'Shape or Record index out of range.'
+== shape out/parcels -1
+  Shape #5: POLYGON
+    bbox [4000.0, 1000.0, 4600.0, 1100.0]
+    parts [0, 5, 10]
+    points [(4000.0, 1000.0), (4000.0, 1100.0), (4100.0, 1100.0), (4100.0, 1000.0), (4000.0, 1000.0), (4200.0, 1000.0), (4200.0, 1100.0), (4300.0, 1100.0), (4300.0, 1000.0), (4200.0, 1000.0), (4500.0, 1000.0), (4600.0, 1000.0), (4600.0, 1100.0), (4500.0, 1100.0), (4500.0, 1000.0)]
+== shape out/parcels 6
+! IndexError: 'Shape or Record index out of range.'
+== shape out/wells 2
+  Shape #2: POINTZ
+    parts []
+    points [[2300.0, 1300.0]]
+    z [72.0]
+    m [12.5]
+== bbox out/parcels 1900,900,2650,1650
+  shapes [2]
+  Shape #2: POLYGON Record #2: ['AV-0003', 'Marsh Island Trust', 28.0, 999000000, 'notadate', None, 'AG']
+== bbox out/wells 0,0,10,10
+  shapes [0, 1, 2, 3, 4]
+  Shape #0: POINTZ Record #0: ['BH-01', 42.12, True, datetime.date(1998, 6, 14)]
+  Shape #1: POINTZ Record #1: ['BH-02', 18.0, True, datetime.date(2004, 11, 2)]
+  Shape #2: POINTZ Record #2: ['BH-03', 30.5, None, '20101301']
+  Shape #3: POINTZ Record #3: ['BH-04', 10.0, False, None]
+  Shape #4: POINTZ Record #4: ['BH-05', -3.5, None, None]
+== bbox out/roads 2900,800,3500,1000
+  shapes [2]
+  Shape #2: POLYLINEM Record #2: ['U12', 'Church Walk', 12]
+== info legacy
+  shapefile Reader
+      5 shapes (type 'POLYGON')
+      5 records (6 fields)
+  type POLYGON (5) bbox [0.0, 0.0, 65.0, 10.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 5 numRecords 5 numShapes None
+  fields [('DeletionFlag', 'C', 1, 0), ['PLOTNUMBER', 'C', 6, 0], ['AREA', 'N', 8, 0], ['RATE', 'F', 7, 2], ['LET', 'D', 8, 0], ['FREEHOLD', 'L', 1, 0]]
+== shapes legacy
+  Shape #0: POLYGON
+    bbox [0.0, 0.0, 10.0, 10.0]
+    parts [0]
+    points [(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0)]
+  Shape #1: POLYGON
+    bbox [20.0, 0.0, 30.0, 10.0]
+    parts [0]
+    points [(20.0, 0.0), (20.0, 10.0), (30.0, 10.0), (30.0, 0.0), (20.0, 0.0)]
+  Shape #2: POLYGON
+    bbox [40.0, 0.0, 50.0, 10.0]
+    parts [0, 5]
+    points [(40.0, 0.0), (40.0, 10.0), (50.0, 10.0), (50.0, 0.0), (40.0, 0.0), (42.0, 2.0), (48.0, 2.0), (48.0, 8.0), (42.0, 8.0), (42.0, 2.0)]
+  Shape #3: NULL
+    parts []
+    points []
+  Shape #4: POLYGON
+    bbox [60.0, 0.0, 65.0, 5.0]
+    parts [0]
+    points [(60.0, 0.0), (60.0, 5.0), (65.0, 5.0), (65.0, 0.0), (60.0, 0.0)]
+== records legacy
+  Record #0: ['P-001', 100, 12.5, datetime.date(1987, 4, 1), True]
+  Record #1: ['P-002', 1000, None, None, False]
+  Record #3: ['P-004', 12, None, None, None]
+  Record #4: ['P-005', None, 1000.0, '2026-3-1', True]
+== iter legacy
+  Shape #0: POLYGON | Record #0: ['P-001', 100, 12.5, datetime.date(1987, 4, 1), True]
+  Shape #1: POLYGON | Record #1: ['P-002', 1000, None, None, False]
+  Shape #2: POLYGON | Record #3: ['P-004', 12, None, None, None]
+  Shape #3: NULL | Record #4: ['P-005', None, 1000.0, '2026-3-1', True]
+== get legacy 0 PLOTNUMBER .FREEHOLD
+  Record #0: ['P-001', 100, 12.5, datetime.date(1987, 4, 1), True]
+  PLOTNUMBER = 'P-001'
+  .FREEHOLD = True
+== get legacy 2 AREA
+  None
+  AREA ! TypeError: "'NoneType' object is not subscriptable"
+== get legacy 4 RATE AREA .LET
+  Record #4: ['P-005', None, 1000.0, '2026-3-1', True]
+  RATE = 1000.0
+  AREA = None
+  .LET = '2026-3-1'
+== shape legacy 3
+  Shape #3: NULL
+    parts []
+    points []
+== geojson legacy
+  FeatureCollection bbox [0.0, 0.0, 65.0, 10.0]
+  {"type": "Feature", "properties": {"PLOTNUMBER": "P-001", "AREA": 100, "RATE": 12.5, "LET": "19870401", "FREEHOLD": true}, "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.0, 10.0], [10.0, 10.0], [10.0, 0.0], [0.0, 0.0]]]}}
+  {"type": "Feature", "properties": {"PLOTNUMBER": "P-002", "AREA": 1000, "RATE": null, "LET": null, "FREEHOLD": false}, "geometry": {"type": "Polygon", "coordinates": [[[20.0, 0.0], [20.0, 10.0], [30.0, 10.0], [30.0, 0.0], [20.0, 0.0]]]}}
+  {"type": "Feature", "properties": {"PLOTNUMBER": "P-004", "AREA": 12, "RATE": null, "LET": null, "FREEHOLD": null}, "geometry": {"type": "Polygon", "coordinates": [[[40.0, 0.0], [40.0, 10.0], [50.0, 10.0], [50.0, 0.0], [40.0, 0.0]], [[42.0, 2.0], [48.0, 2.0], [48.0, 8.0], [42.0, 8.0], [42.0, 2.0]]]}}
+  {"type": "Feature", "properties": {"PLOTNUMBER": "P-005", "AREA": null, "RATE": 1000.0, "LET": "2026-3-1", "FREEHOLD": true}, "geometry": null}
+== info truncated
+  shapefile Reader
+      3 shapes (type 'POLYGON')
+  type POLYGON (5) bbox [0.0, 0.0, 14.0, 4.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 3 numRecords None numShapes 3
+== shapes truncated
+  Shape #0: POLYGON
+    bbox [0.0, 0.0, 4.0, 4.0]
+    parts [0]
+    points [(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]
+  Shape #1: POLYGON
+    bbox [5.0, 0.0, 9.0, 4.0]
+    parts [0]
+    points [(5.0, 0.0), (5.0, 4.0), (9.0, 4.0), (9.0, 0.0), (5.0, 0.0)]
+! error: 'unpack requires a buffer of 80 bytes'
+== shape truncated 1
+  Shape #1: POLYGON
+    bbox [5.0, 0.0, 9.0, 4.0]
+    parts [0]
+    points [(5.0, 0.0), (5.0, 4.0), (9.0, 4.0), (9.0, 0.0), (5.0, 0.0)]
+== shape truncated 2
+! error: 'unpack requires a buffer of 80 bytes'
+== info measures
+  shapefile Reader
+      2 shapes (type 'POLYLINEM')
+  type POLYLINEM (23) bbox [0.0, 0.0, 6.0, 8.0] zbox [0.0, 0.0] mbox [0.0, 10.0]
+  len 2 numRecords None numShapes 2
+== shapes measures
+  Shape #0: POLYLINEM
+    bbox [0.0, 0.0, 6.0, 8.0]
+    parts [0]
+    points [(0.0, 0.0), (3.0, 4.0), (6.0, 8.0)]
+    m [None, None, None]
+  Shape #1: POLYLINEM
+    bbox [0.0, 0.0, 6.0, 8.0]
+    parts [0]
+    points [(0.0, 0.0), (3.0, 4.0), (6.0, 8.0)]
+    m [0.0, 5.0, None]
+== info gauges
+  shapefile Reader
+      3 shapes (type 'POINTM')
+  type POINTM (21) bbox [1.0, 2.0, 5.0, 6.0] zbox [0.0, 0.0] mbox [None, 7.5]
+  len 3 numRecords None numShapes 3
+== shapes gauges
+  Shape #0: POINTM
+    parts []
+    points [[1.0, 2.0]]
+    m [None]
+  Shape #1: POINTM
+    parts []
+    points [[3.0, 4.0]]
+    m [7.5]
+  Shape #2: POINTM
+    parts []
+    points [[5.0, 6.0]]
+    m [None]
+== shape gauges 2
+  Shape #2: POINTM
+    parts []
+    points [[5.0, 6.0]]
+    m [None]
+== info noterm
+! ShapefileException: 'Shapefile dbf header lacks expected terminator. (likely corrupt?)'
+== info short
+  shapefile Reader
+      3 records (2 fields)
+  len 3 numRecords 3 numShapes None
+  fields [('DeletionFlag', 'C', 1, 0), ['ID', 'N', 3, 0]]
+== records short
+! error: 'unpack requires a buffer of 4 bytes'
+== info nowhere
+! ShapefileException: 'Unable to open data/nowhere.dbf or data/nowhere.shp.'
+== extract out/parcels out/clip 1900,900,4150,1650
+  extracted 4 of 6
+== info out/clip
+  shapefile Reader
+      4 shapes (type 'POLYGON')
+      4 records (8 fields)
+  type POLYGON (5) bbox [2000.0, 1000.0, 4600.0, 1600.0] zbox [0.0, 0.0] mbox [0.0, 0.0]
+  len 4 numRecords 4 numShapes 4
+  fields [('DeletionFlag', 'C', 1, 0), ['PARCEL_ID', 'C', 8, 0], ['OWNER', 'C', 24, 0], ['AREA_HA', 'F', 10, 3], ['VALUE', 'N', 9, 0], ['SURVEYED', 'D', 8, 0], ['ACTIVE', 'L', 1, 0], ['ZONE', 'C', 2, 0]]
+== records out/clip
+  Record #0: ['AV-0003', 'Marsh Island Trust', 28.0, 999000000, 'notadate', None, 'AG']
+  Record #1: ['AV-0004', 'Allotment Society', None, None, None, None, 'CM']
+  Record #2: ['AV-0005', "St Wilfrid's Glebe", None, -875, '2026-3-1', None, 'CH']
+  Record #3: ['AV-0006', 'Crown Estate', 2.0, None, None, False, 'AG']
+== report
+parcels
+  AV-0001  Hollins Farm Ltd         polys=1 holes=0 area=50000.0 m2 (5.000 ha) ok
+  AV-0002  Zoë Lefèvre              polys=1 holes=1 area=65212.6 m2 (6.521 ha) ok
+  AV-0003  Marsh Island Trust       polys=3 holes=3 area=280000.0 m2 (28.000 ha) ok
+  AV-0004  Allotment Society        polys=1 holes=0 area=10000.0 m2 (1.000 ha) no stated area
+  AV-0005  St Wilfrid's Glebe       polys=1 holes=0 area=10040.0 m2 (1.004 ha) no stated area
+  AV-0006  Crown Estate             polys=3 holes=0 area=30000.0 m2 (3.000 ha) MISMATCH stated 2.000
+  total 445252.7 m2
+wells
+  BH-01 at (1100.0, 1100.0) z=88.5 depth=42.12 drilled=datetime.date(1998, 6, 14) in AV-0001
+  BH-02 at (1500.0, 1200.0) z=90.25 depth=18.0 drilled=datetime.date(2004, 11, 2) in AV-0002
+  BH-03 at (2300.0, 1300.0) z=72.0 depth=30.5 drilled='20101301' in no parcel
+  BH-04 at (2220.0, 1220.0) z=70.5 depth=10.0 drilled=None in AV-0003
+  BH-05 at (3500.0, 3500.0) z=101.0 depth=-3.5 drilled=None in no parcel
+roads
+  B1290  Vale Road            lanes=2 parts=1 length=1600.00 m=0.0..1600.0
+  C31    Mill Lane            lanes=1 parts=2 length=948.29 m=0.0..400.0
+  U12    Church Walk          lanes=12 parts=1 length=400.00 m=-
+  U13    Glebe Track          lanes=None parts=1 length=600.00 m=7.0..12.25
+sensors
+  AV-0001 clusters [0] probes inside 3
+  AV-0002 clusters [] probes inside 0
+  AV-0003 clusters [1, 2] probes inside 2
+  AV-0004 clusters [] probes inside 0
+  AV-0005 clusters [] probes inside 0
+  AV-0006 clusters [] probes inside 0

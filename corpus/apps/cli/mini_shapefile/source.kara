@@ -1,0 +1,4135 @@
+// mini_shapefile: pyshp 2.3.1, the pure-Python ESRI shapefile library,
+// as the GIS desk of a small county for one afternoon:
+// - the Writer: point, multipoint, line, polygon (closing open rings),
+//   their M and Z kinds and multipatch, null shapes, shapes from GeoJSON
+//   dicts with pyshp's rewinding, field() and record() by position and
+//   by keyword, every dbf value conversion (N, F, D, L, C) with its
+//   errors, autoBalance and balance(), and close() with its checks;
+//   the files are written as pyshp writes them, record header first, so
+//   a shape or record that fails half way stays in the file;
+// - the Reader: load() with upper-case extensions and no .shx, the three
+//   headers, len() and str(), shape(i) through the index or by scanning,
+//   iterShapes over the index count or to the end of the file, the m
+//   blocks a file may leave out, records with deleted rows, field
+//   subsets, every value parse, the _Record accessors and errors, the
+//   misaligned zip of shapes and records, bbox filters, and the
+//   struct.errors and UnicodeDecodeErrors broken files give;
+// - __geo_interface__: organize_polygon_rings with nested exteriors,
+//   orphaned holes and wrongly wound rings, and json.dumps of it all;
+// - three programs: a clip of the cadastre to a bounding box, and a
+//   county report that checks stated areas, places boreholes and probes
+//   in parcels and measures roads.
+//
+// The inputs are data/jobs.txt and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through pyshp itself (the copy in shapefile.py).
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else {
+        c - b'a' + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    for file in data_files() {
+        let (name, body) = file;
+        let p = f"data/{name}";
+        if let Err(e) = fs.write_bytes(p.clone(), unhex(body)) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_bytes(name: ref String) -> Vec[u8] {
+    fs.read_bytes(f"data/{name}").unwrap_or(Vec.new())
+}
+
+fn read_text(name: ref String) -> String {
+    match decode(read_bytes(name), "utf-8", "strict".to_string()) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+// ------------------------------------------------------------ text
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn str_of(cs: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn slice_chars(cs: ref Vec[char], from: i64, to: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut a = if from < 0 { 0 } else { from };
+    let b = if to > cs.len() { cs.len() } else { to };
+    while a < b {
+        out.push(cs[a]);
+        a += 1;
+    }
+    out
+}
+
+fn substr(s: ref String, from: i64, to: i64) -> String {
+    str_of(slice_chars(chars_of(s), from, to))
+}
+
+fn char_len(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_str(s: ref String, sep: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(sep) {
+        out.push(p.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut s = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            s.push_str(sep);
+        }
+        s.push_str(p);
+        first = false;
+    }
+    s
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_space(c) {
+            if cur.len() > 0 {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn ascii_upper(c: char) -> char {
+    if c >= 'a' and c <= 'z' {
+        char.try_from((c as u32) - 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        char.try_from((c as u32) + 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn upper_str(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(ascii_upper(c));
+    }
+    out
+}
+
+// str.isspace
+fn is_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or n == 32 or (n >= 0x1c and n <= 0x1f) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029
+        or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// \w on ASCII text
+fn is_word(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn hex_digit(c: char) -> i64 {
+    if is_digit(c) {
+        ((c as u32) - 48) as i64
+    } else if c >= 'a' and c <= 'f' {
+        ((c as u32) - 87) as i64
+    } else {
+        ((c as u32) - 55) as i64
+    }
+}
+
+fn hex2(n: i64) -> String {
+    f"{n:02x}"
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let has_sq = s.contains("'");
+    let has_dq = s.contains("\"");
+    let q = if has_sq and not has_dq { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n as i64)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_list(items: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in items.iter() {
+        parts.push(repr_str(s));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn utf8_len(s: ref String) -> i64 {
+    s.len()
+}
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    a.push(1);
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = Vec.new();
+    den.push(1);
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float() and int()
+
+// What float() and int() do first: the white space at the ends is
+// stripped and underscores between digits removed.
+fn number_text(cs: ref Vec[char]) -> Option[Vec[char]] {
+    let mut a = 0;
+    while a < cs.len() and is_space(cs[a]) {
+        a += 1;
+    }
+    let mut b = cs.len();
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut prev = ' ';
+    for i in a..b {
+        let c = cs[i];
+        if (c as u32) >= 128 {
+            return None;
+        }
+        if c == '_' {
+            if not is_digit(prev) {
+                return None;
+            }
+        } else {
+            if prev == '_' and not is_digit(c) {
+                return None;
+            }
+            out.push(c);
+        }
+        prev = c;
+    }
+    if prev == '_' {
+        return None;
+    }
+    Some(out)
+}
+
+fn lower_word(cs: ref Vec[char], from: i64) -> String {
+    let mut s = String.new();
+    for i in from..cs.len() {
+        s.push(ascii_lower(cs[i]));
+    }
+    s
+}
+
+// float() of a str; None where it raises ValueError.
+fn py_float(cs: ref Vec[char]) -> Option[f64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    let w = lower_word(t, i);
+    if w == "inf" or w == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if w == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut seen = false;
+    let mut exp10: i64 = 0;
+    while i < t.len() and is_digit(t[i]) {
+        seen = true;
+        let d = ((t[i] as u32) - 48) as u8;
+        if digits.len() > 0 or d != 0 {
+            digits.push(d);
+        }
+        i += 1;
+    }
+    if i < t.len() and t[i] == '.' {
+        i += 1;
+        while i < t.len() and is_digit(t[i]) {
+            seen = true;
+            let d = ((t[i] as u32) - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            exp10 -= 1;
+            i += 1;
+        }
+    }
+    if not seen {
+        return None;
+    }
+    if i < t.len() and (t[i] == 'e' or t[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < t.len() and (t[i] == '+' or t[i] == '-') {
+            eneg = t[i] == '-';
+            i += 1;
+        }
+        let st = i;
+        let mut e: i64 = 0;
+        while i < t.len() and is_digit(t[i]) {
+            if e < 100000000 {
+                e = e * 10 + ((t[i] as u32) - 48) as i64;
+            }
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+        exp10 += if eneg { -e } else { e };
+    }
+    if i != t.len() {
+        return None;
+    }
+    Some(decimal_to_f64(digits, exp10, neg))
+}
+
+fn py_float_s(s: ref String) -> Option[f64] {
+    py_float(chars_of(s))
+}
+
+// int() of a str; None where it raises ValueError (and, here, where the
+// value would not fit in an i64).
+fn py_int(cs: ref Vec[char]) -> Option[i64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut sig = 0;
+    while i < t.len() {
+        if not is_digit(t[i]) {
+            return None;
+        }
+        n = n * 10 + ((t[i] as u32) - 48) as i64;
+        if n > 0 {
+            sig += 1;
+        }
+        if sig > 17 {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn py_int_s(s: ref String) -> Option[i64] {
+    py_int(chars_of(s))
+}
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class name and str(e).
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn perr(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn err_text(e: ref PyErr) -> String {
+    f"! {e.kind}: {repr_str(e.msg)}"
+}
+
+fn shp_err(msg: own String) -> PyErr {
+    perr("ShapefileException", msg)
+}
+
+fn struct_err(n: i64) -> PyErr {
+    perr("error", f"unpack requires a buffer of {n} bytes")
+}
+
+fn index_err() -> PyErr {
+    perr("IndexError", "list index out of range".to_string())
+}
+
+// ------------------------------------------------------------ bytes
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn encode(s: ref String) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn sub_bytes(b: ref Vec[u8], a: i64, e: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = if a < 0 { 0 } else { a };
+    let end = if e > b.len() { b.len() } else { e };
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn find_bytes(h: ref Vec[u8], n: ref Vec[u8], from: i64) -> i64 {
+    let mut i = from;
+    while i + n.len() <= h.len() {
+        let mut k = 0;
+        while k < n.len() and h[i + k] == n[k] {
+            k += 1;
+        }
+        if k == n.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn has_byte(set: ref Vec[u8], c: u8) -> bool {
+    for x in set.iter() {
+        if *x == c {
+            return true;
+        }
+    }
+    false
+}
+
+// bytes.strip(): ASCII white space.
+fn strip_ascii(b: ref Vec[u8]) -> Vec[u8] {
+    let ws = [b' ', b'\t', b'\n', b'\r', 0x0b as u8, 0x0c as u8];
+    let mut a = 0;
+    let mut e = b.len();
+    while a < e and has_byte(ws, b[a]) {
+        a += 1;
+    }
+    while e > a and has_byte(ws, b[e - 1]) {
+        e -= 1;
+    }
+    sub_bytes(b, a, e)
+}
+
+// The bytes as one char each, which is how int() and float() read them.
+fn latin1(b: ref Vec[u8]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for x in b.iter() {
+        out.push(*x as char);
+    }
+    out
+}
+
+// bytes.decode(encoding, errors) for ascii and utf-8, with strict and
+// replace errors.
+fn decode(b: ref Vec[u8], enc: Str, errors: ref String) -> Result[String, PyErr] {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        if enc == "ascii" {
+            if errors == "replace" {
+                out.push('\u{fffd}');
+                i += 1;
+                continue;
+            }
+            return Err(perr("UnicodeDecodeError", f"'ascii' codec can't decode byte 0x{hex2(c as i64)} in position {i}: ordinal not in range(128)"));
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xbf;
+        let mut cp: u32 = 0;
+        if c >= 0xc2 and c <= 0xdf {
+            need = 1;
+            cp = (c & 0x1f) as u32;
+        } else if c >= 0xe0 and c <= 0xef {
+            need = 2;
+            cp = (c & 0x0f) as u32;
+            if c == 0xe0 {
+                lo = 0xa0;
+            }
+            if c == 0xed {
+                hi = 0x9f;
+            }
+        } else if c >= 0xf0 and c <= 0xf4 {
+            need = 3;
+            cp = (c & 0x07) as u32;
+            if c == 0xf0 {
+                lo = 0x90;
+            }
+            if c == 0xf4 {
+                hi = 0x8f;
+            }
+        }
+        let mut reason = String.new();
+        let mut got = 0;
+        if need == 0 {
+            reason = "invalid start byte".to_string();
+            got = 1;
+        } else {
+            let mut k = 1;
+            while k <= need {
+                if i + k >= b.len() {
+                    reason = "unexpected end of data".to_string();
+                    break;
+                }
+                let x = b[i + k];
+                let (l, h) = if k == 1 { (lo, hi) } else { (0x80 as u8, 0xbf as u8) };
+                if x < l or x > h {
+                    reason = "invalid continuation byte".to_string();
+                    break;
+                }
+                cp = (cp << 6) | ((x & 0x3f) as u32);
+                k += 1;
+            }
+            got = k;
+        }
+        if reason.len() == 0 {
+            out.push(char.try_from(cp).unwrap_or('\u{fffd}'));
+            i += need + 1;
+            continue;
+        }
+        if errors == "replace" {
+            out.push('\u{fffd}');
+            i += got;
+            continue;
+        }
+        let pos = if got == 1 { f"byte 0x{hex2(c as i64)} in position {i}" } else { f"bytes in position {i}-{i + got - 1}" };
+        return Err(perr("UnicodeDecodeError", f"'utf-8' codec can't decode {pos}: {reason}"));
+    }
+    Ok(out)
+}
+
+// str.encode('ascii'), strict.
+fn encode_ascii(s: ref String) -> Result[Vec[u8], PyErr] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    for c in s.chars() {
+        let n = c as u32;
+        if n >= 128 {
+            let shown = if n < 0x100 { f"\\x{hex2(n as i64)}" } else if n < 0x10000 { f"\\u{n:04x}" } else { f"\\U{n:08x}" };
+            return Err(perr("UnicodeEncodeError", f"'ascii' codec can't encode character '{shown}' in position {i}: ordinal not in range(128)"));
+        }
+        out.push(n as u8);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn adler32(b: ref Vec[u8]) -> u64 {
+    let mut a: u64 = 1;
+    let mut s: u64 = 0;
+    for x in b.iter() {
+        a = (a + (*x as u64)) % 65521;
+        s = (s + a) % 65521;
+    }
+    (s << 16) | a
+}
+
+// ------------------------------------------------------------ struct
+
+fn be_i32(b: ref Vec[u8], o: i64) -> i64 {
+    let u = ((b[o] as u32) << 24) | ((b[o + 1] as u32) << 16) | ((b[o + 2] as u32) << 8) | (b[o + 3] as u32);
+    (u as i32) as i64
+}
+
+fn le_u32(b: ref Vec[u8], o: i64) -> i64 {
+    let u = ((b[o + 3] as u32) << 24) | ((b[o + 2] as u32) << 16) | ((b[o + 1] as u32) << 8) | (b[o] as u32);
+    u as i64
+}
+
+fn le_i32(b: ref Vec[u8], o: i64) -> i64 {
+    (le_u32(b, o) as u32 as i32) as i64
+}
+
+fn le_u16(b: ref Vec[u8], o: i64) -> i64 {
+    ((b[o] as i64) | ((b[o + 1] as i64) << 8))
+}
+
+fn le_f64(b: ref Vec[u8], o: i64) -> f64 {
+    let mut u: u64 = 0;
+    let mut k = 7;
+    while k >= 0 {
+        u = (u << 8) | (b[o + k] as u64);
+        k -= 1;
+    }
+    u.bits_as_f64()
+}
+
+fn put_be_i32(out: mut ref Vec[u8], v: i64) {
+    let u = (v as i32) as u32;
+    out.push((u >> 24) as u8);
+    out.push((u >> 16) as u8);
+    out.push((u >> 8) as u8);
+    out.push(u as u8);
+}
+
+fn put_le_i32(out: mut ref Vec[u8], v: i64) {
+    let u = (v as i32) as u32;
+    out.push(u as u8);
+    out.push((u >> 8) as u8);
+    out.push((u >> 16) as u8);
+    out.push((u >> 24) as u8);
+}
+
+fn put_le_u16(out: mut ref Vec[u8], v: i64) {
+    out.push(v as u8);
+    out.push((v >> 8) as u8);
+}
+
+fn put_le_f64(out: mut ref Vec[u8], x: f64) {
+    let u = x.to_bits();
+    let mut k = 0;
+    while k < 8 {
+        out.push((u >> (8 * k)) as u8);
+        k += 1;
+    }
+}
+
+// f.read(n) at *pos, then unpack of a struct of `need` bytes.
+fn take(data: ref Vec[u8], pos: mut ref i64, n: i64, need: i64) -> Result[Vec[u8], PyErr] {
+    let b = sub_bytes(data, *pos, *pos + n);
+    *pos += b.len();
+    if b.len() != need {
+        return Err(struct_err(need));
+    }
+    Ok(b)
+}
+
+// A file opened "wb+": its bytes and position.
+struct Buf {
+    data: Vec[u8],
+    pos: i64,
+}
+
+impl Buf {
+    fn write(mut ref self, b: ref Vec[u8]) {
+        for x in b.iter() {
+            if self.pos < self.data.len() {
+                self.data[self.pos] = *x;
+            } else {
+                self.data.push(*x);
+            }
+            self.pos += 1;
+        }
+    }
+}
+
+fn new_buf() -> Buf {
+    Buf { data: Vec.new(), pos: 0 }
+}
+
+// ------------------------------------------------------------ Python values
+
+// The values a record holds: what a dbf field reads as, and what the
+// layer scripts hand the Writer.
+#[derive(Clone)]
+enum Val {
+    Nothing,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Date(i64, i64, i64),
+    List(Vec[i64]),
+}
+
+fn int_list_repr(v: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(f"{*x}");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn val_repr(v: ref Val) -> String {
+    match v {
+        Val.Nothing => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{*n}",
+        Val.Float(x) => float_repr(*x),
+        Val.Text(s) => repr_str(s),
+        Val.Date(y, m, d) => f"datetime.date({*y}, {*m}, {*d})",
+        Val.List(xs) => int_list_repr(xs),
+    }
+}
+
+// str(value)
+fn val_str(v: ref Val) -> String {
+    match v {
+        Val.Nothing => "None".to_string(),
+        Val.Text(s) => s.clone(),
+        Val.Date(y, m, d) => f"{*y:04}-{*m:02}-{*d:02}",
+        _ => val_repr(v),
+    }
+}
+
+fn val_type(v: ref Val) -> String {
+    match v {
+        Val.Nothing => "NoneType".to_string(),
+        Val.Bool(_) => "bool".to_string(),
+        Val.Int(_) => "int".to_string(),
+        Val.Float(_) => "float".to_string(),
+        Val.Text(_) => "str".to_string(),
+        Val.Date(_, _, _) => "datetime.date".to_string(),
+        Val.List(_) => "list".to_string(),
+    }
+}
+
+fn vals_repr(vs: ref Vec[Val]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in vs.iter() {
+        parts.push(val_repr(v));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// value in [None, '']
+fn is_missing(v: ref Val) -> bool {
+    match v {
+        Val.Nothing => true,
+        Val.Text(s) => s.len() == 0,
+        _ => false,
+    }
+}
+
+fn floats_repr(v: ref Vec[f64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(float_repr(*x));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn opt_floats_repr(v: ref Vec[Option[f64]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        match x {
+            Some(f) => parts.push(float_repr(*f)),
+            None => parts.push("None".to_string()),
+        }
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn ints_repr(v: ref Vec[i64]) -> String {
+    int_list_repr(v)
+}
+
+// min() and max() as Python's builtins pick: the first of equals.
+fn py_min(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+fn py_max(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if is_leap(y) { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+// datetime.date(y, m, d)'s checks.
+fn date_ok(y: i64, m: i64, d: i64) -> bool {
+    y >= 1 and y <= 9999 and m >= 1 and m <= 12 and d >= 1 and d <= days_in_month(y, m)
+}
+// ------------------------------------------------------------ geometry
+
+// A coordinate as pyshp holds it: a list of x, y and maybe z and m, any
+// of which a layer script may leave as None.
+fn cx(p: ref Vec[Option[f64]], k: i64) -> f64 {
+    if k < p.len() {
+        p[k].unwrap_or(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn same_xy(a: ref Vec[Option[f64]], b: ref Vec[Option[f64]]) -> bool {
+    cx(a, 0) == cx(b, 0) and cx(a, 1) == cx(b, 1)
+}
+
+// A coordinate list compared as Python compares lists: element by element.
+fn same_coord(a: ref Vec[Option[f64]], b: ref Vec[Option[f64]]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        let ok = match (a[i], b[i]) {
+            (Some(x), Some(y)) => x == y,
+            (None, None) => true,
+            _ => false,
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn xy(x: f64, y: f64) -> Vec[Option[f64]] {
+    [Some(x), Some(y)]
+}
+
+// signed_area(coords, fast=True): twice the area, positive when the ring
+// runs counter-clockwise.
+fn signed_area2(coords: ref Vec[Vec[Option[f64]]]) -> f64 {
+    let mut xs: Vec[f64] = Vec.new();
+    let mut ys: Vec[f64] = Vec.new();
+    for p in coords.iter() {
+        xs.push(cx(p, 0));
+        ys.push(cx(p, 1));
+    }
+    if coords.len() < 2 {
+        return 0.0;
+    }
+    xs.push(xs[1]);
+    ys.push(ys[1]);
+    let mut area2: f64 = 0.0;
+    let mut i = 1;
+    while i < coords.len() {
+        area2 += xs[i] * (ys[i + 1] - ys[i - 1]);
+        i += 1;
+    }
+    area2
+}
+
+fn signed_area(coords: ref Vec[Vec[Option[f64]]]) -> f64 {
+    signed_area2(coords) / 2.0
+}
+
+fn is_cw(coords: ref Vec[Vec[Option[f64]]]) -> bool {
+    signed_area2(coords) < 0.0
+}
+
+fn rewind(coords: ref Vec[Vec[Option[f64]]]) -> Vec[Vec[Option[f64]]] {
+    let mut out: Vec[Vec[Option[f64]]] = Vec.new();
+    let mut i = coords.len() - 1;
+    while i >= 0 {
+        out.push(coords[i].clone());
+        i -= 1;
+    }
+    out
+}
+
+fn ring_bbox(coords: ref Vec[Vec[Option[f64]]]) -> Vec[f64] {
+    let mut b = [cx(coords[0], 0), cx(coords[0], 1), cx(coords[0], 0), cx(coords[0], 1)];
+    for p in coords.iter() {
+        b[0] = py_min(b[0], cx(p, 0));
+        b[1] = py_min(b[1], cx(p, 1));
+        b[2] = py_max(b[2], cx(p, 0));
+        b[3] = py_max(b[3], cx(p, 1));
+    }
+    b
+}
+
+fn bbox_overlap(a: ref Vec[f64], b: ref Vec[f64]) -> bool {
+    a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+}
+
+fn bbox_contains(a: ref Vec[f64], b: ref Vec[f64]) -> bool {
+    a[0] < b[0] and a[2] > b[2] and a[1] < b[1] and a[3] > b[3]
+}
+
+// The crossings test, MacMartin's way, as pyshp has it.
+fn ring_contains_point(coords: ref Vec[Vec[Option[f64]]], tx: f64, ty: f64) -> bool {
+    let mut x0 = cx(coords[0], 0);
+    let mut y0 = cx(coords[0], 1);
+    let mut yflag0 = y0 >= ty;
+    let mut inside = false;
+    let mut i = 1;
+    while i < coords.len() {
+        let x1 = cx(coords[i], 0);
+        let y1 = cx(coords[i], 1);
+        let yflag1 = y1 >= ty;
+        if yflag0 != yflag1 {
+            let xflag0 = x0 >= tx;
+            if xflag0 == (x1 >= tx) {
+                if xflag0 {
+                    inside = not inside;
+                }
+            } else if (x1 - (y1 - ty) * (x0 - x1) / (y0 - y1)) >= tx {
+                inside = not inside;
+            }
+        }
+        yflag0 = yflag1;
+        x0 = x1;
+        y0 = y1;
+        i += 1;
+    }
+    inside
+}
+
+// A point inside the ring: the centroid of the first triplet of
+// vertices that winds the ring's way and lands inside it.
+fn ring_sample(coords: ref Vec[Vec[Option[f64]]], ccw: bool) -> Result[(f64, f64), PyErr] {
+    let mut seq: Vec[(f64, f64)] = Vec.new();
+    for p in coords.iter() {
+        seq.push((cx(p, 0), cx(p, 1)));
+    }
+    seq.push((cx(coords[1], 0), cx(coords[1], 1)));
+    let mut tri: Vec[(f64, f64)] = Vec.new();
+    for p in seq.iter() {
+        let (px, py) = *p;
+        let mut seen = false;
+        for t in tri.iter() {
+            let (tx, ty) = *t;
+            if tx == px and ty == py {
+                seen = true;
+            }
+        }
+        if not seen {
+            tri.push((px, py));
+        }
+        if tri.len() == 3 {
+            let (ax, ay) = tri[0];
+            let (bx, by) = tri[1];
+            let (qx, qy) = tri[2];
+            let straight = (ay - by) * (ax - qx) == (ay - qy) * (ax - bx);
+            if not straight {
+                let closed = [xy(ax, ay), xy(bx, by), xy(qx, qy), xy(ax, ay)];
+                let tri_ccw = not is_cw(closed);
+                if ccw == tri_ccw {
+                    let xm = (ax + bx + qx) / 3.0;
+                    let ym = (ay + by + qy) / 3.0;
+                    if ring_contains_point(coords, xm, ym) {
+                        return Ok((xm, ym));
+                    }
+                }
+            }
+            tri.remove(0);
+        }
+    }
+    Err(perr("Exception", "Unexpected error: Unable to find a ring sample point.".to_string()))
+}
+
+// organize_polygon_rings: clockwise rings are exteriors, the rest holes,
+// and each hole goes to the smallest exterior that holds it.
+fn organize_polygon_rings(rings: ref Vec[Vec[Vec[Option[f64]]]]) -> Result[Vec[Vec[Vec[Vec[Option[f64]]]]], PyErr] {
+    let mut exteriors: Vec[Vec[Vec[Option[f64]]]] = Vec.new();
+    let mut holes: Vec[Vec[Vec[Option[f64]]]] = Vec.new();
+    for ring in rings.iter() {
+        if is_cw(ring) {
+            exteriors.push(ring.clone());
+        } else {
+            holes.push(ring.clone());
+        }
+    }
+    let mut polys: Vec[Vec[Vec[Vec[Option[f64]]]]] = Vec.new();
+    if exteriors.len() == 1 {
+        let mut poly = [exteriors[0].clone()];
+        for h in holes.iter() {
+            poly.push(h.clone());
+        }
+        polys.push(poly);
+        return Ok(polys);
+    }
+    if exteriors.len() == 0 {
+        for h in holes.iter() {
+            polys.push([h.clone()]);
+        }
+        return Ok(polys);
+    }
+    if holes.len() == 0 {
+        for e in exteriors.iter() {
+            polys.push([e.clone()]);
+        }
+        return Ok(polys);
+    }
+    let mut ext_boxes: Vec[Vec[f64]] = Vec.new();
+    for e in exteriors.iter() {
+        ext_boxes.push(ring_bbox(e));
+    }
+    let mut cands: Vec[Vec[i64]] = Vec.new();
+    for h in holes.iter() {
+        let hb = ring_bbox(h);
+        let mut c: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < ext_boxes.len() {
+            if bbox_contains(ext_boxes[k], hb) {
+                c.push(k);
+            }
+            k += 1;
+        }
+        cands.push(c);
+    }
+    let mut hi = 0;
+    while hi < holes.len() {
+        if cands[hi].len() > 1 {
+            let ccw = not is_cw(holes[hi]);
+            let (sx, sy) = ring_sample(holes[hi], ccw)?;
+            let mut keep: Vec[i64] = Vec.new();
+            for k in cands[hi].iter() {
+                if ring_contains_point(exteriors[*k], sx, sy) {
+                    keep.push(*k);
+                }
+            }
+            cands[hi] = keep;
+        }
+        hi += 1;
+    }
+    hi = 0;
+    while hi < holes.len() {
+        if cands[hi].len() > 1 {
+            let mut best = cands[hi][0];
+            let mut best_area = signed_area2(exteriors[best]).abs();
+            for k in cands[hi].iter() {
+                let a = signed_area2(exteriors[*k]).abs();
+                if a < best_area {
+                    best = *k;
+                    best_area = a;
+                }
+            }
+            cands[hi] = [best];
+        }
+        hi += 1;
+    }
+    let mut ei = 0;
+    while ei < exteriors.len() {
+        let mut poly = [exteriors[ei].clone()];
+        hi = 0;
+        while hi < holes.len() {
+            if cands[hi].len() > 0 and cands[hi][0] == ei {
+                poly.push(holes[hi].clone());
+            }
+            hi += 1;
+        }
+        polys.push(poly);
+        ei += 1;
+    }
+    hi = 0;
+    while hi < holes.len() {
+        if cands[hi].len() == 0 {
+            polys.push([holes[hi].clone()]);
+        }
+        hi += 1;
+    }
+    Ok(polys)
+}
+
+// ------------------------------------------------------------ GeoJSON
+
+// A __geo_interface__ dict: its type and coordinates, nested `depth`
+// lists deep (0 is one coordinate, c[0][0][0]; 1 is c[0][0]; 2 is c[0];
+// 3 is all of c).
+#[derive(Clone)]
+struct Geo {
+    kind: String,
+    depth: i64,
+    c: Vec[Vec[Vec[Vec[Option[f64]]]]],
+}
+
+fn json_str(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let n = c as u32;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 0x20 or n > 0x7e {
+            if n >= 0x10000 {
+                let v = n - 0x10000;
+                let hi = 0xd800 + (v >> 10);
+                let lo = 0xdc00 + (v & 0x3ff);
+                out.push_str(f"\\u{hi:04x}\\u{lo:04x}");
+            } else {
+                out.push_str(f"\\u{n:04x}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_float(x: f64) -> String {
+    if x != x {
+        "NaN".to_string()
+    } else if x == f64.INFINITY {
+        "Infinity".to_string()
+    } else if x == -f64.INFINITY {
+        "-Infinity".to_string()
+    } else {
+        float_repr(x)
+    }
+}
+
+fn json_coord(p: ref Vec[Option[f64]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in p.iter() {
+        match v {
+            Some(x) => parts.push(json_float(*x)),
+            None => parts.push("null".to_string()),
+        }
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn json_coords(ps: ref Vec[Vec[Option[f64]]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in ps.iter() {
+        parts.push(json_coord(p));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn json_rings(rs: ref Vec[Vec[Vec[Option[f64]]]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for r in rs.iter() {
+        parts.push(json_coords(r));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn geo_json(g: ref Geo) -> String {
+    let coords = if g.depth == 0 {
+        json_coord(g.c[0][0][0])
+    } else if g.depth == 1 {
+        json_coords(g.c[0][0])
+    } else if g.depth == 2 {
+        json_rings(g.c[0])
+    } else {
+        let mut parts: Vec[String] = Vec.new();
+        for p in g.c.iter() {
+            parts.push(json_rings(p));
+        }
+        f"[{join(parts, ", ")}]"
+    };
+    f"{{\"type\": {json_str(g.kind)}, \"coordinates\": {coords}}}"
+}
+
+fn geo_point(kind: Str, p: own Vec[Option[f64]]) -> Geo {
+    Geo { kind: kind.to_string(), depth: 0, c: [[[p]]] }
+}
+
+fn geo_list(kind: Str, ps: own Vec[Vec[Option[f64]]]) -> Geo {
+    Geo { kind: kind.to_string(), depth: 1, c: [[ps]] }
+}
+
+fn geo_rings(kind: Str, rs: own Vec[Vec[Vec[Option[f64]]]]) -> Geo {
+    Geo { kind: kind.to_string(), depth: 2, c: [rs] }
+}
+
+// list[a:b] with Python's slice rules.
+fn py_slice(ps: ref Vec[Vec[Option[f64]]], a: i64, b: i64) -> Vec[Vec[Option[f64]]] {
+    let n = ps.len();
+    let mut lo = if a < 0 { a + n } else { a };
+    let mut hi = if b < 0 { b + n } else { b };
+    if lo < 0 {
+        lo = 0;
+    }
+    if hi > n {
+        hi = n;
+    }
+    let mut out: Vec[Vec[Option[f64]]] = Vec.new();
+    while lo < hi {
+        out.push(ps[lo].clone());
+        lo += 1;
+    }
+    out
+}
+// ------------------------------------------------------------ shapes
+
+fn nodata() -> f64 {
+    -10e38
+}
+
+fn type_name(st: i64) -> Option[String] {
+    let n = if st == 0 {
+        "NULL"
+    } else if st == 1 {
+        "POINT"
+    } else if st == 3 {
+        "POLYLINE"
+    } else if st == 5 {
+        "POLYGON"
+    } else if st == 8 {
+        "MULTIPOINT"
+    } else if st == 11 {
+        "POINTZ"
+    } else if st == 13 {
+        "POLYLINEZ"
+    } else if st == 15 {
+        "POLYGONZ"
+    } else if st == 18 {
+        "MULTIPOINTZ"
+    } else if st == 21 {
+        "POINTM"
+    } else if st == 23 {
+        "POLYLINEM"
+    } else if st == 25 {
+        "POLYGONM"
+    } else if st == 28 {
+        "MULTIPOINTM"
+    } else if st == 31 {
+        "MULTIPATCH"
+    } else {
+        return None;
+    };
+    Some(n.to_string())
+}
+
+// SHAPETYPE_LOOKUP[st]
+fn lookup_type(st: i64) -> Result[String, PyErr] {
+    match type_name(st) {
+        Some(n) => Ok(n),
+        None => Err(perr("KeyError", f"{st}")),
+    }
+}
+
+fn type_code(name: ref String) -> Option[i64] {
+    let codes = [0, 1, 3, 5, 8, 11, 13, 15, 18, 21, 23, 25, 28, 31];
+    for c in codes.iter() {
+        if type_name(*c).unwrap_or(String.new()) == *name {
+            return Some(*c);
+        }
+    }
+    None
+}
+
+fn in_set(st: i64, set: ref Vec[i64]) -> bool {
+    for x in set.iter() {
+        if *x == st {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_bbox(st: i64) -> bool {
+    in_set(st, [3, 5, 8, 13, 15, 18, 23, 25, 28, 31])
+}
+
+fn has_parts(st: i64) -> bool {
+    in_set(st, [3, 5, 13, 15, 23, 25, 31])
+}
+
+fn has_z(st: i64) -> bool {
+    in_set(st, [13, 15, 18, 31])
+}
+
+fn has_m(st: i64) -> bool {
+    in_set(st, [13, 15, 18, 23, 25, 28, 31])
+}
+
+fn is_point(st: i64) -> bool {
+    st == 1 or st == 11 or st == 21
+}
+
+// A Shape: what the Writer is handed, or what the Reader reads back.
+// The attributes pyshp only sets for some shape types are Options.
+#[derive(Clone)]
+struct Shape {
+    st: i64,
+    points: Vec[Vec[Option[f64]]],
+    parts: Vec[i64],
+    part_types: Option[Vec[i64]],
+    bbox: Option[Vec[f64]],
+    z: Option[Vec[f64]],
+    m: Option[Vec[Option[f64]]],
+    oid: i64,
+    // The Reader's points are tuples, except a point type's one point,
+    // which is an array (printed as a list).
+    tup: bool,
+}
+
+fn new_shape(st: i64) -> Shape {
+    Shape { st: st, points: Vec.new(), parts: Vec.new(), part_types: None, bbox: None, z: None, m: None, oid: -1, tup: false }
+}
+
+fn shape_repr(s: ref Shape) -> Result[String, PyErr] {
+    let n = lookup_type(s.st)?;
+    Ok(f"Shape #{s.oid}: {n}")
+}
+
+fn points_repr(s: ref Shape) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in s.points.iter() {
+        let mut vs: Vec[String] = Vec.new();
+        for v in p.iter() {
+            match v {
+                Some(x) => vs.push(float_repr(*x)),
+                None => vs.push("None".to_string()),
+            }
+        }
+        if s.tup {
+            parts.push(f"({join(vs, ", ")})");
+        } else {
+            parts.push(f"[{join(vs, ", ")}]");
+        }
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn show(s: ref Shape) -> Result[(), PyErr] {
+    let r = shape_repr(s)?;
+    println(f"  {r}");
+    if let Some(b) = s.bbox {
+        println(f"    bbox {floats_repr(b)}");
+    }
+    println(f"    parts {ints_repr(s.parts)}");
+    if let Some(t) = s.part_types {
+        println(f"    partTypes {ints_repr(t)}");
+    }
+    println(f"    points {points_repr(s)}");
+    if let Some(z) = s.z {
+        println(f"    z {floats_repr(z)}");
+    }
+    if let Some(m) = s.m {
+        println(f"    m {opt_floats_repr(m)}");
+    }
+    Ok(())
+}
+
+// Shape.__geo_interface__
+fn shape_geo(s: ref Shape) -> Result[Geo, PyErr] {
+    let st = s.st;
+    if is_point(st) {
+        if s.points.len() == 0 {
+            return Ok(geo_point("Point", Vec.new()));
+        }
+        return Ok(geo_point("Point", s.points[0].clone()));
+    }
+    if st == 8 or st == 18 or st == 28 {
+        return Ok(geo_list("MultiPoint", s.points.clone()));
+    }
+    if st == 3 or st == 13 or st == 23 {
+        if s.parts.len() == 0 {
+            return Ok(geo_list("LineString", Vec.new()));
+        }
+        if s.parts.len() == 1 {
+            return Ok(geo_list("LineString", s.points.clone()));
+        }
+        let mut lines: Vec[Vec[Vec[Option[f64]]]] = Vec.new();
+        let mut i = 1;
+        while i < s.parts.len() {
+            lines.push(py_slice(s.points, s.parts[i - 1], s.parts[i]));
+            i += 1;
+        }
+        lines.push(py_slice(s.points, s.parts[s.parts.len() - 1], s.points.len()));
+        return Ok(geo_rings("MultiLineString", lines));
+    }
+    if st == 5 or st == 15 or st == 25 {
+        if s.parts.len() == 0 {
+            return Ok(geo_rings("Polygon", Vec.new()));
+        }
+        let mut rings: Vec[Vec[Vec[Option[f64]]]] = Vec.new();
+        let mut i = 0;
+        while i < s.parts.len() {
+            let end = if i + 1 < s.parts.len() { s.parts[i + 1] } else { s.points.len() };
+            rings.push(py_slice(s.points, s.parts[i], end));
+            i += 1;
+        }
+        let polys = organize_polygon_rings(rings)?;
+        if polys.len() == 1 {
+            return Ok(geo_rings("Polygon", polys[0].clone()));
+        }
+        return Ok(Geo { kind: "MultiPolygon".to_string(), depth: 3, c: polys });
+    }
+    let n = lookup_type(st)?;
+    Err(perr("Exception", f"Shape type \"{n}\" cannot be represented as GeoJSON."))
+}
+
+fn wind_into(points: mut ref Vec[Vec[Option[f64]]], parts: mut ref Vec[i64], rings: ref Vec[Vec[Vec[Option[f64]]]]) {
+    let mut i = 0;
+    for r in rings.iter() {
+        let ring = if i == 0 and not is_cw(r) {
+            rewind(r)
+        } else if i > 0 and is_cw(r) {
+            rewind(r)
+        } else {
+            r.clone()
+        };
+        parts.push(points.len());
+        for p in ring.iter() {
+            points.push(p.clone());
+        }
+        i += 1;
+    }
+}
+
+// Shape._from_geojson
+fn shape_from_geo(g: ref Geo) -> Result[Shape, PyErr] {
+    let k = g.kind.clone();
+    let st = if k == "Null" {
+        0
+    } else if k == "Point" {
+        1
+    } else if k == "LineString" or k == "MultiLineString" {
+        3
+    } else if k == "Polygon" or k == "MultiPolygon" {
+        5
+    } else if k == "MultiPoint" {
+        8
+    } else {
+        return Err(perr("Exception", f"Cannot create Shape from GeoJSON type '{k}'"));
+    };
+    let mut s = new_shape(st);
+    if k == "Point" {
+        s.points = [g.c[0][0][0].clone()];
+        s.parts = [0];
+    } else if k == "MultiPoint" or k == "LineString" {
+        s.points = g.c[0][0].clone();
+        s.parts = [0];
+    } else if k == "Polygon" {
+        wind_into(mut s.points, mut s.parts, g.c[0]);
+    } else if k == "MultiLineString" {
+        for line in g.c[0].iter() {
+            s.parts.push(s.points.len());
+            for p in line.iter() {
+                s.points.push(p.clone());
+            }
+        }
+    } else if k == "MultiPolygon" {
+        for poly in g.c.iter() {
+            wind_into(mut s.points, mut s.parts, poly);
+        }
+    }
+    Ok(s)
+}
+
+// ------------------------------------------------------------ the Writer
+
+#[derive(Clone)]
+struct Field {
+    name: String,
+    ftype: String,
+    size: i64,
+    deci: i64,
+}
+
+fn field_repr(f: ref Field) -> String {
+    f"[{repr_str(f.name)}, {repr_str(f.ftype)}, {f.size}, {f.deci}]"
+}
+
+struct Writer {
+    shp: Buf,
+    shx: Buf,
+    dbf: Buf,
+    fields: Vec[Field],
+    st: Option[i64],
+    auto_balance: bool,
+    rec_num: i64,
+    shp_num: i64,
+    bbox: Option[Vec[f64]],
+    zbox: Option[Vec[f64]],
+    mbox: Option[Vec[f64]],
+    closed: bool,
+}
+
+fn new_writer(st: Option[i64], auto_balance: bool) -> Writer {
+    let mut w = Writer {
+        shp: new_buf(),
+        shx: new_buf(),
+        dbf: new_buf(),
+        fields: Vec.new(),
+        st: st,
+        auto_balance: auto_balance,
+        rec_num: 0,
+        shp_num: 0,
+        bbox: None,
+        zbox: None,
+        mbox: None,
+        closed: false,
+    };
+    let mut nines: Vec[u8] = Vec.new();
+    for _ in 0..100 {
+        nines.push(b'9');
+    }
+    w.shp.write(nines);
+    w.shx.write(nines);
+    w
+}
+
+fn opt_box_repr(b: ref Option[Vec[f64]]) -> String {
+    match b {
+        Some(v) => floats_repr(v),
+        None => "None".to_string(),
+    }
+}
+
+fn pack_be_i32(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_be_i32(mut out, v);
+    out
+}
+
+fn pack_le_i32(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_le_i32(mut out, v);
+    out
+}
+
+fn pack_f64s(vs: ref Vec[f64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in vs.iter() {
+        put_le_f64(mut out, *x);
+    }
+    out
+}
+
+fn fixed(x: f64, d: i64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if d == 0 {
+        f"{x:.0}"
+    } else if d == 1 {
+        f"{x:.1}"
+    } else if d == 2 {
+        f"{x:.2}"
+    } else if d == 3 {
+        f"{x:.3}"
+    } else if d == 4 {
+        f"{x:.4}"
+    } else if d == 5 {
+        f"{x:.5}"
+    } else if d == 6 {
+        f"{x:.6}"
+    } else if d == 7 {
+        f"{x:.7}"
+    } else if d == 8 {
+        f"{x:.8}"
+    } else if d == 9 {
+        f"{x:.9}"
+    } else if d == 10 {
+        f"{x:.10}"
+    } else if d == 11 {
+        f"{x:.11}"
+    } else if d == 12 {
+        f"{x:.12}"
+    } else if d == 13 {
+        f"{x:.13}"
+    } else if d == 14 {
+        f"{x:.14}"
+    } else {
+        f"{x:.15}"
+    }
+}
+
+// format(...)[:size].rjust(size) on ASCII text.
+fn fit_right(s: ref String, size: i64) -> Vec[u8] {
+    let b = sub_bytes(encode(s), 0, size);
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = b.len();
+    while k < size {
+        out.push(b' ');
+        k += 1;
+    }
+    for x in b.iter() {
+        out.push(*x);
+    }
+    out
+}
+
+fn repeat_byte(c: u8, n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+fn float_trunc(x: f64) -> Result[i64, PyErr] {
+    if x != x {
+        return Err(perr("ValueError", "cannot convert float NaN to integer".to_string()));
+    }
+    if x == f64.INFINITY or x == -f64.INFINITY {
+        return Err(perr("OverflowError", "cannot convert float infinity to integer".to_string()));
+    }
+    Ok(x as i64)
+}
+
+fn not_float(s: ref String) -> PyErr {
+    perr("ValueError", f"could not convert string to float: {repr_str(s)}")
+}
+
+// int(value), then int(float(value)) when that raises ValueError.
+fn to_int(v: ref Val) -> Result[i64, PyErr] {
+    match v {
+        Val.Int(n) => Ok(*n),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Float(x) => float_trunc(*x),
+        Val.Text(s) => match py_int_s(s) {
+            Some(n) => Ok(n),
+            None => match py_float_s(s) {
+                Some(x) => float_trunc(x),
+                None => Err(not_float(s)),
+            },
+        },
+        _ => Err(perr("TypeError", f"int() argument must be a string, a bytes-like object or a real number, not '{val_type(v)}'")),
+    }
+}
+
+fn to_float(v: ref Val) -> Result[f64, PyErr] {
+    match v {
+        Val.Int(n) => Ok(*n as f64),
+        Val.Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
+        Val.Float(x) => Ok(*x),
+        Val.Text(s) => match py_float_s(s) {
+            Some(x) => Ok(x),
+            None => Err(not_float(s)),
+        },
+        _ => Err(perr("TypeError", f"float() argument must be a string or a real number, not '{val_type(v)}'")),
+    }
+}
+
+fn ymd(y: i64, m: i64, d: i64) -> String {
+    f"{y:04}{m:02}{d:02}"
+}
+
+impl Writer {
+    fn len(ref self) -> i64 {
+        if self.rec_num > self.shp_num { self.rec_num } else { self.shp_num }
+    }
+
+    fn field(mut ref self, name: ref String, ftype: ref String, size: i64, deci: i64) -> Result[(), PyErr] {
+        let mut sz = size;
+        let mut dc = deci;
+        if *ftype == "D" {
+            sz = 8;
+            dc = 0;
+        } else if *ftype == "L" {
+            sz = 1;
+            dc = 0;
+        }
+        if self.fields.len() >= 2046 {
+            return Err(shp_err("Shapefile Writer reached maximum number of fields: 2046.".to_string()));
+        }
+        self.fields.push(Field { name: name.clone(), ftype: ftype.clone(), size: sz, deci: dc });
+        Ok(())
+    }
+
+    fn real_fields(ref self) -> Vec[Field] {
+        let mut out: Vec[Field] = Vec.new();
+        for f in self.fields.iter() {
+            if f.name != "DeletionFlag" {
+                out.push(f.clone());
+            }
+        }
+        out
+    }
+
+    fn update_bbox(mut ref self, s: ref Shape) -> Result[Vec[f64], PyErr] {
+        if s.points.len() == 0 {
+            return Err(perr("Exception", f"Cannot create bbox. Expected a valid shape with at least one point. Got a shape of type '{s.st}' and 0 points."));
+        }
+        let mut b = [cx(s.points[0], 0), cx(s.points[0], 1), cx(s.points[0], 0), cx(s.points[0], 1)];
+        for p in s.points.iter() {
+            b[0] = py_min(b[0], cx(p, 0));
+            b[1] = py_min(b[1], cx(p, 1));
+            b[2] = py_max(b[2], cx(p, 0));
+            b[3] = py_max(b[3], cx(p, 1));
+        }
+        let g = match self.bbox.clone() {
+            Some(o) => [py_min(b[0], o[0]), py_min(b[1], o[1]), py_max(b[2], o[2]), py_max(b[3], o[3])],
+            None => b.clone(),
+        };
+        self.bbox = Some(g);
+        Ok(b)
+    }
+
+    fn update_zbox(mut ref self, s: ref Shape) -> Vec[f64] {
+        let mut z: Vec[f64] = Vec.new();
+        for p in s.points.iter() {
+            z.push(cx(p, 2));
+        }
+        let mut b = [z[0], z[0]];
+        for v in z.iter() {
+            b[0] = py_min(b[0], *v);
+            b[1] = py_max(b[1], *v);
+        }
+        let g = match self.zbox.clone() {
+            Some(o) => [py_min(b[0], o[0]), py_max(b[1], o[1])],
+            None => b.clone(),
+        };
+        self.zbox = Some(g);
+        b
+    }
+
+    fn update_mbox(mut ref self, s: ref Shape) -> Vec[f64] {
+        let mpos = if in_set(s.st, [11, 13, 15, 18, 31]) { 3 } else { 2 };
+        let mut m: Vec[f64] = Vec.new();
+        for p in s.points.iter() {
+            if mpos < p.len() {
+                if let Some(v) = p[mpos] {
+                    m.push(v);
+                }
+            }
+        }
+        if m.len() == 0 {
+            m.push(nodata());
+        }
+        let mut b = [m[0], m[0]];
+        for v in m.iter() {
+            b[0] = py_min(b[0], *v);
+            b[1] = py_max(b[1], *v);
+        }
+        let g = match self.mbox.clone() {
+            Some(o) => [py_min(b[0], o[0]), py_max(b[1], o[1])],
+            None => b.clone(),
+        };
+        self.mbox = Some(g);
+        b
+    }
+
+    fn shape(mut ref self, s: ref Shape) -> Result[(), PyErr] {
+        if self.auto_balance and self.rec_num < self.shp_num {
+            self.balance()?;
+        }
+        let (offset, length) = self.shp_record(s)?;
+        self.shx.write(pack_be_i32(offset / 2));
+        self.shx.write(pack_be_i32(length));
+        Ok(())
+    }
+
+    fn shp_record(mut ref self, s: ref Shape) -> Result[(i64, i64), PyErr] {
+        let offset = self.shp.pos;
+        self.shp_num += 1;
+        let mut hdr = pack_be_i32(self.shp_num);
+        put_be_i32(mut hdr, 0);
+        self.shp.write(hdr);
+        let start = self.shp.pos;
+        let st = s.st;
+        if self.st.is_none() and st != 0 {
+            self.st = Some(st);
+        }
+        let mine = self.st.unwrap_or(-1);
+        if st != 0 and st != mine {
+            let shown = match self.st {
+                Some(t) => f"{t}",
+                None => "None".to_string(),
+            };
+            return Err(perr("Exception", f"The shape's type ({st}) must match the type of the shapefile ({shown})."));
+        }
+        self.shp.write(pack_le_i32(st));
+        if is_point(st) {
+            self.update_bbox(s)?;
+        }
+        if has_bbox(st) {
+            let b = self.update_bbox(s)?;
+            self.shp.write(pack_f64s(b));
+        }
+        if has_parts(st) {
+            self.shp.write(pack_le_i32(s.parts.len()));
+        }
+        if has_bbox(st) {
+            self.shp.write(pack_le_i32(s.points.len()));
+        }
+        if has_parts(st) {
+            for p in s.parts.iter() {
+                self.shp.write(pack_le_i32(*p));
+            }
+        }
+        if st == 31 {
+            if let Some(t) = s.part_types {
+                for p in t.iter() {
+                    self.shp.write(pack_le_i32(*p));
+                }
+            }
+        }
+        if has_bbox(st) {
+            for p in s.points.iter() {
+                if p.len() < 2 or p[0].is_none() or p[1].is_none() {
+                    return Err(shp_err(f"Failed to write points for record {self.shp_num}. Expected floats."));
+                }
+                self.shp.write(pack_f64s([cx(p, 0), cx(p, 1)]));
+            }
+        }
+        if has_z(st) {
+            let zb = self.update_zbox(s);
+            self.shp.write(pack_f64s(zb));
+            match s.z {
+                Some(z) => self.shp.write(pack_f64s(z)),
+                None => {
+                    for p in s.points.iter() {
+                        if p.len() > 2 and p[2].is_none() {
+                            return Err(shp_err(f"Failed to write elevation values for record {self.shp_num}. Expected floats."));
+                        }
+                        self.shp.write(pack_f64s([cx(p, 2)]));
+                    }
+                }
+            }
+        }
+        if has_m(st) {
+            let mb = self.update_mbox(s);
+            self.shp.write(pack_f64s(mb));
+            match s.m {
+                Some(m) => {
+                    for v in m.iter() {
+                        self.shp.write(pack_f64s([v.unwrap_or(nodata())]));
+                    }
+                }
+                None => {
+                    let mpos = if has_z(st) { 3 } else { 2 };
+                    for p in s.points.iter() {
+                        let v = if mpos < p.len() { p[mpos].unwrap_or(nodata()) } else { nodata() };
+                        self.shp.write(pack_f64s([v]));
+                    }
+                }
+            }
+        }
+        if is_point(st) {
+            let p = s.points[0].clone();
+            if p.len() < 2 or p[0].is_none() or p[1].is_none() {
+                return Err(shp_err(f"Failed to write point for record {self.shp_num}. Expected floats."));
+            }
+            self.shp.write(pack_f64s([cx(p, 0), cx(p, 1)]));
+        }
+        if st == 11 {
+            self.update_zbox(s);
+            match s.z {
+                Some(z) => {
+                    let v = if z.len() == 0 { 0.0 } else { z[0] };
+                    self.shp.write(pack_f64s([v]));
+                }
+                None => {
+                    let p = s.points[0].clone();
+                    if p.len() >= 3 and p[2].is_none() {
+                        return Err(shp_err(f"Failed to write elevation value for record {self.shp_num}. Expected floats."));
+                    }
+                    self.shp.write(pack_f64s([cx(p, 2)]));
+                }
+            }
+        }
+        if st == 11 or st == 21 {
+            self.update_mbox(s);
+            match s.m {
+                Some(m) => {
+                    let v = if m.len() == 0 { nodata() } else { m[0].unwrap_or(nodata()) };
+                    self.shp.write(pack_f64s([v]));
+                }
+                None => {
+                    let mpos = if st == 11 { 3 } else { 2 };
+                    let p = s.points[0].clone();
+                    let v = if mpos < p.len() { p[mpos].unwrap_or(nodata()) } else { nodata() };
+                    self.shp.write(pack_f64s([v]));
+                }
+            }
+        }
+        let finish = self.shp.pos;
+        let length = (finish - start) / 2;
+        self.shp.pos = start - 4;
+        self.shp.write(pack_be_i32(length));
+        self.shp.pos = finish;
+        Ok((offset, length))
+    }
+
+    fn null(mut ref self) -> Result[(), PyErr] {
+        self.shape(new_shape(0))
+    }
+
+    fn balance(mut ref self) -> Result[(), PyErr] {
+        while self.rec_num > self.shp_num {
+            self.null()?;
+        }
+        while self.rec_num < self.shp_num {
+            self.record_list(Vec.new())?;
+        }
+        Ok(())
+    }
+
+    // record(*values)
+    fn record_list(mut ref self, values: ref Vec[Val]) -> Result[(), PyErr] {
+        if self.auto_balance and self.rec_num > self.shp_num {
+            self.balance()?;
+        }
+        let count = self.real_fields().len();
+        let mut rec = values.clone();
+        while rec.len() < count {
+            rec.push(Val.Text(String.new()));
+        }
+        self.dbf_record(rec)
+    }
+
+    // record(**values)
+    fn record_kw(mut ref self, kw: ref Vec[(String, Val)]) -> Result[(), PyErr] {
+        if self.auto_balance and self.rec_num > self.shp_num {
+            self.balance()?;
+        }
+        let mut rec: Vec[Val] = Vec.new();
+        for f in self.real_fields().iter() {
+            let mut got = Val.Text(String.new());
+            for item in kw.iter() {
+                let (k, v) = item;
+                if *k == f.name {
+                    got = match v {
+                        Val.Nothing => Val.Text(String.new()),
+                        _ => v.clone(),
+                    };
+                }
+            }
+            rec.push(got);
+        }
+        self.dbf_record(rec)
+    }
+
+    fn dbf_record(mut ref self, record: ref Vec[Val]) -> Result[(), PyErr] {
+        if self.rec_num == 0 {
+            self.dbf_header()?;
+        }
+        self.dbf.write([b' ']);
+        self.rec_num += 1;
+        let fields = self.real_fields();
+        let mut i = 0;
+        while i < fields.len() and i < record.len() {
+            let f = fields[i].clone();
+            let v = record[i].clone();
+            let size = f.size;
+            let t = upper_str(f.ftype);
+            let mut text_value = true;
+            let mut out: Vec[u8] = Vec.new();
+            if t == "N" or t == "F" {
+                if is_missing(v) {
+                    out = repeat_byte(b'*', size);
+                    text_value = false;
+                } else if f.deci == 0 {
+                    let n = to_int(v)?;
+                    out = fit_right(f"{n}", size);
+                } else {
+                    let x = to_float(v)?;
+                    out = fit_right(fixed(x, f.deci), size);
+                }
+            } else if t == "D" {
+                match v {
+                    Val.Date(y, m, d) => out = encode(ymd(y, m, d)),
+                    Val.List(xs) => {
+                        if xs.len() == 3 {
+                            out = encode(ymd(xs[0], xs[1], xs[2]));
+                        } else {
+                            return Err(shp_err("Date values must be either a datetime.date object, a list, a YYYYMMDD string, or a missing value.".to_string()));
+                        }
+                    }
+                    _ => {
+                        if is_missing(v) {
+                            out = repeat_byte(b'0', 8);
+                            text_value = false;
+                        } else {
+                            let ok = match v {
+                                Val.Text(ref s) => char_len(s) == 8,
+                                _ => false,
+                            };
+                            if not ok {
+                                return Err(shp_err("Date values must be either a datetime.date object, a list, a YYYYMMDD string, or a missing value.".to_string()));
+                            }
+                            out = encode_ascii(val_str(v))?;
+                        }
+                    }
+                }
+            } else if t == "L" {
+                text_value = false;
+                let c = if is_missing(v) {
+                    b' '
+                } else {
+                    match v {
+                        Val.Bool(b) => if b { b'T' } else { b'F' },
+                        Val.Int(n) => if n == 1 { b'T' } else if n == 0 { b'F' } else { b' ' },
+                        Val.Float(x) => if x == 1.0 { b'T' } else if x == 0.0 { b'F' } else { b' ' },
+                        _ => b' ',
+                    }
+                };
+                out = [c];
+            } else {
+                text_value = false;
+                let raw = match v {
+                    Val.Nothing => Vec.new(),
+                    _ => encode(val_str(v)),
+                };
+                let mut b = sub_bytes(raw, 0, size);
+                while b.len() < size {
+                    b.push(b' ');
+                }
+                out = b;
+            }
+            if text_value {
+                // format() results are ASCII already.
+            }
+            if out.len() != size {
+                return Err(shp_err(f"Shapefile Writer unable to pack incorrect sized value (size {out.len()}) into field '{f.name}' (size {size})."));
+            }
+            self.dbf.write(out);
+            i += 1;
+        }
+        Ok(())
+    }
+
+    fn dbf_header(mut ref self) -> Result[(), PyErr] {
+        self.dbf.pos = 0;
+        let fields = self.real_fields();
+        if fields.len() == 0 {
+            return Err(shp_err("Shapefile dbf file must contain at least one field.".to_string()));
+        }
+        let header_len = fields.len() * 32 + 33;
+        if header_len >= 65535 {
+            return Err(shp_err("Shapefile dbf header length exceeds maximum length.".to_string()));
+        }
+        let mut rec_len = 1;
+        for f in fields.iter() {
+            rec_len += f.size;
+        }
+        let mut h: Vec[u8] = [3 as u8, 126 as u8, 10 as u8, 21 as u8];
+        put_le_i32(mut h, self.rec_num);
+        put_le_u16(mut h, header_len);
+        put_le_u16(mut h, rec_len);
+        for _ in 0..20 {
+            h.push(0);
+        }
+        self.dbf.write(h);
+        for f in fields.iter() {
+            let mut name: Vec[u8] = Vec.new();
+            for c in encode(f.name).iter() {
+                name.push(if *c == b' ' { b'_' } else { *c });
+            }
+            let mut nb = sub_bytes(name, 0, 10);
+            while nb.len() < 11 {
+                nb.push(0);
+            }
+            let mut fd = nb;
+            let tb = encode(f.ftype);
+            if tb.len() != 1 {
+                return Err(perr("error", "char format requires a bytes object of length 1".to_string()));
+            }
+            fd.push(tb[0]);
+            for _ in 0..4 {
+                fd.push(0);
+            }
+            fd.push(f.size as u8);
+            fd.push(f.deci as u8);
+            for _ in 0..14 {
+                fd.push(0);
+            }
+            self.dbf.write(fd);
+        }
+        self.dbf.write([b'\r']);
+        Ok(())
+    }
+
+    fn file_header(mut ref self, shx: bool) {
+        let mut h: Vec[u8] = Vec.new();
+        put_be_i32(mut h, 9994);
+        for _ in 0..5 {
+            put_be_i32(mut h, 0);
+        }
+        if shx {
+            put_be_i32(mut h, (100 + self.shp_num * 8) / 2);
+        } else {
+            put_be_i32(mut h, self.shp.data.len() / 2);
+        }
+        if self.st.is_none() {
+            self.st = Some(0);
+        }
+        let st = self.st.unwrap_or(0);
+        put_le_i32(mut h, 1000);
+        put_le_i32(mut h, st);
+        if st != 0 {
+            let b = self.bbox.clone().unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            for x in b.iter() {
+                put_le_f64(mut h, *x);
+            }
+        } else {
+            for _ in 0..4 {
+                put_le_f64(mut h, 0.0);
+            }
+        }
+        let zb = if in_set(st, [11, 13, 15, 18]) { self.zbox.clone().unwrap_or([0.0, 0.0]) } else { [0.0, 0.0] };
+        let mb = if in_set(st, [11, 13, 15, 18, 21, 23, 25, 28, 31]) { self.mbox.clone().unwrap_or([0.0, 0.0]) } else { [0.0, 0.0] };
+        put_le_f64(mut h, zb[0]);
+        put_le_f64(mut h, zb[1]);
+        put_le_f64(mut h, mb[0]);
+        put_le_f64(mut h, mb[1]);
+        if shx {
+            self.shx.pos = 0;
+            self.shx.write(h);
+        } else {
+            self.shp.pos = 0;
+            self.shp.write(h);
+        }
+    }
+
+    fn close(mut ref self) -> Result[(), PyErr] {
+        if self.closed {
+            return Ok(());
+        }
+        if self.auto_balance {
+            self.balance()?;
+        }
+        if self.rec_num != self.shp_num {
+            return Err(shp_err(f"When saving both the dbf and shp file, the number of records ({self.rec_num}) must correspond with the number of shapes ({self.shp_num})"));
+        }
+        self.file_header(false);
+        self.file_header(true);
+        self.dbf_header()?;
+        self.closed = true;
+        Ok(())
+    }
+
+    // _shapeparts
+    fn shape_parts(mut ref self, parts: ref Vec[Vec[Vec[Option[f64]]]], st: i64) -> Result[(), PyErr] {
+        let mut s = new_shape(st);
+        for part in parts.iter() {
+            let mut pt = part.clone();
+            if in_set(st, [5, 15, 25, 31]) {
+                if pt.len() == 0 {
+                    return Err(index_err());
+                }
+                if not same_coord(pt[0], pt[pt.len() - 1]) {
+                    pt.push(pt[0].clone());
+                }
+            }
+            s.parts.push(s.points.len());
+            for p in pt.iter() {
+                s.points.push(p.clone());
+            }
+        }
+        self.shape(s)
+    }
+
+    fn multipatch(mut ref self, parts: ref Vec[Vec[Vec[Option[f64]]]], types: ref Vec[i64]) -> Result[(), PyErr] {
+        let mut s = new_shape(31);
+        for part in parts.iter() {
+            s.parts.push(s.points.len());
+            for p in part.iter() {
+                s.points.push(p.clone());
+            }
+        }
+        s.part_types = Some(types.clone());
+        self.shape(s)
+    }
+}
+// ------------------------------------------------------------ the Reader
+
+// A _Record: the values, the name-to-position lookup, and the oid.
+#[derive(Clone)]
+struct Rec {
+    vals: Vec[Val],
+    lookup: Vec[(String, i64)],
+    oid: i64,
+}
+
+fn rec_repr(r: ref Rec) -> String {
+    f"Record #{r.oid}: {vals_repr(r.vals)}"
+}
+
+fn opt_rec_repr(r: ref Option[Rec]) -> String {
+    match r {
+        Some(x) => rec_repr(x),
+        None => "None".to_string(),
+    }
+}
+
+fn rec_pos(r: ref Rec, name: ref String) -> Option[i64] {
+    for item in r.lookup.iter() {
+        let (k, i) = item;
+        if *k == *name {
+            return Some(*i);
+        }
+    }
+    None
+}
+
+// What a record read needs: which fields to unpack, its size, and the
+// lookup the _Record gets.
+#[derive(Clone)]
+struct RecPlan {
+    take: Vec[bool],
+    size: i64,
+    lookup: Vec[(String, i64)],
+}
+
+// A dict built by assigning keys in order: first position, last value.
+fn dict_set(d: mut ref Vec[(String, i64)], k: ref String, v: i64) {
+    let mut i = 0;
+    while i < d.len() {
+        if d[i].0 == *k {
+            d[i] = (k.clone(), v);
+            return;
+        }
+        i += 1;
+    }
+    d.push((k.clone(), v));
+}
+
+fn dict_get(d: ref Vec[(String, i64)], k: ref String) -> Option[i64] {
+    for item in d.iter() {
+        let (key, v) = item;
+        if *key == *k {
+            return Some(*v);
+        }
+    }
+    None
+}
+
+// int() of bytes, where it raises ValueError as None.
+fn bytes_int(b: ref Vec[u8]) -> Option[i64] {
+    py_int(latin1(b))
+}
+
+fn bytes_float(b: ref Vec[u8]) -> Option[f64] {
+    py_float(latin1(b))
+}
+
+struct Reader {
+    shp: Option[Vec[u8]],
+    shx: Option[Vec[u8]],
+    dbf: Option[Vec[u8]],
+    shp_pos: i64,
+    dbf_pos: i64,
+    st: i64,
+    bbox: Vec[f64],
+    zbox: Vec[f64],
+    mbox: Vec[Option[f64]],
+    num_records: Option[i64],
+    num_shapes: Option[i64],
+    fields: Vec[Field],
+    field_lookup: Vec[(String, i64)],
+    hdr_len: i64,
+    rec_len: i64,
+    offsets: Vec[i64],
+    errors: String,
+}
+
+fn open_file(base: ref String, ext: Str) -> Option[Vec[u8]] {
+    match fs.read_bytes(f"{base}.{ext}") {
+        Ok(b) => Some(b),
+        Err(_) => match fs.read_bytes(f"{base}.{upper_str(ext.to_string())}") {
+            Ok(b) => Some(b),
+            Err(_) => None,
+        },
+    }
+}
+
+fn no_file(what: Str) -> PyErr {
+    shp_err(f"Shapefile Reader requires a shapefile or file-like object. (no {what} file found)")
+}
+
+fn need_file() -> PyErr {
+    shp_err("Shapefile Reader requires a shapefile or file-like object.".to_string())
+}
+
+fn read_shapefile(path: ref String, errors: Str) -> Result[Reader, PyErr] {
+    let mut r = Reader {
+        shp: open_file(path, "shp"),
+        shx: open_file(path, "shx"),
+        dbf: open_file(path, "dbf"),
+        shp_pos: 0,
+        dbf_pos: 0,
+        st: 0,
+        bbox: Vec.new(),
+        zbox: Vec.new(),
+        mbox: Vec.new(),
+        num_records: None,
+        num_shapes: None,
+        fields: Vec.new(),
+        field_lookup: Vec.new(),
+        hdr_len: 0,
+        rec_len: 0,
+        offsets: Vec.new(),
+        errors: errors.to_string(),
+    };
+    if r.shp.is_none() and r.dbf.is_none() {
+        return Err(shp_err(f"Unable to open {path}.dbf or {path}.shp."));
+    }
+    if r.shp.is_some() {
+        r.shp_header()?;
+    }
+    if r.dbf.is_some() {
+        r.dbf_header()?;
+    }
+    if r.shx.is_some() {
+        r.shx_header()?;
+    }
+    Ok(r)
+}
+
+fn f64s_at(b: ref Vec[u8], n: i64) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(le_f64(b, 8 * k));
+        k += 1;
+    }
+    out
+}
+
+fn i32s_at(b: ref Vec[u8], n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(le_i32(b, 4 * k));
+        k += 1;
+    }
+    out
+}
+
+fn measure(m: f64) -> Option[f64] {
+    if m > nodata() { Some(m) } else { None }
+}
+
+impl Reader {
+    fn shp_bytes(ref self) -> Vec[u8] {
+        self.shp.clone().unwrap_or(Vec.new())
+    }
+
+    fn shp_header(mut ref self) -> Result[(), PyErr] {
+        let data = self.shp_bytes();
+        let mut pos = 24;
+        take(data, mut pos, 4, 4)?;
+        pos = 32;
+        let t = take(data, mut pos, 4, 4)?;
+        self.st = le_i32(t, 0);
+        let b = take(data, mut pos, 32, 32)?;
+        self.bbox = f64s_at(b, 4);
+        let z = take(data, mut pos, 16, 16)?;
+        self.zbox = f64s_at(z, 2);
+        let m = take(data, mut pos, 16, 16)?;
+        let mut mb: Vec[Option[f64]] = Vec.new();
+        for v in f64s_at(m, 2).iter() {
+            mb.push(measure(*v));
+        }
+        self.mbox = mb;
+        self.shp_pos = pos;
+        Ok(())
+    }
+
+    fn shx_header(mut ref self) -> Result[(), PyErr] {
+        let data = self.shx.clone().unwrap_or(Vec.new());
+        let mut pos = 24;
+        let b = take(data, mut pos, 4, 4)?;
+        let n = be_i32(b, 0) * 2 - 100;
+        // Python's // rounds down.
+        let q = if n < 0 and n % 8 != 0 { n / 8 - 1 } else { n / 8 };
+        self.num_shapes = Some(q);
+        Ok(())
+    }
+
+    fn dbf_header(mut ref self) -> Result[(), PyErr] {
+        let data = match self.dbf.clone() {
+            Some(d) => d,
+            None => return Err(no_file("dbf")),
+        };
+        let mut pos = 0;
+        let h = take(data, mut pos, 32, 32)?;
+        self.num_records = Some(le_u32(h, 4));
+        self.hdr_len = le_u16(h, 8);
+        self.rec_len = le_u16(h, 10);
+        let num_fields = if self.hdr_len < 33 { 0 } else { (self.hdr_len - 33) / 32 };
+        let mut k = 0;
+        while k < num_fields {
+            let d = take(data, mut pos, 32, 32)?;
+            let raw = sub_bytes(d, 0, 11);
+            let mut idx = 10;
+            let mut j = 0;
+            while j < 11 {
+                if raw[j] == 0 {
+                    idx = j;
+                    break;
+                }
+                j += 1;
+            }
+            let name_s = decode(sub_bytes(raw, 0, idx), "utf-8", self.errors)?;
+            let cs = chars_of(name_s);
+            let mut a = 0;
+            while a < cs.len() and is_space(cs[a]) {
+                a += 1;
+            }
+            let name = str_of(slice_chars(cs, a, cs.len()));
+            let ftype = decode([d[11]], "ascii", "strict".to_string())?;
+            self.fields.push(Field { name: name, ftype: ftype, size: d[16] as i64, deci: d[17] as i64 });
+            k += 1;
+        }
+        let term = sub_bytes(data, pos, pos + 1);
+        pos += term.len();
+        if term.len() != 1 or term[0] != b'\r' {
+            return Err(shp_err("Shapefile dbf header lacks expected terminator. (likely corrupt?)".to_string()));
+        }
+        self.dbf_pos = pos;
+        self.fields.insert(0, Field { name: "DeletionFlag".to_string(), ftype: "C".to_string(), size: 1, deci: 0 });
+        let mut lk: Vec[(String, i64)] = Vec.new();
+        let mut i = 0;
+        while i < self.fields.len() {
+            dict_set(mut lk, self.fields[i].name, i);
+            i += 1;
+        }
+        self.field_lookup = lk;
+        let mut names: Vec[String] = Vec.new();
+        i = 1;
+        while i < self.fields.len() {
+            names.push(self.fields[i].name.clone());
+            i += 1;
+        }
+        self.rec_plan(Some(names))?;
+        Ok(())
+    }
+
+    fn fields_repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        for f in self.fields.iter() {
+            if i == 0 {
+                parts.push(f"({repr_str(f.name)}, {repr_str(f.ftype)}, {f.size}, {f.deci})");
+            } else {
+                parts.push(field_repr(f));
+            }
+            i += 1;
+        }
+        f"[{join(parts, ", ")}]"
+    }
+
+    // __recordFields(fields)
+    fn rec_plan(ref self, sel: ref Option[Vec[String]]) -> Result[RecPlan, PyErr] {
+        let mut want: Vec[String] = Vec.new();
+        let all = sel.is_none();
+        if let Some(names) = sel {
+            for n in names.iter() {
+                let mut dup = false;
+                for w in want.iter() {
+                    if *w == *n {
+                        dup = true;
+                    }
+                }
+                if not dup {
+                    want.push(n.clone());
+                }
+            }
+        }
+        let mut take: Vec[bool] = Vec.new();
+        let mut size = 0;
+        let mut i = 0;
+        for f in self.fields.iter() {
+            let mut inc = all or i == 0;
+            for w in want.iter() {
+                if *w == f.name {
+                    inc = true;
+                }
+            }
+            take.push(inc);
+            size += f.size;
+            i += 1;
+        }
+        if size < self.rec_len {
+            size = self.rec_len;
+        }
+        for w in want.iter() {
+            if dict_get(self.field_lookup, w).is_none() or *w == "DeletionFlag" {
+                return Err(perr("ValueError", f"\"{w}\" is not a valid field name"));
+            }
+        }
+        let mut lookup: Vec[(String, i64)] = Vec.new();
+        let mut n = 0;
+        i = 0;
+        for f in self.fields.iter() {
+            if i > 0 and take[i] {
+                dict_set(mut lookup, f.name, n);
+                n += 1;
+            }
+            i += 1;
+        }
+        Ok(RecPlan { take: take, size: size, lookup: lookup })
+    }
+
+    fn parse_value(ref self, f: ref Field, v: ref Vec[u8]) -> Result[Val, PyErr] {
+        let t = f.ftype.clone();
+        if t == "N" or t == "F" {
+            let mut cut = 0;
+            while cut < v.len() and v[cut] != 0 {
+                cut += 1;
+            }
+            let mut b: Vec[u8] = Vec.new();
+            for x in sub_bytes(v, 0, cut).iter() {
+                if *x != b'*' {
+                    b.push(*x);
+                }
+            }
+            if b.len() == 0 {
+                return Ok(Val.Nothing);
+            }
+            if f.deci != 0 {
+                return Ok(match bytes_float(b) {
+                    Some(x) => Val.Float(x),
+                    None => Val.Nothing,
+                });
+            }
+            if let Some(n) = bytes_int(b) {
+                return Ok(Val.Int(n));
+            }
+            return match bytes_float(b) {
+                Some(x) => {
+                    if x != x {
+                        Ok(Val.Nothing)
+                    } else {
+                        Ok(Val.Int(float_trunc(x)?))
+                    }
+                }
+                None => Ok(Val.Nothing),
+            };
+        }
+        if t == "D" {
+            let mut blank = true;
+            for x in v.iter() {
+                if *x != 0 and *x != b' ' and *x != b'0' {
+                    blank = false;
+                }
+            }
+            if blank {
+                return Ok(Val.Nothing);
+            }
+            let y = bytes_int(sub_bytes(v, 0, 4));
+            let m = bytes_int(sub_bytes(v, 4, 6));
+            let d = bytes_int(sub_bytes(v, 6, 8));
+            if let (Some(yy), Some(mm), Some(dd)) = (y, m, d) {
+                if date_ok(yy, mm, dd) {
+                    return Ok(Val.Date(yy, mm, dd));
+                }
+            }
+            return Ok(Val.Text(decode(strip_ascii(v), "utf-8", "strict".to_string())?));
+        }
+        if t == "L" {
+            if v.len() == 1 and v[0] == b' ' {
+                return Ok(Val.Nothing);
+            }
+            if find_bytes(bytes_of("YyTt1"), v, 0) >= 0 {
+                return Ok(Val.Bool(true));
+            }
+            if find_bytes(bytes_of("NnFf0"), v, 0) >= 0 {
+                return Ok(Val.Bool(false));
+            }
+            return Ok(Val.Nothing);
+        }
+        let s = decode(v, "utf-8", self.errors)?;
+        let cs = chars_of(s);
+        let mut a = 0;
+        let mut e = cs.len();
+        while a < e and is_space(cs[a]) {
+            a += 1;
+        }
+        while e > a and is_space(cs[e - 1]) {
+            e -= 1;
+        }
+        while e > a and cs[e - 1] == '\u{0}' {
+            e -= 1;
+        }
+        Ok(Val.Text(str_of(slice_chars(cs, a, e))))
+    }
+
+    // __record at the dbf's position.
+    fn read_record(mut ref self, plan: ref RecPlan, oid: i64) -> Result[Option[Rec], PyErr] {
+        let data = match self.dbf.clone() {
+            Some(d) => d,
+            None => return Err(need_file()),
+        };
+        let mut pos = self.dbf_pos;
+        let row = take(data, mut pos, plan.size, plan.size);
+        self.dbf_pos = pos;
+        let row = row?;
+        if row[0] != b' ' {
+            return Ok(None);
+        }
+        let mut vals: Vec[Val] = Vec.new();
+        let mut off = 1;
+        let mut i = 1;
+        while i < self.fields.len() {
+            let f = self.fields[i].clone();
+            if plan.take[i] {
+                vals.push(self.parse_value(f, sub_bytes(row, off, off + f.size))?);
+            }
+            off += f.size;
+            i += 1;
+        }
+        Ok(Some(Rec { vals: vals, lookup: plan.lookup.clone(), oid: oid }))
+    }
+
+    fn restrict(ref self, i: i64) -> Result[i64, PyErr] {
+        if let Some(n) = self.num_records {
+            if n != 0 {
+                let ai = if i < 0 { -i } else { i };
+                if ai > n - 1 {
+                    return Err(perr("IndexError", "Shape or Record index out of range.".to_string()));
+                }
+                if i < 0 {
+                    return Ok(n + i);
+                }
+            }
+        }
+        Ok(i)
+    }
+
+    fn len(mut ref self) -> Result[i64, PyErr] {
+        if self.dbf.is_some() {
+            return Ok(self.num_records.unwrap_or(0));
+        }
+        if self.shp.is_some() {
+            if self.shx.is_some() {
+                return Ok(self.num_shapes.unwrap_or(0));
+            }
+            if self.num_shapes.is_none() {
+                let data = self.shp_bytes();
+                let mut offsets: Vec[i64] = Vec.new();
+                let mut pos = 100;
+                while pos < data.len() {
+                    offsets.push(pos);
+                    let mut p = pos;
+                    let h = take(data, mut p, 8, 8)?;
+                    pos += 8 + 2 * be_i32(h, 4);
+                }
+                self.num_shapes = Some(offsets.len());
+                self.offsets = offsets;
+            }
+            return Ok(self.num_shapes.unwrap_or(0));
+        }
+        Ok(0)
+    }
+
+    fn describe(mut ref self) -> Result[String, PyErr] {
+        let mut info = ["shapefile Reader".to_string()];
+        if self.shp.is_some() {
+            let n = self.len()?;
+            let t = lookup_type(self.st)?;
+            info.push(f"    {n} shapes (type '{t}')");
+        }
+        if self.dbf.is_some() {
+            let n = self.len()?;
+            info.push(f"    {n} records ({self.fields.len()} fields)");
+        }
+        Ok(join(info, "\n"))
+    }
+
+    // __shape at the shp's position.
+    fn read_shape(mut ref self, oid: i64, bbox: ref Option[Vec[f64]]) -> Result[Option[Shape], PyErr] {
+        let data = match self.shp.clone() {
+            Some(d) => d,
+            None => return Err(need_file()),
+        };
+        let mut pos = self.shp_pos;
+        let r = self.shape_at(data, mut pos, oid, bbox);
+        self.shp_pos = pos;
+        r
+    }
+
+    fn shape_at(ref self, f: ref Vec[u8], pos: mut ref i64, oid: i64, bbox: ref Option[Vec[f64]]) -> Result[Option[Shape], PyErr] {
+        let mut s = new_shape(0);
+        s.oid = oid;
+        let h = take(f, mut pos, 8, 8)?;
+        let next = *pos + 2 * be_i32(h, 4);
+        let t = take(f, mut pos, 4, 4)?;
+        let st = le_i32(t, 0);
+        s.st = st;
+        s.tup = true;
+        if has_bbox(st) {
+            let b = f64s_at(take(f, mut pos, 32, 32)?, 4);
+            if let Some(q) = bbox {
+                if not bbox_overlap(q, b) {
+                    *pos = next;
+                    return Ok(None);
+                }
+            }
+            s.bbox = Some(b);
+        }
+        let mut n_parts = 0;
+        let mut n_points = 0;
+        if has_parts(st) {
+            n_parts = le_i32(take(f, mut pos, 4, 4)?, 0);
+        }
+        if has_bbox(st) {
+            n_points = le_i32(take(f, mut pos, 4, 4)?, 0);
+        }
+        if n_parts != 0 {
+            s.parts = i32s_at(take(f, mut pos, n_parts * 4, n_parts * 4)?, n_parts);
+        }
+        if st == 31 {
+            s.part_types = Some(i32s_at(take(f, mut pos, n_parts * 4, n_parts * 4)?, n_parts));
+        }
+        if n_points != 0 {
+            let flat = f64s_at(take(f, mut pos, 16 * n_points, 16 * n_points)?, 2 * n_points);
+            let mut k = 0;
+            while k < n_points {
+                s.points.push(xy(flat[2 * k], flat[2 * k + 1]));
+                k += 1;
+            }
+        }
+        if has_z(st) {
+            take(f, mut pos, 16, 16)?;
+            s.z = Some(f64s_at(take(f, mut pos, n_points * 8, n_points * 8)?, n_points));
+        }
+        if has_m(st) {
+            if next - *pos >= 16 {
+                take(f, mut pos, 16, 16)?;
+            }
+            let mut ms: Vec[Option[f64]] = Vec.new();
+            if next - *pos >= n_points * 8 {
+                for v in f64s_at(take(f, mut pos, n_points * 8, n_points * 8)?, n_points).iter() {
+                    ms.push(measure(*v));
+                }
+            } else {
+                let mut k = 0;
+                while k < n_points {
+                    ms.push(None);
+                    k += 1;
+                }
+            }
+            s.m = Some(ms);
+        }
+        if is_point(st) {
+            let p = f64s_at(take(f, mut pos, 16, 16)?, 2);
+            s.points = [xy(p[0], p[1])];
+            s.tup = false;
+        }
+        if st == 11 {
+            s.z = Some(f64s_at(take(f, mut pos, 8, 8)?, 1));
+        }
+        if st == 21 or st == 11 {
+            let m = if next - *pos >= 8 { le_f64(take(f, mut pos, 8, 8)?, 0) } else { nodata() };
+            s.m = Some([measure(m)]);
+        }
+        *pos = next;
+        Ok(Some(s))
+    }
+
+    fn shx_offsets(mut ref self) -> Result[(), PyErr] {
+        let data = match self.shx.clone() {
+            Some(d) => d,
+            None => return Err(no_file("shx")),
+        };
+        let n = self.num_shapes.unwrap_or(0);
+        let raw = if n < 0 { sub_bytes(data, 100, data.len()) } else { sub_bytes(data, 100, 100 + 2 * n * 4) };
+        if raw.len() % 4 != 0 {
+            return Err(perr("ValueError", "bytes length not a multiple of item size".to_string()));
+        }
+        let mut out: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k * 4 < raw.len() {
+            if k % 2 == 0 {
+                out.push(2 * be_i32(raw, 4 * k));
+            }
+            k += 1;
+        }
+        self.offsets = out;
+        Ok(())
+    }
+
+    // shape(i, bbox)
+    fn shape(mut ref self, i0: i64, bbox: ref Option[Vec[f64]]) -> Result[Option[Shape], PyErr] {
+        let data = match self.shp.clone() {
+            Some(d) => d,
+            None => return Err(need_file()),
+        };
+        let i = self.restrict(i0)?;
+        let mut offset: i64 = 0;
+        if self.shx.is_some() {
+            if self.offsets.len() == 0 {
+                self.shx_offsets()?;
+            }
+            let n = self.offsets.len();
+            let j = if i < 0 { i + n } else { i };
+            if j < 0 or j >= n {
+                return Err(index_err());
+            }
+            offset = self.offsets[j];
+        }
+        if offset == 0 {
+            let mut k = 0;
+            offset = 100;
+            while offset < data.len() {
+                if k == i {
+                    break;
+                }
+                let mut p = offset;
+                let h = take(data, mut p, 8, 8)?;
+                offset += 8 + 2 * be_i32(h, 4);
+                k += 1;
+            }
+            if k != i {
+                return Err(shp_err(f"Shape index {i} is out of bounds; the .shp file only contains {k} shapes"));
+            }
+        }
+        self.shp_pos = offset;
+        self.read_shape(i, bbox)
+    }
+
+    fn record(mut ref self, i0: i64, sel: ref Option[Vec[String]]) -> Result[Option[Rec], PyErr] {
+        if self.dbf.is_none() {
+            return Err(need_file());
+        }
+        if self.num_records.is_none() {
+            self.dbf_header()?;
+        }
+        let i = self.restrict(i0)?;
+        self.dbf_pos = self.hdr_len + i * self.rec_len;
+        let plan = self.rec_plan(sel)?;
+        self.read_record(plan, i)
+    }
+
+    fn records(mut ref self, sel: ref Option[Vec[String]]) -> Result[Vec[Rec], PyErr] {
+        if self.num_records.is_none() {
+            self.dbf_header()?;
+        }
+        if self.dbf.is_none() {
+            return Err(need_file());
+        }
+        self.dbf_pos = self.hdr_len;
+        let plan = self.rec_plan(sel)?;
+        let mut out: Vec[Rec] = Vec.new();
+        let n = self.num_records.unwrap_or(0);
+        let mut i = 0;
+        while i < n {
+            if let Some(r) = self.read_record(plan, i)? {
+                out.push(r);
+            }
+            i += 1;
+        }
+        Ok(out)
+    }
+}
+
+// The iterShapes generator, one step at a time.
+struct ShapeIter {
+    started: bool,
+    counted: bool,
+    n: i64,
+    i: i64,
+    end: i64,
+    offsets: Vec[i64],
+    done: bool,
+}
+
+fn shape_iter() -> ShapeIter {
+    ShapeIter { started: false, counted: false, n: 0, i: 0, end: 0, offsets: Vec.new(), done: false }
+}
+
+fn next_shape(it: mut ref ShapeIter, r: mut ref Reader, bbox: ref Option[Vec[f64]]) -> Result[Option[Shape], PyErr] {
+    if it.done {
+        return Ok(None);
+    }
+    if not it.started {
+        it.started = true;
+        let data = match r.shp.clone() {
+            Some(d) => d,
+            None => return Err(need_file()),
+        };
+        it.end = data.len();
+        r.shp_pos = 100;
+        let n = r.num_shapes.clone().unwrap_or(0);
+        it.counted = n != 0;
+        it.n = n;
+    }
+    loop {
+        if it.counted {
+            if it.i >= it.n {
+                it.done = true;
+                return Ok(None);
+            }
+            let oid = it.i;
+            it.i += 1;
+            if let Some(s) = r.read_shape(oid, bbox)? {
+                return Ok(Some(s));
+            }
+        } else {
+            if r.shp_pos >= it.end {
+                it.done = true;
+                r.num_shapes = Some(it.i);
+                r.offsets = it.offsets.clone();
+                return Ok(None);
+            }
+            it.offsets.push(r.shp_pos);
+            let oid = it.i;
+            let got = r.read_shape(oid, bbox)?;
+            it.i += 1;
+            if let Some(s) = got {
+                return Ok(Some(s));
+            }
+        }
+    }
+}
+
+// The iterRecords generator.
+struct RecIter {
+    started: bool,
+    plan: Option[RecPlan],
+    i: i64,
+    pos: i64,
+}
+
+fn rec_iter() -> RecIter {
+    RecIter { started: false, plan: None, i: 0, pos: 0 }
+}
+
+fn next_rec(it: mut ref RecIter, r: mut ref Reader, sel: ref Option[Vec[String]]) -> Result[Option[Rec], PyErr] {
+    if not it.started {
+        it.started = true;
+        if r.num_records.is_none() {
+            r.dbf_header()?;
+        }
+        if r.dbf.is_none() {
+            return Err(need_file());
+        }
+        it.pos = r.hdr_len;
+        it.plan = Some(r.rec_plan(sel)?);
+    }
+    let plan = match it.plan.clone() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let n = r.num_records.clone().unwrap_or(0);
+    while it.i < n {
+        let oid = it.i;
+        it.i += 1;
+        r.dbf_pos = it.pos;
+        let got = r.read_record(plan, oid);
+        it.pos = r.dbf_pos;
+        if let Some(rec) = got? {
+            return Ok(Some(rec));
+        }
+    }
+    Ok(None)
+}
+
+fn all_shapes(r: mut ref Reader, bbox: ref Option[Vec[f64]]) -> Result[Vec[Shape], PyErr] {
+    let mut it = shape_iter();
+    let mut out: Vec[Shape] = Vec.new();
+    loop {
+        match next_shape(mut it, mut r, bbox)? {
+            Some(s) => out.push(s),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+// iterShapeRecords as a list (shapeRecords)
+fn shape_records(r: mut ref Reader, bbox: ref Option[Vec[f64]]) -> Result[Vec[(Shape, Option[Rec])], PyErr] {
+    let mut out: Vec[(Shape, Option[Rec])] = Vec.new();
+    let none: Option[Vec[String]] = None;
+    let mut si = shape_iter();
+    if bbox.is_some() {
+        loop {
+            match next_shape(mut si, mut r, bbox)? {
+                Some(s) => {
+                    let rec = r.record(s.oid, none)?;
+                    out.push((s, rec));
+                }
+                None => break,
+            }
+        }
+        return Ok(out);
+    }
+    let mut ri = rec_iter();
+    loop {
+        let s = match next_shape(mut si, mut r, bbox)? {
+            Some(s) => s,
+            None => break,
+        };
+        match next_rec(mut ri, mut r, none)? {
+            Some(rec) => out.push((s, Some(rec))),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ layer scripts
+
+fn bad_float(s: ref String) -> PyErr {
+    not_float(s)
+}
+
+fn parse_float(s: ref String) -> Result[f64, PyErr] {
+    match py_float_s(s) {
+        Some(x) => Ok(x),
+        None => Err(bad_float(s)),
+    }
+}
+
+fn parse_int(s: ref String) -> Result[i64, PyErr] {
+    match py_int_s(s) {
+        Some(n) => Ok(n),
+        None => Err(perr("ValueError", f"invalid literal for int() with base 10: {repr_str(s)}")),
+    }
+}
+
+fn num(v: ref String) -> Result[Option[f64], PyErr] {
+    if *v == "-" {
+        Ok(None)
+    } else {
+        Ok(Some(parse_float(v)?))
+    }
+}
+
+fn point_of(text: ref String) -> Result[Vec[Option[f64]], PyErr] {
+    let mut out: Vec[Option[f64]] = Vec.new();
+    for v in split_on(text, ',').iter() {
+        out.push(num(v)?);
+    }
+    Ok(out)
+}
+
+fn part_of(text: ref String) -> Result[Vec[Vec[Option[f64]]], PyErr] {
+    let mut out: Vec[Vec[Option[f64]]] = Vec.new();
+    for p in split_ws(text).iter() {
+        out.push(point_of(p)?);
+    }
+    Ok(out)
+}
+
+fn parts_of(text: ref String) -> Result[Vec[Vec[Vec[Option[f64]]]], PyErr] {
+    let mut out: Vec[Vec[Vec[Option[f64]]]] = Vec.new();
+    if split_ws(text).len() == 0 {
+        return Ok(out);
+    }
+    for p in split_on(text, '|').iter() {
+        out.push(part_of(p)?);
+    }
+    Ok(out)
+}
+
+fn strip(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut a = 0;
+    let mut e = cs.len();
+    while a < e and is_space(cs[a]) {
+        a += 1;
+    }
+    while e > a and is_space(cs[e - 1]) {
+        e -= 1;
+    }
+    str_of(slice_chars(cs, a, e))
+}
+
+// str.partition(sep) on a one-char separator.
+fn partition(s: ref String, sep: char) -> (String, String) {
+    let cs = chars_of(s);
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == sep {
+            return (str_of(slice_chars(cs, 0, i)), str_of(slice_chars(cs, i + 1, cs.len())));
+        }
+        i += 1;
+    }
+    (s.clone(), String.new())
+}
+
+fn value_of(text0: ref String) -> Result[Val, PyErr] {
+    let text = strip(text0);
+    if text == "n" {
+        return Ok(Val.Nothing);
+    }
+    if text == "e" {
+        return Ok(Val.Text(String.new()));
+    }
+    let (kind, v) = partition(text, ':');
+    if kind == "i" {
+        return Ok(Val.Int(parse_int(v)?));
+    }
+    if kind == "f" {
+        return Ok(Val.Float(parse_float(v)?));
+    }
+    if kind == "s" {
+        return Ok(Val.Text(v));
+    }
+    if kind == "b" {
+        return Ok(Val.Bool(v == "T"));
+    }
+    if kind == "d" {
+        let ps = split_on(v, '-');
+        if ps.len() != 3 {
+            return Err(perr("ValueError", "not enough values to unpack (expected 3)".to_string()));
+        }
+        let y = parse_int(ps[0])?;
+        let m = parse_int(ps[1])?;
+        let d = parse_int(ps[2])?;
+        if not date_ok(y, m, d) {
+            return Err(perr("ValueError", "day is out of range for month".to_string()));
+        }
+        return Ok(Val.Date(y, m, d));
+    }
+    if kind == "l" {
+        let mut xs: Vec[i64] = Vec.new();
+        for p in split_on(v, ',').iter() {
+            xs.push(parse_int(p)?);
+        }
+        return Ok(Val.List(xs));
+    }
+    Err(perr("ValueError", f"bad value {text}"))
+}
+
+fn geo_of(rest: ref String) -> Result[Geo, PyErr] {
+    let (kind, coords) = partition(rest, ' ');
+    if kind == "Point" {
+        return Ok(Geo { kind: kind, depth: 0, c: [[[point_of(coords)?]]] });
+    }
+    if kind == "MultiPoint" or kind == "LineString" {
+        return Ok(Geo { kind: kind, depth: 1, c: [[part_of(coords)?]] });
+    }
+    if kind == "MultiLineString" or kind == "Polygon" {
+        return Ok(Geo { kind: kind, depth: 2, c: [parts_of(coords)?] });
+    }
+    let mut polys: Vec[Vec[Vec[Vec[Option[f64]]]]] = Vec.new();
+    for p in split_on(coords, ';').iter() {
+        polys.push(parts_of(p)?);
+    }
+    Ok(Geo { kind: kind, depth: 3, c: polys })
+}
+
+fn no_attr(name: Str) -> PyErr {
+    perr("AttributeError", f"'NoneType' object has no attribute '{name}'")
+}
+
+fn step(slot: mut ref Option[Writer], cmd: ref String, rest: ref String) -> Result[(), PyErr] {
+    if *cmd == "writer" {
+        let words = split_ws(rest);
+        let st = if words[0] == "-" {
+            None
+        } else {
+            match type_code(words[0]) {
+                Some(c) => Some(c),
+                None => return Err(perr("KeyError", repr_str(words[0]))),
+            }
+        };
+        let mut auto = false;
+        for w in words.iter() {
+            if *w == "autobalance" {
+                auto = true;
+            }
+        }
+        *slot = Some(new_writer(st, auto));
+        return Ok(());
+    }
+    let attr = if *cmd == "autobalance" {
+        "autoBalance"
+    } else if *cmd == "geo" {
+        "shape"
+    } else if *cmd == "recordkw" {
+        "record"
+    } else {
+        "field"
+    };
+    let w = match slot {
+        Some(w) => w,
+        None => return Err(no_attr(attr)),
+    };
+    if *cmd == "autobalance" {
+        w.auto_balance = true;
+    } else if *cmd == "field" {
+        let ps = split_ws(rest);
+        if ps.len() != 4 {
+            return Err(perr("ValueError", "not enough values to unpack (expected 4)".to_string()));
+        }
+        let size = parse_int(ps[2])?;
+        let deci = parse_int(ps[3])?;
+        w.field(ps[0], ps[1], size, deci)?;
+    } else if *cmd == "point" or *cmd == "pointm" or *cmd == "pointz" {
+        let ps = split_ws(rest);
+        let mut p: Vec[Option[f64]] = [Some(parse_float(ps[0])?), Some(parse_float(ps[1])?)];
+        let mut st = 1;
+        if *cmd == "pointm" {
+            p.push(num(ps[2])?);
+            st = 21;
+        } else if *cmd == "pointz" {
+            p.push(Some(parse_float(ps[2])?));
+            p.push(num(ps[3])?);
+            st = 11;
+        }
+        let mut s = new_shape(st);
+        s.points.push(p);
+        w.shape(s)?;
+    } else if *cmd == "multipoint" or *cmd == "multipointm" or *cmd == "multipointz" {
+        let st = if *cmd == "multipoint" { 8 } else if *cmd == "multipointm" { 28 } else { 18 };
+        w.shape_parts([part_of(rest)?], st)?;
+    } else if *cmd == "line" or *cmd == "linem" or *cmd == "linez" or *cmd == "poly" or *cmd == "polym" or *cmd == "polyz" {
+        let st = if *cmd == "line" {
+            3
+        } else if *cmd == "linem" {
+            23
+        } else if *cmd == "linez" {
+            13
+        } else if *cmd == "poly" {
+            5
+        } else if *cmd == "polym" {
+            25
+        } else {
+            15
+        };
+        w.shape_parts(parts_of(rest)?, st)?;
+    } else if *cmd == "multipatch" {
+        let (types, ps) = partition(rest, ' ');
+        let parts = parts_of(ps)?;
+        let mut ts: Vec[i64] = Vec.new();
+        for t in split_on(types, ',').iter() {
+            ts.push(parse_int(t)?);
+        }
+        w.multipatch(parts, ts)?;
+    } else if *cmd == "null" {
+        w.null()?;
+    } else if *cmd == "geo" {
+        let g = geo_of(rest)?;
+        let s = shape_from_geo(g)?;
+        w.shape(s)?;
+    } else if *cmd == "record" {
+        let mut vals: Vec[Val] = Vec.new();
+        if split_ws(rest).len() > 0 {
+            for v in split_on(rest, ';').iter() {
+                vals.push(value_of(v)?);
+            }
+        }
+        w.record_list(vals)?;
+    } else if *cmd == "recordkw" {
+        let mut kw: Vec[(String, Val)] = Vec.new();
+        for item in split_on(rest, ';').iter() {
+            let (k, v) = partition(strip(item), '=');
+            let val = value_of(v)?;
+            let mut found = false;
+            let mut i = 0;
+            while i < kw.len() {
+                if kw[i].0 == k {
+                    kw[i] = (k.clone(), val.clone());
+                    found = true;
+                }
+                i += 1;
+            }
+            if not found {
+                kw.push((k, val));
+            }
+        }
+        if kw.len() > 0 {
+            w.record_kw(kw)?;
+        } else {
+            w.record_list(Vec.new())?;
+        }
+    } else if *cmd == "balance" {
+        w.balance()?;
+    } else if *cmd == "close" {
+        w.close()?;
+        println("  closed");
+    }
+    Ok(())
+}
+
+fn save(base: ref String, ext: Str, data: ref Vec[u8]) {
+    if let Err(e) = fs.write_bytes(f"{base}.{ext}", data.clone()) {
+        eprintln(f"cannot write {base}.{ext}: {e}");
+    }
+}
+
+fn save_writer(base: ref String, w: ref Writer) {
+    save(base, "shp", w.shp.data);
+    save(base, "shx", w.shx.data);
+    save(base, "dbf", w.dbf.data);
+}
+
+fn opt_int_repr(v: ref Option[i64]) -> String {
+    match v {
+        Some(n) => f"{*n}",
+        None => "None".to_string(),
+    }
+}
+
+fn job_write(name: ref String) {
+    let text = read_text(f"{name}.layer");
+    let lines = split_on(text, '\n');
+    let mut slot: Option[Writer] = None;
+    let mut ln = 0;
+    for raw in lines.iter() {
+        ln += 1;
+        let line = strip(raw);
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let (cmd, rest) = partition(line, ' ');
+        if let Err(e) = step(mut slot, cmd, rest) {
+            println(f"  line {ln} {cmd} {err_text(e)}");
+        }
+    }
+    let w = match slot {
+        Some(w) => w,
+        None => return,
+    };
+    let base = f"data/out/{name}";
+    save_writer(base, w);
+    println(f"  len {w.len()} shapeType {opt_int_repr(w.st)} bbox {opt_box_repr(w.bbox)} zbox {opt_box_repr(w.zbox)} mbox {opt_box_repr(w.mbox)}");
+    let files = [("shp", w.shp.data.clone()), ("shx", w.shx.data.clone()), ("dbf", w.dbf.data.clone())];
+    for item in files.iter() {
+        let (ext, data) = item;
+        let a = adler32(data);
+        println(f"  {*ext} {data.len()} bytes adler32 {a:08x}");
+    }
+}
+
+// ------------------------------------------------------------ reading jobs
+
+fn job_info(r: mut ref Reader) -> Result[(), PyErr] {
+    let d = r.describe()?;
+    for line in split_on(d, '\n').iter() {
+        println(f"  {line}");
+    }
+    if r.shp.is_some() {
+        let t = lookup_type(r.st)?;
+        println(f"  type {t} ({r.st}) bbox {floats_repr(r.bbox)} zbox {floats_repr(r.zbox)} mbox {opt_floats_repr(r.mbox)}");
+    }
+    let n = r.len()?;
+    println(f"  len {n} numRecords {opt_int_repr(r.num_records)} numShapes {opt_int_repr(r.num_shapes)}");
+    if r.dbf.is_some() {
+        println(f"  fields {r.fields_repr()}");
+    }
+    Ok(())
+}
+
+fn job_shapes(r: mut ref Reader) -> Result[(), PyErr] {
+    let mut it = shape_iter();
+    let none: Option[Vec[f64]] = None;
+    loop {
+        match next_shape(mut it, mut r, none)? {
+            Some(s) => show(s)?,
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn job_records(r: mut ref Reader, sel: ref Option[Vec[String]]) -> Result[(), PyErr] {
+    let recs = r.records(sel)?;
+    for rec in recs.iter() {
+        println(f"  {rec_repr(rec)}");
+    }
+    Ok(())
+}
+
+fn is_int_key(k: ref String) -> bool {
+    let cs = chars_of(k);
+    let mut a = 0;
+    while a < cs.len() and cs[a] == '-' {
+        a += 1;
+    }
+    if a == cs.len() {
+        return false;
+    }
+    let mut i = a;
+    while i < cs.len() {
+        if not is_digit(cs[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn get_key(rec: ref Option[Rec], k: ref String) -> Result[Val, PyErr] {
+    if k.starts_with(".") {
+        let name = substr(k, 1, char_len(k));
+        let r = match rec {
+            Some(r) => r,
+            None => return Err(perr("AttributeError", f"'NoneType' object has no attribute '{name}'")),
+        };
+        return match rec_pos(r, name) {
+            Some(i) => {
+                if i < r.vals.len() {
+                    Ok(r.vals[i].clone())
+                } else {
+                    Err(perr("IndexError", f"{name} found as a field but not enough values available."))
+                }
+            }
+            None => Err(perr("AttributeError", f"{name} is not a field name")),
+        };
+    }
+    let r = match rec {
+        Some(r) => r,
+        None => return Err(perr("TypeError", "'NoneType' object is not subscriptable".to_string())),
+    };
+    if is_int_key(k) {
+        let i = parse_int(k)?;
+        let n = r.vals.len();
+        let j = if i < 0 { i + n } else { i };
+        if j < 0 or j >= n {
+            return Err(index_err());
+        }
+        return Ok(r.vals[j].clone());
+    }
+    match rec_pos(r, k) {
+        Some(i) => {
+            if i < r.vals.len() {
+                Ok(r.vals[i].clone())
+            } else {
+                Err(index_err())
+            }
+        }
+        None => Err(perr("IndexError", f"\"{k}\" is not a field name and not an int")),
+    }
+}
+
+fn job_get(r: mut ref Reader, i: i64, keys: ref Vec[String]) -> Result[(), PyErr] {
+    let none: Option[Vec[String]] = None;
+    let rec = r.record(i, none)?;
+    println(f"  {opt_rec_repr(rec)}");
+    for k in keys.iter() {
+        match get_key(rec, k) {
+            Ok(v) => println(f"  {k} = {val_repr(v)}"),
+            Err(e) => println(f"  {k} {err_text(e)}"),
+        }
+    }
+    Ok(())
+}
+
+fn bbox_arg(text: ref String) -> Result[Vec[f64], PyErr] {
+    let mut out: Vec[f64] = Vec.new();
+    for v in split_on(text, ',').iter() {
+        out.push(parse_float(v)?);
+    }
+    Ok(out)
+}
+
+fn oids_repr(shapes: ref Vec[Shape]) -> String {
+    let mut ids: Vec[i64] = Vec.new();
+    for s in shapes.iter() {
+        ids.push(s.oid);
+    }
+    ints_repr(ids)
+}
+
+fn job_bbox(r: mut ref Reader, bb: own Vec[f64]) -> Result[(), PyErr] {
+    let q = Some(bb);
+    let shapes = all_shapes(mut r, q)?;
+    println(f"  shapes {oids_repr(shapes)}");
+    let srs = shape_records(mut r, q)?;
+    for item in srs.iter() {
+        let (s, rec) = item;
+        println(f"  {shape_repr(s)?} {opt_rec_repr(rec)}");
+    }
+    Ok(())
+}
+
+fn job_iter(r: mut ref Reader) -> Result[(), PyErr] {
+    let none: Option[Vec[f64]] = None;
+    let nosel: Option[Vec[String]] = None;
+    let mut si = shape_iter();
+    let mut ri = rec_iter();
+    loop {
+        let s = match next_shape(mut si, mut r, none)? {
+            Some(s) => s,
+            None => break,
+        };
+        let rec = match next_rec(mut ri, mut r, nosel)? {
+            Some(rec) => rec,
+            None => break,
+        };
+        println(f"  {shape_repr(s)?} | {rec_repr(rec)}");
+    }
+    Ok(())
+}
+
+fn val_json(v: ref Val) -> String {
+    match v {
+        Val.Nothing => "null".to_string(),
+        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Val.Int(n) => f"{*n}",
+        Val.Float(x) => json_float(*x),
+        Val.Text(s) => json_str(s),
+        Val.Date(y, m, d) => json_str(ymd(*y, *m, *d)),
+        Val.List(xs) => int_list_repr(xs),
+    }
+}
+
+fn props_json(rec: ref Rec) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for item in rec.lookup.iter() {
+        let (k, i) = item;
+        parts.push(f"{json_str(k)}: {val_json(rec.vals[*i])}");
+    }
+    f"{{{join(parts, ", ")}}}"
+}
+
+fn job_geojson(r: mut ref Reader) -> Result[(), PyErr] {
+    let none: Option[Vec[f64]] = None;
+    let srs = shape_records(mut r, none)?;
+    let mut feats: Vec[String] = Vec.new();
+    for item in srs.iter() {
+        let (s, rec) = item;
+        let props = match rec {
+            Some(x) => props_json(x),
+            None => return Err(perr("AttributeError", "'NoneType' object has no attribute 'as_dict'".to_string())),
+        };
+        let geom = if s.st == 0 { "null".to_string() } else { geo_json(shape_geo(s)?) };
+        feats.push(f"{{\"type\": \"Feature\", \"properties\": {props}, \"geometry\": {geom}}}");
+    }
+    let mut bb: Vec[String] = Vec.new();
+    for x in r.bbox.iter() {
+        bb.push(json_float(*x));
+    }
+    println(f"  FeatureCollection bbox [{join(bb, ", ")}]");
+    for f in feats.iter() {
+        println(f"  {f}");
+    }
+    Ok(())
+}
+
+fn job_extract(src: ref String, dst: ref String, bb: own Vec[f64]) -> Result[(), PyErr] {
+    let mut r = read_shapefile(f"data/{src}", "strict")?;
+    let mut w = new_writer(Some(r.st), false);
+    let mut i = 1;
+    while i < r.fields.len() {
+        let f = r.fields[i].clone();
+        w.field(f.name, f.ftype, f.size, f.deci)?;
+        i += 1;
+    }
+    let q = Some(bb);
+    let nosel: Option[Vec[String]] = None;
+    let mut it = shape_iter();
+    let mut n = 0;
+    loop {
+        let s = match next_shape(mut it, mut r, q)? {
+            Some(s) => s,
+            None => break,
+        };
+        let rec = match r.record(s.oid, nosel)? {
+            Some(x) => x,
+            None => return Err(perr("TypeError", "Writer.record() argument after * must be an iterable, not NoneType".to_string())),
+        };
+        w.shape(s)?;
+        w.record_list(rec.vals)?;
+        n += 1;
+    }
+    w.close()?;
+    save_writer(f"data/{dst}", w);
+    let total = r.len()?;
+    println(f"  extracted {n} of {total}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ the county report
+
+fn pad(s: ref String, w: i64) -> String {
+    let mut out = s.clone();
+    let mut n = char_len(s);
+    while n < w {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn field_val(rec: ref Rec, name: Str) -> Result[Val, PyErr] {
+    get_key(Some(rec.clone()), f".{name}")
+}
+
+fn poly_area(poly: ref Vec[Vec[Vec[Option[f64]]]]) -> f64 {
+    let mut a = signed_area(poly[0]).abs();
+    let mut i = 1;
+    while i < poly.len() {
+        a -= signed_area(poly[i]).abs();
+        i += 1;
+    }
+    a
+}
+
+fn inside(polys: ref Vec[Vec[Vec[Vec[Option[f64]]]]], x: f64, y: f64) -> bool {
+    for poly in polys.iter() {
+        if ring_contains_point(poly[0], x, y) {
+            let mut in_hole = false;
+            let mut i = 1;
+            while i < poly.len() {
+                if ring_contains_point(poly[i], x, y) {
+                    in_hole = true;
+                    break;
+                }
+                i += 1;
+            }
+            if not in_hole {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn seg_length(pts: ref Vec[Vec[Option[f64]]]) -> f64 {
+    let mut total = 0.0;
+    let mut i = 1;
+    while i < pts.len() {
+        let dx = cx(pts[i], 0) - cx(pts[i - 1], 0);
+        let dy = cx(pts[i], 1) - cx(pts[i - 1], 1);
+        total += (dx * dx + dy * dy).sqrt();
+        i += 1;
+    }
+    total
+}
+
+fn open_out(name: Str) -> Result[Reader, PyErr] {
+    read_shapefile(f"data/out/{name}", "strict")
+}
+
+fn job_report() -> Result[(), PyErr] {
+    let mut parcels = open_out("parcels")?;
+    let mut wells = open_out("wells")?;
+    let mut roads = open_out("roads")?;
+    let mut sensors = open_out("sensors")?;
+    let none: Option[Vec[f64]] = None;
+    println("parcels");
+    let mut plots: Vec[(String, Vec[Vec[Vec[Vec[Option[f64]]]]], Vec[f64])] = Vec.new();
+    let mut total = 0.0;
+    for item in shape_records(mut parcels, none)?.iter() {
+        let (s, rec0) = item;
+        let rec = rec0.clone().unwrap();
+        let polys = shape_geo(s)?.c;
+        let mut area = 0.0;
+        let mut holes = 0;
+        for p in polys.iter() {
+            area += poly_area(p);
+            holes += p.len() - 1;
+        }
+        total += area;
+        let stated = field_val(rec, "AREA_HA")?;
+        let check = match stated {
+            Val.Nothing => "no stated area".to_string(),
+            _ => {
+                let x = to_float(stated)?;
+                if (x - area / 10000.0).abs() > 0.05 {
+                    f"MISMATCH stated {x:.3}"
+                } else {
+                    "ok".to_string()
+                }
+            }
+        };
+        let pid = val_str(field_val(rec, "PARCEL_ID")?);
+        let owner = val_str(field_val(rec, "OWNER")?);
+        let ha = area / 10000.0;
+        println(f"  {pad(pid, 8)} {pad(owner, 24)} polys={polys.len()} holes={holes} area={area:.1} m2 ({ha:.3} ha) {check}");
+        plots.push((pid, polys, s.bbox.clone().unwrap_or(Vec.new())));
+    }
+    println(f"  total {total:.1} m2");
+    println("wells");
+    for item in shape_records(mut wells, none)?.iter() {
+        let (s, rec0) = item;
+        let rec = rec0.clone().unwrap();
+        let x = cx(s.points[0], 0);
+        let y = cx(s.points[0], 1);
+        let mut where_: Vec[String] = Vec.new();
+        for plot in plots.iter() {
+            let (pid, polys, _) = plot;
+            if inside(polys, x, y) {
+                where_.push(pid.clone());
+            }
+        }
+        let z = s.z.clone().unwrap_or(Vec.new());
+        let place = if where_.len() == 0 { "no parcel".to_string() } else { join(where_, ",") };
+        let well = val_str(field_val(rec, "WELL")?);
+        let depth = val_repr(field_val(rec, "DEPTH_M")?);
+        let drilled = val_repr(field_val(rec, "DRILLED")?);
+        println(f"  {well} at ({float_repr(x)}, {float_repr(y)}) z={float_repr(z[0])} depth={depth} drilled={drilled} in {place}");
+    }
+    println("roads");
+    for item in shape_records(mut roads, none)?.iter() {
+        let (s, rec0) = item;
+        let rec = rec0.clone().unwrap();
+        let mut bounds = s.parts.clone();
+        bounds.push(s.points.len());
+        let mut length = 0.0;
+        let mut i = 1;
+        while i < bounds.len() {
+            length += seg_length(py_slice(s.points, bounds[i - 1], bounds[i]));
+            i += 1;
+        }
+        let mut ms: Vec[f64] = Vec.new();
+        for v in s.m.clone().unwrap_or(Vec.new()).iter() {
+            if let Some(x) = v {
+                ms.push(*x);
+            }
+        }
+        let mr = if ms.len() == 0 {
+            "-".to_string()
+        } else {
+            let mut lo = ms[0];
+            let mut hi = ms[0];
+            for v in ms.iter() {
+                lo = py_min(lo, *v);
+                hi = py_max(hi, *v);
+            }
+            f"{float_repr(lo)}..{float_repr(hi)}"
+        };
+        let road = val_str(field_val(rec, "ROAD")?);
+        let name = val_str(field_val(rec, "NAME")?);
+        let lanes = val_repr(field_val(rec, "LANES")?);
+        println(f"  {pad(road, 6)} {pad(name, 20)} lanes={lanes} parts={s.parts.len()} length={length:.2} m={mr}");
+    }
+    println("sensors");
+    for plot in plots.iter() {
+        let (pid, polys, bb) = plot;
+        let near = all_shapes(mut sensors, Some(bb.clone()))?;
+        let mut probes = 0;
+        for s in near.iter() {
+            for p in s.points.iter() {
+                if inside(polys, cx(p, 0), cx(p, 1)) {
+                    probes += 1;
+                }
+            }
+        }
+        println(f"  {pid} clusters {oids_repr(near)} probes inside {probes}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn run_job(w: ref Vec[String]) -> Result[(), PyErr] {
+    let k = w[0].clone();
+    if k == "write" {
+        job_write(w[1]);
+        return Ok(());
+    }
+    if k == "report" {
+        return job_report();
+    }
+    if k == "extract" {
+        return job_extract(w[1], w[2], bbox_arg(w[3])?);
+    }
+    let mut replace = false;
+    let mut i = 2;
+    while i < w.len() {
+        if w[i] == "replace" {
+            replace = true;
+        }
+        i += 1;
+    }
+    let mut r = read_shapefile(f"data/{w[1]}", if replace { "replace" } else { "strict" })?;
+    let nosel: Option[Vec[String]] = None;
+    if k == "info" {
+        job_info(mut r)?;
+    } else if k == "shapes" {
+        job_shapes(mut r)?;
+    } else if k == "records" {
+        job_records(mut r, nosel)?;
+    } else if k == "fields" {
+        job_records(mut r, Some(split_on(w[2], ',')))?;
+    } else if k == "get" {
+        let mut keys: Vec[String] = Vec.new();
+        let mut j = 3;
+        while j < w.len() {
+            keys.push(w[j].clone());
+            j += 1;
+        }
+        job_get(mut r, parse_int(w[2])?, keys)?;
+    } else if k == "shape" {
+        let none: Option[Vec[f64]] = None;
+        match r.shape(parse_int(w[2])?, none)? {
+            Some(s) => show(s)?,
+            None => println("  None"),
+        }
+    } else if k == "bbox" {
+        job_bbox(mut r, bbox_arg(w[2])?)?;
+    } else if k == "iter" {
+        job_iter(mut r)?;
+    } else if k == "geojson" {
+        job_geojson(mut r)?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut lines = split_on(read_text("jobs.txt".to_string()), '\n');
+    lines.pop();
+    for line in lines.iter() {
+        println(f"== {line}");
+        if let Err(e) = run_job(split_on(line, ' ')) {
+            println(err_text(e));
+        }
+    }
+}
+// ------------------------------------------------------------ data (gen_kara.py)
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("empty.layer".to_string(), "77726974657220504f4c59474f4e0a6669656c64204944204e203320300a706f6c790a7265636f726420693a310a636c6f73650a".to_string()));
+    v.push(("gauges.shp".to_string(), "0000270a000000000000000000000000000000000000000000000064e803000015000000000000000000f03f000000000000004000000000000014400000000000001840000000000000000000000000000000001d4a9cf4878217c80000000000001e40000000010000000a15000000000000000000f03f0000000000000040000000020000000e15000000000000000000084000000000000010400000000000001e40000000030000000e15000000000000000000144000000000000018401d4a9cf4878217c8".to_string()));
+    v.push(("geo.layer".to_string(), "232046656174757265732070617374656420696e2061732047656f4a534f4e2c20776f756e64207468652047656f4a534f4e207761792028636f756e7465722d636c6f636b776973650a23206578746572696f7273292c20776869636820707973687020726577696e647320666f722074686520736861706566696c652e0a777269746572202d0a6669656c6420535243204320313020300a6e756c6c0a7265636f726420733a656d7074790a67656f20506f6c79676f6e20302c302031302c302031302c313020302c313020302c30207c20322c3220322c3420342c3420342c3220322c320a7265636f726420733a6363772d706f6c790a67656f204d756c7469506f6c79676f6e2032302c302033302c302033302c31302032302c31302032302c30203b2034302c302034302c31302035302c31302035302c302034302c300a7265636f726420733a6d756c74690a636c6f73650a".to_string()));
+    v.push(("jobs.txt".to_string(), "77726974652070617263656c730a777269746520726f6164730a77726974652077656c6c730a77726974652073656e736f72730a777269746520706174636865730a77726974652067656f0a7772697465206c696e6567656f0a7772697465206d697374616b65730a7772697465206f776e6572730a777269746520756e62616c616e6365640a7772697465206e6f6669656c64730a777269746520656d7074790a696e666f206f75742f70617263656c730a736861706573206f75742f70617263656c730a7265636f726473206f75742f70617263656c730a67656f6a736f6e206f75742f70617263656c730a696e666f206f75742f726f6164730a736861706573206f75742f726f6164730a7265636f726473206f75742f726f6164730a67656f6a736f6e206f75742f726f6164730a696e666f206f75742f77656c6c730a736861706573206f75742f77656c6c730a7265636f726473206f75742f77656c6c730a67656f6a736f6e206f75742f77656c6c730a696e666f206f75742f73656e736f72730a736861706573206f75742f73656e736f72730a67656f6a736f6e206f75742f73656e736f72730a696e666f206f75742f706174636865730a736861706573206f75742f706174636865730a67656f6a736f6e206f75742f706174636865730a696e666f206f75742f67656f0a736861706573206f75742f67656f0a67656f6a736f6e206f75742f67656f0a696e666f206f75742f6c696e6567656f0a736861706573206f75742f6c696e6567656f0a67656f6a736f6e206f75742f6c696e6567656f0a696e666f206f75742f6d697374616b65730a736861706573206f75742f6d697374616b65730a7265636f726473206f75742f6d697374616b65730a696e666f206f75742f6f776e6572730a696e666f206f75742f6f776e657273207265706c6163650a7265636f726473206f75742f6f776e657273207265706c6163650a696e666f206f75742f756e62616c616e6365640a7265636f726473206f75742f756e62616c616e6365640a696e666f206f75742f656d7074790a736861706573206f75742f656d7074790a7265636f726473206f75742f656d7074790a6669656c6473206f75742f70617263656c73204f574e45522c56414c55450a6669656c6473206f75742f70617263656c73204143544956452c4143544956450a6669656c6473206f75742f70617263656c732044656c6574696f6e466c61670a6669656c6473206f75742f70617263656c73204845494748540a676574206f75742f70617263656c7320312050415243454c5f4944202e4f574e455220302036202d31202e484549474854204845494748540a676574206f75742f70617263656c73202d32205a4f4e450a676574206f75742f70617263656c732036205a4f4e450a676574206f75742f70617263656c73202d37205a4f4e450a676574206f75742f70617263656c73202d36205a4f4e450a7368617065206f75742f70617263656c73202d310a7368617065206f75742f70617263656c7320360a7368617065206f75742f77656c6c7320320a62626f78206f75742f70617263656c7320313930302c3930302c323635302c313635300a62626f78206f75742f77656c6c7320302c302c31302c31300a62626f78206f75742f726f61647320323930302c3830302c333530302c313030300a696e666f206c65676163790a736861706573206c65676163790a7265636f726473206c65676163790a69746572206c65676163790a676574206c6567616379203020504c4f544e554d424552202e46524545484f4c440a676574206c6567616379203220415245410a676574206c6567616379203420524154452041524541202e4c45540a7368617065206c656761637920330a67656f6a736f6e206c65676163790a696e666f207472756e63617465640a736861706573207472756e63617465640a7368617065207472756e636174656420310a7368617065207472756e636174656420320a696e666f206d656173757265730a736861706573206d656173757265730a696e666f206761756765730a736861706573206761756765730a73686170652067617567657320320a696e666f206e6f7465726d0a696e666f2073686f72740a7265636f7264732073686f72740a696e666f206e6f77686572650a65787472616374206f75742f70617263656c73206f75742f636c697020313930302c3930302c343135302c313635300a696e666f206f75742f636c69700a7265636f726473206f75742f636c69700a7265706f72740a".to_string()));
+    v.push(("legacy.DBF".to_string(), "0362070105000000c1001f000000000000000000000000000000000000000000504c4f544e554d4245525343000000000600000000000000000000000000000041524541000000000000004e000000000800000000000000000000000000000052415445000000000000004600000000070200000000000000000000000000004c4554000000000000000044000000000800000000000000000000000000000046524545484f4c440000004c00000000010000000000000000000000000000000d20502d303031202020202020313030202031322e353031393837303430315920502d30303200202020315f3030302020202a2a2a2a30303030303030306e2a502d303033202020202020343030202020332e323532303236313332313f2020502d30303420202031322e37356162632020202020202020202020202020502d30303500000000000000000020203165332020323032362d332d31311a".to_string()));
+    v.push(("legacy.SHP".to_string(), "0000270a000000000000000000000000000000000000000000000172e8030000050000000000000000000000000000000000000000000000004050400000000000002440000000000000000000000000000000000000000000000000000000000000000000000001000000400500000000000000000000000000000000000000000000000000244000000000000024400100000005000000000000000000000000000000000000000000000000000000000000000000000000002440000000000000244000000000000024400000000000002440000000000000000000000000000000000000000000000000000000020000004005000000000000000000344000000000000000000000000000003e40000000000000244001000000050000000000000000000000000034400000000000000000000000000000344000000000000024400000000000003e4000000000000024400000000000003e40000000000000000000000000000034400000000000000000000000030000006a050000000000000000004440000000000000000000000000000049400000000000002440020000000a0000000000000005000000000000000000444000000000000000000000000000004440000000000000244000000000000049400000000000002440000000000000494000000000000000000000000000004440000000000000000000000000000045400000000000000040000000000000484000000000000000400000000000004840000000000000204000000000000045400000000000002040000000000000454000000000000000400000000400000002000000000000000500000040050000000000000000004e400000000000000000000000000040504000000000000014400100000005000000000000000000000000004e4000000000000000000000000000004e40000000000000144000000000004050400000000000001440000000000040504000000000000000000000000000004e400000000000000000".to_string()));
+    v.push(("linegeo.layer".to_string(), "777269746572202d0a6669656c6420535243204320313020300a67656f204c696e65537472696e6720302c3020352c352031302c300a7265636f726420733a6c696e650a67656f204d756c74694c696e65537472696e6720302c3020312c31207c20322c3220332c332c390a7265636f726420733a6d756c74696c696e650a67656f20506f696e7420372c370a7265636f726420733a706f696e740a62616c616e63650a636c6f73650a".to_string()));
+    v.push(("measures.shp".to_string(), "0000270a0000000000000000000000000000000000000000000000aee803000017000000000000000000000000000000000000000000000000001840000000000000204000000000000000000000000000000000000000000000000000000000000024400000000100000030170000000000000000000000000000000000000000000000000018400000000000002040010000000300000000000000000000000000000000000000000000000000000000000840000000000000104000000000000018400000000000002040000000020000004417000000000000000000000000000000000000000000000000001840000000000000204001000000030000000000000000000000000000000000000000000000000000000000084000000000000010400000000000001840000000000000204000000000000000000000000000002440000000000000000000000000000014401d4a9cf4878207c8".to_string()));
+    v.push(("measures.shx".to_string(), "0000270a00000000000000000000000000000000000000000000003ae8030000170000000000000000000000000000000000000000000000000018400000000000002040000000000000000000000000000000000000000000000000000000000000244000000032000000300000006600000044".to_string()));
+    v.push(("mistakes.layer".to_string(), "23204f6e652061667465726e6f6f6e2773206d697374616b65732c20616e6420686f7720746865205772697465722074616b6573207468656d2e0a77726974657220504f494e540a6669656c64204944204e203420300a6669656c64204e414d452043203820300a6669656c64205748454e2044203820300a6669656c64204f4b204c203120300a706f696e74203120310a7265636f726420693a31203b20733a6669727374203b20643a323032362d31302d3231203b20623a540a7265636f726420733a616263203b20733a7365636f6e64203b2065203b20650a7265636f726420693a33203b20733a7468697264203b20733a323032362d31302d3231203b20650a7265636f726420643a323032362d31302d3231203b20733a666f75727468203b2065203b20650a7265636f726420663a352e35203b20733ac3867468656c666cc3a664203b2065203b20733a7965730a706f696e74203520350a6d756c7469706f696e7420362c3620372c370a706f696e74203820380a7265636f726420693a36203b20733a7369787468203b2065203b20650a636c6f73650a62616c616e63650a636c6f73650a".to_string()));
+    v.push(("nofields.layer".to_string(), "77726974657220504f4c594c494e450a636c6f73650a".to_string()));
+    v.push(("noterm.dbf".to_string(), "036207010100000041000400000000000000000000000000000000000000000049440000000000000000004e000000000300000000000000000000000000000000202020311a".to_string()));
+    v.push(("owners.layer".to_string(), "232041207265676973746572206578706f72746564206279206120746f6f6c20746861742074686f7567687420696e20636861726163746572732c206e6f742062797465732e0a77726974657220504f494e540a6669656c642050726f707269c3a974c3a9312043203320300a6669656c64204e4f5445204320313220300a706f696e74203020300a7265636f726420733a5a6fc3ab204c6566c3a8767265203b20733a6f6b0a706f696e74203120310a7265636f726420733a416e61203b20733a6661c3a7616465206e6f72640a636c6f73650a".to_string()));
+    v.push(("parcels.layer".to_string(), "232041736862792056616c652063616461737472653a2070617263656c73207769746820706f6e64732c20616e2069736c616e64206661726d2c2061206d69732d776f756e640a2320616c6c6f746d656e7420616e6420612072696e67206e6f626f647920636c6f7365642e0a77726974657220504f4c59474f4e0a6669656c642050415243454c5f49442043203820300a6669656c64204f574e4552204320323420300a6669656c6420415245415f4841204620313020330a6669656c642056414c5545204e203920300a6669656c642053555256455945442044203820300a6669656c6420414354495645204c203120300a6669656c64205a4f4e452043203220300a706f6c7920313030302c3130303020313030302c3132303020313235302c3132303020313235302c3130303020313030302c313030300a7265636f726420733a41562d30303031203b20733a486f6c6c696e73204661726d204c7464203b20663a352e30203b20693a343230303030203b20643a323032362d30332d3031203b20623a54203b20733a41470a706f6c7920313330302c3130303020313330302c313235302e3520313630302e32352c313235302e3520313630302e32352c3130303020313330302c31303030207c20313335302c3130353020313435302c3130353020313435302c3131353020313335302c3131353020313335302c313035300a7265636f726420733a41562d30303032203b20733a5a6fc3ab204c6566c3a8767265203b20663a362e353032203b20733a3132353030302e3735203b206c3a323032362c322c3330203b20693a30203b20733a52310a706f6c7920323030302c3130303020323030302c3136303020323630302c3136303020323630302c3130303020323030302c31303030207c20323130302c3131303020323530302c3131303020323530302c3135303020323130302c3135303020323130302c31313030207c20323230302c3132303020323230302c3134303020323430302c3134303020323430302c3132303020323230302c31323030207c20323235302c3132353020323335302c3132353020323335302c3133353020323235302c3133353020323235302c31323530207c20323730302c3130303020323730302c3133303020323930302c3133303020323930302c3130303020323730302c31303030207c20323735302c3130353020323835302c3130353020323835302c3131353020323735302c3131353020323735302c313035300a7265636f726420733a41562d30303033203b20733a4d617273682049736c616e64205472757374203b20663a32382e30203b20663a393939303030303030302e30203b20733a6e6f746164617465203b20733a54203b20733a41470a706f6c7920333030302c3130303020333130302c3130303020333130302c3131303020333030302c3131303020333030302c313030300a7265636f72646b772050415243454c5f49443d733a41562d30303034203b204f574e45523d733a416c6c6f746d656e7420536f6369657479203b205a4f4e453d733a434d203b20434f4c4f55523d733a677265656e0a706f6c7920333230302c313030302e3120333230302c313130302e3220333330302e332c313130302e3220333330302e332c313030302e310a7265636f726420733a41562d30303035203b20733a53742057696c66726964277320476c656265203b206e203b20693a2d383735203b20733a323032362d332d31203b206e203b20733a43480a706f6c7920343030302c3130303020343030302c3131303020343130302c3131303020343130302c3130303020343030302c31303030207c20343230302c3130303020343230302c3131303020343330302c3131303020343330302c3130303020343230302c31303030207c20343530302c3130303020343630302c3130303020343630302c3131303020343530302c3131303020343530302c313030300a7265636f726420733a41562d30303036203b20733a43726f776e20457374617465203b20663a322e30203b2065203b2065203b20623a46203b20733a4147203b20733a65787472610a636c6f73650a".to_string()));
+    v.push(("patches.layer".to_string(), "232041206261726e20726f6f6620616e6420697473206761626c652c2061732061206d756c746970617463682e0a777269746572204d554c544950415443480a6669656c642050415254204320313020300a6d756c7469706174636820302c3220313030302c313030302c3520313031302c313030302c3520313030302c313031302c3920313031302c313031302c39207c203939302c3939302c30203939302c313032302c3020313032302c313032302c3020313032302c3939302c30203939302c3939302c300a7265636f726420733a6261726e0a636c6f73650a".to_string()));
+    v.push(("roads.layer".to_string(), "2320526f61642063656e7472656c696e65732c206d6561737572656420696e20636861696e616765206d65747265732e0a77726974657220504f4c594c494e454d0a6669656c6420524f41442043203620300a6669656c64204e414d45204320323020300a6669656c64204c414e4553204e203220300a6c696e656d20313030302c3939302c3020313630302c3939302c36303020323630302c3939302c313630300a7265636f726420733a4231323930203b20733a56616c6520526f6164203b20693a320a6c696e656d20313632352c3930302c3020313632352c313330302c343030207c20313632352c313330302c34303020323030302c313730300a7265636f726420733a433331203b20733a4d696c6c204c616e65203b20733a310a6c696e656d20333030302c39353020333430302c3935300a7265636f726420733a553132203b20733a4368757263682057616c6b203b20693a3132330a6c696e656d20343030302c3935302c3720343330302c3935302c2d20343630302c3935302c31322e32350a7265636f726420733a553133203b20733a476c65626520547261636b203b206e0a636c6f73650a".to_string()));
+    v.push(("sensors.layer".to_string(), "2320536f696c206d6f6973747572652070726f6265732c206465706c6f79656420696e20636c7573746572732e0a777269746572204d554c5449504f494e540a6669656c6420434c55535445522043203420300a6669656c642050524f424553204e203320300a6d756c7469706f696e7420313035302c3130353020313130302c3131353020313230302c313035300a7265636f726420733a4b31203b20693a330a6d756c7469706f696e7420323035302c3130353020323435302c3134353020323233302c313233300a7265636f726420733a4b32203b20693a330a6d756c7469706f696e7420323830302c313130300a7265636f726420733a4b33203b20663a312e390a6d756c7469706f696e7420353030302c3530303020353130302c353130300a7265636f726420733a4b34203b20733a31322065787472610a636c6f73650a".to_string()));
+    v.push(("short.dbf".to_string(), "036207010300000041000400000000000000000000000000000000000000000049440000000000000000004e00000000030000000000000000000000000000000d2020203120202032".to_string()));
+    v.push(("truncated.shp".to_string(), "0000270a0000000000000000000000000000000000000000000000fee803000005000000000000000000000000000000000000000000000000002c40000000000000104000000000000000000000000000000000000000000000000000000000000000000000000100000040050000000000000000000000000000000000000000000000000010400000000000001040010000000500000000000000000000000000000000000000000000000000000000000000000000000000104000000000000010400000000000001040000000000000104000000000000000000000000000000000000000000000000000000002000000400500000000000000000014400000000000000000000000000000224000000000000010400100000005000000000000000000000000001440000000000000000000000000000014400000000000001040000000000000224000000000000010400000000000002240000000000000000000000000000014400000000000000000000000030000004005000000000000000000244000000000000000000000000000002c40000000000000104001000000050000000000000000000000000024400000000000000000000000000000244000000000000010400000000000002c40".to_string()));
+    v.push(("truncated.shx".to_string(), "0000270a00000000000000000000000000000000000000000000003ee803000005000000000000000000000000000000000000000000000000002c400000000000001040000000000000000000000000000000000000000000000000000000000000000000000032000000400000007600000040000000ba00000040".to_string()));
+    v.push(("unbalanced.layer".to_string(), "77726974657220504f494e540a6175746f62616c616e63650a6669656c64204944204e203320300a706f696e74203120320a706f696e74203320340a7265636f726420693a390a7265636f726420693a31300a7265636f726420693a31310a636c6f73650a".to_string()));
+    v.push(("wells.layer".to_string(), "2320426f7265686f6c65733a20656c65766174696f6e206f662074686520636173696e6720746f70206173207a2c20616e64206e6f206d656173757265732e0a77726974657220504f494e545a0a6669656c642057454c4c2043203620300a6669656c642044455054485f4d2046203720320a6669656c64204c4943454e534544204c203120300a6669656c64204452494c4c45442044203820300a706f696e747a203131303020313130302038382e35202d0a7265636f726420733a42482d3031203b20663a34322e313235203b20623a54203b20643a313939382d30362d31340a706f696e747a203135303020313230302039302e3235202d0a7265636f726420733a42482d3032203b20663a3138203b20693a31203b206c3a323030342c31312c320a706f696e747a203233303020313330302037322e302031322e350a7265636f726420733a42482d3033203b20733a33302e35203b20733a59203b20733a32303130313330310a706f696e747a203232323020313232302037302e35202d0a7265636f726420733a42482d3034203b20663a392e393939203b20623a46203b206e0a706f696e747a2033353030203335303020313031202d0a7265636f726420733a42482d3035203b20663a2d332e35203b206e203b20650a636c6f73650a".to_string()));
+    v
+}
