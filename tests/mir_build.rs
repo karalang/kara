@@ -7372,3 +7372,47 @@ fn main() {
     .expect("refused");
     assert!(err.contains("found 'Env'"), "{err}");
 }
+
+/// B-2026-10-21-58: arithmetic over unsuffixed float literals takes a
+/// narrow slot's width, operands and all, so compiled code stores an `f32`
+/// where it had stored the folded `f64` (a wrong value, and the neighbour
+/// clobbered).
+#[test]
+fn mir_literal_float_arithmetic_takes_the_slots_width() {
+    let src = r#"
+fn third() -> f32 {
+    1.0 / 3.0
+}
+
+fn half(x: f32) -> f32 {
+    x * 0.5
+}
+
+fn main() {
+    let c: f32 = 0.1;
+    let d: f32 = 1.0 / 3.0;
+    let e: f32 = 2.0 * 3.0 - 0.25;
+    let n: f32 = -(1.0 / 8.0);
+    let h: f64 = 1.0 / 4.0;
+    println(c);
+    println(d);
+    println(e);
+    println(n);
+    println(h);
+    println(third());
+    println(half(1.0 / 3.0));
+    let v: Vec[f32] = [1.0 / 3.0, 0.5];
+    println(v[0] + v[1]);
+    let o: Option[f32] = Some(1.0 / 4.0);
+    println(o.unwrap());
+}
+"#;
+    let want = "0.1\n0.33333334\n5.75\n-0.125\n0.25\n0.33333334\n0.16666667\n0.8333334\n0.25\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

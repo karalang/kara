@@ -559,6 +559,15 @@ impl<'a> super::TypeChecker<'a> {
             {
                 self.record_expr_type(&expr.span, ctx);
             }
+            // Arithmetic over unsuffixed float literals alone (`1.0 / 3.0`,
+            // `-0.5`) synthesises `f64` too, so it takes the slot's width as
+            // a bare literal does, operands and all (B-2026-10-21-58).
+            (ExprKind::Binary { .. } | ExprKind::Unary { .. }, Type::Float(size))
+                if !matches!(size, crate::typechecker::types::FloatSize::F64)
+                    && Self::float_literal_arith(expr) =>
+            {
+                self.record_float_literal_arith(expr, ctx);
+            }
             (ExprKind::Tuple(elems), Type::Tuple(slots)) if elems.len() == slots.len() => {
                 for (e, slot) in elems.iter().zip(slots.iter()) {
                     self.record_narrow_float_literal(e, slot);
@@ -597,6 +606,39 @@ impl<'a> super::TypeChecker<'a> {
                         self.record_narrow_float_literal(&a.value, &t);
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// Is `e` arithmetic whose leaves are all unsuffixed float literals?
+    fn float_literal_arith(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Float(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => Self::float_literal_arith(operand),
+            ExprKind::Binary { op, left, right } => {
+                matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+                ) && Self::float_literal_arith(left)
+                    && Self::float_literal_arith(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Record every node of a [`Self::float_literal_arith`] tree at `t`.
+    fn record_float_literal_arith(&mut self, e: &Expr, t: &Type) {
+        self.record_expr_type(&e.span, t);
+        self.record_node_type(e.id, t);
+        match &e.kind {
+            ExprKind::Unary { operand, .. } => self.record_float_literal_arith(operand, t),
+            ExprKind::Binary { left, right, .. } => {
+                self.record_float_literal_arith(left, t);
+                self.record_float_literal_arith(right, t);
             }
             _ => {}
         }
@@ -1014,6 +1056,12 @@ impl<'a> super::TypeChecker<'a> {
             && !self.mentions_foreign_param(expected)
         {
             self.record_node_type(expr.id, expected);
+        } else if matches!(Self::peel_borrow(expected), Type::Float(size)
+                if !matches!(size, crate::typechecker::types::FloatSize::F64))
+            && Self::float_literal_arith(expr)
+        {
+            // Narrowed with its operands (`record_narrow_float_literal`).
+            self.record_node_type(expr.id, Self::peel_borrow(expected));
         } else {
             self.record_node_type(expr.id, weak_store.as_ref().unwrap_or(&ty));
         }
