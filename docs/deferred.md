@@ -2381,7 +2381,7 @@ A `deterministic` profile — useful for replayable simulations, offline batch j
 ```toml
 [profile]
 name = "deterministic"
-no_effects = ["reads(Clock)", "reads(RandomSource)", "reads(Env)"]
+no_effects = ["reads(Clock)", "writes(RandomSource)", "reads(Env)"]
 ```
 
 Under this profile, any function that transitively reads the wall clock, draws from the system RNG, or touches environment variables is a compile error. Tests that want determinism can still use `#[with_provider]` to inject fake clocks and fake RNGs without enabling the profile project-wide; the profile is for shipping binaries where determinism must hold by construction, not just by test discipline.
@@ -5141,7 +5141,7 @@ Browser and host-runtime APIs live behind effect resources **declared in stdlib 
 
 - `fetch(url)` is declared in `std.web.net` with effect `sends(Network) receives(Network)` — the same signature a native HTTP client would carry. No browser-specific "Fetch" resource exists.
 - `performance.now()` and `Date.now()` are `reads(Clock)`, same as `std.time.now()` on native.
-- `crypto.getRandomValues()` is `reads(RandomSource)`, same as `std.random` on native.
+- `crypto.getRandomValues()` is `writes(RandomSource)`, same as `std.random` on native.
 
 **`std.wasi` — headless WASM / server-side runtimes.** A WASM module running in wasmtime or a Component-Model host does not have `Display` or `Input`. It does have filesystem, env, and network, which are already the native primitives. `std.wasi` declares any WASI-specific capabilities as they emerge; it starts as a thin module because WASI's current surface maps directly onto Kāra's existing primitives.
 

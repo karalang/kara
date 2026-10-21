@@ -5137,7 +5137,7 @@ A second execution effect, `suspends` (the task may yield cooperatively), return
 | `reads` | `Clock` | wall-clock and monotonic time |
 | `reads`/`writes` | `Env` | environment variables, arguments, working directory |
 | `sends`/`receives` | `Network` | the capability to use the network |
-| `reads` | `RandomSource` | system entropy |
+| `writes` | `RandomSource` | system entropy; a draw advances the source, so it writes |
 | `allocates` | `Heap` | the heap (default-permitted) |
 
 Because `println` has `writes(Stdout)`, two `par` branches that both print conflict ([core-semantics.md §11.2](core-semantics.md#11-concurrency-c9)).
@@ -5185,12 +5185,12 @@ This is also what lets automatic parallelism, when it arrives, leave `conn.write
 **Every source of nondeterminism enters through a named resource.** A function that reads the clock, draws a random number or reads the process environment is observably nondeterministic, and its effect set says so. There is no ambient clock, no global random generator and no environment access that bypasses the effect system. This is a language commitment, because reproducibility and deterministic replay are properties of the language, not of one standard library.
 
 - **`Clock`**: wall-clock time, monotonic time and any value that depends on when the program runs. Kāra does not split it into wall and monotonic resources: the distinction matters to the API, not to conflict checking.
-- **`RandomSource`**: entropy and any value drawn from a randomness primitive (random numbers, UUIDs, nonces). A pseudo-random generator seeded from a value the caller passes in is not `reads(RandomSource)`: determinism returns as soon as the source of randomness is an argument.
+- **`RandomSource`**: entropy and any value drawn from a randomness primitive (random numbers, UUIDs, nonces). A draw advances the source, so it is `writes(RandomSource)`: two draws keep their order and two `par` branches that both draw conflict ([core-semantics.md §14.7](core-semantics.md)). A pseudo-random generator seeded from a value the caller passes in does not touch `RandomSource`: determinism returns as soon as the source of randomness is an argument.
 - **`Env`**: environment variables, command-line arguments, the working directory, and anything else the operating system hands the process. Reading is `reads(Env)`; setting a variable is `writes(Env)`.
 
 Their APIs are in [library/time-random-env.md](library/time-random-env.md).
 
-**Inference does the work.** If a private function transitively reads the clock, it infers `reads(Clock)` with no annotation. A public function declares it, which is where nondeterminism belongs: callers may rely on the signature to know whether a function is deterministic. `#[no_effect(reads(Clock, RandomSource, Env))]` forbids all three below a boundary ([`#[no_effect]`](#no_effect)).
+**Inference does the work.** If a private function transitively reads the clock, it infers `reads(Clock)` with no annotation. A public function declares it, which is where nondeterminism belongs: callers may rely on the signature to know whether a function is deterministic. `#[no_effect(reads(Clock, Env), writes(RandomSource))]` forbids all three below a boundary ([`#[no_effect]`](#no_effect)).
 
 **Observability is exempt.** A clock, random or environment read performed inside an [observability operation](#observability), at any depth, is transparent too: a log line may carry a timestamp without giving its caller `reads(Clock)`. The rule is transitive because a one-level rule would break as soon as a helper was extracted. It applies only inside observability operations; any other function that reads the clock has `reads(Clock)`, so the exemption cannot launder a clock read into a deterministic function.
 
