@@ -1,0 +1,65 @@
+// LeetCode 818 — Race Car, the best run to each distance.
+//
+// For a target t with n bits, n accelerations reach 2^n - 1, the first
+// point at or past t. Either drive there and reverse, then cover the
+// overshoot 2^n - 1 - t; or stop one acceleration short at 2^(n-1) - 1,
+// reverse, back up m accelerations to 2^(n-1) - 2^m, reverse again and
+// cover the rest. `best[d]` holds the answer for every distance below t
+// already, so O(t log t).
+
+fn racecar(target: i64) -> i64 {
+    let mut best = Vec.filled(target + 1, 0);
+    for t in 1..target + 1 {
+        let mut n = 0;
+        while (1 << n) <= t {
+            n += 1;
+        }
+        let full = (1 << n) - 1;
+        if t == full {
+            best[t] = n;
+            continue;
+        }
+        let mut shortest = n + 1 + best[full - t];
+        let short = (1 << (n - 1)) - 1;
+        for m in 0..n - 1 {
+            let back = (1 << m) - 1;
+            let steps = (n - 1) + 1 + m + 1 + best[t - short + back];
+            if steps < shortest {
+                shortest = steps;
+            }
+        }
+        best[t] = shortest;
+    }
+    best[target]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"target = 3 -> {racecar(3)}");
+    println(f"target = 6 -> {racecar(6)}");
+    let mut first: Vec[i64] = Vec.new();
+    for t in 1..33 {
+        first.push(racecar(t));
+    }
+    println(f"targets 1 to 32 -> {first}");
+    // LeetCode's largest, and the targets just around powers of two.
+    for t in [10000, 9999, 8191, 8192, 4097, 5461] {
+        println(f"target = {t} -> {racecar(t)}");
+    }
+    let mut seed = 818;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let t = 1 + next_random(mut seed) % 200;
+        let answer = racecar(t);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random targets up to 200: total {total}, checksum {check}");
+}

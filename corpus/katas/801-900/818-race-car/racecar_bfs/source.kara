@@ -1,0 +1,57 @@
+// LeetCode 818 — Race Car, breadth-first search over the car's states.
+//
+// A state is a position and a speed, and both instructions lead to one
+// next state, so a search outward from (0, 1) reaches the target in the
+// fewest instructions. A shortest run never goes past 2 * target or
+// back past -target, which bounds the states to O(t log t).
+
+fn racecar(target: i64) -> i64 {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    queue.push_back((0, 1, 0));
+    seen.insert((0, 1));
+    while let Some((pos, speed, steps)) = queue.pop_front() {
+        if pos == target {
+            return steps;
+        }
+        let ahead = (pos + speed, speed * 2);
+        let turned = (pos, if speed > 0 { -1 } else { 1 });
+        for (p, s) in [ahead, turned] {
+            if p > -target and p < 2 * target and seen.insert((p, s)) {
+                queue.push_back((p, s, steps + 1));
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"target = 3 -> {racecar(3)}");
+    println(f"target = 6 -> {racecar(6)}");
+    let mut first: Vec[i64] = Vec.new();
+    for t in 1..33 {
+        first.push(racecar(t));
+    }
+    println(f"targets 1 to 32 -> {first}");
+    // LeetCode's largest, and the targets just around powers of two.
+    for t in [10000, 9999, 8191, 8192, 4097, 5461] {
+        println(f"target = {t} -> {racecar(t)}");
+    }
+    let mut seed = 818;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let t = 1 + next_random(mut seed) % 200;
+        let answer = racecar(t);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random targets up to 200: total {total}, checksum {check}");
+}

@@ -1,0 +1,3 @@
+1600 cases (the longest run 24 instructions), 25600 checks over 4 arms: 0 failures
+by arm: star 0, bfs 0, memo 0, iter 0
+by property: answer 0, bits 0, split 0, overshoot 0

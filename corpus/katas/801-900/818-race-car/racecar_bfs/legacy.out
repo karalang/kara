@@ -1,0 +1,10 @@
+target = 3 -> 2
+target = 6 -> 5
+targets 1 to 32 -> [1, 4, 2, 5, 7, 5, 3, 6, 8, 7, 10, 7, 9, 6, 4, 7, 9, 8, 11, 12, 10, 9, 12, 9, 11, 13, 11, 8, 10, 7, 5, 8]
+target = 10000 -> 45
+target = 9999 -> 43
+target = 8191 -> 13
+target = 8192 -> 16
+target = 4097 -> 17
+target = 5461 -> 52
+300 random targets up to 200: total 4342, checksum 126509810
