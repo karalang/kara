@@ -1,0 +1,68 @@
+// Benchmark for #826: Most Profit Assigning Work -- the ★ arm (two sorted sweeps).
+//
+// With the jobs sorted by difficulty and the workers by ability, one
+// pointer walks the jobs as the abilities grow, keeping the best profit
+// among the jobs passed.
+
+fn max_profit_assignment(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let n = difficulty.len();
+    let mut jobs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        jobs.push((difficulty[i], profit[i]));
+    }
+    jobs.sort();
+    let mut abilities = worker.clone();
+    abilities.sort();
+    let mut next = 0;
+    let mut best = 0;
+    let mut total = 0;
+    for ability in abilities.iter() {
+        while next < n and jobs[next].0 <= ability {
+            best = best.max(jobs[next].1);
+            next += 1;
+        }
+        total += best;
+    }
+    total
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draw(seed: mut ref i64, count: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        v.push(1 + next_random(mut seed) % 100000);
+    }
+    v
+}
+
+fn main() {
+    // 64 cases of 10,000 jobs and 10,000 workers, values from 1 to
+    // 100,000, LeetCode's largest, drawn once. Each round answers the
+    // next one.
+    let count = 64;
+    let rounds = 2000;
+    let mut seed: i64 = 826;
+    let mut difficulties: Vec[Vec[i64]] = Vec.new();
+    let mut profits: Vec[Vec[i64]] = Vec.new();
+    let mut workers: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        difficulties.push(draw(mut seed, 10000));
+        profits.push(draw(mut seed, 10000));
+        workers.push(draw(mut seed, 10000));
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let r = max_profit_assignment(difficulties[g], profits[g], workers[g]);
+        total += r;
+        checksum = (checksum * 131 + r) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} cases: total {total}, checksum {checksum}");
+}

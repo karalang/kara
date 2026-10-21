@@ -1,0 +1,228 @@
+// LeetCode #826: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random jobs and workers,
+// against the statement read worker by worker.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn max_profit_assignment_star(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let n = difficulty.len();
+    let mut jobs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        jobs.push((difficulty[i], profit[i]));
+    }
+    jobs.sort();
+    let mut abilities = worker.clone();
+    abilities.sort();
+    let mut next = 0;
+    let mut best = 0;
+    let mut total = 0;
+    for ability in abilities.iter() {
+        while next < n and jobs[next].0 <= ability {
+            best = best.max(jobs[next].1);
+            next += 1;
+        }
+        total += best;
+    }
+    total
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn max_profit_assignment_table(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let mut top = 0;
+    for d in difficulty.iter() {
+        top = top.max(d);
+    }
+    for w in worker.iter() {
+        top = top.max(w);
+    }
+    let mut best: Vec[i64] = Vec.filled(top + 1, 0);
+    for i in 0..difficulty.len() {
+        best[difficulty[i]] = best[difficulty[i]].max(profit[i]);
+    }
+    for d in 1..top + 1 {
+        best[d] = best[d].max(best[d - 1]);
+    }
+    let mut total = 0;
+    for w in worker.iter() {
+        total += best[w];
+    }
+    total
+}
+
+// ---- binary-search arm ----------------------------------------------
+
+fn max_profit_assignment_search(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let n = difficulty.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| difficulty[i]);
+    let mut hard: Vec[i64] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for i in order.iter() {
+        let so_far = if best.is_empty() { 0 } else { best[best.len() - 1] };
+        hard.push(difficulty[i]);
+        best.push(so_far.max(profit[i]));
+    }
+    let mut total = 0;
+    for w in worker.iter() {
+        // the number of jobs no harder than w
+        let mut low = 0;
+        let mut high = n;
+        while low < high {
+            let mid = (low + high) / 2;
+            if hard[mid] <= w {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        if low > 0 {
+            total += best[low - 1];
+        }
+    }
+    total
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn max_profit_assignment_iter(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let mut jobs: Vec[(i64, i64)] = difficulty.iter().zip(profit.iter()).collect();
+    jobs.sort();
+    let ladder: Vec[(i64, i64)] = jobs.iter().scan(0, |best, (d, p)| {
+        let top = best.max(p);
+        Some((top, (d, top)))
+    }).collect();
+    let mut abilities = worker.clone();
+    abilities.sort();
+    let (_, _, total) = abilities.iter().fold((0, 0, 0), |(i, best, total), w| {
+        let mut i = i;
+        let mut best = best;
+        while i < ladder.len() and ladder[i].0 <= w {
+            best = ladder[i].1;
+            i += 1;
+        }
+        (i, best, total + best)
+    });
+    total
+}
+
+// ---- the statement, worker by worker --------------------------------------
+
+// The statement read literally: each worker looks at every job and takes
+// the best profit among those no harder than their ability, or nothing.
+fn statement(difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for w in worker.iter() {
+        let mut earn = 0;
+        for j in 0..difficulty.len() {
+            if difficulty[j] <= w and profit[j] > earn {
+                earn = profit[j];
+            }
+        }
+        total += earn;
+    }
+    total
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, difficulty: Vec[i64], profit: Vec[i64], worker: Vec[i64]) -> i64 {
+    if arm == 0 {
+        max_profit_assignment_star(difficulty, profit, worker)
+    } else if arm == 1 {
+        max_profit_assignment_table(difficulty, profit, worker)
+    } else if arm == 2 {
+        max_profit_assignment_search(difficulty, profit, worker)
+    } else {
+        max_profit_assignment_iter(difficulty, profit, worker)
+    }
+}
+
+fn reversed(v: Vec[i64]) -> Vec[i64] {
+    let mut r = v.clone();
+    r.reverse();
+    r
+}
+
+fn main() {
+    let names = ["star", "table", "search", "iter"];
+    let properties = ["answer", "reversed", "a job too hard added", "a worker able for all added"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 826;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 15;
+        let m = 1 + next_random(mut seed) % 15;
+        let mut difficulty: Vec[i64] = Vec.new();
+        let mut profit: Vec[i64] = Vec.new();
+        let mut worker: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let d = if kind == 1 { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 40 };
+            difficulty.push(d);
+            if kind == 2 {
+                // harder jobs pay less
+                profit.push(100 - 2 * d + next_random(mut seed) % 2);
+            } else {
+                profit.push(1 + next_random(mut seed) % 60);
+            }
+        }
+        for _ in 0..m {
+            if kind == 3 {
+                // abilities mostly below the jobs
+                worker.push(1 + next_random(mut seed) % 12);
+            } else {
+                worker.push(1 + next_random(mut seed) % 45);
+            }
+        }
+        let want = statement(difficulty.clone(), profit.clone(), worker.clone());
+        let mut hardest = 0;
+        let mut richest = 0;
+        for j in 0..n {
+            hardest = hardest.max(difficulty[j]);
+            richest = richest.max(profit[j]);
+        }
+        let mut strongest = 0;
+        for w in worker.iter() {
+            strongest = strongest.max(w);
+        }
+        let mut hard_d = difficulty.clone();
+        let mut hard_p = profit.clone();
+        let at = next_random(mut seed) % (n + 1);
+        hard_d.insert(at, strongest + 1);
+        hard_p.insert(at, 1000);
+        let mut able = worker.clone();
+        able.insert(next_random(mut seed) % (m + 1), hardest + next_random(mut seed) % 3);
+        for arm in 0..4 {
+            let got = answer(arm, difficulty.clone(), profit.clone(), worker.clone());
+            let oks = [
+                got == want,
+                answer(arm, reversed(difficulty.clone()), reversed(profit.clone()), reversed(worker.clone())) == got,
+                answer(arm, hard_d.clone(), hard_p.clone(), worker.clone()) == got,
+                answer(arm, difficulty.clone(), profit.clone(), able.clone()) == got + richest,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {difficulty} {profit} {worker} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, table {by_arm[1]}, search {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, a job too hard added {by_property[2]}, a worker able for all added {by_property[3]}");
+}
