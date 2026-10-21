@@ -113,7 +113,7 @@ fn with_point_canon(part: Str, p: i64) -> String {
 // Whether a number written with at most one point is its own shortest
 // form.
 fn prints_as_itself_canon(text: String) -> bool {
-    let mut (n, k) = match text.find('.') {
+    let mut (n, k) = match text.find(".") {
         Some(at) => (i64.parse(f"{text[0..at]}{text[at + 1..text.len()]}").unwrap(), text.len() - at - 1),
         None => (i64.parse(text).unwrap(), 0),
     };
