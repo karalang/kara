@@ -7052,3 +7052,56 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_shared_pattern_parts_read_through_deref() {
+    // B-2026-10-18-30: a `shared` scrutinee counts as a `ref` scrutinee, so a
+    // handle part reads through `*rest` (core semantics §4.6), as `karac
+    // check` accepts; the MIR surfaces bound the part by value and refused it.
+    let src = r#"
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+fn tail(list: own List) -> List {
+    match list {
+        List.Nil => List.Nil,
+        List.Cons(_, rest) => *rest,
+    }
+}
+fn len(list: List) -> i64 {
+    if let List.Cons(_, rest) = list {
+        1 + len(*rest)
+    } else {
+        0
+    }
+}
+fn nth(list: List, index: i64) -> i64 {
+    match list {
+        List.Nil => -1,
+        List.Cons(v, rest) => if index == 0 { v } else { nth(*rest, index - 1) },
+    }
+}
+fn sum(list: List) -> i64 {
+    match list {
+        List.Nil => 0,
+        List.Cons(v, rest) => match *rest {
+            List.Nil => v,
+            List.Cons(w, _) => v + w + sum(*rest),
+        },
+    }
+}
+fn main() {
+    let l = List.Cons(4, List.Cons(5, List.Cons(6, List.Nil)));
+    println(f"{len(tail(l))} {len(l)} {nth(l, 1)} {nth(l, 5)} {sum(l)}");
+}
+"#;
+    let want = "2 3 5 -1 26\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

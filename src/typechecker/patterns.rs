@@ -1361,11 +1361,14 @@ impl<'a> super::TypeChecker<'a> {
                     self.local_scope.mark_view(name);
                 } else if self.library_methods_from_source
                     && matches!(mode, ScrutineeMode::Owned)
-                    && self
-                        .program
-                        .ref_binding_spans
-                        .contains(&SpanKey::from_span(&pattern.span))
+                    && (self.core_shared_depth > 0
+                        || self
+                            .program
+                            .ref_binding_spans
+                            .contains(&SpanKey::from_span(&pattern.span)))
                 {
+                    // A part of a `shared` value binds as a `ref` the same way
+                    // (core semantics §4.6; B-2026-10-18-30).
                     // The MIR pipeline binds an explicit `ref name` over an
                     // owned scrutinee through a reference (a `Copy` part by
                     // value), so `*name` reads through it as `karac check`'s
@@ -1974,7 +1977,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn core_enters_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {
-        self.cli_lint_overrides.strict_core
+        (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
             && matches!(mode, ScrutineeMode::Owned)
             && !self.current_scrutinee_core_borrowed
             && self.name_is_shared_decl(type_name)

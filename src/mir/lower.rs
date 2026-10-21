@@ -4504,12 +4504,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => {
                 let p = self.expr_place(operand, mutable)?;
                 // A `Copy` part bound through a `ref` is bound by value
-                // (`bind_one`), so `*min` of it is the binding itself.
+                // (`bind_one`), so `*min` of it is the binding itself; so is
+                // a handle part of a `shared` value (B-2026-10-18-30).
                 let pt = self.place_type(&p);
                 if !matches!(
                     self.tys().tcx().kind(pt),
                     HK::Ref(_) | HK::MutRef(_) | HK::RawPtr { .. }
-                ) && self.is_copy(pt)
+                ) && (self.is_copy(pt) || self.is_handle(pt) || self.is_handle_aggregate(pt))
                 {
                     return Ok(p);
                 }
