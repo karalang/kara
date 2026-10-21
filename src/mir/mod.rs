@@ -7,6 +7,7 @@
 //! build on it. `ty` is a placeholder interner until the typed HIR's
 //! interned types land; MIR only needs the queries it exposes.
 
+pub mod ascii_chars;
 pub mod borrowck;
 pub mod build;
 pub mod concat;

@@ -1232,7 +1232,9 @@ impl<'a> Interp<'a> {
                 _ => err(format!("{name} takes a reference and an index")),
             },
             // A `chars()` cursor step, which must not copy the text.
-            ("String", "char_at_byte") => {
+            // `ascii_at_byte` is the `ascii_chars` pass's `char_at_byte`
+            // over a text it proved ASCII: the same char.
+            ("String", "char_at_byte" | "ascii_at_byte") => {
                 let [recv, Value::Int(i)] = args.as_slice() else {
                     return err(format!("{name} takes a receiver and an index"));
                 };

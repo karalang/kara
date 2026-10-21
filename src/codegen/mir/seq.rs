@@ -566,6 +566,29 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, c.into())?;
             }
+            // The `ascii_chars` pass's step over a text it proved ASCII:
+            // the byte at `i`, which starts a char of its own.
+            ("ascii_at_byte", [s, i]) => {
+                let (p, n) = self.str_parts(s)?;
+                let i = self.int_arg(i)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, n, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "explicit panic")?;
+                let bp = self.elem_ptr(p, i, 1)?;
+                let b = self
+                    .builder
+                    .build_load(self.llcx.i8_type(), bp, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let c = self
+                    .builder
+                    .build_int_z_extend(b, self.llcx.i32_type(), "")
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, c.into())?;
+            }
             ("char_before_byte", [s, i]) => {
                 let (p, n) = self.str_parts(s)?;
                 let i = self.int_arg(i)?;

@@ -623,3 +623,70 @@ fn atomic_literal_operands_take_the_atomic_type() {
         0,
     );
 }
+
+/// The `ascii_chars` pass: a search over an ASCII literal's chars, a
+/// cursor stepped by hand, and the texts it must leave alone (a wide char,
+/// a text that grows, a backwards walk) agree on both backends.
+#[test]
+fn ascii_literal_chars_agree_on_both_backends() {
+    agrees(
+        r#"
+fn find(n: i64) -> char {
+    let a: String = "abcdefghijklmnopqrstuvwxyz";
+    let mut i = 0;
+    for ch in a.chars() {
+        if i == n {
+            return ch;
+        }
+        i = i + 1;
+    }
+    '?'
+}
+fn wide(n: i64) -> char {
+    let a: String = "aéb€c";
+    let mut i = 0;
+    for ch in a.chars() {
+        if i == n {
+            return ch;
+        }
+        i = i + 1;
+    }
+    '?'
+}
+fn grown() -> String {
+    let mut a: String = "ab";
+    a.push('é');
+    let mut out: String = "";
+    for ch in a.chars() {
+        out.push(ch);
+    }
+    out
+}
+fn manual() -> String {
+    let a: String = "xyz";
+    let mut it = a.chars();
+    let mut out: String = "";
+    loop {
+        match it.next() {
+            Some(c) => out.push(c),
+            None => break,
+        }
+    }
+    out
+}
+fn backwards() -> String {
+    let a: String = "abc";
+    let mut out: String = "";
+    for ch in a.chars().rev() {
+        out.push(ch);
+    }
+    out
+}
+fn main() {
+    println(f"{find(0)} {find(25)} {find(26)} {wide(1)} {wide(3)} {grown()} {manual()} {backwards()}");
+}
+"#,
+        "a z ? é € abé xyz cba\n",
+        0,
+    );
+}
