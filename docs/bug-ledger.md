@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 322 |
-| codegen-gap | 282 |
+| codegen-gap | 283 |
 | false-positive | 267 |
 | other | 191 |
 | diagnostics | 184 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3007 |
-| interp | 1027 |
+| codegen | 3008 |
+| interp | 1028 |
 | typecheck | 540 |
 | ownership | 128 |
 | other | 123 |
@@ -186,6 +186,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-48 | 2026-10-21 | interp+codegen | low | `for i in (1..) { .. }` is refused by the MIR builder: "a `for` loop over a collection is not lowered yet" | — |
 | B-2026-10-21-49 | 2026-10-21 | interp+codegen | medium | A program's own `struct Env` breaks `karac __mir-run` with "'Env' is not an effect resource (it is a struct)", the span in the library's cli.kara: the clash renaming of B-2026-10-12-21 skips `effect resource` items, so the library's `reads(Env)` resolves to the program's struct (`karac check` and `karac run` pass) | — |
 | B-2026-10-21-50 | 2026-10-21 | interp+codegen | medium | A `collect()` inside a `map` closure still does not build on the MIR backends when the outer `collect()` takes its type from the function's RETURN type rather than a `let` annotation: `fn f(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] { image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect() }` fails with "an expression whose type does not lower (Type(UnknownParam("C")))"; the remainder of B-2026-10-14-6 | — |
+| B-2026-10-21-51 | 2026-10-21 | interp+codegen | medium | `v.iter_mut()` on a `Vec` takes no adaptor on either MIR backend: `for x in v.iter_mut().skip(1) { *x += 10; }` and the same with `take(2)`, `rev()` or `step_by(2)`, and `let mut it = v.iter_mut().enumerate()` (or any of those) driven by `while let Some(x) = it.next()`, all pass `karac check` and exit 3 under `karac __mir-run` and `karac __mir-llvm-run` with "an iterator value is not lowered yet". Only the two shapes the `for` lowering peels work: `for x in v.iter_mut()` and `for (i, x) in v.iter_mut().enumerate()`. collections.md says `iter_mut()` returns `impl Iterator` (item `mut ref T`), so every adaptor applies; `iter()` takes them all since `SliceIter`/`VecIter` (B-2026-10-13-3). | — |
 
 ### Relocated
 
