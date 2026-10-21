@@ -641,11 +641,20 @@ impl<'a> super::TypeChecker<'a> {
         // the peeled type is what every arm was checked against.
         let scrut_borrows_an_element =
             self.index_read_names_a_borrowed_element(scrutinee, &dispatch_ty);
-        let mut arm_types: Vec<Type> = Vec::new();
         let mut scrutinee_mismatch = false;
 
+        // B-2026-10-19-25: on the MIR pipeline an arm whose value is a bare
+        // `collect()` takes its target from a sibling arm, so it is checked
+        // after the others.
+        let mir = self.library_methods_from_source;
+        let mut order: Vec<usize> = (0..arms.len()).collect();
+        if mir {
+            order.sort_by_key(|&i| super::exprs::tail_is_bare_collect(&arms[i].body));
+        }
+        let mut typed: Vec<Option<Type>> = vec![None; arms.len()];
         let mut materializes = false;
-        for arm in arms {
+        for &i in &order {
+            let arm = &arms[i];
             self.local_scope.push();
             let errs_before = self.errors.len();
             let prev_arm_body = self
@@ -688,9 +697,20 @@ impl<'a> super::TypeChecker<'a> {
             }
             // B-2026-09-25-8 — an earlier `Array` arm is a later bare
             // literal arm's expectation; see `sibling_array_expectation`.
-            let sibling = arm_types
+            let sibling = typed
                 .iter()
-                .find_map(|t| super::exprs::sibling_array_expectation(&arm.body, t));
+                .flatten()
+                .find_map(|t| super::exprs::sibling_array_expectation(&arm.body, t))
+                .or_else(|| {
+                    if !(mir && super::exprs::tail_is_bare_collect(&arm.body)) {
+                        return None;
+                    }
+                    typed
+                        .iter()
+                        .flatten()
+                        .find(|t| **t != Type::Never && super::exprs::expectation_is_concrete(t))
+                        .cloned()
+                });
             let arm_ty = match sibling {
                 Some(expected) => self.check_expr(&arm.body, &expected),
                 None => self.infer_expr(&arm.body),
@@ -706,9 +726,10 @@ impl<'a> super::TypeChecker<'a> {
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }
-            arm_types.push(arm_ty);
+            typed[i] = Some(arm_ty);
             self.local_scope.pop();
         }
+        let mut arm_types: Vec<Type> = typed.into_iter().flatten().collect();
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if materializes {
             self.warn_scrutinee_projection_copy(scrutinee, &scrut_ty);

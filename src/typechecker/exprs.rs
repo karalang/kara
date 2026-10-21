@@ -117,6 +117,14 @@ pub(super) fn is_bare_collect(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
 }
 
+/// Is `e`, or the tail its blocks end in, a bare `collect()`?
+pub(super) fn tail_is_bare_collect(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(tail_is_bare_collect),
+        _ => is_bare_collect(e),
+    }
+}
+
 /// The element types of a `Slice` parameter and the `Vec` or array argument
 /// viewed as it, through any references.
 fn slice_view_elements<'t>(param: &'t Type, arg: &'t Type) -> Option<(&'t Type, &'t Type)> {
@@ -8680,11 +8688,43 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
-                let then_ty = self.infer_block(then_block);
+                // B-2026-10-19-25: on the MIR pipeline a bare `collect()` tail
+                // takes its target from the sibling branch, whichever branch
+                // it is in, so the `then` side waits for the `else` side.
+                let mir = self.library_methods_from_source;
+                let early_else = match else_branch.as_deref() {
+                    Some(els)
+                        if mir
+                            && then_block
+                                .final_expr
+                                .as_deref()
+                                .is_some_and(tail_is_bare_collect)
+                            && !tail_is_bare_collect(els) =>
+                    {
+                        Some(self.infer_expr(els))
+                    }
+                    _ => None,
+                };
+                let then_ty = match &early_else {
+                    Some(t) if *t != Type::Never && expectation_is_concrete(t) => {
+                        self.check_block_against(then_block, t)
+                    }
+                    _ => self.infer_block(then_block),
+                };
                 if let Some(ref else_expr) = else_branch {
-                    let else_ty = match sibling_array_expectation(else_expr, &then_ty) {
-                        Some(expected) => self.check_expr(else_expr, &expected),
-                        None => self.infer_expr(else_expr),
+                    let else_ty = match (early_else, sibling_array_expectation(else_expr, &then_ty))
+                    {
+                        (Some(t), _) => t,
+                        (None, Some(expected)) => self.check_expr(else_expr, &expected),
+                        (None, None)
+                            if mir
+                                && tail_is_bare_collect(else_expr)
+                                && then_ty != Type::Never
+                                && expectation_is_concrete(&then_ty) =>
+                        {
+                            self.check_expr(else_expr, &then_ty)
+                        }
+                        (None, None) => self.infer_expr(else_expr),
                     };
                     if then_ty == Type::Never {
                         return else_ty;

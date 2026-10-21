@@ -7001,3 +7001,54 @@ fn main() {
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
 }
+
+#[test]
+fn mir_collect_in_one_branch_takes_the_sibling_type() {
+    // B-2026-10-19-25: a bare `collect()` as one branch's value of an
+    // un-annotated `if` or `match`, whose target only the OTHER branch names,
+    // left `collect`'s `C` unsolved, whichever branch it was in.
+    let src = r#"
+fn pick(word: own String, flip: bool) -> String {
+    let out = if flip {
+        let chars: Vec[char] = word.chars().collect();
+        chars.iter().rev().collect()
+    } else {
+        word
+    };
+    out
+}
+fn pick2(word: own String, flip: bool) -> String {
+    let out = if flip {
+        word
+    } else {
+        let chars: Vec[char] = word.chars().collect();
+        chars.iter().rev().collect()
+    };
+    out
+}
+fn upto(n: i64, k: i64) -> Vec[i64] {
+    let v = match k {
+        0 => (0..n).collect(),
+        _ => {
+            let mut w: Vec[i64] = Vec.new();
+            w.push(k);
+            w
+        }
+    };
+    v
+}
+fn main() {
+    println(f"{pick("abc".to_string(), true)} {pick("abc".to_string(), false)}");
+    println(f"{pick2("xyz".to_string(), true)} {pick2("xyz".to_string(), false)}");
+    println(f"{upto(3, 0)} {upto(3, 7)}");
+}
+"#;
+    let want = "cba abc\nxyz zyx\n[0, 1, 2] [7]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
