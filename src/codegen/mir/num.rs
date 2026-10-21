@@ -1813,7 +1813,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             (
                 "sin" | "cos" | "tan" | "exp" | "ln" | "log2" | "log10" | "asin" | "acos" | "atan"
-                | "sinh" | "cosh" | "tanh" | "exp2" | "exp_m1" | "ln_1p" | "trunc",
+                | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "cbrt" | "exp2"
+                | "exp_m1" | "ln_1p" | "trunc",
                 [],
             ) => {
                 // Computed at the destination's width, as the interpreter's

@@ -286,6 +286,19 @@ fn fallible_twins_report_out_of_memory() {
     );
 }
 
+/// B-2026-10-21-67: `cbrt` and the inverse hyperbolic functions lower on
+/// compiled MIR, at either float width, as the interpreter computes them.
+#[test]
+fn cube_root_and_inverse_hyperbolics_agree() {
+    agrees(
+        "fn main() {\n    let x: f64 = 27.0;\n    let y: f32 = 8.0;\n    \
+         println(f\"{x.cbrt()} {y.cbrt()} {(0.0).asinh()} {(1.0).acosh()} {(0.0).atanh()}\");\n    \
+         println(f\"{(0.5).asinh()} {(2.0).acosh()} {(0.5).atanh()}\");\n}\n",
+        "3.0 2.0 0.0 0.0 0.0\n0.48121182505960347 1.3169578969248166 0.5493061443340548\n",
+        0,
+    );
+}
+
 /// B-2026-10-21-40: a view of a literal receiver chosen in an `if` outlives
 /// the branch (the literal is lent from static data), on both backends; a
 /// `mut` method on a literal still has a `String` of its own.
