@@ -301,8 +301,8 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 ## `Arena[T]` and `Pool[T]`
 
 Two allocation primitives are library types, not language features:
-- **`Arena[T]`** is a bulk allocator with one lifetime. Every item is freed together when the arena drops, which suits cache-friendly batch work such as parse trees and per-frame game data. Items cannot be removed one at a time. Not yet implemented.
-- **`Pool[T]`** is a generational-handle allocator with a lifetime per item. Items are inserted and removed one at a time; `pool.insert(x)` returns a `Handle[T]`, and `pool.get(h)` returns `Option[ref T]`, which is `None` when the handle is stale. Use it when items have independent lifetimes and stale-handle detection matters (entities, connection tables), and for self-referential data that is deduplicated rather than shared: a type table holds a `Pool[Type]`, and the recursive positions hold `Handle[Type]` ([design.md §11](../design.md#cycles-and-weak)).
+- **`Arena[T]`** is a bulk allocator with one lifetime. Every item is freed together when the arena drops, which suits cache-friendly batch work such as parse trees and per-frame game data. Items cannot be removed one at a time. `Arena.new()` makes one; `a.push(x)` stores `x` and returns an `ArenaRef[T]`, `a.get(r)` returns `ref T`, and `a.len()` counts the items. `a.high_water_mark()` returns an `ArenaCheckpoint`, and `a.rewind_to(cp)` drops everything pushed after it, which makes any `ArenaRef` from after the checkpoint dangle.
+- **`Pool[T]`** is a generational-handle allocator with a lifetime per item. Items are inserted and removed one at a time; `pool.insert(x)` returns a `Handle[T]`, and `pool.get(h)` returns `Option[ref T]`, which is `None` when the handle is stale. Use it when items have independent lifetimes and stale-handle detection matters (entities, connection tables), and for self-referential data that is deduplicated rather than shared: a type table holds a `Pool[Type]`, and the recursive positions hold `Handle[Type]` ([design.md §11](../design.md#cycles-and-weak)). Not yet implemented. Until it is, the library's `Pool[T]` is a connection pool (`Pool.new(create, max_connections, max_waiters)`, `acquire`, `release`), which this page does not describe.
 
 ## Fallible allocation
 
@@ -310,7 +310,7 @@ An allocation can fail at run time: the kernel refuses memory, a fixed heap regi
 
 **Default behaviour.** Every allocating method (`Vec.push`, `Vec.insert`, `Vec.extend`, `Vec.reserve`, `Vec.with_capacity`, `String.push`, `String.push_str`, `Map.insert`, `Set.insert` and the rest) panics when the allocation fails ([core-semantics.md §10](../core-semantics.md#10-panics-and-errors-c8)). Most code cannot do anything useful when memory runs out, so this is the default. That panic is covered by the method's `allocates(Heap)` effect, not by a separate `panics` ([design.md §12](../design.md#default-permitted-effects)).
 
-**Fallible twins.** Each panicking method has a `try_*` companion. Operations that report only success or failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`). Constructors and capacity-bearing operations return `Result[T, AllocError]` (`try_with_capacity`, `try_new`).
+**Fallible twins.** Each panicking method has a `try_*` companion. Operations that report only success or failure return `Result[(), AllocError]` (`try_push`, `try_insert` on a `Vec` or `VecDeque`, `try_reserve`, `try_extend`). A twin whose panicking method returns a value returns that value in the `Ok`: `Map.try_insert(k, v)` is `Result[Option[V], AllocError]`, the displaced value as `insert` returns it, and `Set.try_insert(x)` is `Result[bool, AllocError]`. Constructors and capacity-bearing operations return `Result[T, AllocError]` (`try_with_capacity`, `try_new`).
 
 ```kara
 // Panics on allocation failure
