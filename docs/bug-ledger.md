@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 314 |
 | codegen-gap | 281 |
-| false-positive | 263 |
+| false-positive | 264 |
 | other | 191 |
 | diagnostics | 184 |
 | perf | 181 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 2997 |
 | interp | 1017 |
 | typecheck | 534 |
-| ownership | 126 |
+| ownership | 127 |
 | other | 123 |
 | runtime | 84 |
 | cli | 82 |
@@ -170,7 +170,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
 | B-2026-10-21-19 | 2026-10-21 | typecheck | low | An un-annotated `if`/`else` whose branches are tuples fails to unify when one branch leaves an inference variable (`Vec.new()`) and the other has a bare `None`: `if/else branches have incompatible types: '(Vec[?T0], Option[i64])' and '(Vec[i64], Option[T])'` | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
-| B-2026-10-21-24 | 2026-10-21 | typecheck+interp+codegen | high | `v[a..b] = other` (docs/library/collections.md: copies `other` into the range, panics if the lengths differ, requires `T: Copy`) is a silent no-op on every backend: `let mut v = [1, 2, 3, 4]; v[1..3] = w[0..2];` prints `[1, 2, 3, 4]` on `__mir-run`, the compiled MIR backend and the frozen legacy interpreter, where the page gives `[1, 8, 9, 4]`. A length mismatch does not panic, a `Vec` right-hand side is invalid MIR ("assigning Vec[i64] to _5 of type Slice[i64]"), and `karac check` accepts it for a `Vec[String]`. Not an M3 blocker (legacy is wrong too), high because the output is silently wrong. | — |
 | B-2026-10-21-25 | 2026-10-21 | interp+codegen | medium | `for x in d.iter_mut()` over a `VecDeque`, `Map` or `SortedMap` is refused on both MIR backends with "a `for` loop over a collection is not lowered yet" (collections.md documents `iter_mut` on all three); `iter()` and a `Vec`/`Array` `iter_mut` work. The frozen legacy interpreter runs the VecDeque case, so M3 would lose it. M3-needed. | — |
 | B-2026-10-21-29 | 2026-10-21 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places. It refuses: `a.union(b)` then `a.intersection(b)` ("value 'b' moved here"; Set and SortedSet `union`/`intersection`/`difference` take `other` bare, which borrows under D5), and `a[0] = 10` through a half of `v.split_at_mut(2)` ("declared without `mut`", while patterns cannot carry `mut`). It accepts what the page rejects: `v.len()` while both `split_at_mut` halves are live, and `s.iter_mut()` on a `Set`/`SortedSet` ("have no `iter_mut`"); the MIR backends then exit 3 on the latter. It also types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.truncate(n)` and `d.contains(x)` check though the page's VecDeque table has none of them. Later. | — |
 | B-2026-10-21-30 | 2026-10-21 | typecheck | low | Library surface collections.md documents that no backend has: `Set.from(array)` / `Map.from(array of pairs)` (the page's opening example; `PriorityQueue.from` works), `Array.from_fn(n, f)`, the mutating `Slice` methods on an `Array` (`sort`, `reverse`, `swap`, `fill`, `split_at`, `split_at_mut`, `sort_by`, `sort_by_key`; the page says an Array "has every `Slice[T]` method"), `f64.total_cmp` as a function value (`w.sort_by(f64.total_cmp)`), `Slice.clone_from_slice`, `Vec.remove_first(pred)`, and Display / PartialEq / PartialOrd / Ord for `VecDeque`. Also the uninitialized-array diagnostic suggests `Array[v; N]` and `Array.from_fn`. Later. | — |
@@ -179,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-33 | 2026-10-21 | codegen | medium | MIR finish_build is roughly cubic in a body's `?` exits times its live owned locals: one 287-line constructor with ~90 `?` takes 36 s, so mini_inflect times out on mir-interp | — |
 | B-2026-10-21-34 | 2026-10-21 | typecheck+interp+codegen | high | A trait default method whose own generic shares a name with the implementing impl's (`fn pair[K]` in a trait, `impl[K: Clone] Tr for W[K]`) is instantiated with the method's K in the impl's place on both v2 backends: `__mir-run` stops with `use of a0 after it was freed`, `build --mir` aborts with `free(): double free` | — |
 | B-2026-10-21-35 | 2026-10-21 | interp+runtime | low | `Vec.try_resize` with an unrepresentable length does not return the failure as a value: `v.try_resize(i64.MAX, 0)` runs until killed on `__mir-run` (timeout at 20 s) and panics on compiled MIR ("attempt to multiply with overflow", runtime/src/mir.rs:415); collections.md says a `try_*` method returns the failure as a value, which is `Err(AllocError.CapacityOverflow)` here | — |
+| B-2026-10-21-36 | 2026-10-21 | ownership | medium | `karac check` treats the target of a range assignment `v[a..b] = other` as a slice borrow that stays live, so a later `mut v` borrow of the same Vec is refused ("`v` cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"); both MIR backends run the program | — |
 
 ### Relocated
 
@@ -4323,6 +4323,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-20 | interp+codegen | medium | `env.var(name)` returns `Err(VarError.NotPresent)` for a variable whose value is not UTF-8, on both MIR backends, where time-random-env.md says `NotU… | 2b32e45cf9 |
 | B-2026-10-21-21 | effect | medium | A random draw is still `reads(RandomSource)` in the library and the effect checker, though core semantics §14.7 (ruled 2026-10-20) says a draw writes… | b9cafbdd2f |
 | B-2026-10-21-23 | interp+codegen | medium | `String.normalize(form)` (docs/library/strings.md, design.md § Strings (Equality)) is accepted by `karac check` but missing on both MIR backends: `__… | 596e4a38d1 |
+| B-2026-10-21-24 | typecheck+interp+codegen | high | `v[a..b] = other` (docs/library/collections.md: copies `other` into the range, panics if the lengths differ, requires `T: Copy`) is a silent no-op on… | 9cd0764298 |
 | B-2026-10-21-26 | interp+codegen | medium | `VecDeque.clear`, `insert` and `try_insert` (collections.md's method table and fallible-twin table) are accepted by `karac check` and missing on both… | 16eb54f2a7 |
 | B-2026-10-21-27 | interp+codegen | medium | `StableHash.siphash24(bytes, k0, k1)` (collections.md § Hashing, runtime/stdlib/stable_hash.kara) is missing on both MIR backends: "call of unknown f… | 16eb54f2a7 |
 | B-2026-10-21-28 | interp+runtime | medium | The fallible twins do not return a capacity overflow as a value: collections.md says a `try_*` method "returns the failure as a value", but `Vec.try_… | d944a30602 |
