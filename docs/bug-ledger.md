@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 322 |
 | codegen-gap | 281 |
-| false-positive | 266 |
+| false-positive | 267 |
 | other | 191 |
 | diagnostics | 184 |
 | perf | 181 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3005 |
-| interp | 1025 |
+| codegen | 3006 |
+| interp | 1026 |
 | typecheck | 540 |
 | ownership | 128 |
 | other | 123 |
@@ -187,6 +187,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-46 | 2026-10-21 | typecheck | medium | An open range `(lo..)` takes no iterator adaptor: `(1..).take(3)` and `(1..).take_while(..)` are refused as "no method on type 'RangeFrom'", while `(1..).into_iter()` and `.iter()` are refused as "already an iterator: drop `.into_iter()`" | — |
 | B-2026-10-21-47 | 2026-10-21 | parser | low | `for i in 1.. { .. }` does not parse: the loop body's `{` is taken as the range's end, "Expected LeftBrace, found RightBrace" | — |
 | B-2026-10-21-48 | 2026-10-21 | interp+codegen | low | `for i in (1..) { .. }` is refused by the MIR builder: "a `for` loop over a collection is not lowered yet" | — |
+| B-2026-10-21-49 | 2026-10-21 | interp+codegen | medium | A program's own `struct Env` breaks `karac __mir-run` with "'Env' is not an effect resource (it is a struct)", the span in the library's cli.kara: the clash renaming of B-2026-10-12-21 skips `effect resource` items, so the library's `reads(Env)` resolves to the program's struct (`karac check` and `karac run` pass) | — |
 
 ### Relocated
 
