@@ -138,6 +138,17 @@ pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> 
                 inkwell::passes::PassBuilderOptions::create(),
             )
             .map_err(|e| format!("sroa: {}", e.to_string()))?;
+        // `sroa` grows a name per split (`_463.sroa.0.sroa.0...`); past
+        // the IR parser's length limit two such names read back as one.
+        for f in module.get_functions() {
+            for b in f.get_basic_blocks() {
+                for i in b.get_instructions() {
+                    if i.get_name().is_some_and(|n| n.to_bytes().len() > 64) {
+                        let _ = i.set_name("");
+                    }
+                }
+            }
+        }
     }
     Ok(module.print_to_string().to_string())
 }
