@@ -1503,14 +1503,14 @@ fn test_unreachable_propagates_panics_effect() {
 }
 
 #[test]
-fn test_public_fn_with_todo_must_declare_panics() {
-    // Public function calling todo() needs panics declared
-    let errors = effectcheck_errors(
+fn test_public_fn_with_todo_needs_no_panics_declaration() {
+    // `panics` is default-permitted (design.md § Default-permitted effects):
+    // a public function calling todo() need not declare it. B-2026-10-21-54.
+    effectcheck_ok(
         "pub fn not_done_yet() {\n\
              todo();\n\
          }",
     );
-    assert!(errors.iter().any(|e| e.message.contains("panics")));
 }
 
 // ── Subscript / Index Panics Effect ────────────────────────────
@@ -1534,13 +1534,14 @@ fn test_index_infers_panics_effect() {
 }
 
 #[test]
-fn test_public_fn_with_index_must_declare_panics() {
-    let errors = effectcheck_errors(
+fn test_public_fn_with_index_needs_no_panics_declaration() {
+    // B-2026-10-21-54: indexing infers `panics` (above), which a public
+    // function never has to declare.
+    effectcheck_ok(
         "pub fn get_first(arr: i64) -> i64 {\n\
              arr[0]\n\
          }",
     );
-    assert!(errors.iter().any(|e| e.message.contains("panics")));
 }
 
 // ── Diagnostics: Fix Suggestion Content ────────────────────────
@@ -1548,12 +1549,15 @@ fn test_public_fn_with_index_must_declare_panics() {
 #[test]
 fn test_missing_effect_fixit_is_parseable_with_clause() {
     // examples/weave GAP-W6 regression: the fix-it must suggest a *parseable*
-    // `with` clause. Execution / resourceless verbs render bare (`panics`, not
-    // `panics()` — empty parens do not parse), and the suggestion is prefixed
-    // `with` so it can be pasted onto the signature verbatim.
+    // `with` clause. Execution / resourceless verbs render bare (`blocks`, not
+    // `blocks()` — empty parens do not parse), and the suggestion is prefixed
+    // `with` so it can be pasted onto the signature verbatim. (This used
+    // `panics`, which is default-permitted and so never asked for since
+    // B-2026-10-21-54; `blocks` is the resourceless verb that still is.)
     let errors = effectcheck_errors(
-        "pub fn boom(a: Vec[i64]) -> i64 {\n\
-             a[0]\n\
+        "fn waits(n: i64) -> i64 with blocks { n }\n\
+         pub fn boom(a: i64) -> i64 {\n\
+             waits(a)\n\
          }",
     );
     let msg = errors
@@ -1565,10 +1569,10 @@ fn test_missing_effect_fixit_is_parseable_with_clause() {
         msg.contains("Add: with "),
         "fix-it must prefix `with`: {msg}"
     );
-    assert!(msg.contains("panics"), "fix-it must mention panics: {msg}");
+    assert!(msg.contains("blocks"), "fix-it must mention blocks: {msg}");
     assert!(
-        !msg.contains("panics()"),
-        "resourceless verb must render bare, not `panics()`: {msg}"
+        !msg.contains("blocks()"),
+        "resourceless verb must render bare, not `blocks()`: {msg}"
     );
 }
 
@@ -2248,15 +2252,12 @@ fn test_addition_does_not_infer_panics() {
 }
 
 #[test]
-fn test_public_fn_with_division_must_declare_panics() {
-    let errors = effectcheck_errors(
+fn test_public_fn_with_division_needs_no_panics_declaration() {
+    // B-2026-10-21-54: division infers `panics`, which is default-permitted.
+    effectcheck_ok(
         "pub fn divide(a: i64, b: i64) -> i64 {\n\
              a / b\n\
          }",
-    );
-    assert!(
-        errors.iter().any(|e| e.message.contains("panics")),
-        "public fn with division must declare panics"
     );
 }
 
@@ -5568,15 +5569,21 @@ fn test_pub_fn_returning_map_infers_allocates_but_needs_no_declaration() {
 }
 
 #[test]
-fn test_pub_fn_indexing_map_must_declare_panics() {
-    // `pub fn lookup(...) -> i64 { m[k] }` without `panics` is rejected.
-    let errors = effectcheck_errors("pub fn lookup(m: Map[i64, i64], k: i64) -> i64 { m[k] }");
+fn test_pub_fn_indexing_map_needs_no_panics_declaration() {
+    // `pub fn lookup(...) -> i64 { m[k] }` infers `panics` for the missing
+    // key and, `panics` being default-permitted, needs no declaration.
+    // B-2026-10-21-54 (this asserted the opposite before).
+    let result = effectcheck_ok("pub fn lookup(m: Map[i64, i64], k: i64) -> i64 { m[k] }");
+    let inferred = result
+        .inferred_effects
+        .get("lookup")
+        .expect("lookup has an inferred effect set");
     assert!(
-        errors
+        inferred
+            .effects
             .iter()
-            .any(|e| e.message.to_lowercase().contains("panic")),
-        "Expected undeclared-panics error for pub fn indexing a Map, got: {:?}",
-        errors
+            .any(|te| te.effect.verb == EffectVerbKind::Panics),
+        "indexing a Map should still INFER panics; got: {inferred:?}"
     );
 }
 
@@ -9984,19 +9991,26 @@ fn test_pub_fn_allocating_only_needs_no_declaration() {
 
 #[test]
 fn test_missing_effect_fixit_omits_substrate_allocates() {
-    // A pub fn that allocates AND panics must declare only `panics`; the
-    // substrate allocates(Heap) is neither required nor offered in the fix-it.
-    let errors =
-        effectcheck_errors("pub fn p(a: Vec[i64]) -> i64 { let _v: Vec[i64] = Vec.new(); a[0] }");
+    // A pub fn that allocates, panics AND blocks must declare only `blocks`:
+    // the default-permitted allocates(Heap) and panics are neither required
+    // nor offered in the fix-it (B-2026-10-21-54 added panics).
+    let errors = effectcheck_errors(
+        "fn waits(n: i64) -> i64 with blocks { n }\n\
+         pub fn p(a: Vec[i64]) -> i64 { let _v: Vec[i64] = Vec.new(); waits(a[0]) }",
+    );
     let msg = errors
         .iter()
         .find(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
         .map(|e| e.message.clone())
         .unwrap_or_default();
-    assert!(msg.contains("panics"), "must still require panics: {msg}");
+    assert!(msg.contains("blocks"), "must still require blocks: {msg}");
     assert!(
         !msg.contains("allocates(Heap)"),
         "substrate allocates(Heap) must not appear in the diagnostic: {msg}"
+    );
+    assert!(
+        !msg.contains("panics"),
+        "default-permitted panics must not appear in the diagnostic: {msg}"
     );
 }
 
@@ -11140,9 +11154,25 @@ fn test_effect_carries_through_container_element() {
         msg.contains("writes(UserDB)"),
         "container element dropped the callee's effect: {msg}"
     );
+    // `panics` is default-permitted, so the diagnostic no longer lists it
+    // (B-2026-10-21-54); the inferred set must still carry it.
+    let inferred = effectcheck_all(&format!(
+        "{FN_VALUE_PRELUDE}\
+         pub fn via_vec() -> i64 {{\n\
+         \x20   let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+         \x20   v.push(save);\n\
+         \x20   v[0](7)\n\
+         }}"
+    ));
+    let set = inferred
+        .inferred_effects
+        .get("via_vec")
+        .expect("via_vec has an inferred effect set");
     assert!(
-        msg.contains("panics"),
-        "the pre-existing panics effect must survive alongside it: {msg}"
+        set.effects
+            .iter()
+            .any(|te| te.effect.verb == EffectVerbKind::Panics),
+        "the indexing panics effect must survive alongside it: {set:?}"
     );
 }
 

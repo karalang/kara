@@ -113,13 +113,6 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): a closure argument's effects are charged to the caller, not checked against a pure `Fn` slot (§12); `Row` is the reader's type",
       "first_diagnostic": "undefined type 'Row', did you mean 'rows'?"
     },
-    "639e8544f124": {
-      "line": 5353,
-      "heading": "Effect lattice > `#[no_effect]`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `panics` needs no declaration on a public function (§12)",
-      "first_diagnostic": "public function 'render_frame' performs effects [panics] but has no effect declaration. Add: with panics to the function signature"
-    },
     "e77c3bdf3dea": {
       "line": 5606,
       "heading": "13. Concurrency > `par` blocks",

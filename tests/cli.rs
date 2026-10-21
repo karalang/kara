@@ -19422,8 +19422,12 @@ fn build_rejects_an_effect_violation_like_check_does() {
     let path = tmp.join("effgate.kara");
     std::fs::write(
         &path,
-        "pub fn risky(v: ref Vec[i64]) -> i64 { return v[0]; }\n\
-         fn main() { let v: Vec[i64] = Vec.filled(2i64, 5i64); println(risky(v)); }\n",
+        // `reads(Db)` rather than `panics`: `panics` is default-permitted and
+        // needs no declaration (B-2026-10-21-54), so it is no violation.
+        "effect resource Db;\n\
+         fn load() -> i64 with reads(Db) { 1 }\n\
+         pub fn risky() -> i64 { return load(); }\n\
+         fn main() { println(risky()); }\n",
     )
     .unwrap();
     let exe = tmp.join("effgate");
@@ -19439,7 +19443,7 @@ fn build_rejects_an_effect_violation_like_check_does() {
     );
     assert!(
         stderr.contains("error[effect]")
-            && stderr.contains("public function 'risky' performs effects [panics]"),
+            && stderr.contains("public function 'risky' performs effects [reads(Db)]"),
         "build must RENDER the finding, not just exit non-zero: {stderr}",
     );
     assert!(

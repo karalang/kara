@@ -277,6 +277,8 @@ impl<'a> super::EffectChecker<'a> {
                                 // (where heap is scoped) are unaffected — their
                                 // rejection is owned by `check_profile_compat`.
                                 // See examples/weave GAP-W6 / bugs B-2026-06-13-4.
+                                // `panics`, the other default-permitted effect,
+                                // takes the same exemption (B-2026-10-21-54).
                                 .filter(|e| !self.is_default_permitted_effect(&e.effect))
                                 .collect();
                             if !non_transparent.is_empty() {
