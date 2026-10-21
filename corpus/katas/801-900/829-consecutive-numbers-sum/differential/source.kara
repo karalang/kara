@@ -1,0 +1,181 @@
+// LeetCode #829: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on chosen numbers,
+// against the statement read start by start.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn consecutive_numbers_sum_star(n: i64) -> i64 {
+    let mut count = 0;
+    let mut k = 1;
+    while k * (k + 1) / 2 <= n {
+        if (n - k * (k - 1) / 2) % k == 0 {
+            count += 1;
+        }
+        k += 1;
+    }
+    count
+}
+
+// ---- odd-divisor arm ------------------------------------------------
+
+fn consecutive_numbers_sum_odd(n: i64) -> i64 {
+    let mut m = n;
+    while m % 2 == 0 {
+        m /= 2;
+    }
+    let mut divisors = 1;
+    let mut p = 3;
+    while p * p <= m {
+        let mut e = 0;
+        while m % p == 0 {
+            m /= p;
+            e += 1;
+        }
+        divisors *= e + 1;
+        p += 2;
+    }
+    if m > 1 {
+        divisors *= 2;
+    }
+    divisors
+}
+
+// ---- factor-pair arm ------------------------------------------------
+
+fn consecutive_numbers_sum_pairs(n: i64) -> i64 {
+    let twice = 2 * n;
+    let mut count = 0;
+    let mut k = 1;
+    while k * k < twice {
+        if twice % k == 0 {
+            let m = twice / k;
+            if (k + m) % 2 == 1 {
+                count += 1;
+            }
+        }
+        k += 1;
+    }
+    count
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn consecutive_numbers_sum_iter(n: i64) -> i64 {
+    (1..=n).take_while(|k| k * (k + 1) / 2 <= n).filter(|k| (n - k * (k - 1) / 2) % k == 0).count()
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: from each start a, add a, a + 1, ...
+// until the sum reaches n, and count the starts where it lands on n.
+fn statement(n: i64) -> i64 {
+    let mut count = 0;
+    for a in 1..n + 1 {
+        let mut sum = 0;
+        let mut x = a;
+        while sum < n {
+            sum += x;
+            x += 1;
+        }
+        if sum == n {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        consecutive_numbers_sum_star(n)
+    } else if arm == 1 {
+        consecutive_numbers_sum_odd(n)
+    } else if arm == 2 {
+        consecutive_numbers_sum_pairs(n)
+    } else {
+        consecutive_numbers_sum_iter(n)
+    }
+}
+
+fn main() {
+    let names = ["star", "odd", "pairs", "iter"];
+    let properties = ["answer", "doubled", "times a new odd prime", "multiplicative"];
+    let primes = [3, 5, 7, 11, 13];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 829;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut n = 1;
+        if kind == 0 {
+            // anything up to 600
+            n = 1 + next_random(mut seed) % 600;
+        } else if kind == 1 {
+            // a power of two times a small odd number
+            n = (1 + 2 * (next_random(mut seed) % 8)) * (1 << (next_random(mut seed) % 6));
+        } else if kind == 2 {
+            // a power of one odd prime
+            let p = primes[next_random(mut seed) % 5];
+            for _ in 0..next_random(mut seed) % 5 {
+                if n * p <= 600 {
+                    n *= p;
+                }
+            }
+        } else {
+            // a product of small primes, 2 among them
+            let small = [2, 2, 3, 3, 5, 7];
+            for _ in 0..1 + next_random(mut seed) % 6 {
+                let p = small[next_random(mut seed) % 6];
+                if n * p <= 600 {
+                    n *= p;
+                }
+            }
+        }
+        let want = statement(n);
+        let mut q = 0;
+        while n % primes[q] == 0 {
+            q += 1;
+        }
+        let p = primes[q];
+        let mut m = 1 + next_random(mut seed) % 50;
+        while gcd(n, m) != 1 {
+            m += 1;
+        }
+        for arm in 0..4 {
+            let got = answer(arm, n);
+            let oks = [
+                got == want,
+                answer(arm, 2 * n) == got,
+                answer(arm, p * n) == 2 * got,
+                answer(arm, m * n) == answer(arm, m) * got,
+            ];
+            for i in 0..4 {
+                checks += 1;
+                if not oks[i] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[i] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[i]}: {n} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, odd {by_arm[1]}, pairs {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, doubled {by_property[1]}, times a new odd prime {by_property[2]}, multiplicative {by_property[3]}");
+}

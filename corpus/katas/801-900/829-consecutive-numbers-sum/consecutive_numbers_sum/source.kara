@@ -1,0 +1,63 @@
+// LeetCode #829: Consecutive Numbers Sum -- the ★ arm (each length).
+//
+// k consecutive numbers starting at a sum to k * a + k * (k - 1) / 2, so
+// n has a run of length k exactly when n - k * (k - 1) / 2 is a positive
+// multiple of k. The smallest run of length k, 1 + 2 + ... + k, must not
+// pass n, which bounds k by about the square root of 2n. O(sqrt n).
+
+fn consecutive_numbers_sum(n: i64) -> i64 {
+    let mut count = 0;
+    let mut k = 1;
+    while k * (k + 1) / 2 <= n {
+        if (n - k * (k - 1) / 2) % k == 0 {
+            count += 1;
+        }
+        k += 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n} -> {consecutive_numbers_sum(n)}");
+}
+
+fn main() {
+    show(5);
+    show(9);
+    show(15);
+    show(1);
+    show(2);
+    show(3);
+    show(4);
+    show(1024);
+    show(945);
+    show(1000000000);
+    show(999999937);
+    show(536870912);
+    show(918918000);
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..3001 {
+        let r = consecutive_numbers_sum(n);
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"1 to 3000: total {total}, checksum {check}");
+    let mut seed = 829;
+    total = 0;
+    check = 0;
+    for _ in 0..100 {
+        let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000;
+        let r = consecutive_numbers_sum(n);
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"100 random up to 10^9: total {total}, checksum {check}");
+}

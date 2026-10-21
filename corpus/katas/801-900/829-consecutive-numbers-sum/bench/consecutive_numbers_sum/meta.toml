@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/829-consecutive-numbers-sum/bench/consecutive_numbers_sum.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "ceec47818"
+extracted_src = "ff1c46ee"
+model_rev = "583cfb0d"
+model_src = "ff1c46ee"
