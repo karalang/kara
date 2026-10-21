@@ -1,0 +1,2013 @@
+== read pyproject
+> "rt" "pyproject"
+  rt pyproject: ok
+> "parse" "d" "pyproject"
+> "show" "d"
+  {'build-system': {'requires': ['poetry-core>=1.8'], 'build-backend': 'poetry.core.masonry.api'}, 'tool': {'poetry': {'name': 'inkwell', 'version': '2.3.1', 'description': 'Render Markdown notebooks to static sites', 'authors': ['Ada Byron <ada@example.org>', 'Grace H. <grace@example.org>'], 'license': 'MIT', 'readme': 'README.md', 'classifiers': ['Development Status :: 4 - Beta', 'Programming Language :: Python :: 3', 'Topic :: Text Processing :: Markup'], 'packages': [{'include': 'inkwell', 'from': 'src'}], 'dependencies': {'python': '^3.9', 'markdown-it-py': {'version': '^3.0', 'extras': ['linkify']}, 'jinja2': '^3.1', 'watchdog': {'version': '>=3.0', 'optional': True}}, 'group': {'dev': {'dependencies': {'pytest': '^8.0', 'pytest-cov': '^5.0', 'ruff': '0.4.4'}}}, 'extras': {'watch': ['watchdog']}, 'scripts': {'inkwell': 'inkwell.cli:main'}}, 'ruff': {'line-length': 100, 'target-version': 'py39', 'lint': {'select': ['E', 'F', 'I', 'B'], 'ignore': []}}, 'pytest': {'ini_options': {'addopts': '-ra --strict-markers', 'testpaths': ['tests']}}}}
+== read cargo
+> "rt" "cargo"
+  rt cargo: ok
+> "parse" "d" "cargo"
+> "show" "d"
+  {'package': {'name': 'ferrite', 'version': '0.9.4', 'edition': '2021', 'rust-version': '1.74', 'authors': ['The Ferrite Developers'], 'description': 'A tiny embedded key-value store', 'keywords': ['kv', 'embedded', 'storage'], 'categories': ['database-implementations']}, 'dependencies': {'serde': {'version': '1.0', 'features': ['derive']}, 'crc32fast': '1.4', 'memmap2': {'version': '0.9', 'optional': True}, 'log': '0.4'}, 'dev-dependencies': {'tempfile': '3', 'proptest': {'version': '1.4', 'default-features': False, 'features': ['std']}}, 'features': {'default': ['mmap'], 'mmap': ['dep:memmap2']}, 'profile': {'release': {'lto': True, 'codegen-units': 1, 'opt-level': 3, 'debug': False}}, 'bin': [{'name': 'ferrite-cli', 'path': 'src/bin/cli.rs'}, {'name': 'ferrite-bench', 'path': 'src/bin/bench.rs', 'required-features': ['mmap']}], 'example': [{'name': 'basic'}]}
+== read workspace
+> "rt" "workspace"
+  rt workspace: ok
+> "parse" "d" "workspace"
+> "show" "d"
+  {'workspace': {'resolver': '2', 'members': ['crates/core', 'crates/cli', 'crates/server'], 'exclude': ['crates/experimental'], 'package': {'version': '1.4.0', 'edition': '2021', 'license': 'Apache-2.0 OR MIT'}, 'dependencies': {'tokio': {'version': '1.37', 'features': ['rt-multi-thread', 'macros']}, 'tracing': '0.1', 'anyhow': '1'}}}
+== read spec
+> "rt" "spec"
+  rt spec: ok
+> "parse" "d" "spec"
+> "show" "d"
+  {'title': 'TOML Example', 'owner': {'name': 'Tom Preston-Werner', 'dob': datetime(1979-05-27T07:32:00-08:00)}, 'database': {'enabled': True, 'ports': [8000, 8001, 8002], 'data': [['delta', 'phi'], [3.14]], 'temp_targets': {'cpu': 79.5, 'case': 72.0}}, 'servers': {'alpha': {'ip': '10.0.0.1', 'role': 'frontend'}, 'beta': {'ip': '10.0.0.2', 'role': 'backend'}}}
+== read netlify
+> "rt" "netlify"
+  rt netlify: ok
+> "parse" "d" "netlify"
+> "show" "d"
+  {'build': {'base': 'site/', 'publish': 'public/', 'command': 'hugo --gc --minify', 'environment': {'HUGO_VERSION': '0.125.4', 'NODE_ENV': 'production'}}, 'context': {'deploy-preview': {'command': 'hugo --buildDrafts --buildFuture -b $DEPLOY_PRIME_URL'}}, 'redirects': [{'from': '/blog/*', 'to': '/posts/:splat', 'status': 301, 'force': False}, {'from': '/api/*', 'to': 'https://api.example.net/:splat', 'status': 200}], 'headers': [{'for': '/*', 'values': {'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'"}}]}
+== read hugo
+> "rt" "hugo"
+  rt hugo: ok
+> "parse" "d" "hugo"
+> "show" "d"
+  {'baseURL': 'https://notes.example.com/', 'languageCode': 'en-us', 'title': 'Field Notes', 'theme': 'paper', 'paginate': 10, 'params': {'author': 'R. Okafor', 'description': 'Notes from the field', 'showReadingTime': True, 'social': {'github': 'rokafor', 'mastodon': '@rok@hachyderm.io'}}, 'menu': {'main': [{'name': 'Posts', 'url': '/posts/', 'weight': 1}, {'name': 'Tags', 'url': '/tags/', 'weight': 2}]}, 'languages': {'en': {'languageName': 'English', 'weight': 1}, 'fr': {'languageName': 'Français', 'title': 'Carnets de terrain', 'weight': 2}}, 'markup': {'goldmark': {'renderer': {'unsafe': False}}}}
+== read alacritty
+> "rt" "alacritty"
+  rt alacritty: ok
+> "parse" "d" "alacritty"
+> "show" "d"
+  {'live_config_reload': True, 'window': {'padding': {'x': 6, 'y': 6}, 'opacity': 0.95, 'decorations': 'Buttonless', 'dimensions': {'columns': 120, 'lines': 36}}, 'font': {'size': 13.5, 'normal': {'family': 'JetBrains Mono', 'style': 'Regular'}, 'bold': {'family': 'JetBrains Mono', 'style': 'Bold'}}, 'colors': {'primary': {'background': '#1d1f21', 'foreground': '#c5c8c6'}, 'normal': {'black': '#1d1f21', 'red': '#cc6666', 'green': '#b5bd68'}}, 'keyboard': {'bindings': [{'key': 'N', 'mods': 'Command', 'action': 'SpawnNewInstance'}, {'key': 'Return', 'mods': 'Command|Shift', 'action': 'ToggleFullscreen'}]}}
+== read outoforder
+> "rt" "outoforder"
+  rt outoforder: ok
+> "parse" "d" "outoforder"
+> "show" "d"
+  {'fruit': {'apple': {'color': 'red', 'texture': {'smooth': True}}, 'orange': {'color': 'orange'}}, 'animal': {'legs': 4}}
+== read dotted
+> "rt" "dotted"
+  rt dotted: ok
+> "parse" "d" "dotted"
+> "show" "d"
+  {'name': 'Orange', 'physical': {'color': 'orange', 'shape': 'round'}, 'site': {'google.com': True}, '3': {'14159': 'pi'}, 'ʎǝʞ': 'value', 'key2': 'literal key', 'a': {'b': {'c': 1}}, '': 'empty quoted key', 'tool': {'lint': {'enabled': True, 'rules': ['E1', 'W2']}}}
+== read strings
+> "rt" "strings"
+  rt strings: ok
+> "parse" "d" "strings"
+> "show" "d"
+  {'str1': 'I\'m a string. "You can quote me". Name\tJosé\nLocation\tSF.', 'str2': 'Roses are red\nViolets are blue', 'str3': 'The quick brown fox jumps over the lazy dog.', 'str4': 'Here are two quotation marks: "". Simple enough.', 'str5': 'Here are fifteen quotation marks: """"""""""""""".', 'str6': '"This," she said, "is just a pointless statement."', 'winpath': 'C:\\Users\\nodejs\\templates', 'quoted': 'Tom "Dubs" Preston-Werner', 'regex': '<\\i\\c*\\s*>', 'regex2': "I [dw]on't need \\d{2} apples", 'lines': 'The first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n', 'quot15': 'Here are fifteen quotation marks: """""""""""""""', 'apos15': "Here are fifteen apostrophes: '''''''''''''''", 'emoji': '😀 and é', 'empty': '', 'empty_lit': ''}
+== read numbers
+> "rt" "numbers"
+  rt numbers: ok
+> "parse" "d" "numbers"
+> "show" "d"
+  {'int1': 99, 'int2': 42, 'int3': 0, 'int4': -17, 'int5': 1000, 'int6': 5349221, 'int7': 5349221, 'hex1': 3735928559, 'hex2': 3735928559, 'oct1': 342391, 'oct2': 493, 'bin1': 214, 'flt1': 1.0, 'flt2': 3.1415, 'flt3': -0.01, 'flt4': 5e+22, 'flt5': 1000000.0, 'flt6': -0.02, 'flt7': 6.626e-34, 'flt8': 224617.445991228, 'sf1': inf, 'sf2': inf, 'sf3': -inf, 'sf4': nan, 'sf5': nan, 'sf6': nan, 'zero': -0.0, 'big': inf, 'odd': inf}
+== read dates
+> "rt" "dates"
+  rt dates: differs
+  |odt1 = 1979-05-27T07:32:00Z|
+  |odt2 = 1979-05-27T00:32:00-07:00|
+  |odt3 = 1979-05-27T00:32:00.999999-07:00|
+  |odt4 = 1979-05-27 07:32:00Z|
+  |ldt1 = 1979-05-27T07:32:00|
+  |ldt2 = 1979-05-27T00:32:00.999999|
+  |ld1 = 1979-05-27|
+  |lt1 = 07:32:00|
+  |lt2 = 00:32:00.999999|
+  |nanos = 2024-02-29T12:00:00.123456789Z|
+  |lower = 2024-01-02t03:04:05z|
+  |spaced = 2024-03-10   # a date, then a comment|
+  |pipe = 2024-03-10T08:00:00|05:30|
+  |dates = [ 2024-01-01, 2024-06-30]|
+> "parse" "d" "dates"
+> "show" "d"
+  {'odt1': datetime(1979-05-27T07:32:00+00:00), 'odt2': datetime(1979-05-27T00:32:00-07:00), 'odt3': datetime(1979-05-27T00:32:00.999999-07:00), 'odt4': datetime(1979-05-27T07:32:00+00:00), 'ldt1': datetime(1979-05-27T07:32:00), 'ldt2': datetime(1979-05-27T00:32:00.999999), 'ld1': date(1979-05-27), 'lt1': time(07:32:00), 'lt2': time(00:32:00.999999), 'nanos': datetime(2024-02-29T12:00:00.123456+00:00), 'lower': datetime(2024-01-02T03:04:05+00:00), 'spaced': date(2024-03-10), 'pipe': datetime(2024-03-10T08:00:00+05:30), 'dates': [date(2024-01-01), date(2024-06-30)]}
+== read crlf
+> "rt" "crlf"
+  rt crlf: ok
+> "parse" "d" "crlf"
+> "show" "d"
+  {'server': {'host': '0.0.0.0', 'port': 8080, 'tls': {'enabled': False, 'ciphers': ['TLS_AES_128_GCM_SHA256']}}}
+== read arrays
+> "rt" "arrays"
+  rt arrays: ok
+> "parse" "d" "arrays"
+> "show" "d"
+  {'integers': [1, 2, 3], 'colors': ['red', 'yellow', 'green'], 'nested_arrays_of_ints': [[1, 2], [3, 4, 5]], 'nested_mixed_array': [[1, 2], ['a', 'b', 'c']], 'string_array': ['all', 'strings', 'are the same', 'type'], 'numbers': [0.1, 0.2, 0.5, 1, 2, 5], 'contributors': ['Foo Bar <foo@example.com>', {'name': 'Baz Qux', 'email': 'bazqux@example.com', 'url': 'https://example.com/bazqux'}], 'integers2': [1, 2, 3], 'integers3': [1, 2], 'empty': [], 'empty_ws': [], 'commented': ['x', 'y']}
+== read service
+> "rt" "service"
+  rt service: ok
+> "parse" "d" "service"
+> "show" "d"
+  {'version': 1, 'log_level': 'info', 'log_format': 'json', 'server': {'host': '0.0.0.0', 'port': 8443, 'workers': 8, 'read_timeout': '15s'}, 'database': {'url': 'postgres://orders@db.internal:5432/orders', 'pool_size': 20, 'statement_timeout': 5000}, 'cache': {'backend': 'redis', 'url': 'redis://cache.internal:6379/2', 'ttl': 300}, 'upstreams': [{'name': 'payments', 'url': 'https://payments.internal', 'retries': 3}, {'name': 'inventory', 'url': 'https://inventory.internal', 'retries': 1}]}
+== structure of strings
+> "parse" "d" "strings"
+> "body" "d"
+  str1  String '"I\'m a string. \\"You can quote me\\". Name\\tJos\\u00E9\\nLocation\\tSF."'
+  str2  String '"""\nRoses are red\nViolets are blue"""'
+  str3  String '"""\\\n       The quick brown \\\n       fox jumps over \\\n       the lazy dog.\\\n       """'
+  str4  String '"""Here are two quotation marks: "". Simple enough."""'
+  str5  String '"""Here are fifteen quotation marks: ""\\"""\\"""\\"""\\"""\\"."""'
+  str6  String '""""This," she said, "is just a pointless statement.""""'
+  winpath   String "'C:\\Users\\nodejs\\templates'"
+  quoted    String '\'Tom "Dubs" Preston-Werner\''
+  regex     String "'<\\i\\c*\\s*>'"
+  regex2  String "'''I [dw]on't need \\d{2} apples'''"
+  lines   String "'''\nThe first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n'''"
+  quot15  String '\'\'\'Here are fifteen quotation marks: """""""""""""""\'\'\''
+  apos15  String '"Here are fifteen apostrophes: \'\'\'\'\'\'\'\'\'\'\'\'\'\'\'"'
+  emoji  String '"\\U0001F600 and \\u00e9"'
+  empty  String '""'
+  empty_lit  String "''"
+== structure of arrays
+> "parse" "d" "arrays"
+> "body" "d"
+  integers  Array '[ 1, 2, 3 ]'
+  colors  Array '[ "red", "yellow", "green" ]'
+  nested_arrays_of_ints  Array '[ [ 1, 2 ], [3, 4, 5] ]'
+  nested_mixed_array  Array '[ [ 1, 2 ], ["a", "b", "c"] ]'
+  string_array  Array '[ "all", \'strings\', """are the same""", \'\'\'type\'\'\' ]'
+  numbers  Array '[ 0.1, 0.2, 0.5, 1, 2, 5 ]'
+  contributors  Array '[\n  "Foo Bar <foo@example.com>",\n  { name = "Baz Qux", email = "bazqux@example.com", url = "https://example.com/bazqux" }\n]'
+  integers2  Array '[\n  1, 2, 3\n]'
+  integers3  Array '[\n  1,\n  2, # this is ok\n]'
+  empty  Array '[]'
+  empty_ws  Array '[ ]'
+  commented  Array '[ # opening\n  "x", # first\n  # alone\n  "y"\n]'
+== structure of dotted
+> "parse" "d" "dotted"
+> "body" "d"
+  name  String '"Orange"'
+  physical (dotted) Table
+    color  String '"orange"'
+  physical (dotted) Table
+    shape  String '"round"'
+  site (dotted) Table
+    "google.com"  Bool 'true'
+  3 (dotted) Table
+    14159  String '"pi"'
+  "ʎǝʞ"  String '"value"'
+  'key2'  String '"literal key"'
+  a  (dotted) Table
+     b  (dotted) Table
+       c  Integer '1'
+  ""  String '"empty quoted key"'
+  - Whitespace '\n'
+  tool Table
+    lint (dotted) Table
+      enabled  Bool 'true'
+    lint (dotted) Table
+      rules  Array '["E1", "W2"]'
+== structure of netlify
+> "parse" "d" "netlify"
+> "body" "d"
+  build Table
+    base  String '"site/"'
+    publish  String '"public/"'
+    command  String '"hugo --gc --minify"'
+    - Whitespace '\n'
+    environment Table
+      HUGO_VERSION  String '"0.125.4"'
+      NODE_ENV  String '"production"'
+      - Whitespace '\n'
+  context Table
+    deploy-preview Table
+      command  String '"hugo --buildDrafts --buildFuture -b $DEPLOY_PRIME_URL"'
+      - Whitespace '\n'
+  redirects AoT
+    [[]] Table
+      from  String '"/blog/*"'
+      to  String '"/posts/:splat"'
+      status  Integer '301'
+      force  Bool 'false'
+      - Whitespace '\n'
+    [[]] Table
+      from  String '"/api/*"'
+      to  String '"https://api.example.net/:splat"'
+      status  Integer '200'
+      - Whitespace '\n'
+  headers AoT
+    [[]] Table
+      for  String '"/*"'
+      values Table
+        X-Frame-Options  String '"DENY"'
+        Content-Security-Policy  String '"default-src \'self\'"'
+== structure of outoforder
+> "parse" "d" "outoforder"
+> "body" "d"
+  - Comment '# Tables of one parent spread through the file, as TOML allows.\n'
+  fruit Table
+    apple Table
+      color  String '"red"'
+      - Whitespace '\n'
+  animal Table
+    legs  Integer '4'
+    - Whitespace '\n'
+  fruit Table
+    orange Table
+      color  String '"orange"'
+      - Whitespace '\n'
+    apple Table
+      texture Table
+        smooth  Bool 'true'
+== structure of dates
+> "parse" "d" "dates"
+> "body" "d"
+  odt1  DateTime '1979-05-27T07:32:00Z'
+  odt2  DateTime '1979-05-27T00:32:00-07:00'
+  odt3  DateTime '1979-05-27T00:32:00.999999-07:00'
+  odt4  DateTime '1979-05-27 07:32:00Z'
+  ldt1  DateTime '1979-05-27T07:32:00'
+  ldt2  DateTime '1979-05-27T00:32:00.999999'
+  ld1  Date '1979-05-27'
+  lt1  Time '07:32:00'
+  lt2  Time '00:32:00.999999'
+  nanos  DateTime '2024-02-29T12:00:00.123456789Z'
+  lower  DateTime '2024-01-02t03:04:05z'
+  spaced  Date '2024-03-10'
+  pipe  DateTime '2024-03-10T08:00:00|05:30'
+  dates  Array '[ 2024-01-01, 2024-06-30]'
+> "text" "d"
+  |odt1 = 1979-05-27T07:32:00Z|
+  |odt2 = 1979-05-27T00:32:00-07:00|
+  |odt3 = 1979-05-27T00:32:00.999999-07:00|
+  |odt4 = 1979-05-27 07:32:00Z|
+  |ldt1 = 1979-05-27T07:32:00|
+  |ldt2 = 1979-05-27T00:32:00.999999|
+  |ld1 = 1979-05-27|
+  |lt1 = 07:32:00|
+  |lt2 = 00:32:00.999999|
+  |nanos = 2024-02-29T12:00:00.123456789Z|
+  |lower = 2024-01-02t03:04:05z|
+  |spaced = 2024-03-10   # a date, then a comment|
+  |pipe = 2024-03-10T08:00:00|05:30|
+  |dates = [ 2024-01-01, 2024-06-30]|
+== error: missing value
+> "check" "a = \n"
+  ! UnexpectedCharError: Unexpected character: '\n' at line 1 col 4
+== error: missing equals
+> "check" "a 1\n"
+  ! ParseError: Invalid key "a 1" at line 1 col 3
+== error: two equals
+> "check" "a == 1\n"
+  ! UnexpectedCharError: Unexpected character: '=' at line 1 col 3
+== error: bare key space
+> "check" "first name = 1\n"
+  ! ParseError: Invalid key "first name" at line 1 col 11
+== error: empty key
+> "check" "= 1\n"
+  ! EmptyKeyError: Empty key at line 1 col 0
+== error: empty table name
+> "check" "[]\n"
+  ! EmptyTableNameError: Empty table name at line 1 col 1
+== error: unterminated table
+> "check" "[a\nb = 1\n"
+  ! UnexpectedCharError: Unexpected character: '\n' at line 1 col 2
+== error: table eof
+> "check" "[a"
+  ! UnexpectedEofError: Unexpected end of file at line 1 col 2
+== error: duplicate key
+> "check" "a = 1\na = 2\n"
+  ! ParseError: Key "a" already exists. at line 2 col 0
+== error: duplicate key in table
+> "check" "[t]\nx = 1\nx = 2\n"
+  ! KeyAlreadyPresent: Key "x" already exists.
+== error: duplicate table
+> "check" "[t]\nx = 1\n[t]\ny = 2\n"
+  ! ParseError: Key "t" already exists. at line 4 col 0
+== error: table after aot
+> "check" "[[t]]\nx = 1\n[t]\ny = 2\n"
+  ! ParseError: Key "t" already exists. at line 4 col 0
+== error: aot after table
+> "check" "[t]\nx = 1\n[[t]]\ny = 2\n"
+  ! ParseError: Key "t" already exists. at line 4 col 0
+== error: dotted redefines table
+> "check" "[a]\nb.c = 1\n[a.b]\nd = 2\n"
+  ! TOMLKitError: Redefinition of an existing table
+== error: value then table
+> "check" "a = 1\n[a]\nb = 2\n"
+  ! ParseError: Key "a" already exists. at line 3 col 0
+== error: leading zero
+> "check" "n = 012\n"
+  ! InvalidNumberError: Invalid number at line 1 col 7
+== error: double underscore
+> "check" "n = 1__2\n"
+  ! InvalidNumberError: Invalid number at line 1 col 8
+== error: trailing underscore
+> "check" "n = 12_\n"
+  ! InvalidNumberError: Invalid number at line 1 col 7
+== error: trailing dot
+> "check" "n = 1.\n"
+  ! InvalidNumberError: Invalid number at line 1 col 6
+== error: dot exponent
+> "check" "n = 1.e5\n"
+  ! InvalidNumberError: Invalid number at line 1 col 8
+== error: signed hex
+> "check" "n = +0x1F\n"
+  ! InvalidNumberError: Invalid number at line 1 col 9
+== error: hex underscore lead
+> "check" "n = 0x_1F\n"
+  ! InvalidNumberError: Invalid number at line 1 col 9
+== error: bad float
+> "check" "n = 1.2.3\n"
+  ! InvalidNumberError: Invalid number at line 1 col 9
+== error: plus dot
+> "check" "n = +.5\n"
+  ! InvalidNumberError: Invalid number at line 1 col 7
+== error: bare word
+> "check" "n = yes\n"
+  ! UnexpectedCharError: Unexpected character: 'y' at line 1 col 4
+== error: bad bool
+> "check" "b = tru\n"
+  ! UnexpectedCharError: Unexpected character: '\n' at line 1 col 7
+== error: bad bool 2
+> "check" "b = falsey\n"
+  ! UnexpectedCharError: Unexpected character: 'y' at line 1 col 9
+== error: bad date
+> "check" "d = 2024-02-30\n"
+  ! InvalidDateError: Invalid date at line 1 col 14
+== error: bad datetime
+> "check" "d = 2024-13-01T00:00:00\n"
+  ! InvalidDateTimeError: Invalid datetime at line 1 col 23
+== error: leap second
+> "check" "d = 2016-12-31T23:59:60Z\n"
+  ! InvalidDateTimeError: Invalid datetime at line 1 col 24
+== error: bad time
+> "check" "t = 25:00:00\n"
+  ! InvalidTimeError: Invalid time at line 1 col 12
+== error: date junk
+> "check" "d = 2024-01-01 x\n"
+  ! InvalidDateError: Invalid date at line 1 col 16
+== error: unterminated string
+> "check" "a = \"abc\n"
+  ! InvalidControlChar: Control characters (codes less than 0x1f and 0x7f) are not allowed in strings, use \u000a instead at line 1 col 8
+== error: unterminated eof
+> "check" "a = \"abc"
+  ! UnexpectedEofError: Unexpected end of file at line 1 col 8
+== error: bad escape
+> "check" "a = \"\\q\"\n"
+  ! InvalidCharInStringError: Invalid character 'q' in string at line 1 col 6
+== error: bad unicode
+> "check" "a = \"\\u12G4\"\n"
+  ! InvalidUnicodeValueError: Invalid unicode value at line 1 col 6
+== error: surrogate escape
+> "check" "a = \"\\uD800\"\n"
+  ! InvalidUnicodeValueError: Invalid unicode value at line 1 col 6
+== error: control char
+> "check" "a = \"x\u0001y\"\n"
+  ! InvalidControlChar: Control characters (codes less than 0x1f and 0x7f) are not allowed in strings, use \u0001 instead at line 1 col 6
+== error: delete char
+> "check" "a = \"xy\"\n"
+  ! InvalidControlChar: Control characters (codes less than 0x1f and 0x7f) are not allowed in strings, use \u007f instead at line 1 col 6
+== error: control in comment
+> "check" "a = 1 # x\u0002\n"
+  ! InvalidControlChar: Control characters (codes less than 0x1f and 0x7f) are not allowed in comments, use \u0002 instead at line 1 col 9
+== error: tab in string ok
+> "check" "a = \"x\ty\"\n"
+  {'a': 'x\ty'}
+== error: newline in basic
+> "check" "a = \"x\ny\"\n"
+  ! InvalidControlChar: Control characters (codes less than 0x1f and 0x7f) are not allowed in strings, use \u000a instead at line 1 col 6
+== error: six quotes
+> "check" "a = \"\"\"x\"\"\"\"\"\"\n"
+  ! InvalidCharInStringError: Invalid character '\n' in string at line 1 col 14
+== error: multiline key
+> "check" "a.\"\"\"b\"\"\" = 1\n"
+  ! UnexpectedCharError: Unexpected character: '"""' at line 1 col 9
+== error: trailing junk
+> "check" "a = 1 2\n"
+  ! UnexpectedCharError: Unexpected character: '2' at line 1 col 6
+== error: array no comma
+> "check" "a = [1 2]\n"
+  ! UnexpectedCharError: Unexpected character: '2' at line 1 col 7
+== error: array leading comma
+> "check" "a = [,1]\n"
+  ! UnexpectedCharError: Unexpected character: ',' at line 1 col 5
+== error: array double comma
+> "check" "a = [1,,2]\n"
+  ! UnexpectedCharError: Unexpected character: ',' at line 1 col 7
+== error: array eof
+> "check" "a = [1, 2"
+  ! UnexpectedCharError: Unexpected character: '\x00' at line 1 col 9
+== error: inline trailing comma
+> "check" "a = {x = 1,}\n"
+  ! UnexpectedCharError: Unexpected character: '}' at line 1 col 11
+== error: inline leading comma
+> "check" "a = {, x = 1}\n"
+  ! UnexpectedCharError: Unexpected character: ',' at line 1 col 5
+== error: inline no comma
+> "check" "a = {x = 1 y = 2}\n"
+  ! UnexpectedCharError: Unexpected character: 'y' at line 1 col 11
+== error: inline newline
+> "check" "a = {x = 1,\n y = 2}\n"
+  ! EmptyKeyError: Empty key at line 1 col 11
+== error: inline duplicate
+> "check" "a = {x = 1, x = 2}\n"
+  ! KeyAlreadyPresent: Key "x" already exists.
+== error: inline eof
+> "check" "a = {x = 1,"
+  ! UnexpectedEofError: Unexpected end of file at line 1 col 11
+== error: table name space
+> "check" "[a b]\n"
+  ! ParseError: Invalid key "a b" at line 1 col 4
+== error: bad line start
+> "check" "!x = 1\n"
+  ! EmptyKeyError: Empty key at line 1 col 0
+== error: only a value
+> "check" "\"x\"\n"
+  ! UnexpectedCharError: Unexpected character: '\n' at line 1 col 3
+== error: backslash ws no newline
+> "check" "a = \"\"\"x\\  y\"\"\"\n"
+  ! InvalidCharInStringError: Invalid character 'y' in string at line 1 col 11
+== error: mixed array
+> "check" "a = [1, \"x\", 2.5]\n"
+  {'a': [1, 'x', 2.5]}
+== error: crlf bare cr
+> "check" "a = 1\rb = 2\n"
+  ! UnexpectedCharError: Unexpected character: 'b' at line 2 col 0
+== items of pyproject
+> "parse" "d" "pyproject"
+> "print" "d" "tool" "poetry" "version"
+  String '2.3.1'
+> "raw" "d" "tool" "poetry" "version"
+  String '"2.3.1"'
+> "print" "d" "tool" "poetry" "classifiers"
+  Array ['Development Status :: 4 - Beta', 'Programming Language :: Python :: 3', 'Topic :: Text Processing :: Markup']
+> "raw" "d" "tool" "poetry" "classifiers"
+  Array '[\n    "Development Status :: 4 - Beta",\n    "Programming Language :: Python :: 3",  # keep sorted\n    "Topic :: Text Processing :: Markup",\n]'
+> "print" "d" "tool" "poetry" "dependencies" "markdown-it-py"
+  InlineTable {'version': '^3.0', 'extras': ['linkify']}
+> "raw" "d" "tool" "poetry" "dependencies" "markdown-it-py"
+  InlineTable '{ version = "^3.0", extras = ["linkify"] }'
+> "print" "d" "tool" "poetry" "dependencies" "watchdog" "optional"
+  bool True
+> "print" "d" "tool" "poetry" "packages" 0 "from"
+  String 'src'
+> "print" "d" "tool" "ruff" "line-length"
+  Integer 100
+> "print" "d" "tool"
+  Table {'poetry': {'name': 'inkwell', 'version': '2.3.1', 'description': 'Render Markdown notebooks to static sites', 'authors': ['Ada Byron <ada@example.org>', 'Grace H. <grace@example.org>'], 'license': 'MIT', 'readme': 'README.md', 'classifiers': ['Development Status :: 4 - Beta', 'Programming Language :: Python :: 3', 'Topic :: Text Processing :: Markup'], 'packages': [{'include': 'inkwell', 'from': 'src'}], 'dependencies': {'python': '^3.9', 'markdown-it-py': {'version': '^3.0', 'extras': ['linkify']}, 'jinja2': '^3.1', 'watchdog': {'version': '>=3.0', 'optional': True}}, 'group': {'dev': {'dependencies': {'pytest': '^8.0', 'pytest-cov': '^5.0', 'ruff': '0.4.4'}}}, 'extras': {'watch': ['watchdog']}, 'scripts': {'inkwell': 'inkwell.cli:main'}}, 'ruff': {'line-length': 100, 'target-version': 'py39', 'lint': {'select': ['E', 'F', 'I', 'B'], 'ignore': []}}, 'pytest': {'ini_options': {'addopts': '-ra --strict-markers', 'testpaths': ['tests']}}}
+> "super" "d" "tool"
+  True
+> "super" "d" "tool" "poetry"
+  False
+> "super" "d" "build-system"
+  False
+> "keys" "d"
+  ['build-system', 'tool']
+> "keys" "d" "tool"
+  ['poetry', 'ruff', 'pytest']
+> "len" "d" "tool" "poetry"
+  12
+> "print" "d" "tool" "poetry" "nope"
+  ! NonExistentKey: 'Key "nope" does not exist.'
+> "print" "d" "tool" "poetry" "classifiers" 7
+  ! IndexError: list index out of range
+> "print" "d" "tool" "poetry" "classifiers" -1
+  String 'Topic :: Text Processing :: Markup'
+> "in" "d" "tool"
+  True
+> "in" "d" "poetry"
+  False
+== items of numbers
+> "parse" "d" "numbers"
+> "raw" "d" "int1"
+  Integer '+99'
+> "raw" "d" "hex2"
+  Integer '0xdead_beef'
+> "raw" "d" "oct1"
+  Integer '0o01234567'
+> "raw" "d" "bin1"
+  Integer '0b11010110'
+> "raw" "d" "flt8"
+  Float '224_617.445_991_228'
+> "raw" "d" "sf2"
+  Float '+inf'
+> "raw" "d" "sf6"
+  Float '-nan'
+> "raw" "d" "zero"
+  Float '-0.0'
+> "raw" "d" "big"
+  Float '1e400'
+> "raw" "d" "odd"
+  Float '+infinity'
+> "print" "d" "int1"
+  Integer 99
+> "print" "d" "hex2"
+  Integer 3735928559
+> "print" "d" "flt4"
+  Float 5e+22
+> "print" "d" "sf4"
+  Float nan
+> "print" "d" "sf6"
+  Float nan
+> "print" "d" "zero"
+  Float -0.0
+> "print" "d" "big"
+  Float inf
+> "print" "d" "odd"
+  Float inf
+== items of dates
+> "parse" "d" "dates"
+> "print" "d" "odt1"
+  DateTime datetime(1979-05-27T07:32:00+00:00)
+> "print" "d" "odt2"
+  DateTime datetime(1979-05-27T00:32:00-07:00)
+> "print" "d" "odt3"
+  DateTime datetime(1979-05-27T00:32:00.999999-07:00)
+> "print" "d" "odt4"
+  DateTime datetime(1979-05-27T07:32:00+00:00)
+> "print" "d" "ldt1"
+  DateTime datetime(1979-05-27T07:32:00)
+> "print" "d" "ld1"
+  Date date(1979-05-27)
+> "print" "d" "lt1"
+  Time time(07:32:00)
+> "print" "d" "lt2"
+  Time time(00:32:00.999999)
+> "print" "d" "nanos"
+  DateTime datetime(2024-02-29T12:00:00.123456+00:00)
+> "print" "d" "lower"
+  DateTime datetime(2024-01-02T03:04:05+00:00)
+> "print" "d" "spaced"
+  Date date(2024-03-10)
+> "print" "d" "pipe"
+  DateTime datetime(2024-03-10T08:00:00+05:30)
+> "print" "d" "dates"
+  Array [date(2024-01-01), date(2024-06-30)]
+> "raw" "d" "odt4"
+  DateTime '1979-05-27 07:32:00Z'
+> "raw" "d" "nanos"
+  DateTime '2024-02-29T12:00:00.123456789Z'
+> "raw" "d" "spaced"
+  Date '2024-03-10'
+> "raw" "d" "pipe"
+  DateTime '2024-03-10T08:00:00|05:30'
+> "raw" "d" "dates"
+  Array '[ 2024-01-01, 2024-06-30]'
+== items of netlify
+> "parse" "d" "netlify"
+> "print" "d" "redirects"
+  AoT [{'from': '/blog/*', 'to': '/posts/:splat', 'status': 301, 'force': False}, {'from': '/api/*', 'to': 'https://api.example.net/:splat', 'status': 200}]
+> "print" "d" "redirects" 1 "status"
+  Integer 200
+> "len" "d" "redirects"
+  2
+> "raw" "d" "redirects" 0
+  Table '  from = "/blog/*"\n  to = "/posts/:splat"\n  status = 301\n  force = false\n\n'
+> "print" "d" "headers" 0 "values"
+  Table {'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'"}
+> "super" "d" "context"
+  True
+> "raw" "d" "build"
+  Table '  base = "site/"\n  publish = "public/"\n  command = "hugo --gc --minify"\n\n  [build.environment]\n    HUGO_VERSION = "0.125.4"\n    NODE_ENV = "production"\n\n'
+== out of order tables
+> "parse" "d" "outoforder"
+> "print" "d" "fruit"
+  OutOfOrderTableProxy {'apple': {'color': 'red', 'texture': {'smooth': True}}, 'orange': {'color': 'orange'}}
+> "keys" "d" "fruit"
+  ['apple', 'orange']
+> "print" "d" "fruit" "apple"
+  OutOfOrderTableProxy {'color': 'red', 'texture': {'smooth': True}}
+> "print" "d" "fruit" "apple" "texture"
+  Table {'smooth': True}
+> "set" "d" "fruit" "banana" {"color": "yellow"}
+> "text" "d"
+  |# Tables of one parent spread through the file, as TOML allows.|
+  |[fruit.apple]|
+  |color = "red"|
+  ||
+  |[fruit.banana]|
+  |color = "yellow"|
+  |[animal]|
+  |legs = 4|
+  ||
+  |[fruit.orange]|
+  |color = "orange"|
+  ||
+  |[fruit.apple.texture]|
+  |smooth = true|
+> "set" "d" "fruit" "apple" "color" "green"
+> "text" "d"
+  |# Tables of one parent spread through the file, as TOML allows.|
+  |[fruit.apple]|
+  |color = "green"|
+  ||
+  |[fruit.banana]|
+  |color = "yellow"|
+  |[animal]|
+  |legs = 4|
+  ||
+  |[fruit.orange]|
+  |color = "orange"|
+  ||
+  |[fruit.apple.texture]|
+  |smooth = true|
+> "del" "d" "fruit" "orange"
+> "text" "d"
+  |# Tables of one parent spread through the file, as TOML allows.|
+  |[fruit.apple]|
+  |color = "green"|
+  ||
+  |[fruit.banana]|
+  |color = "yellow"|
+  |[animal]|
+  |legs = 4|
+  ||
+  |[fruit.apple.texture]|
+  |smooth = true|
+> "show" "d"
+  {'fruit': {'apple': {'color': 'green', 'texture': {'smooth': True}}, 'banana': {'color': 'yellow'}}, 'animal': {'legs': 4}}
+== out of order then replace
+> "parse" "d" "outoforder"
+> "get" "f" "d" "fruit"
+> "set" "f" "apple" "fresh"
+> "text" "d"
+  |# Tables of one parent spread through the file, as TOML allows.|
+  |[fruit]|
+  |apple = "fresh"|
+  |[animal]|
+  |legs = 4|
+  ||
+> "show" "d"
+  {'fruit': {'apple': 'fresh'}, 'animal': {'legs': 4}}
+> "print" "f" "apple"
+  String 'fresh'
+== dotted keys
+> "parse" "d" "dotted"
+> "print" "d" "physical"
+  OutOfOrderTableProxy {'color': 'orange', 'shape': 'round'}
+> "super" "d" "physical"
+  ! AttributeError: 'OutOfOrderTableProxy' object has no attribute 'is_super_table'
+> "raw" "d" "a"
+  Table ' b . c = 1   # spaces around the dots\n'
+> "print" "d" "3"
+  Table {'14159': 'pi'}
+> "set" "d" "physical" "size" "medium"
+> "text" "d"
+  |name = "Orange"|
+  |physical.color = "orange"|
+  |physical.size = "medium"|
+  |physical.shape = "round"|
+  |site."google.com" = true|
+  |3.14159 = "pi"|
+  |"ʎǝʞ" = "value"|
+  |'key2' = "literal key"|
+  |a . b . c = 1   # spaces around the dots|
+  |"" = "empty quoted key"|
+  ||
+  |[tool]|
+  |lint.enabled = true|
+  |lint.rules = ["E1", "W2"]|
+> "set" "d" "site" "example.org" false
+> "del" "d" "physical" "color"
+> "text" "d"
+  |name = "Orange"|
+  |physical.size = "medium"|
+  |physical.shape = "round"|
+  |site."google.com" = true|
+  |site."example.org" = false|
+  |3.14159 = "pi"|
+  |"ʎǝʞ" = "value"|
+  |'key2' = "literal key"|
+  |a . b . c = 1   # spaces around the dots|
+  |"" = "empty quoted key"|
+  ||
+  |[tool]|
+  |lint.enabled = true|
+  |lint.rules = ["E1", "W2"]|
+> "append" "d" {"$key": ["x", "y", "z"]} 9
+> "text" "d"
+  |name = "Orange"|
+  |physical.size = "medium"|
+  |physical.shape = "round"|
+  |site."google.com" = true|
+  |site."example.org" = false|
+  |3.14159 = "pi"|
+  |"ʎǝʞ" = "value"|
+  |'key2' = "literal key"|
+  |a . b . c = 1   # spaces around the dots|
+  |"" = "empty quoted key"|
+  |x.y.z = 9|
+  ||
+  |[tool]|
+  |lint.enabled = true|
+  |lint.rules = ["E1", "W2"]|
+> "append" "d" {"$key": ["u", "v"]} {"w": 1}
+  ! TOMLKitError: Can't add a table to a dotted key
+== bump pyproject
+> "parse" "d" "pyproject"
+> "get" "p" "d" "tool" "poetry"
+> "set" "p" "version" "2.4.0"
+> "get" "deps" "p" "dependencies"
+> "set" "deps" "httpx" "^0.27"
+> "set" "deps" "jinja2" {"version": "^3.1", "extras": ["i18n"]}
+> "del" "d" "tool" "poetry" "group" "dev" "dependencies" "pytest-cov"
+> "get" "cls" "p" "classifiers"
+> "insert" "cls" 2 "Programming Language :: Python :: 3.12"
+> "push" "cls" "Typing :: Typed"
+> "set" "d" "tool" "ruff" "line-length" 88
+> "get" "ign" "d" "tool" "ruff" "lint" "ignore"
+> "push" "ign" "E501"
+> "text" "d"
+  |# Packaging for the "inkwell" project.|
+  |[build-system]|
+  |requires = ["poetry-core>=1.8"]|
+  |build-backend = "poetry.core.masonry.api"|
+  ||
+  |[tool.poetry]|
+  |name = "inkwell"|
+  |version = "2.4.0"   # bumped by the release script|
+  |description = "Render Markdown notebooks to static sites"|
+  |authors = ["Ada Byron <ada@example.org>", "Grace H. <grace@example.org>"]|
+  |license = "MIT"|
+  |readme = "README.md"|
+  |classifiers = [|
+  |    "Development Status :: 4 - Beta",|
+  |    "Programming Language :: Python :: 3",  # keep sorted|
+  |    "Programming Language :: Python :: 3.12",|
+  |    "Topic :: Text Processing :: Markup",|
+  |    "Typing :: Typed",|
+  |]|
+  |packages = [{ include = "inkwell", from = "src" }]|
+  ||
+  |[tool.poetry.dependencies]|
+  |python = "^3.9"|
+  |markdown-it-py = { version = "^3.0", extras = ["linkify"] }|
+  |watchdog = { version = ">=3.0", optional = true }|
+  |httpx = "^0.27"|
+  ||
+  |[tool.poetry.dependencies.jinja2]|
+  |version = "^3.1"|
+  |extras = ["i18n"]|
+  |[tool.poetry.group.dev.dependencies]|
+  |pytest = "^8.0"|
+  |ruff = "0.4.4"|
+  ||
+  |[tool.poetry.extras]|
+  |watch = ["watchdog"]|
+  ||
+  |[tool.poetry.scripts]|
+  |inkwell = "inkwell.cli:main"|
+  ||
+  |[tool.ruff]|
+  |line-length = 88|
+  |target-version = "py39"|
+  ||
+  |[tool.ruff.lint]|
+  |select = ["E", "F", "I", "B"]|
+  |ignore = ["E501"] # nothing yet|
+  ||
+  |[tool.pytest.ini_options]|
+  |addopts = "-ra --strict-markers"|
+  |testpaths = [|
+  |  "tests",|
+  |]|
+== new tables in pyproject
+> "parse" "d" "pyproject"
+> "get" "tool" "d" "tool"
+> "set" "tool" "black" {"line-length": 100, "target-version": ["py39"]}
+> "set" "tool" "mypy" {"strict": true, "overrides": [{"module": "tests.*", "disallow_untyped_defs": false}]}
+> "set" "d" "project" {"name": "inkwell", "urls": {"Homepage": "https://inkwell.example.org"}}
+> "set" "d" "readme-note" "see README"
+> "text" "d"
+  |# Packaging for the "inkwell" project.|
+  |readme-note = "see README"|
+  |[build-system]|
+  |requires = ["poetry-core>=1.8"]|
+  |build-backend = "poetry.core.masonry.api"|
+  ||
+  |[tool.poetry]|
+  |name = "inkwell"|
+  |version = "2.3.1"   # bumped by the release script|
+  |description = "Render Markdown notebooks to static sites"|
+  |authors = ["Ada Byron <ada@example.org>", "Grace H. <grace@example.org>"]|
+  |license = "MIT"|
+  |readme = "README.md"|
+  |classifiers = [|
+  |    "Development Status :: 4 - Beta",|
+  |    "Programming Language :: Python :: 3",  # keep sorted|
+  |    "Topic :: Text Processing :: Markup",|
+  |]|
+  |packages = [{ include = "inkwell", from = "src" }]|
+  ||
+  |[tool.poetry.dependencies]|
+  |python = "^3.9"|
+  |markdown-it-py = { version = "^3.0", extras = ["linkify"] }|
+  |jinja2 = "^3.1"|
+  |watchdog = { version = ">=3.0", optional = true }|
+  ||
+  |[tool.poetry.group.dev.dependencies]|
+  |pytest = "^8.0"|
+  |pytest-cov = "^5.0"|
+  |ruff = "0.4.4"|
+  ||
+  |[tool.poetry.extras]|
+  |watch = ["watchdog"]|
+  ||
+  |[tool.poetry.scripts]|
+  |inkwell = "inkwell.cli:main"|
+  ||
+  |[tool.ruff]|
+  |line-length = 100|
+  |target-version = "py39"|
+  ||
+  |[tool.ruff.lint]|
+  |select = ["E", "F", "I", "B"]|
+  |ignore = [] # nothing yet|
+  ||
+  |[tool.pytest.ini_options]|
+  |addopts = "-ra --strict-markers"|
+  |testpaths = [|
+  |  "tests",|
+  |]|
+  ||
+  |[tool.black]|
+  |line-length = 100|
+  |target-version = ["py39"]|
+  ||
+  |[tool.mypy]|
+  |strict = true|
+  ||
+  |[[tool.mypy.overrides]]|
+  |module = "tests.*"|
+  |disallow_untyped_defs = false|
+  ||
+  |[project]|
+  |name = "inkwell"|
+  ||
+  |[project.urls]|
+  |Homepage = "https://inkwell.example.org"|
+> "show" "d" "tool" "mypy"
+  {'strict': True, 'overrides': [{'module': 'tests.*', 'disallow_untyped_defs': False}]}
+== cargo dependencies
+> "parse" "d" "cargo"
+> "get" "deps" "d" "dependencies"
+> "let" "it" {"$call": ["inline_table"]}
+> "update" "it" {"version": "1.0", "features": ["full"]}
+> "set" "deps" "tokio" {"$v": "it"}
+> "set" "deps" "log" "0.4.21"
+> "del" "deps" "memmap2"
+> "get" "feat" "d" "features"
+> "set" "feat" "mmap" []
+> "set" "feat" "default" ["std"]
+> "set" "d" "package" "version" "0.10.0"
+> "get" "bins" "d" "bin"
+> "push" "bins" {"name": "ferrite-repair", "path": "src/bin/repair.rs"}
+> "del" "d" "profile" "release" "debug"
+> "set" "d" "profile" "release" "strip" "symbols"
+> "text" "d"
+  |[package]|
+  |name = "ferrite"|
+  |version = "0.10.0"|
+  |edition = "2021"|
+  |rust-version = "1.74"|
+  |authors = ["The Ferrite Developers"]|
+  |description = "A tiny embedded key-value store"|
+  |keywords = ["kv", "embedded", "storage"]|
+  |categories = ["database-implementations"]|
+  ||
+  |[dependencies]|
+  |serde = { version = "1.0", features = ["derive"] }|
+  |crc32fast = "1.4"|
+  |log = "0.4.21"|
+  |tokio = {version = "1.0", features = ["full"]}|
+  ||
+  |[dev-dependencies]|
+  |tempfile = "3"|
+  |proptest = { version = "1.4", default-features = false, features = ["std"] }|
+  ||
+  |[features]|
+  |default = ["std"]|
+  |mmap = []|
+  ||
+  |[profile.release]|
+  |lto = true|
+  |codegen-units = 1|
+  |opt-level = 3|
+  |strip = "symbols"|
+  ||
+  |[[bin]]|
+  |name = "ferrite-cli"|
+  |path = "src/bin/cli.rs"|
+  ||
+  |[[bin]]|
+  |name = "ferrite-bench"|
+  |path = "src/bin/bench.rs"|
+  |required-features = ["mmap"]|
+  ||
+  |[[bin]]|
+  |name = "ferrite-repair"|
+  |path = "src/bin/repair.rs"|
+  |[[example]]|
+  |name = "basic"|
+> "len" "bins"
+  3
+== cargo aot insert and delete
+> "parse" "d" "cargo"
+> "get" "bins" "d" "bin"
+> "insert" "bins" 0 {"name": "ferrite-first", "path": "src/main.rs"}
+> "del" "bins" 1
+> "text" "d"
+  |[package]|
+  |name = "ferrite"|
+  |version = "0.9.4"|
+  |edition = "2021"|
+  |rust-version = "1.74"|
+  |authors = ["The Ferrite Developers"]|
+  |description = "A tiny embedded key-value store"|
+  |keywords = ["kv", "embedded", "storage"]|
+  |categories = ["database-implementations"]|
+  ||
+  |[dependencies]|
+  |serde = { version = "1.0", features = ["derive"] }|
+  |crc32fast = "1.4"|
+  |memmap2 = { version = "0.9", optional = true }|
+  |log = "0.4"|
+  ||
+  |[dev-dependencies]|
+  |tempfile = "3"|
+  |proptest = { version = "1.4", default-features = false, features = ["std"] }|
+  ||
+  |[features]|
+  |default = ["mmap"]|
+  |mmap = ["dep:memmap2"]|
+  ||
+  |[profile.release]|
+  |lto = true|
+  |codegen-units = 1|
+  |opt-level = 3|
+  |debug = false|
+  ||
+  |[[bin]]|
+  |name = "ferrite-first"|
+  |path = "src/main.rs"|
+  |[[bin]]|
+  |name = "ferrite-bench"|
+  |path = "src/bin/bench.rs"|
+  |required-features = ["mmap"]|
+  ||
+  |[[example]]|
+  |name = "basic"|
+> "set" "bins" 0 {"name": "x"}
+  ! NotImplementedError: 
+== workspace members
+> "parse" "d" "workspace"
+> "get" "m" "d" "workspace" "members"
+> "push" "m" "crates/web"
+> "insert" "m" 0 "crates/alpha"
+> "del" "m" 2
+> "text" "d"
+  |[workspace]|
+  |resolver = "2"|
+  |members = [|
+  |    "crates/alpha",|
+  |    "crates/core",|
+  |    "crates/server",|
+  |    "crates/web",|
+  |]|
+  |exclude = ["crates/experimental"]|
+  ||
+  |[workspace.package]|
+  |version = "1.4.0"|
+  |edition = "2021"|
+  |license = "Apache-2.0 OR MIT"|
+  ||
+  |[workspace.dependencies]|
+  |tokio = { version = "1.37", features = ["rt-multi-thread", "macros"] }|
+  |tracing = "0.1"|
+  |anyhow = "1"|
+> "set" "m" 1 "crates/beta"
+> "print" "m"
+  Array ['crates/alpha', 'crates/beta', 'crates/server', 'crates/web']
+> "raw" "m"
+  Array '[\n    "crates/alpha",\n    "crates/beta",\n    "crates/server",\n    "crates/web",\n]'
+> "get" "e" "d" "workspace" "exclude"
+> "push" "e" "crates/old"
+> "insert" "e" 0 "crates/zero"
+> "raw" "e"
+  Array '["crates/zero","crates/experimental", "crates/old"]'
+> "del" "e" 0
+> "del" "e" -1
+> "raw" "e"
+  Array '["crates/experimental"]'
+> "del" "e" 0
+> "raw" "e"
+  Array '[]'
+> "push" "e" "only"
+> "raw" "e"
+  Array '["only"]'
+> "del" "e" 3
+  ! IndexError: list assignment index out of range
+== netlify redirects
+> "parse" "d" "netlify"
+> "get" "r" "d" "redirects"
+> "push" "r" {"from": "/old", "to": "/new", "status": 302}
+> "set" "d" "build" "environment" "HUGO_VERSION" "0.126.0"
+> "set" "d" "build" "processing" {"skip_processing": true}
+> "text" "d"
+  |[build]|
+  |  base = "site/"|
+  |  publish = "public/"|
+  |  command = "hugo --gc --minify"|
+  ||
+  |  [build.environment]|
+  |    HUGO_VERSION = "0.126.0"|
+  |    NODE_ENV = "production"|
+  ||
+  |[build.processing]|
+  |skip_processing = true|
+  |[context.deploy-preview]|
+  |  command = "hugo --buildDrafts --buildFuture -b $DEPLOY_PRIME_URL"|
+  ||
+  |[[redirects]]|
+  |  from = "/blog/*"|
+  |  to = "/posts/:splat"|
+  |  status = 301|
+  |  force = false|
+  ||
+  |[[redirects]]|
+  |  from = "/api/*"|
+  |  to = "https://api.example.net/:splat"|
+  |  status = 200|
+  ||
+  |[[redirects]]|
+  |from = "/old"|
+  |to = "/new"|
+  |status = 302|
+  |[[headers]]|
+  |  for = "/*"|
+  |  [headers.values]|
+  |    X-Frame-Options = "DENY"|
+  |    Content-Security-Policy = "default-src 'self'"|
+== service settings
+> "parse" "d" "service"
+> "set" "d" "log_level" "debug"
+> "set" "d" "region" "eu-west-1"
+> "set" "d" "server" "port" 9443
+> "del" "d" "cache"
+> "set" "d" "database" "pool_size" 40
+> "set" "d" "database" "replica" {"url": "postgres://replica", "pool_size": 5}
+> "get" "u" "d" "upstreams"
+> "del" "u" 0
+> "text" "d"
+  |# orders-api: production settings|
+  |version = 1|
+  |log_level = "debug"|
+  |log_format = "json"  # json or text|
+  |region = "eu-west-1"|
+  ||
+  |[server]|
+  |host = "0.0.0.0"|
+  |port = 9443|
+  |workers = 8|
+  |read_timeout = "15s"|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 40|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[database.replica]|
+  |url = "postgres://replica"|
+  |pool_size = 5|
+  |[[upstreams]]|
+  |name = "inventory"|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+> "show" "d"
+  {'version': 1, 'log_level': 'debug', 'log_format': 'json', 'server': {'host': '0.0.0.0', 'port': 9443, 'workers': 8, 'read_timeout': '15s'}, 'database': {'url': 'postgres://orders@db.internal:5432/orders', 'pool_size': 40, 'statement_timeout': 5000, 'replica': {'url': 'postgres://replica', 'pool_size': 5}}, 'upstreams': [{'name': 'inventory', 'url': 'https://inventory.internal', 'retries': 1}], 'region': 'eu-west-1'}
+== service replace kinds
+> "parse" "d" "service"
+> "set" "d" "server" "plain"
+> "set" "d" "log_format" {"style": "json", "color": false}
+> "text" "d"
+  |# orders-api: production settings|
+  |version = 1|
+  |log_level = "info"|
+  ||
+  |server = "plain"|
+  |[log_format]|
+  |style = "json"|
+  |color = false|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 20|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+  |[[upstreams]]|
+  |name = "payments"|
+  |url = "https://payments.internal"|
+  |retries = 3|
+  ||
+  |[[upstreams]]|
+  |name = "inventory"|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+> "keys" "d"
+  ['version', 'log_level', 'database', 'cache', 'upstreams', 'server', 'log_format']
+> "set" "d" "upstreams" "none"
+> "text" "d"
+  |# orders-api: production settings|
+  |version = 1|
+  |log_level = "info"|
+  ||
+  |server = "plain"|
+  |upstreams = "none"|
+  |[log_format]|
+  |style = "json"|
+  |color = false|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 20|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+> "keys" "d"
+  ['version', 'log_level', 'database', 'cache', 'server', 'log_format', 'upstreams']
+== hugo menus
+> "parse" "d" "hugo"
+> "get" "mm" "d" "menu" "main"
+> "push" "mm" {"name": "About", "url": "/about/", "weight": 3}
+> "set" "d" "params" "social" "rss" true
+> "set" "d" "languages" "de" {"languageName": "Deutsch", "weight": 3}
+> "text" "d"
+  |baseURL = "https://notes.example.com/"|
+  |languageCode = "en-us"|
+  |title = "Field Notes"|
+  |theme = "paper"|
+  |paginate = 10|
+  ||
+  |[params]|
+  |  author = "R. Okafor"|
+  |  description = "Notes from the field"|
+  |  showReadingTime = true|
+  |  [params.social]|
+  |    github = "rokafor"|
+  |    mastodon = "@rok@hachyderm.io"|
+  |  rss = true|
+  ||
+  |[[menu.main]]|
+  |  name = "Posts"|
+  |  url = "/posts/"|
+  |  weight = 1|
+  ||
+  |[[menu.main]]|
+  |  name = "Tags"|
+  |  url = "/tags/"|
+  |  weight = 2|
+  ||
+  |[[menu.main]]|
+  |name = "About"|
+  |url = "/about/"|
+  |weight = 3|
+  |[languages]|
+  |  [languages.en]|
+  |    languageName = "English"|
+  |    weight = 1|
+  |  [languages.fr]|
+  |    languageName = "Fran\u00e7ais"|
+  |    title = "Carnets de terrain"|
+  |    weight = 2|
+  ||
+  |[languages.de]|
+  |languageName = "Deutsch"|
+  |weight = 3|
+  |[markup.goldmark.renderer]|
+  |  unsafe = false|
+> "print" "d" "languages" "fr" "languageName"
+  String 'Français'
+== alacritty colors
+> "parse" "d" "alacritty"
+> "set" "d" "colors" "normal" "blue" "#81a2be"
+> "set" "d" "window" "opacity" 1.0
+> "set" "d" "window" "dimensions" "lines" 40
+> "set" "d" "font" "bold" "style" "Heavy"
+> "get" "b" "d" "keyboard" "bindings"
+> "push" "b" {"key": "Q", "mods": "Command", "action": "Quit"}
+> "text" "d"
+  |# Alacritty terminal configuration|
+  |live_config_reload = true|
+  ||
+  |[window]|
+  |padding = { x = 6, y = 6 }|
+  |opacity = 1.0|
+  |decorations = "Buttonless"|
+  |dimensions.columns = 120|
+  |dimensions.lines = 40|
+  ||
+  |[font]|
+  |size = 13.5|
+  |normal = { family = "JetBrains Mono", style = "Regular" }|
+  |bold.family = "JetBrains Mono"|
+  |bold.style = "Heavy"|
+  ||
+  |[colors.primary]|
+  |background = "#1d1f21"|
+  |foreground = "#c5c8c6"|
+  ||
+  |[colors.normal]|
+  |black   = "#1d1f21"|
+  |red     = "#cc6666"|
+  |green   = "#b5bd68"|
+  |blue = "#81a2be"|
+  ||
+  |[[keyboard.bindings]]|
+  |key = "N"|
+  |mods = "Command"|
+  |action = "SpawnNewInstance"|
+  ||
+  |[[keyboard.bindings]]|
+  |key = "Return"|
+  |mods = "Command|Shift"|
+  |action = "ToggleFullscreen"|
+  |[[keyboard.bindings]]|
+  |key = "Q"|
+  |mods = "Command"|
+  |action = "Quit"|
+== crlf document
+> "parse" "d" "crlf"
+> "set" "d" "server" "port" 443
+> "set" "d" "server" "tls" "enabled" true
+> "set" "d" "server" "name" "edge"
+> "text" "d"
+  |# saved on Windows\r|
+  |[server]\r|
+  |host = "0.0.0.0"\r|
+  |port = 443\r|
+  |name = "edge"|
+  |\r|
+  |[server.tls]\r|
+  |enabled = true # off in dev\r|
+  |ciphers = [\r|
+  |  "TLS_AES_128_GCM_SHA256",\r|
+  |]\r|
+== strings changed
+> "parse" "d" "strings"
+> "set" "d" "str1" "plain now"
+> "set" "d" "str2" "line one\nline two"
+> "set" "d" "winpath" "D:\\data"
+> "raw" "d" "winpath"
+  String '"D:\\\\data"'
+> "raw" "d" "str2"
+  String '"line one\\nline two"'
+> "set" "d" "emoji" {"$call": ["string", "it's \"fine\"", {"$kw": {"literal": false}}]}
+> "raw" "d" "emoji"
+  String '"it\'s \\"fine\\""'
+== comments and indent
+> "parse" "d" "service"
+> "get" "port" "d" "server" "port"
+> "comment" "port" "TLS"
+> "get" "pool" "d" "database" "pool_size"
+> "comment" "pool" "# per worker"
+> "indent" "pool" 4
+> "get" "srv" "d" "server"
+> "indent" "srv" 2
+> "text" "d"
+  |# orders-api: production settings|
+  |version = 1|
+  |log_level = "info"|
+  |log_format = "json"  # json or text|
+  ||
+  |  [server]|
+  |  host = "0.0.0.0"|
+  |  port = 8443 # TLS|
+  |  workers = 8|
+  |  read_timeout = "15s"|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |    pool_size = 20 # per worker|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+  |[[upstreams]]|
+  |name = "payments"|
+  |url = "https://payments.internal"|
+  |retries = 3|
+  ||
+  |[[upstreams]]|
+  |name = "inventory"|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+== new document
+> "let" "d" {"$call": ["document"]}
+> "add" "d" {"$call": ["comment", "generated by deploy-tool"]}
+> "add" "d" {"$call": ["nl"]}
+> "add" "d" "title" "release"
+> "let" "t" {"$call": ["table"]}
+> "add" "t" "host" "example.org"
+> "add" "t" "port" 443
+> "append" "t" null {"$call": ["comment", "ports below 1024 need root"]}
+> "add" "d" "server" {"$v": "t"}
+> "let" "a" {"$call": ["aot"]}
+> "push" "a" {"$call": ["item", {"name": "web", "replicas": 3}]}
+> "push" "a" {"$call": ["item", {"name": "worker", "replicas": 1}]}
+> "append" "d" "service" {"$v": "a"}
+> "let" "s" {"$call": ["table", true]}
+> "let" "inner" {"$call": ["table"]}
+> "update" "inner" {"x": 1}
+> "append" "s" "inner" {"$v": "inner"}
+> "append" "d" "outer" {"$v": "s"}
+> "add" "d" "late" true
+> "text" "d"
+  |# generated by deploy-tool|
+  ||
+  |title = "release"|
+  |late = true|
+  ||
+  |[server]|
+  |host = "example.org"|
+  |port = 443|
+  |# ports below 1024 need root|
+  ||
+  |[[service]]|
+  |name = "web"|
+  |replicas = 3|
+  ||
+  |[[service]]|
+  |name = "worker"|
+  |replicas = 1|
+  ||
+  |[outer.inner]|
+  |x = 1|
+> "show" "d"
+  {'title': 'release', 'server': {'host': 'example.org', 'port': 443}, 'service': [{'name': 'web', 'replicas': 3}, {'name': 'worker', 'replicas': 1}], 'outer': {'inner': {'x': 1}}, 'late': True}
+== document errors
+> "let" "d" {"$call": ["document"]}
+> "add" "d" "x" 1
+> "add" "d" "x" 2
+  ! KeyAlreadyPresent: Key "x" already exists.
+> "add" "d" 5
+  ! ValueError: Non comment/whitespace items must have an associated key
+> "append" "d" {"$key": ["a", "b"]} {"t": 1}
+  ! TOMLKitError: Can't add a table to a dotted key
+> "del" "d" "zzz"
+  ! NonExistentKey: 'Key "zzz" does not exist.'
+> "pop" "d" "x"
+  Integer 1
+> "pop" "d" "x"
+  ! NonExistentKey: 'Key "x" does not exist.'
+> "text" "d"
+== setdefault and pop
+> "parse" "d" "service"
+> "setdefault" "d" "version" 2
+  Integer 1
+> "setdefault" "d" "owner" "team-orders"
+  String 'team-orders'
+> "setdefault" "d" "limits" {"rps": 500}
+  Table {'rps': 500}
+> "pop" "d" "log_format"
+  String 'json'
+> "get" "s" "d" "server"
+> "pop" "s" "workers"
+  Integer 8
+> "text" "d"
+  |# orders-api: production settings|
+  |version = 1|
+  |log_level = "info"|
+  |owner = "team-orders"|
+  ||
+  |[server]|
+  |host = "0.0.0.0"|
+  |port = 8443|
+  |read_timeout = "15s"|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 20|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+  |[[upstreams]]|
+  |name = "payments"|
+  |url = "https://payments.internal"|
+  |retries = 3|
+  ||
+  |[[upstreams]]|
+  |name = "inventory"|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+  ||
+  |[limits]|
+  |rps = 500|
+== dumps of plain data
+> "dumps" {"title": "x", "owner": {"name": "y", "dob": {"$dt": "1979-05-27T07:32:00-08:00"}}, "ports": [8000, 8001], "flags": {"a": true}, "z": 1} false
+  |title = "x"|
+  |ports = [8000, 8001]|
+  |z = 1|
+  ||
+  |[owner]|
+  |name = "y"|
+  |dob = 1979-05-27T07:32:00-08:00|
+  ||
+  |[flags]|
+  |a = true|
+> "dumps" {"title": "x", "owner": {"name": "y", "dob": {"$dt": "1979-05-27T07:32:00-08:00"}}, "ports": [8000, 8001], "flags": {"a": true}, "z": 1} true
+  |ports = [8000, 8001]|
+  |title = "x"|
+  |z = 1|
+  ||
+  |[flags]|
+  |a = true|
+  ||
+  |[owner]|
+  |dob = 1979-05-27T07:32:00-08:00|
+  |name = "y"|
+> "dumps" {"servers": [{"name": "a", "ip": "10.0.0.1"}, {"name": "b"}], "mixed": [1, {"x": 2}], "points": [{"x": 1, "y": {"z": 2}}]} false
+  |mixed = [1, {x = 2}]|
+  |[[servers]]|
+  |name = "a"|
+  |ip = "10.0.0.1"|
+  ||
+  |[[servers]]|
+  |name = "b"|
+  ||
+  |[[points]]|
+  |x = 1|
+  ||
+  |[points.y]|
+  |z = 2|
+> "dumps" {"b": 2, "a": {"d": 1, "c": [{"y": 1, "x": 2}]}, "aa": 0} true
+  |aa = 0|
+  |b = 2|
+  ||
+  |[a]|
+  |d = 1|
+  |[[a.c]]|
+  |x = 2|
+  |y = 1|
+> "dumps" {"when": {"$date": "2024-05-01"}, "at": {"$time": "09:30:00.5"}, "utc": {"$dt": "2024-05-01T09:30:00Z"}, "local": {"$dt": "2024-05-01T09:30:00"}, "f": 1.5, "e": 1e-07, "big": 1e+300, "inf": {"$f": "inf"}, "ninf": {"$f": "-inf"}, "nan": {"$f": "nan"}, "neg0": {"$f": "-0.0"}} false
+  |when = 2024-05-01|
+  |at = 09:30:00.500000|
+  |utc = 2024-05-01T09:30:00Z|
+  |local = 2024-05-01T09:30:00|
+  |f = 1.5|
+  |e = 1e-07|
+  |big = 1e+300|
+  |inf = inf|
+  |ninf = -inf|
+  |nan = nan|
+  |neg0 = -0.0|
+> "dumps" {"s": "tab\there \"q\" back\\slash\u0001 é", "k y": 1, "": 2, "dotted.key": 3, "é": 4} false
+  |s = "tab\there \"q\" back\\slash\u0001 é"|
+  |"k y" = 1|
+  |"" = 2|
+  |"dotted.key" = 3|
+  |"é" = 4|
+> "dumps" {"empty": {}, "nested": {"empty": {}}, "list": [], "e2": [[]]} false
+  |list = []|
+  |e2 = [[]]|
+  |[empty]|
+  ||
+  |[nested.empty]|
+== item conversions
+> "let" "a" {"$call": ["item", [1, 2, 3]]}
+> "raw" "a"
+  Array '[1, 2, 3]'
+> "let" "b" {"$call": ["item", [{"x": 1}, {"x": 2}]]}
+> "raw" "b"
+  AoT 'x = 1\nx = 2\n'
+> "let" "c" {"$call": ["item", {"t": {"u": 1}, "v": 2}]}
+> "raw" "c"
+  Table 'v = 2\n[t]\nu = 1\n'
+> "let" "e" {"$call": ["item", [[1, 2], {"k": "v"}, "s"]]}
+> "raw" "e"
+  Array '[[1, 2], {k = "v"}, "s"]'
+> "let" "f" {"$call": ["item", {"$f": "nan"}]}
+> "raw" "f"
+  Float 'nan'
+> "let" "g" {"$call": ["item", {"$dt": "2024-01-02T03:04:05.000600+05:30"}]}
+> "raw" "g"
+  DateTime '2024-01-02T03:04:05.000600+05:30'
+> "print" "g"
+  DateTime datetime(2024-01-02T03:04:05.000600+05:30)
+> "let" "h" {"$call": ["item", {"$time": "23:59:59"}]}
+> "raw" "h"
+  Time '23:59:59'
+> "let" "i" {"$call": ["item", true]}
+> "raw" "i"
+  Bool 'true'
+> "let" "j" {"$call": ["item", -12]}
+> "raw" "j"
+  Integer '-12'
+> "let" "k" {"$call": ["item", 3.0]}
+> "raw" "k"
+  Float '3.0'
+> "let" "l" {"$call": ["item", 12345678.9]}
+> "raw" "l"
+  Float '12345678.9'
+== string constructors
+> "let" "a" {"$call": ["string", "plain"]}
+> "raw" "a"
+  String '"plain"'
+> "let" "a" {"$call": ["string", "C:\\temp", {"$kw": {"literal": true}}]}
+> "raw" "a"
+  String "'C:\\temp'"
+> "let" "a" {"$call": ["string", "one\ntwo\n", {"$kw": {"multiline": true}}]}
+> "raw" "a"
+  String '"""one\ntwo\n"""'
+> "let" "a" {"$call": ["string", "has \"\"\" inside \\ and \t tab\r\nnext", {"$kw": {"multiline": true}}]}
+> "raw" "a"
+  String '"""has ""\\" inside \\\\ and \\t tab\r\nnext"""'
+> "print" "a"
+  String 'has """ inside \\ and \t tab\r\nnext'
+> "let" "a" {"$call": ["string", "lit\nlines", {"$kw": {"literal": true, "multiline": true}}]}
+> "raw" "a"
+  String "'''lit\nlines'''"
+> "let" "a" {"$call": ["string", "it's", {"$kw": {"literal": true}}]}
+  ! InvalidStringError: Invalid string: 'it's'.
+> "let" "a" {"$call": ["string", "x'''y", {"$kw": {"literal": true, "multiline": true}}]}
+  ! InvalidStringError: Invalid string: '''x'''y'''.
+> "let" "a" {"$call": ["string", "bell\u0007", {"$kw": {"literal": true}}]}
+  ! InvalidStringError: Invalid string: 'bell\x07'.
+> "let" "a" {"$call": ["string", "raw \\n kept", {"$kw": {"escape": false}}]}
+> "raw" "a"
+  String '"raw \\n kept"'
+> "let" "a" {"$call": ["string", "\u0000\u001f é"]}
+> "raw" "a"
+  String '"\\u0000\\u001f\\u007f\x80 é"'
+> "let" "a" {"$call": ["string", "\"\"\"\"", {"$kw": {"multiline": true}}]}
+> "raw" "a"
+  String '"""""\\"""""'
+== scalar constructors
+> "let" "a" {"$call": ["integer", "42"]}
+> "raw" "a"
+  Integer '42'
+> "let" "a" {"$call": ["integer", -7]}
+> "raw" "a"
+  Integer '-7'
+> "let" "a" {"$call": ["float_", "2.50"]}
+> "raw" "a"
+  Float '2.5'
+> "let" "a" {"$call": ["boolean", "true"]}
+> "raw" "a"
+  Bool 'true'
+> "let" "a" {"$call": ["boolean", "True"]}
+> "raw" "a"
+  Bool 'false'
+> "let" "a" {"$call": ["date", "2024-07-04"]}
+> "raw" "a"
+  Date '2024-07-04'
+> "let" "a" {"$call": ["date", "2024-07-04T00:00:00"]}
+> "let" "a" {"$call": ["time", "12:30:45.123"]}
+> "raw" "a"
+  Time '12:30:45.123000'
+> "print" "a"
+  Time time(12:30:45.123000)
+> "let" "a" {"$call": ["datetime", "2024-07-04 12:30:45+02:00"]}
+> "raw" "a"
+  DateTime '2024-07-04T12:30:45+02:00'
+> "print" "a"
+  DateTime datetime(2024-07-04T12:30:45+02:00)
+> "let" "a" {"$call": ["datetime", "2024-07-04"]}
+  ! ValueError: datetime() only accepts datetime strings.
+> "let" "a" {"$call": ["date", "July 4"]}
+  ! ValueError: Invalid RFC 339 string
+> "let" "a" {"$call": ["array"]}
+> "raw" "a"
+  Array '[]'
+> "let" "a" {"$call": ["array", "[1, 2,   3]"]}
+> "raw" "a"
+  Array '[1, 2,   3]'
+> "let" "a" {"$call": ["key", "simple"]}
+> "let" "a" {"$call": ["key", "needs quoting"]}
+> "let" "w" {"$call": ["ws", "  \t"]}
+> "raw" "w"
+  Whitespace '  \t'
+> "let" "c" {"$call": ["comment", "hello"]}
+> "raw" "c"
+  Comment '# hello\n'
+== value and key_value
+> "value" "1"
+  Integer '1' 1
+> "value" "0x1F"
+  Integer '0x1F' 31
+> "value" "true"
+  Bool 'true' True
+> "value" "\"s\\u00e9\""
+  String '"s\\u00e9"' 'sé'
+> "value" "[1, [2, 3], {a = 1}]"
+  Array '[1, [2, 3], {a = 1}]' [1, [2, 3], {'a': 1}]
+> "value" "{ a = 1, b.c = 2 }"
+  InlineTable '{ a = 1, b.c = 2 }' {'a': 1, 'b': {'c': 2}}
+> "value" "1979-05-27"
+  Date '1979-05-27' date(1979-05-27)
+> "value" "1979-05-27 07:32:00"
+  DateTime '1979-05-27 07:32:00' datetime(1979-05-27T07:32:00)
+> "value" "07:32:00"
+  Time '07:32:00' time(07:32:00)
+> "value" "nan"
+  Float 'nan' nan
+> "value" "-inf"
+  Float '-inf' -inf
+> "value" "1 2"
+  ! UnexpectedCharError: Unexpected character: ' ' at line 1 col 1
+> "value" "\"unterminated"
+  ! UnexpectedEofError: Unexpected end of file at line 1 col 13
+> "value" ""
+  ! UnexpectedCharError: Unexpected character: '\x00' at line 0 col 0
+> "kv" "a = 1"
+  'a ' Integer '1' 1
+> "kv" "  \"quoted key\"   =   'v'"
+  '"quoted key"   ' String "'v'" 'v'
+> "kv" "a.b.c = [1]"
+  'a.b.c ' Array '[1]' [1]
+> "kv" "x=1 # c"
+  'x' Integer '1' 1
+> "kv" "a b = 1"
+  ! ParseError: Invalid key "a b" at line 1 col 4
+> "kv" "a = "
+  ! UnexpectedCharError: Unexpected character: '\x00' at line 1 col 4
+== arrays by hand
+> "let" "a" {"$call": ["array"]}
+> "push" "a" 1
+> "push" "a" 2
+> "raw" "a"
+  Array '[1, 2]'
+> "multiline" "a" true
+> "raw" "a"
+  Array '[\n    1,\n    2,\n]'
+> "insert" "a" 0 0
+> "raw" "a"
+  Array '[\n    0,\n    1,\n    2,\n]'
+> "let" "b" {"$call": ["array"]}
+> "add_line" "b" [1, 2, 3]
+> "add_line" "b" [4, 5, 6] {"comment": "second row"}
+> "add_line" "b" [] {"indent": ""}
+> "raw" "b"
+  Array '[\n    1, 2, 3,\n    4, 5, 6, # second row\n]'
+> "print" "b"
+  Array [1, 2, 3, 4, 5, 6]
+> "let" "c" {"$call": ["array", "[\n    \"a\",\n    \"b\",\n]"]}
+> "push" "c" "c"
+> "insert" "c" 1 "a2"
+> "raw" "c"
+  Array '[\n    "a",\n    "a2",\n    "b",\n    "c",\n]'
+> "del" "c" 0
+> "raw" "c"
+  Array '[\n    "a2",\n    "b",\n    "c",\n]'
+> "set" "c" -1 "last"
+> "raw" "c"
+  Array '[\n    "a2",\n    "b",\n    "last",\n]'
+> "insert" "c" 99 "end"
+> "raw" "c"
+  Array '[\n    "a2",\n    "b",\n    "last",\n    "end",\n]'
+> "insert" "c" -99 "start"
+> "raw" "c"
+  Array '[\n    "start",\n    "a2",\n    "b",\n    "last",\n    "end",\n]'
+> "clear" "c"
+> "raw" "c"
+  Array '[]'
+> "push" "c" 1
+> "raw" "c"
+  Array '[1]'
+> "let" "e" {"$call": ["array", "[1, 2] "]}
+  ! UnexpectedCharError: Unexpected character: ' ' at line 1 col 6
+> "let" "e" {"$call": ["array", "[ # c\n  1, # one\n  2\n]"]}
+> "push" "e" 3
+> "raw" "e"
+  Array '[ # c\n  1, # one\n  2,\n  3\n]'
+> "del" "e" 0
+> "raw" "e"
+  Array '[ # c\n  2,\n  3\n]'
+> "set" "e" 5 1
+  ! IndexError: list assignment index out of range
+> "add_line" "e" [{"$call": ["comment", "no"]}]
+  ! ValueError: item type <class 'tomlkit.items.Comment'> is not allowed in add_line
+== inline tables
+> "parses" "d" "point = { x = 1, y = 2 }\nempty = {}\n"
+> "get" "p" "d" "point"
+> "set" "p" "z" 3
+> "del" "p" "x"
+> "raw" "p"
+  InlineTable '{  y = 2, z = 3}'
+> "get" "e" "d" "empty"
+> "set" "e" "a" 1
+> "set" "e" "b" {"c": 2}
+> "raw" "e"
+  InlineTable '{a = 1,b = {c = 2}}'
+> "let" "n" {"$call": ["inline_table"]}
+> "append" "n" "k" "v"
+> "append" "n" "j" {"$call": ["integer", "5"]}
+> "raw" "n"
+  InlineTable '{k = "v", j = 5}'
+> "let" "i" {"$call": ["integer", "7"]}
+> "comment" "i" "dropped"
+> "set" "n" "i" {"$v": "i"}
+> "raw" "n"
+  InlineTable '{k = "v", j = 5, i = 7}'
+> "set" "d" "point" {"$v": "n"}
+> "text" "d"
+  |point = {k = "v", j = 5, i = 7}|
+  |empty = {a = 1,b = {c = 2}}|
+== tables by hand
+> "let" "d" {"$call": ["document"]}
+> "let" "t" {"$call": ["table"]}
+> "add" "t" "a" 1
+> "add" "t" {"$call": ["nl"]}
+> "add" "t" "b" 2
+> "append" "d" "t" {"$v": "t"}
+> "let" "u" {"$call": ["table"]}
+> "add" "u" "c" 3
+> "append" "d" "u" {"$v": "u"}
+> "add" "d" "after" "x"
+> "text" "d"
+  |after = "x"|
+  |[t]|
+  |a = 1|
+  ||
+  |b = 2|
+  ||
+  |[u]|
+  |c = 3|
+> "body" "d"
+  after String '"x"'
+  t Table
+    a Integer '1'
+    - Whitespace '\n'
+    b Integer '2'
+  u Table
+    c Integer '3'
+> "let" "d2" {"$call": ["document"]}
+> "add" "d2" "k" 1
+> "append" "d2" "t" {"x": {"y": {"z": 1}}}
+> "text" "d2"
+  |k = 1|
+  ||
+  |[t.x.y]|
+  |z = 1|
+> "super" "d2" "t"
+  True
+> "super" "d2" "t" "x"
+  True
+== files keep line endings
+> "fread" "d" "crlf"
+  linesep '\r\n'
+> "set" "d" "server" "port" 8443
+> "fwrite" "d" "crlf.toml"
+  |# saved on Windows\r|
+  |[server]\r|
+  |host = "0.0.0.0"\r|
+  |port = 8443\r|
+  |\r|
+  |[server.tls]\r|
+  |enabled = false # off in dev\r|
+  |ciphers = [\r|
+  |  "TLS_AES_128_GCM_SHA256",\r|
+  |]\r|
+> "fread" "e" "service"
+  linesep '\n'
+> "set" "e" "version" 2
+> "fwrite" "e" "service.toml"
+  |# orders-api: production settings|
+  |version = 2|
+  |log_level = "info"|
+  |log_format = "json"  # json or text|
+  ||
+  |[server]|
+  |host = "0.0.0.0"|
+  |port = 8443|
+  |workers = 8|
+  |read_timeout = "15s"|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 20|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+  |[[upstreams]]|
+  |name = "payments"|
+  |url = "https://payments.internal"|
+  |retries = 3|
+  ||
+  |[[upstreams]]|
+  |name = "inventory"|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+> "fread" "m" "mixed"
+  linesep 'mixed'
+> "set" "m" "b" 20
+> "fwrite" "m" "mixed.toml"
+  |a = 1\r|
+  |b = 20|
+  |c = 3\r|
+== release
+  version 1.5.0, dated 2024-06-01
+  Cargo.toml:
+    workspace.package.version: 1.4.0 -> 1.5.0
+    workspace.dependencies.ferrite-core.version: 1.4.0 -> 1.5.0
+  |[workspace]|
+  |resolver = "2"|
+  |members = ["crates/core", "crates/cli"]|
+  ||
+  |[workspace.package]|
+  |version = "1.5.0"|
+  |edition = "2021"|
+  |license = "MIT OR Apache-2.0"|
+  |repository = "https://git.example.org/ferrite"|
+  ||
+  |[workspace.dependencies]|
+  |ferrite-core = { path = "crates/core", version = "1.5.0" }|
+  |serde = { version = "1.0.197", features = ["derive"] }|
+  |clap = "4.5"|
+  crates/core/Cargo.toml:
+    package.version: from the workspace
+  |[package]|
+  |name = "ferrite-core"|
+  |version.workspace = true|
+  |edition.workspace = true|
+  |license.workspace = true|
+  ||
+  |[dependencies]|
+  |serde.workspace = true|
+  |crc32fast = "1.4"|
+  ||
+  |[dev-dependencies]|
+  |ferrite-testkit = { path = "../testkit", version = "0.3" }|
+  crates/cli/Cargo.toml:
+    package.version: 1.4.0 -> 1.5.0
+    dependencies.ferrite-core.version: =1.4.0 -> =1.5.0
+    dependencies.ferrite-repair.version: ~1.4 -> ~1.5.0
+  |[package]|
+  |name = "ferrite"|
+  |version = "1.5.0" # keep in step with the workspace|
+  |edition = "2021"|
+  |description = "Command-line tool for ferrite stores"|
+  ||
+  |[[bin]]|
+  |name = "ferrite"|
+  |path = "src/main.rs"|
+  ||
+  |[dependencies]|
+  |ferrite-core = { path = "../core", version = "=1.5.0" }|
+  |clap = { workspace = true }|
+  ||
+  |[dependencies.ferrite-repair]|
+  |path = "../repair"|
+  |version = "~1.5.0"|
+  |optional = true|
+  python/pyproject.toml:
+    tool.poetry.version: 1.4.0 -> 1.5.0
+  |[tool.poetry]|
+  |name = "ferrite-tools"|
+  |version = "1.5.0"|
+  |description = "Python helpers for ferrite stores"|
+  |authors = ["The Ferrite Developers"]|
+  ||
+  |[tool.poetry.dependencies]|
+  |python = "^3.10"|
+  python/ferrite-py/pyproject.toml:
+    project.version: 1.4.0 -> 1.5.0
+  |[build-system]|
+  |requires = ["maturin>=1.5,<2.0"]|
+  |build-backend = "maturin"|
+  ||
+  |[project]|
+  |name = "ferrite-py"|
+  |version = "1.5.0"|
+  |requires-python = ">=3.9"|
+  |classifiers = [|
+  |    "Programming Language :: Rust",|
+  |    "Programming Language :: Python :: Implementation :: CPython",|
+  |]|
+  CHANGELOG.toml:
+  |# Release history, newest first.|
+  ||
+  |[[releases]]|
+  |version = "1.5.0"|
+  |date = 2024-06-01|
+  |notes = "Faster compaction and a new repair command."|
+  ||
+  |[[releases]]|
+  |version = "1.4.0"|
+  |date = 2024-03-12|
+  |notes = "Memory-mapped reads."|
+  ||
+  |[[releases]]|
+  |version = "1.3.2"|
+  |date = 2024-01-20|
+  |notes = "Fix a crash on empty logs."|
+    1.5.0 2024-06-01 Faster compaction and a new repair command.
+    1.4.0 2024-03-12 Memory-mapped reads.
+    1.3.2 2024-01-20 Fix a crash on empty logs.
+== migrate
+  billing-worker.toml:
+    log_level -> logging.level
+    server.shutdown_timeout = 1m30s -> server.shutdown_timeout_ms = 90000
+    upstreams[ledger] -> upstreams.ledger
+    version 1 -> schema 2
+  |# billing-worker\r|
+  |schema = 2\r|
+  |\r|
+  |[server]\r|
+  |port = 9100\r|
+  |shutdown_timeout_ms = 90000\r|
+  |\r|
+  |\r|
+  |[logging]\r|
+  |level = "warn"\r|
+  |\r|
+  |[upstreams.ledger]\r|
+  |url = "https://ledger.internal"\r|
+  |retries = 5\r|
+    {'schema': 2, 'server': {'port': 9100, 'shutdown_timeout_ms': 90000}, 'logging': {'level': 'warn'}, 'upstreams': {'ledger': {'url': 'https://ledger.internal', 'retries': 5}}}
+  notifier.toml:
+    log_level -> logging.level
+    log_format -> logging.format
+    server.read_timeout = 250ms -> server.read_timeout_ms = 250
+    server.idle_timeout = 2m -> server.idle_timeout_ms = 120000
+    version 1 -> schema 2
+  |# Verbose while we chase the duplicate-email bug.|
+  |schema = 2|
+  ||
+  |[server]|
+  |host = "127.0.0.1"|
+  |port = 7000|
+  |tls = { cert = "/etc/notifier/cert.pem", key = "/etc/notifier/key.pem" }|
+  |max_body = "1MB"|
+  |read_timeout_ms = 250|
+  |idle_timeout_ms = 120000|
+  ||
+  |[smtp]|
+  |relay = "mail.internal"|
+  |port = 25|
+  ||
+  |[logging]|
+  |level = "debug"|
+  |format = "text"|
+    {'schema': 2, 'server': {'host': '127.0.0.1', 'port': 7000, 'tls': {'cert': '/etc/notifier/cert.pem', 'key': '/etc/notifier/key.pem'}, 'max_body': '1MB', 'read_timeout_ms': 250, 'idle_timeout_ms': 120000}, 'smtp': {'relay': 'mail.internal', 'port': 25}, 'logging': {'level': 'debug', 'format': 'text'}}
+  orders-api.toml:
+    log_level -> logging.level
+    log_format -> logging.format
+    server.read_timeout = 15s -> server.read_timeout_ms = 15000
+    upstreams[payments] -> upstreams.payments
+    upstreams[inventory] -> upstreams.inventory
+    version 1 -> schema 2
+  |# orders-api: production settings|
+  |schema = 2|
+  ||
+  |[server]|
+  |host = "0.0.0.0"|
+  |port = 8443|
+  |workers = 8|
+  |read_timeout_ms = 15000|
+  ||
+  |[database]|
+  |url = "postgres://orders@db.internal:5432/orders"|
+  |pool_size = 20|
+  |# Statement timeout in milliseconds.|
+  |statement_timeout = 5000|
+  ||
+  |[cache]|
+  |backend = "redis"|
+  |url = "redis://cache.internal:6379/2"|
+  |ttl = 300|
+  ||
+  ||
+  |[logging]|
+  |level = "info"|
+  |format = "json"  # json or text|
+  ||
+  |[upstreams.payments]|
+  |url = "https://payments.internal"|
+  |retries = 3|
+  ||
+  |[upstreams.inventory]|
+  |url = "https://inventory.internal"|
+  |retries = 1|
+    {'schema': 2, 'server': {'host': '0.0.0.0', 'port': 8443, 'workers': 8, 'read_timeout_ms': 15000}, 'database': {'url': 'postgres://orders@db.internal:5432/orders', 'pool_size': 20, 'statement_timeout': 5000}, 'cache': {'backend': 'redis', 'url': 'redis://cache.internal:6379/2', 'ttl': 300}, 'logging': {'level': 'info', 'format': 'json'}, 'upstreams': {'payments': {'url': 'https://payments.internal', 'retries': 3}, 'inventory': {'url': 'https://inventory.internal', 'retries': 1}}}
+  search-api.toml:
+    already at schema 2
