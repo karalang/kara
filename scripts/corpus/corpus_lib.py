@@ -186,7 +186,7 @@ class Origin:
     An origin that answers by route lists `[[origin.route]]` tables instead,
     the first that matches answering: `method` and `path` (either left out
     matches any), `status` (`"200 OK"`), `headers` (lines after the
-    `Content-Length` one) and `body`, or `body_hex` for bytes that are not
+    `Content-Length` and `Connection: close` ones) and `body`, or `body_hex` for bytes that are not
     text. `body` and `headers` may name `{method}`, `{path}`, `{body}` and a
     request header as `{h[x-echo]}`. `reply` then answers what no route
     matches."""
@@ -250,7 +250,11 @@ class Origin:
                 text = bytes.fromhex(r["body_hex"])
             else:
                 text = r.get("body", "").format(**vals).encode("latin-1")
-            head = f"HTTP/1.1 {r.get('status', '200 OK')}\r\nContent-Length: {len(text)}\r\n"
+            # The origin closes each connection after one answer, so it says
+            # so: a client that pooled the connection would otherwise send a
+            # POST down a socket already closed and read a reset.
+            head = (f"HTTP/1.1 {r.get('status', '200 OK')}\r\nContent-Length: {len(text)}\r\n"
+                    "Connection: close\r\n")
             for h in r.get("headers", []):
                 head += h.format(**vals) + "\r\n"
             return (head + "\r\n").encode("latin-1") + text
