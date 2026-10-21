@@ -1,0 +1,366 @@
+-- parse 0
+{'string': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'user_agent': {'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}, 'os': {'family': 'Windows', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 1
+{'string': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1', 'user_agent': {'family': 'Mobile Safari', 'major': '17', 'minor': '1', 'patch': None}, 'os': {'family': 'iOS', 'major': '17', 'minor': '1', 'patch': None, 'patch_minor': None}, 'device': {'family': 'iPhone', 'brand': 'Apple', 'model': 'iPhone'}}
+-- parse 2
+{'string': 'curl/8.4.0', 'user_agent': {'family': 'curl', 'major': '8', 'minor': '4', 'patch': '0'}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 3
+{'string': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36', 'user_agent': {'family': 'Chrome Mobile', 'major': '112', 'minor': '0', 'patch': '0'}, 'os': {'family': 'Android', 'major': '13', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Samsung SM-S908B', 'brand': 'Samsung', 'model': 'SM-S908B'}}
+-- parse 4
+{'string': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15', 'user_agent': {'family': 'Safari', 'major': '17', 'minor': '0', 'patch': None}, 'os': {'family': 'Mac OS X', 'major': '10', 'minor': '15', 'patch': '7', 'patch_minor': None}, 'device': {'family': 'Mac', 'brand': 'Apple', 'model': 'Mac'}}
+-- parse 5
+{'string': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0', 'user_agent': {'family': 'Firefox', 'major': '119', 'minor': '0', 'patch': None}, 'os': {'family': 'Ubuntu', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 6
+{'string': 'Googlebot/2.1 (+http://www.google.com/bot.html)', 'user_agent': {'family': 'Googlebot', 'major': '2', 'minor': '1', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Spider', 'brand': 'Spider', 'model': 'Desktop'}}
+-- parse 7
+{'string': 'python-requests/2.31.0', 'user_agent': {'family': 'Python Requests', 'major': '2', 'minor': '31', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 8
+{'string': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0', 'user_agent': {'family': 'Edge', 'major': '119', 'minor': '0', 'patch': '0'}, 'os': {'family': 'Windows', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 9
+{'string': 'Dalvik/2.1.0 (Linux; U; Android 11; Redmi Note 8 Pro MIUI/V12.5.4.0.RGGMIXM)', 'user_agent': {'family': 'Android', 'major': '11', 'minor': None, 'patch': None}, 'os': {'family': 'Android', 'major': '11', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'XiaoMi Redmi Note 8 Pro', 'brand': 'XiaoMi', 'model': 'Redmi Note 8 Pro'}}
+-- parse 10
+{'string': 'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/118.0.5993.92 Mobile/15E148 Safari/604.1', 'user_agent': {'family': 'Chrome Mobile iOS', 'major': '118', 'minor': '0', 'patch': '5993'}, 'os': {'family': 'iOS', 'major': '16', 'minor': '6', 'patch': None, 'patch_minor': None}, 'device': {'family': 'iPad', 'brand': 'Apple', 'model': 'iPad'}}
+-- parse 11
+{'string': 'Mozilla/5.0 (Android 14; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0', 'user_agent': {'family': 'Firefox Mobile', 'major': '120', 'minor': '0', 'patch': None}, 'os': {'family': 'Android', 'major': '14', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Generic Smartphone', 'brand': 'Generic', 'model': 'Smartphone'}}
+-- parse 12
+{'string': 'Mozilla/5.0 (Linux; Android 12; SAMSUNG SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/23.0 Chrome/115.0.0.0 Mobile Safari/537.36', 'user_agent': {'family': 'Samsung Internet', 'major': '23', 'minor': '0', 'patch': None}, 'os': {'family': 'Android', 'major': '12', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Samsung SM-A525F', 'brand': 'Samsung', 'model': 'SM-A525F'}}
+-- parse 13
+{'string': 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)', 'user_agent': {'family': 'bingbot', 'major': '2', 'minor': '0', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Spider', 'brand': 'Spider', 'model': 'Desktop'}}
+-- parse 14
+{'string': 'Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko', 'user_agent': {'family': 'IE', 'major': '11', 'minor': '0', 'patch': None}, 'os': {'family': 'Windows', 'major': '7', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 15
+{'string': 'Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 6.1; Trident/4.0; chromeframe/11.0.696.57)', 'user_agent': {'family': 'Chrome Frame', 'major': '11', 'minor': '0', 'patch': '696'}, 'os': {'family': 'Windows', 'major': '7', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 16
+{'string': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)', 'user_agent': {'family': 'FacebookBot', 'major': '1', 'minor': '1', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Spider', 'brand': 'Spider', 'model': 'Desktop'}}
+-- parse 17
+{'string': 'Wget/1.21.4', 'user_agent': {'family': 'Wget', 'major': '1', 'minor': '21', 'patch': '4'}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 18
+{'string': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 YaBrowser/23.11.0.0 Safari/537.36', 'user_agent': {'family': 'Yandex Browser', 'major': '23', 'minor': '11', 'patch': '0'}, 'os': {'family': 'Windows', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 19
+{'string': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 OPR/79.0.4195.76', 'user_agent': {'family': 'Opera Mobile', 'major': '79', 'minor': '0', 'patch': '4195'}, 'os': {'family': 'Android', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'K', 'brand': 'Generic_Android', 'model': 'K'}}
+-- parse 20
+{'string': '-', 'user_agent': {'family': 'Other', 'major': None, 'minor': None, 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- parse 21
+{'string': '', 'user_agent': {'family': 'Other', 'major': None, 'minor': None, 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- report
+  160 requests, 5 lines not in the log format, 22 user agents
+  browsers:
+       17  Other
+       12  Yandex Browser 23.11
+       10  Chrome Mobile iOS 118.0
+       10  Samsung Internet 23.0
+        9  Edge 119.0
+        9  FacebookBot 1.1
+        9  curl 8.4
+        8  Chrome Frame 11.0
+        8  Chrome Mobile 112.0
+        8  Safari 17.0
+        8  Wget 1.21
+        7  Opera Mobile 79.0
+        7  bingbot 2.0
+        6  Firefox 119.0
+        6  Firefox Mobile 120.0
+        5  Chrome 120.0
+        5  IE 11.0
+        5  Mobile Safari 17.1
+        4  Android 11
+        4  Googlebot 2.1
+        3  Python Requests 2.31
+  operating systems:
+       57  Other
+       26  Windows 10
+       13  Windows 7
+       10  Android 12
+       10  iOS 16
+        8  Android 13
+        8  Mac OS X 10
+        7  Android 10
+        6  Android 14
+        6  Ubuntu
+        5  iOS 17
+        4  Android 11
+  devices:
+       82  Other
+       20  Spider
+       10  Samsung SM-A525F
+       10  iPad
+        8  Mac
+        8  Samsung SM-S908B
+        7  K
+        6  Generic Smartphone
+        5  iPhone
+        4  XiaoMi Redmi Note 8 Pro
+  brands:
+       82  (none)
+       23  Apple
+       20  Spider
+       18  Samsung
+        7  Generic_Android
+        6  Generic
+        4  XiaoMi
+  bots: 20 requests, 72366 bytes (others 459359 bytes)
+  bot paths:
+        4  /static/app.js
+        3  /api/price?sku=3
+        3  /robots.txt
+        2  /api/stock?sku=17
+        2  /favicon.ico
+        1  /cart
+        1  /login
+        1  /products
+        1  /products/42
+        1  /search?q=lamp
+        1  /static/site.css
+  errors:
+        3  Wget 403
+        2  Edge 404
+        2  FacebookBot 500
+        2  Firefox 403
+        2  Yandex Browser 403
+        2  Yandex Browser 404
+        1  Chrome 403
+        1  Chrome Frame 403
+        1  Chrome Frame 500
+        1  Chrome Mobile 404
+        1  Chrome Mobile iOS 403
+        1  Chrome Mobile iOS 500
+        1  FacebookBot 404
+        1  Firefox Mobile 403
+        1  Googlebot 403
+        1  Googlebot 404
+        1  IE 403
+        1  IE 500
+        1  Mobile Safari 403
+        1  Other 500
+        1  Python Requests 404
+        1  Samsung Internet 403
+        1  Samsung Internet 404
+        1  Wget 500
+        1  curl 403
+        1  curl 404
+-- ua 0
+{'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}
+-- os 0
+{'family': 'Windows', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 0
+{'family': 'Other', 'brand': None, 'model': None}
+-- ua 3
+{'family': 'Chrome Mobile', 'major': '112', 'minor': '0', 'patch': '0'}
+-- os 3
+{'family': 'Android', 'major': '13', 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 3
+{'family': 'Samsung SM-S908B', 'brand': 'Samsung', 'model': 'SM-S908B'}
+-- ua 6
+{'family': 'Googlebot', 'major': '2', 'minor': '1', 'patch': None}
+-- os 6
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 6
+{'family': 'Spider', 'brand': 'Spider', 'model': 'Desktop'}
+-- ua 9
+{'family': 'Android', 'major': '11', 'minor': None, 'patch': None}
+-- os 9
+{'family': 'Android', 'major': '11', 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 9
+{'family': 'XiaoMi Redmi Note 8 Pro', 'brand': 'XiaoMi', 'model': 'Redmi Note 8 Pro'}
+-- ua 13
+{'family': 'bingbot', 'major': '2', 'minor': '0', 'patch': None}
+-- os 13
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 13
+{'family': 'Spider', 'brand': 'Spider', 'model': 'Desktop'}
+-- ua 20
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None}
+-- os 20
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 20
+{'family': 'Other', 'brand': None, 'model': None}
+-- ua 21
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None}
+-- os 21
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- device 21
+{'family': 'Other', 'brand': None, 'model': None}
+-- cache
+22
+-- ua_js 0 js_user_agent_family=Iron
+{'family': 'Iron', 'major': None, 'minor': None, 'patch': None}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 0 js_user_agent_family=Iron|js_user_agent_v1=31|js_user_agent_v3=
+{'family': 'Iron', 'major': '31', 'minor': None, 'patch': None}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 0 js_user_agent_family=
+{'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 0 js_user_agent_v1=99
+{'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 15 'js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+{'family': 'Chrome Frame (Chrome Frame 11)', 'major': '120', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 15 'js_user_agent_string=Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
+{'family': 'Chrome Frame', 'major': '11', 'minor': '0', 'patch': '696'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 15 'js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+{'family': 'Chrome Frame (Chrome Frame 11)', 'major': '120', 'minor': '0', 'patch': '0'}
+-- ua_js 0 'js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+{'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- ua_js 15 'js_user_agent_family=Chromium|js_user_agent_v1=11|js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+{'family': 'Chrome Frame (Chromium 11)', 'major': '120', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- parse_js 2 js_user_agent_family=cURL|js_user_agent_v2=4
+{'string': 'curl/8.4.0', 'user_agent': {'family': 'cURL', 'major': None, 'minor': '4', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+  warning x3 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- parse_js 2 js_user_agent_v2=4|js_user_agent_family=cURL
+{'string': 'curl/8.4.0', 'user_agent': {'family': 'cURL', 'major': None, 'minor': '4', 'patch': None}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- os_js 2 js_user_agent_family=cURL
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+32
+-- os 7
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- clear
+-- os 7
+{'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}
+-- parse 7
+{'string': 'python-requests/2.31.0', 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}, 'user_agent': {'family': 'Python Requests', 'major': '2', 'minor': '31', 'patch': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- device 17
+{'family': 'Other', 'brand': None, 'model': None}
+-- parse 17
+{'string': 'Wget/1.21.4', 'device': {'family': 'Other', 'brand': None, 'model': None}, 'user_agent': {'family': 'Wget', 'major': '1', 'minor': '21', 'patch': '4'}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}}
+-- parse 17
+{'string': 'Wget/1.21.4', 'device': {'family': 'Other', 'brand': None, 'model': None}, 'user_agent': {'family': 'Wget', 'major': '1', 'minor': '21', 'patch': '4'}, 'os': {'family': 'Other', 'major': None, 'minor': None, 'patch': None, 'patch_minor': None}}
+-- pretty_ua Chrome 120 0 6099
+'Chrome 120.0.6099'
+-- pretty Chrome 120 0 6099
+'Chrome 120.0.6099'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua Firefox 3 5 b4
+'Firefox 3.5b4'
+-- pretty Firefox 3 5 b4
+'Firefox 3.5b4'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua Safari 17 1 ~
+'Safari 17.1'
+-- pretty Safari 17 1 ~
+'Safari 17.1'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua curl 8 ~ ~
+'curl 8'
+-- pretty curl 8 ~ ~
+'curl 8'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua Other ~ ~ ~
+'Other'
+-- pretty Other ~ ~ ~
+'Other'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua X ~ 2 ~
+'X None.2'
+-- pretty X ~ 2 ~
+'X None.2'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua X ~ ~ 3
+'X None.None.3'
+-- pretty X ~ ~ 3
+'X None.None.3'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua X 1 '' rc1
+'X 1.rc1'
+-- pretty X 1 '' rc1
+'X 1.rc1'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_ua Opera '' '' ''
+'Opera'
+-- pretty Opera '' '' ''
+'Opera'
+  warning x1 DeprecationWarning: Use PrettyUserAgent
+-- pretty_os Windows 10 ~ ~ ~
+'Windows 10'
+-- pretty_os 'Mac OS X' 10 15 7 ~
+'Mac OS X 10.15.7'
+-- pretty_os iOS 17 1 ~ ~
+'iOS 17.1'
+-- pretty_os Android 4 4 w ~
+'Android 4.4w'
+-- pretty_os Linux ~ ~ ~ 9
+'Linux None.None.None.9'
+-- pretty_os Other ~ ~ ~ ~
+'Other'
+-- pretty_os 'Symbian OS' 9 2 '' ''
+'Symbian OS 9.2'
+-- pretty_parse 0
+'Chrome 120.0.0'
+'Windows 10'
+-- pretty_parse 3
+'Chrome Mobile 112.0.0'
+'Android 13'
+-- pretty_parse 15
+'Chrome Frame 11.0.696'
+'Windows 7'
+-- pretty_parse 16
+'FacebookBot 1.1'
+'Other'
+-- jsov 15 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' ~ ~ ~ ~
+('Chrome Frame (Chrome Frame 11)', '120', '0', '0')
+  warning x1 DeprecationWarning: Use Parse (or a specialised parser)
+-- jsov 15 ~ ~ ~ ~ ~
+('Chrome Frame', '11', '0', '696')
+  warning x1 DeprecationWarning: Use Parse (or a specialised parser)
+-- jsov 0 ~ Iron 31 ~ ''
+('Iron', '31', None, '')
+  warning x1 DeprecationWarning: Use Parse (or a specialised parser)
+-- jsov 0 ~ '' 31 ~ ~
+('Chrome', '120', '0', '0')
+  warning x1 DeprecationWarning: Use Parse (or a specialised parser)
+-- jsov 21 ~ ~ ~ ~ ~
+('Other', None, None, None)
+  warning x1 DeprecationWarning: Use Parse (or a specialised parser)
+-- filters 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' Iron ~ '' 7
+{'js_user_agent_string': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'js_user_agent_family': 'Iron', 'js_user_agent_v3': '7'}
+-- filters 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' ~ ~ ~ ~ ~
+{}
+-- filters '' '' '' 0 ~ x
+{'js_user_agent_v1': '0', 'js_user_agent_v3': 'x'}
+-- spans ua 2 ~
+[]
+-- spans ua 0 'ArcGIS Pro 3.1.2'
+[]
+-- spans ua 1 'ArcGIS Pro 3.1.2.41833'
+[(0, 10), (11, 12), (13, 14), (15, 22)]
+-- spans ua 1 'ArcGIS Pro'
+[(0, 10)]
+-- spans os 0 ~
+[]
+-- spans device 0 ~
+[]
+-- spans ua 2 'ArcGIS Client Using WinInet'
+! TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
+-- clear
+-- fill 150
+  warning x150 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+150
+-- fill 49
+  warning x49 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+199
+-- ua_js 15 'js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0'
+{'family': 'Chrome Frame (Chrome Frame 11)', 'major': '119', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+1
+-- ua_js 15 'js_user_agent_string=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0'
+{'family': 'Chrome Frame (Chrome Frame 11)', 'major': '119', 'minor': '0', 'patch': '0'}
+  warning x1 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+2
+-- fill 260
+  warning x260 DeprecationWarning: javascript overrides are deprecated and will be removed next release
+-- cache
+62
+-- parse 0
+{'string': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'user_agent': {'family': 'Chrome', 'major': '120', 'minor': '0', 'patch': '0'}, 'os': {'family': 'Windows', 'major': '10', 'minor': None, 'patch': None, 'patch_minor': None}, 'device': {'family': 'Other', 'brand': None, 'model': None}}
+-- cache
+63
