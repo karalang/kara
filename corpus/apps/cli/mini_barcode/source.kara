@@ -1,0 +1,3457 @@
+// mini_barcode: python-barcode 0.16.1, the pure-Python library shops,
+// warehouses and libraries use to print barcodes as SVG:
+// - EAN-13, EAN-8, EAN-14, JAN, ISBN-13, ISBN-10 and ISSN (with guard
+//   bars), UPC-A, Code 39 and PZN, Code 128 and GS1-128 with its charset
+//   switching, Codabar and ITF, each with its checks and errors;
+// - the SVGWriter and BaseWriter.render: module packing, guard blocks
+//   and the text under them, every writer option, toprettyxml/toxml;
+// - Barcode.save, barcode.generate and the python-barcode command line;
+// - three programs: shelf labels from a product list with check-digit
+//   checks, GS1-128 and ITF-14 shipping labels for pallets and cartons,
+//   and a library catalogue with spine labels.
+//
+// The inputs are data/jobs.jsonl and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs and
+// programs through python-barcode itself (the copy in barcode/).
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 97 { c - 87 } else { c - 48 }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let d = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < d.len() {
+        out.push((hex_val(d[i] as i64) * 16 + hex_val(d[i + 1] as i64)) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.exists("data/out".to_string()) {
+        if let Err(e) = fs.remove_dir_all("data/out".to_string()) {
+            return Err(f"cannot clear data/out: {e}");
+        }
+    }
+    for file in data_files() {
+        let mut dir = "data".to_string();
+        let parts: Vec[Str] = file.path.split("/").collect();
+        let mut i = 0;
+        while i + 1 < parts.len() {
+            dir = f"{dir}/{parts[i]}";
+            i += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        let p = f"data/{file.path}";
+        let r = if file.hex { fs.write_bytes(p.clone(), unhex(file.body)) } else { fs.write(p.clone(), file.body.clone()) };
+        if let Err(e) = r {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(failure(e));
+    }
+}
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+// ------------------------------------------------------------ helpers
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+        i += 1;
+    }
+    out
+}
+
+
+
+// Whether str.isprintable() holds for one code point, for the ones these
+// programs meet: the C0 and C1 controls, DEL, no-break space and the
+// soft hyphen are not.
+fn printable(cp: i64) -> bool {
+    not (cp < 0x20 or (cp >= 0x7F and cp <= 0xA0) or cp == 0xAD)
+}
+
+fn str_repr(t: ref String) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in t.chars() {
+        if c == '\'' {
+            has_single = true;
+        } else if c == '"' {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in t.chars() {
+        let cp = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(cp) {
+            out.push_str("\\x");
+            out.push_str(hex_n(cp, 2));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// ------------------------------------------------------------- errors
+
+
+fn is_py_space(c: char) -> bool {
+    let cp = c as i64;
+    (cp >= 9 and cp <= 13) or (cp >= 28 and cp <= 32) or cp == 133 or cp == 160
+}
+
+// int(text): surrounding whitespace, a sign, and single underscores
+// between digits.
+fn parse_py_int(t: ref String) -> Option[i64] {
+    let cs: Vec[char] = t.chars().collect();
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and is_py_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (cs[lo] == '-' or cs[lo] == '+') {
+        neg = cs[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let mut n = 0;
+    let mut prev_digit = false;
+    let mut i = lo;
+    while i < hi {
+        let c = cs[i];
+        if c >= '0' and c <= '9' {
+            n = n * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < hi {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if not prev_digit {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+
+fn float_repr(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// repr() of a value json.loads gave.
+fn py_repr(j: ref J) -> String {
+    match j {
+        J.Null => "None".to_string(),
+        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Int(t) => t.clone(),
+        J.Float(x) => float_repr(*x),
+        J.Str(t) => str_repr(t),
+        J.Arr(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(py_repr(x));
+            }
+            f"[{join(parts, ", ")}]"
+        }
+        J.Obj(members) => {
+            let mut parts: Vec[String] = Vec.new();
+            for m in members.iter() {
+                parts.push(f"{str_repr(m.key)}: {py_repr(m.val)}");
+            }
+            f"{{{join(parts, ", ")}}}"
+        }
+    }
+}
+
+fn opt_repr(t: ref Option[String]) -> String {
+    match t {
+        Some(x) => str_repr(x),
+        None => "None".to_string(),
+    }
+}
+
+fn ints_repr(xs: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs.iter() {
+        parts.push(f"{x}");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn truthy(j: ref J) -> bool {
+    match j {
+        J.Null => false,
+        J.Bool(b) => *b,
+        J.Int(t) => *t != "0" and *t != "-0",
+        J.Float(x) => *x != 0.0,
+        J.Str(t) => t.len() > 0,
+        J.Arr(x) => x.len() > 0,
+        J.Obj(x) => x.len() > 0,
+    }
+}
+
+fn as_num(j: ref J) -> f64 {
+    match j {
+        J.Bool(b) => if *b { 1.0 } else { 0.0 },
+        J.Int(t) => {
+            let n: Option[i64] = t.parse();
+            n.unwrap_or(0) as f64
+        }
+        J.Float(x) => *x,
+        _ => 0.0,
+    }
+}
+
+fn as_int(j: ref J) -> i64 {
+    match j {
+        J.Bool(b) => if *b { 1 } else { 0 },
+        J.Int(t) => {
+            let n: Option[i64] = t.parse();
+            n.unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+fn members_of(j: ref J) -> Vec[Member] {
+    match j {
+        J.Obj(m) => m.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn member(ms: ref Vec[Member], key: Str) -> Option[J] {
+    for m in ms.iter() {
+        if m.key == key {
+            return Some(m.val.clone());
+        }
+    }
+    None
+}
+
+// dict.update: a key keeps its place and takes the new value.
+fn update(ms: mut ref Vec[Member], key: ref String, val: own J) {
+    let mut i = 0;
+    while i < ms.len() {
+        if ms[i].key == *key {
+            ms[i].val = val;
+            return;
+        }
+        i += 1;
+    }
+    ms.push(Member { key: key.clone(), val: val });
+}
+
+fn text_of(j: ref J) -> String {
+    match j {
+        J.Str(t) => t.clone(),
+        _ => py_repr(j),
+    }
+}
+
+fn opt_text(j: ref J) -> Option[String] {
+    match j {
+        J.Null => None,
+        J.Str(t) => Some(t.clone()),
+        _ => Some(py_repr(j)),
+    }
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn from_chars(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    let mut i = if lo < 0 { 0 } else { lo };
+    let end = if hi > cs.len() { cs.len() } else { hi };
+    while i < end {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+// s[lo:hi] by code points, clamped the way Python slices are.
+fn slice(s: ref String, lo: i64, hi: i64) -> String {
+    from_chars(chars(s), lo, hi)
+}
+
+fn is_dig(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isdigit() for the ASCII digits these codes use.
+fn all_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if not is_dig(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn digit(c: char) -> i64 {
+    c as i64 - 48
+}
+
+// int(c) for one character.
+fn int_char(c: char) -> Result[i64, Exc] {
+    if is_dig(c) {
+        Ok(digit(c))
+    } else {
+        Err(exc("ValueError", f"invalid literal for int() with base 10: {str_repr(c.to_string())}"))
+    }
+}
+
+fn is_shell_safe(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or is_dig(c) or c == '@' or c == '%' or c == '+'
+        or c == '=' or c == ':' or c == ',' or c == '.' or c == '/' or c == '-' or c == '_'
+}
+
+// shlex.quote.
+fn shell_quote(s: ref String) -> String {
+    if s.len() == 0 {
+        return "''".to_string();
+    }
+    let mut safe = true;
+    for c in s.chars() {
+        if not is_shell_safe(c) {
+            safe = false;
+        }
+    }
+    if safe {
+        return s.clone();
+    }
+    let inner = s.replace("'", "'\"'\"'");
+    f"'{inner}'"
+}
+// ------------------------------------------------------------- charsets
+// The tables in barcode/charsets/, as python-barcode has them.
+
+const EAN_EDGE: Str = "101";
+const EAN_MIDDLE: Str = "01010";
+
+fn ean_a() -> Vec[Str] {
+    vec![
+        "0001101", "0011001", "0010011", "0111101", "0100011",
+        "0110001", "0101111", "0111011", "0110111", "0001011",
+    ]
+}
+
+fn ean_b() -> Vec[Str] {
+    vec![
+        "0100111", "0110011", "0011011", "0100001", "0011101",
+        "0111001", "0000101", "0010001", "0001001", "0010111",
+    ]
+}
+
+fn ean_c() -> Vec[Str] {
+    vec![
+        "1110010", "1100110", "1101100", "1000010", "1011100",
+        "1001110", "1010000", "1000100", "1001000", "1110100",
+    ]
+}
+
+fn ean_left_pattern() -> Vec[Str] {
+    vec![
+        "AAAAAA", "AABABB", "AABBAB", "AABBBA", "ABAABB",
+        "ABBAAB", "ABBBAA", "ABABAB", "ABABBA", "ABBABA",
+    ]
+}
+
+const C39_REF: Str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%";
+const C39_EDGE: Str = "100010111011101";
+const C39_MIDDLE: Str = "0";
+
+fn c39_codes() -> Vec[Str] {
+    vec![
+        "101000111011101", "111010001010111", "101110001010111", "111011100010101",
+        "101000111010111", "111010001110101", "101110001110101", "101000101110111",
+        "111010001011101", "101110001011101", "111010100010111", "101110100010111",
+        "111011101000101", "101011100010111", "111010111000101", "101110111000101",
+        "101010001110111", "111010100011101", "101110100011101", "101011100011101",
+        "111010101000111", "101110101000111", "111011101010001", "101011101000111",
+        "111010111010001", "101110111010001", "101010111000111", "111010101110001",
+        "101110101110001", "101011101110001", "111000101010111", "100011101010111",
+        "111000111010101", "100010111010111", "111000101110101", "100011101110101",
+        "100010101110111", "111000101011101", "100011101011101", "100010001000101",
+        "100010001010001", "100010100010001", "101000100010001",
+    ]
+}
+
+fn c128_codes() -> Vec[Str] {
+    vec![
+        "11011001100", "11001101100", "11001100110", "10010011000", "10010001100", "10001001100",
+        "10011001000", "10011000100", "10001100100", "11001001000", "11001000100", "11000100100",
+        "10110011100", "10011011100", "10011001110", "10111001100", "10011101100", "10011100110",
+        "11001110010", "11001011100", "11001001110", "11011100100", "11001110100", "11101101110",
+        "11101001100", "11100101100", "11100100110", "11101100100", "11100110100", "11100110010",
+        "11011011000", "11011000110", "11000110110", "10100011000", "10001011000", "10001000110",
+        "10110001000", "10001101000", "10001100010", "11010001000", "11000101000", "11000100010",
+        "10110111000", "10110001110", "10001101110", "10111011000", "10111000110", "10001110110",
+        "11101110110", "11010001110", "11000101110", "11011101000", "11011100010", "11011101110",
+        "11101011000", "11101000110", "11100010110", "11101101000", "11101100010", "11100011010",
+        "11101111010", "11001000010", "11110001010", "10100110000", "10100001100", "10010110000",
+        "10010000110", "10000101100", "10000100110", "10110010000", "10110000100", "10011010000",
+        "10011000010", "10000110100", "10000110010", "11000010010", "11001010000", "11110111010",
+        "11000010100", "10001111010", "10100111100", "10010111100", "10010011110", "10111100100",
+        "10011110100", "10011110010", "11110100100", "11110010100", "11110010010", "11011011110",
+        "11011110110", "11110110110", "10101111000", "10100011110", "10001011110", "10111101000",
+        "10111100010", "11110101000", "11110100010", "10111011110", "10111101110", "11101011110",
+        "11110101110", "11010000100", "11010010000", "11010011100",
+    ]
+}
+
+const C128_STOP: Str = "11000111010";
+
+const CODABAR_KEYS: Str = "0123456789-$:/.+";
+
+fn codabar_codes() -> Vec[Str] {
+    vec![
+        "NnNnNwW", "NnNnWwN", "NnNwNnW", "WwNnNnN",
+        "NnWnNwN", "WnNnNwN", "NwNnNnW", "NwNnWnN",
+        "NwWnNnN", "WnNwNnN", "NnNwWnN", "NnWwNnN",
+        "WnNnWnW", "WnWnNnW", "WnWnWnN", "NnWnWnW",
+    ]
+}
+
+const CODABAR_SS_KEYS: Str = "ABCD";
+
+fn codabar_ss() -> Vec[Str] {
+    vec![
+        "NnWwNwN", "NwNwNnW", "NnNwNwW", "NnNwWwN",
+    ]
+}
+
+const ITF_START: Str = "NnNn";
+const ITF_STOP: Str = "WnN";
+
+fn itf_codes() -> Vec[Str] {
+    vec![
+        "NNWWN", "WNNNW", "NWNNW", "WWNNN", "NNWNW",
+        "WNWNN", "NWWNN", "NNNWW", "WNNWN", "NWNWN",
+    ]
+}
+
+// ------------------------------------------------------------- writer
+
+const SVG_COMMENT: Str = "Autogenerated with python-barcode 0.16.1";
+
+fn pt2mm(pt: f64) -> f64 {
+    pt * 0.352777778
+}
+
+// SIZE = "{0:.3f}mm".
+fn size(x: f64) -> String {
+    f"{x:.3}mm"
+}
+
+// An SVGWriter's attributes: BaseWriter's defaults, then the SVG ones.
+#[derive(Clone)]
+struct Writer {
+    module_width: f64,
+    module_height: f64,
+    quiet_zone: f64,
+    font_size: f64,
+    font_text: String,
+    text: String,
+    human: String,
+    text_distance: f64,
+    text_line_distance: f64,
+    center_text: bool,
+    guard_height_factor: f64,
+    margin_top: f64,
+    margin_bottom: f64,
+    background: Option[String],
+    foreground: Option[String],
+    compress: bool,
+    with_doctype: bool,
+}
+
+fn svg_writer() -> Writer {
+    Writer {
+        module_width: 10.0,
+        module_height: 10.0,
+        quiet_zone: 6.5,
+        font_size: 10.0,
+        font_text: "10".to_string(),
+        text: String.new(),
+        human: String.new(),
+        text_distance: 5.0,
+        text_line_distance: 1.0,
+        center_text: true,
+        guard_height_factor: 1.1,
+        margin_top: 1.0,
+        margin_bottom: 1.0,
+        background: Some("white".to_string()),
+        foreground: Some("black".to_string()),
+        compress: false,
+        with_doctype: true,
+    }
+}
+
+fn colour(j: ref J) -> Option[String] {
+    match j {
+        J.Null => None,
+        other => Some(text_of(other)),
+    }
+}
+
+fn colour_text(c: ref Option[String]) -> String {
+    match c {
+        Some(t) => t.clone(),
+        None => "None".to_string(),
+    }
+}
+
+fn same_colour(a: ref Option[String], b: ref Option[String]) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => *x == *y,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn strip_underscores(k: ref String) -> String {
+    let cs = chars(k);
+    let mut i = 0;
+    while i < cs.len() and cs[i] == '_' {
+        i += 1;
+    }
+    from_chars(cs, i, cs.len())
+}
+
+// One element of the SVG document: a tag, its attributes in the order
+// they were set, and the text inside a <text>.
+#[derive(Clone)]
+struct Attr {
+    name: String,
+    val: String,
+}
+
+#[derive(Clone)]
+struct El {
+    tag: String,
+    attrs: Vec[Attr],
+    text: Option[String],
+}
+
+fn at(name: Str, val: own String) -> Attr {
+    Attr { name: name.to_string(), val: val }
+}
+
+// minidom's _write_data.
+fn esc(t: ref String, attr: bool) -> String {
+    let mut out = String.new();
+    for c in t.chars() {
+        if c == '&' {
+            out.push_str("&amp;");
+        } else if c == '<' {
+            out.push_str("&lt;");
+        } else if c == '>' {
+            out.push_str("&gt;");
+        } else if attr and c == '"' {
+            out.push_str("&quot;");
+        } else if attr and c == '\r' {
+            out.push_str("&#13;");
+        } else if attr and c == '\n' {
+            out.push_str("&#10;");
+        } else if attr and c == '\t' {
+            out.push_str("&#9;");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn open_tag(tag: ref String, attrs: ref Vec[Attr]) -> String {
+    let mut out = f"<{tag}";
+    for a in attrs.iter() {
+        out.push_str(f" {a.name}=\"");
+        out.push_str(esc(a.val, true));
+        out.push('"');
+    }
+    out
+}
+
+fn el_xml(e: ref El) -> String {
+    let start = open_tag(e.tag, e.attrs);
+    match e.text {
+        Some(t) => f"{start}>{esc(t, false)}</{e.tag}>",
+        None => f"{start}/>",
+    }
+}
+
+// str.splitlines() for the line breaks these texts have.
+fn count_lines(t: ref String) -> i64 {
+    let cs = chars(t);
+    let mut n = 0;
+    let mut i = 0;
+    let mut open = false;
+    while i < cs.len() {
+        if cs[i] == '\n' {
+            n += 1;
+            open = false;
+        } else if cs[i] == '\r' {
+            if i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+            n += 1;
+            open = false;
+        } else {
+            open = true;
+        }
+        i += 1;
+    }
+    if open { n + 1 } else { n }
+}
+
+// Splits on one character, like str.split(sep).
+fn split_on(t: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in t.chars() {
+        if c == sep {
+            out.push(cur.clone());
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+struct Module {
+    width: i64,
+    factor: f64,
+}
+
+impl Writer {
+    // BaseWriter.set_options: known attributes only, leading _ dropped.
+    fn set_options(mut ref self, opts: ref Vec[Member]) {
+        for m in opts.iter() {
+            let key = strip_underscores(m.key);
+            let v = m.val.clone();
+            if key == "module_width" {
+                self.module_width = as_num(v);
+            } else if key == "module_height" {
+                self.module_height = as_num(v);
+            } else if key == "quiet_zone" {
+                self.quiet_zone = as_num(v);
+            } else if key == "font_size" {
+                self.font_size = as_num(v);
+                self.font_text = text_of(v);
+            } else if key == "text" {
+                self.text = text_of(v);
+            } else if key == "human" {
+                self.human = text_of(v);
+            } else if key == "text_distance" {
+                self.text_distance = as_num(v);
+            } else if key == "text_line_distance" {
+                self.text_line_distance = as_num(v);
+            } else if key == "center_text" {
+                self.center_text = truthy(v);
+            } else if key == "guard_height_factor" {
+                self.guard_height_factor = as_num(v);
+            } else if key == "margin_top" {
+                self.margin_top = as_num(v);
+            } else if key == "margin_bottom" {
+                self.margin_bottom = as_num(v);
+            } else if key == "background" {
+                self.background = colour(v);
+            } else if key == "foreground" {
+                self.foreground = colour(v);
+            } else if key == "compress" {
+                self.compress = truthy(v);
+            } else if key == "with_doctype" {
+                self.with_doctype = truthy(v);
+            }
+        }
+    }
+
+    fn calculate_size(ref self, modules: i64, lines: i64) -> (f64, f64) {
+        let width = 2.0 * self.quiet_zone + modules as f64 * self.module_width;
+        let mut height = self.margin_bottom + self.margin_top + self.module_height * lines as f64;
+        let n = count_lines(self.text);
+        if self.font_size != 0.0 and self.text.len() > 0 {
+            height += pt2mm(self.font_size) / 2.0 * n as f64 + self.text_distance;
+            height += self.text_line_distance * (n - 1) as f64;
+        }
+        (width, height)
+    }
+
+    // packed(): runs of one character as (width, height factor), a
+    // space's width negative.
+    fn packed(ref self, line: ref String) -> Vec[Module] {
+        let cs = chars(line);
+        let mut out: Vec[Module] = Vec.new();
+        let mut c = 1;
+        let mut i = 0;
+        while i < cs.len() {
+            if i + 1 < cs.len() and cs[i] == cs[i + 1] {
+                c += 1;
+            } else {
+                if cs[i] == '1' {
+                    out.push(Module { width: c, factor: 1.0 });
+                } else if cs[i] == 'G' {
+                    out.push(Module { width: c, factor: self.guard_height_factor });
+                } else {
+                    out.push(Module { width: -c, factor: self.guard_height_factor });
+                }
+                c = 1;
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn text_els(ref self, xpos: f64, ypos: f64, els: mut ref Vec[El]) {
+        let shown = if self.human != "" { self.human.clone() } else { self.text.clone() };
+        let mut y = ypos;
+        for sub in split_on(shown, '\n').iter() {
+            let style = f"fill:{colour_text(self.foreground)};font-size:{self.font_text}pt;text-anchor:middle;";
+            els.push(El { tag: "text".to_string(), attrs: vec![at("x", size(xpos)), at("y", size(y)), at("style", style)], text: Some(sub.clone()) });
+            y += pt2mm(self.font_size) + self.text_line_distance;
+        }
+    }
+
+    // BaseWriter.render with SVGWriter's callbacks.
+    fn render(mut ref self, line: ref String) -> String {
+        let (width, height) = self.calculate_size(chars(line).len(), 1);
+        let mut els: Vec[El] = Vec.new();
+        if let Some(bg) = self.background {
+            els.push(El { tag: "rect".to_string(), attrs: vec![at("width", "100%".to_string()), at("height", "100%".to_string()), at("style", f"fill:{bg}")], text: None });
+        }
+        let mut ypos = self.margin_top;
+        let base_height = self.module_height;
+        let mut xpos = self.quiet_zone;
+        let bxs = xpos;
+        let mut starts: Vec[f64] = Vec.new();
+        let mut ends: Vec[f64] = Vec.new();
+        let mut was_guard = false;
+        let mut last_factor = 1.0;
+        for m in self.packed(line).iter() {
+            let bar = m.width >= 1;
+            if bar {
+                if was_guard and m.factor == 1.0 {
+                    ends.push(xpos);
+                    was_guard = false;
+                } else if not was_guard and m.factor != 1.0 {
+                    starts.push(xpos);
+                    was_guard = true;
+                }
+            }
+            self.module_height = base_height * m.factor;
+            let w = self.module_width * (if m.width < 0 { -m.width } else { m.width }) as f64;
+            let colour = if bar { self.foreground.clone() } else { self.background.clone() };
+            if not same_colour(colour, self.background) {
+                els.push(El {
+                    tag: "rect".to_string(),
+                    attrs: vec![at("x", size(xpos)), at("y", size(ypos)), at("width", size(w)), at("height", size(self.module_height)), at("style", f"fill:{colour_text(colour)};")],
+                    text: None,
+                });
+            }
+            xpos += w;
+            last_factor = m.factor;
+        }
+        if last_factor != 1.0 {
+            ends.push(xpos);
+        }
+        self.module_height = base_height;
+        let bxe = xpos;
+        ypos += self.module_height;
+        if self.text.len() > 0 {
+            if starts.len() == 0 {
+                ypos += self.text_distance;
+                let x = if self.center_text { bxs + (bxe - bxs) / 2.0 } else { bxs };
+                self.text_els(x, ypos, mut els);
+            } else {
+                let mut xs: Vec[f64] = vec![bxs - 4.0 * self.module_width];
+                let mut i = 1;
+                while i < starts.len() and i - 1 < ends.len() {
+                    let s = starts[i];
+                    let e = ends[i - 1];
+                    xs.push(e + (s - e) / 2.0);
+                    i += 1;
+                }
+                if ends.len() > 0 {
+                    xs.push(ends[ends.len() - 1] + 4.0 * self.module_width);
+                }
+                ypos += pt2mm(self.font_size);
+                let blocks = split_on(self.text, ' ');
+                let mut k = 0;
+                while k < blocks.len() and k < xs.len() {
+                    self.text = blocks[k].clone();
+                    self.text_els(xs[k], ypos, mut els);
+                    k += 1;
+                }
+            }
+        }
+        self.document(width, height, els)
+    }
+
+    // toprettyxml(indent="    ", newl="\n"), or toxml() when compressed.
+    fn document(ref self, width: f64, height: f64, els: ref Vec[El]) -> String {
+        let svg = open_tag("svg".to_string(), vec![
+            at("version", "1.1".to_string()),
+            at("xmlns", "http://www.w3.org/2000/svg".to_string()),
+            at("width", size(width)),
+            at("height", size(height)),
+        ]);
+        let mut out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>".to_string();
+        if self.compress {
+            if self.with_doctype {
+                out.push_str("<!DOCTYPE svg  PUBLIC '-//W3C//DTD SVG 1.1//EN'  'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd'>");
+            }
+            out.push_str(f"{svg}><!--{SVG_COMMENT}-->");
+            if els.len() == 0 {
+                out.push_str("<g id=\"barcode_group\"/>");
+            } else {
+                out.push_str("<g id=\"barcode_group\">");
+                for e in els.iter() {
+                    out.push_str(el_xml(e));
+                }
+                out.push_str("</g>");
+            }
+            out.push_str("</svg>");
+            return out;
+        }
+        out.push('\n');
+        if self.with_doctype {
+            out.push_str("<!DOCTYPE svg\n  PUBLIC '-//W3C//DTD SVG 1.1//EN'\n  'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd'>\n");
+        }
+        out.push_str(f"{svg}>\n    <!--{SVG_COMMENT}-->\n");
+        if els.len() == 0 {
+            out.push_str("    <g id=\"barcode_group\"/>\n");
+        } else {
+            out.push_str("    <g id=\"barcode_group\">\n");
+            for e in els.iter() {
+                out.push_str(f"        {el_xml(e)}\n");
+            }
+            out.push_str("    </g>\n");
+        }
+        out.push_str("</svg>\n");
+        out
+    }
+}
+
+// ------------------------------------------------------------- barcodes
+
+#[derive(Clone)]
+enum Kind {
+    Ean,
+    Upc,
+    Code39,
+    Code128,
+    Codabar,
+    Itf,
+}
+
+#[derive(Clone)]
+struct Bc {
+    kind: Kind,
+    cls: String,
+    name: String,
+    // EAN-13 and the classes built on it.
+    digits: i64,
+    ean: String,
+    guardbar: bool,
+    ean8: bool,
+    ean14: bool,
+    edge: String,
+    middle: String,
+    // What str() gives for ISBN-10 and ISSN, and ISSN's own number.
+    own_str: Option[String],
+    issn: String,
+    // UPC-A.
+    upc: String,
+    make_ean: bool,
+    // Code 39, Code 128, Codabar and ITF.
+    code: String,
+    pzn: Option[String],
+    gs1: bool,
+    charset: char,
+    buffer: String,
+    narrow: i64,
+    wide: i64,
+    writer: Writer,
+}
+
+fn blank(kind: own Kind, cls: Str, name: Str, w: own Writer) -> Bc {
+    Bc {
+        kind: kind,
+        cls: cls.to_string(),
+        name: name.to_string(),
+        digits: 0,
+        ean: String.new(),
+        guardbar: false,
+        ean8: false,
+        ean14: false,
+        edge: String.new(),
+        middle: String.new(),
+        own_str: None,
+        issn: String.new(),
+        upc: String.new(),
+        make_ean: false,
+        code: String.new(),
+        pzn: None,
+        gs1: false,
+        charset: 'C',
+        buffer: String.new(),
+        narrow: 2,
+        wide: 5,
+        writer: w,
+    }
+}
+
+fn illegal(msg: own String) -> Exc {
+    exc("IllegalCharacterError", msg)
+}
+
+fn digits_error(msg: own String) -> Exc {
+    exc("NumberOfDigitsError", msg)
+}
+
+// EuropeanArticleNumber13.calculate_checksum, or EAN-14's.
+fn ean_checksum(s: ref String, ean14: bool) -> i64 {
+    let cs = chars(s);
+    let n = cs.len();
+    let mut evensum = 0;
+    let mut oddsum = 0;
+    if ean14 {
+        let mut i = 0;
+        while i < n {
+            if i % 2 == 0 {
+                evensum += digit(cs[i]);
+            } else {
+                oddsum += digit(cs[i]);
+            }
+            i += 1;
+        }
+        return (10 - ((evensum * 3 + oddsum) % 10)) % 10;
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        evensum += digit(cs[i]);
+        i -= 2;
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        oddsum += digit(cs[i]);
+        i -= 2;
+    }
+    (10 - ((evensum + oddsum * 3) % 10)) % 10
+}
+
+// The GS1 check digit, as EAN-14 computes it.
+fn gs1_check(s: ref String) -> i64 {
+    ean_checksum(s, true)
+}
+
+fn guarded(s: Str, guardbar: bool) -> String {
+    if guardbar { s.replace("1", "G") } else { s.to_string() }
+}
+
+// EuropeanArticleNumber13.__init__, with the digit count of the class
+// that runs it.
+fn ean_init(b: mut ref Bc, code: ref String, no_checksum: bool, guardbar: bool) -> Result[(), Exc] {
+    let cs = chars(code);
+    let head = from_chars(cs, 0, b.digits);
+    if not all_digits(head) {
+        return Err(illegal(f"EAN code can only contain numbers {code}."));
+    }
+    if cs.len() < b.digits {
+        return Err(digits_error(f"EAN must have {b.digits} digits, received {cs.len()}."));
+    }
+    let last = if no_checksum {
+        if cs.len() > b.digits and is_dig(cs[b.digits]) { digit(cs[b.digits]) } else { 0 }
+    } else {
+        ean_checksum(head, b.ean14)
+    };
+    b.ean = f"{head}{last}";
+    b.guardbar = guardbar;
+    b.edge = guarded(EAN_EDGE, guardbar);
+    b.middle = guarded(EAN_MIDDLE, guardbar);
+    Ok(())
+}
+
+fn upc_checksum(upc: ref String) -> i64 {
+    let cs = chars(upc);
+    let mut oddsum = 0;
+    let mut evensum = 0;
+    let mut i = 0;
+    while i < cs.len() and i < 11 {
+        if i % 2 == 0 {
+            oddsum += digit(cs[i]);
+        } else {
+            evensum += digit(cs[i]);
+        }
+        i += 1;
+    }
+    let check = (evensum + oddsum * 3) % 10;
+    if check == 0 { 0 } else { 10 - check }
+}
+
+fn c39_index(c: char) -> Option[i64] {
+    let mut i = 0;
+    for r in C39_REF.chars() {
+        if r == c {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn c39_checksum(code: ref String) -> Result[char, Exc] {
+    let mut total = 0;
+    for c in code.chars() {
+        match c39_index(c) {
+            Some(i) => total += i,
+            None => return Err(exc("KeyError", str_repr(c.to_string()))),
+        }
+    }
+    let refs = chars(C39_REF.to_string());
+    Ok(refs[total % 43])
+}
+
+// codex.check_code.
+fn check_code(code: ref String, name: ref String, c128: bool) -> Result[(), Exc] {
+    let mut wrong: Vec[String] = Vec.new();
+    for c in code.chars() {
+        let ok = if c128 { c128_valid(c) } else { c39_index(c).is_some() };
+        if not ok {
+            wrong.push(c.to_string());
+        }
+    }
+    if wrong.len() > 0 {
+        return Err(illegal(f"The following characters are not valid for {name}: {join(wrong, ", ")}"));
+    }
+    Ok(())
+}
+
+fn is_fnc(c: char) -> bool {
+    c == 'ó' or c == 'ò' or c == 'ô' or c == 'ñ'
+}
+
+fn c128_valid(c: char) -> bool {
+    (c as i64) < 128 or is_fnc(c)
+}
+
+fn c128_in_a(c: char) -> bool {
+    (c as i64) < 0x60 or is_fnc(c)
+}
+
+fn c128_in_b(c: char) -> bool {
+    let cp = c as i64;
+    (cp >= 0x20 and cp < 0x80) or is_fnc(c)
+}
+
+fn c128_a(c: char) -> i64 {
+    let cp = c as i64;
+    if cp < 0x20 {
+        cp + 64
+    } else if cp < 0x60 {
+        cp - 32
+    } else if c == 'ó' {
+        96
+    } else if c == 'ò' {
+        97
+    } else if c == 'ô' {
+        101
+    } else {
+        102
+    }
+}
+
+fn c128_b(c: char) -> i64 {
+    let cp = c as i64;
+    if cp >= 0x20 and cp < 0x80 {
+        cp - 32
+    } else if c == 'ó' {
+        96
+    } else if c == 'ò' {
+        97
+    } else if c == 'ô' {
+        100
+    } else {
+        102
+    }
+}
+
+fn start_code(charset: char) -> i64 {
+    if charset == 'A' { 103 } else if charset == 'B' { 104 } else { 105 }
+}
+
+// The keyword arguments a constructor takes; anything else is a
+// TypeError before the body runs.
+fn check_kwargs(init: Str, kw: ref Vec[Member], allowed: ref Vec[Str]) -> Result[(), Exc] {
+    for m in kw.iter() {
+        let mut ok = false;
+        for a in allowed.iter() {
+            if m.key == *a {
+                ok = true;
+            }
+        }
+        if not ok {
+            return Err(exc("TypeError", f"{init}.__init__() got an unexpected keyword argument {str_repr(m.key)}"));
+        }
+    }
+    Ok(())
+}
+
+fn kw_bool(kw: ref Vec[Member], name: Str, default: bool) -> bool {
+    match member(kw, name) {
+        Some(v) => truthy(v),
+        None => default,
+    }
+}
+
+fn kw_int(kw: ref Vec[Member], name: Str, default: i64) -> i64 {
+    match member(kw, name) {
+        Some(v) => as_int(v),
+        None => default,
+    }
+}
+
+fn new_ean(cls: Str, name: Str, digits: i64, code: ref String, kw: ref Vec[Member], guard_default: bool, w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs(cls, kw, vec!["no_checksum", "guardbar"])?;
+    let mut b = blank(Kind.Ean, cls, name, w);
+    b.digits = digits;
+    b.ean8 = digits == 7 and cls.starts_with("EuropeanArticleNumber8");
+    b.ean14 = digits == 13;
+    ean_init(mut b, code, kw_bool(kw, "no_checksum", false), kw_bool(kw, "guardbar", guard_default))?;
+    Ok(b)
+}
+
+fn new_isbn13(cls: Str, name: Str, digits: i64, isbn: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    let isbn = isbn.replace("-", "");
+    let prefix = slice(isbn, 0, 3);
+    if prefix != "978" and prefix != "979" {
+        return Err(exc("WrongCountryCodeError", "ISBN must start with 978 or 979.".to_string()));
+    }
+    let fourth = slice(isbn, 3, 4);
+    if prefix == "979" and fourth != "1" and fourth != "8" {
+        return Err(exc("BarcodeError", "ISBN must start with 97910 or 97911.".to_string()));
+    }
+    let mut b = blank(Kind.Ean, cls, name, w);
+    b.digits = digits;
+    ean_init(mut b, isbn, kw_bool(kw, "no_checksum", false), kw_bool(kw, "guardbar", false))?;
+    Ok(b)
+}
+
+fn new_isbn10(code: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs("InternationalStandardBookNumber10", kw, Vec.new())?;
+    let isbn = slice(code.replace("-", ""), 0, 9);
+    let mut b = new_isbn13("InternationalStandardBookNumber10", "ISBN-10", 9, f"978{isbn}", Vec.new(), w)?;
+    let cs = chars(isbn);
+    let mut total = 0;
+    let mut i = 0;
+    while i < cs.len() and i < 9 {
+        total += (i + 1) * int_char(cs[i])?;
+        i += 1;
+    }
+    let check = total % 11;
+    b.own_str = Some(if check == 10 { f"{isbn}X" } else { f"{isbn}{check}" });
+    Ok(b)
+}
+
+fn issn_checksum(issn: ref String) -> Result[String, Exc] {
+    let cs = chars(slice(issn, 0, 7));
+    let mut total = 0;
+    let mut weight = 2;
+    let mut i = cs.len() - 1;
+    while i >= 0 {
+        total += weight * int_char(cs[i])?;
+        weight += 1;
+        i -= 1;
+    }
+    let tmp = 11 - total % 11;
+    Ok(if tmp == 10 { "X".to_string() } else { f"{tmp}" })
+}
+
+fn issn_make_ean(issn: ref String) -> Result[String, Exc] {
+    Ok(f"977{slice(issn, 0, 7)}00{issn_checksum(issn)?}")
+}
+
+fn new_issn(code: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs("InternationalStandardSerialNumber", kw, Vec.new())?;
+    let short = slice(code.replace("-", ""), 0, 7);
+    let issn = f"{short}{issn_checksum(short)?}";
+    let mut b = blank(Kind.Ean, "InternationalStandardSerialNumber", "ISSN", w);
+    b.digits = 7;
+    b.issn = issn.clone();
+    b.own_str = Some(issn.clone());
+    ean_init(mut b, issn_make_ean(issn)?, false, false)?;
+    Ok(b)
+}
+
+fn new_upc(code: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs("UniversalProductCodeA", kw, vec!["make_ean"])?;
+    let upc = slice(code, 0, 11);
+    if not all_digits(upc) {
+        return Err(illegal("UPC code can only contain numbers.".to_string()));
+    }
+    let n = chars(upc).len();
+    if n != 11 {
+        return Err(digits_error(f"UPC must have 11 digits, not {n}."));
+    }
+    let mut b = blank(Kind.Upc, "UniversalProductCodeA", "UPC-A", w);
+    b.make_ean = kw_bool(kw, "make_ean", false);
+    b.upc = f"{upc}{upc_checksum(upc)}";
+    Ok(b)
+}
+
+fn new_code39(cls: Str, name: Str, code: ref String, add_checksum: bool, w: own Writer) -> Result[Bc, Exc] {
+    let mut b = blank(Kind.Code39, cls, name, w);
+    b.code = code.to_uppercase();
+    if add_checksum {
+        let c = c39_checksum(b.code)?;
+        b.code.push(c);
+    }
+    check_code(b.code, b.name, false)?;
+    Ok(b)
+}
+
+fn new_pzn(code: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs("PZN7", kw, Vec.new())?;
+    let pzn = slice(code, 0, 6);
+    if not all_digits(pzn) {
+        return Err(illegal("PZN can only contain numbers.".to_string()));
+    }
+    let n = chars(pzn).len();
+    if n != 6 {
+        return Err(digits_error(f"PZN must have 6 digits, not {n}."));
+    }
+    let mut total = 0;
+    let mut i = 0;
+    for c in pzn.chars() {
+        total += (i + 2) * digit(c);
+        i += 1;
+    }
+    let check = total % 11;
+    if check == 10 {
+        return Err(exc("BarcodeError", "Checksum can not be 10 for PZN.".to_string()));
+    }
+    let full = f"{pzn}{check}";
+    let mut b = new_code39("PZN7", "Pharmazentralnummer", f"PZN-{full}", false, w)?;
+    b.pzn = Some(full);
+    Ok(b)
+}
+
+fn new_code128(cls: Str, name: Str, code: ref String, gs1: bool, w: own Writer) -> Result[Bc, Exc] {
+    let mut b = blank(Kind.Code128, cls, name, w);
+    b.code = if gs1 { f"ñ{code}" } else { code.clone() };
+    b.gs1 = gs1;
+    check_code(b.code, b.name, true)?;
+    Ok(b)
+}
+
+fn new_bars(kind: own Kind, cls: Str, name: Str, code: ref String, kw: ref Vec[Member], w: own Writer) -> Result[Bc, Exc] {
+    check_kwargs(cls, kw, vec!["narrow", "wide"])?;
+    let mut b = blank(kind, cls, name, w);
+    b.narrow = kw_int(kw, "narrow", 2);
+    b.wide = kw_int(kw, "wide", 5);
+    b.code = code.clone();
+    if cls == "ITF" {
+        if not all_digits(code) {
+            return Err(illegal("ITF code can only contain numbers.".to_string()));
+        }
+        if chars(code).len() % 2 != 0 {
+            b.code = f"0{code}";
+        }
+    }
+    Ok(b)
+}
+
+// barcode.get(name, code, writer, options).
+fn get_barcode(name: ref String, code: ref String, kw: ref Vec[Member], writer: own Option[Writer]) -> Result[Bc, Exc] {
+    let w = match writer {
+        Some(w) => w,
+        None => svg_writer(),
+    };
+    let n = name.to_lowercase();
+    if n == "ean" or n == "ean13" {
+        new_ean("EuropeanArticleNumber13", "EAN-13", 12, code, kw, false, w)
+    } else if n == "ean13-guard" {
+        new_ean("EuropeanArticleNumber13WithGuard", "EAN-13 with guards", 12, code, kw, true, w)
+    } else if n == "ean8" {
+        let mut b = new_ean("EuropeanArticleNumber13", "EAN-8", 7, code, kw, false, w)?;
+        b.cls = "EuropeanArticleNumber8".to_string();
+        b.ean8 = true;
+        Ok(b)
+    } else if n == "ean8-guard" {
+        new_ean("EuropeanArticleNumber8WithGuard", "EAN-8 with guards", 7, code, kw, true, w)
+    } else if n == "ean14" or n == "gtin" {
+        let mut b = new_ean("EuropeanArticleNumber13", "EAN-14", 13, code, kw, false, w)?;
+        b.cls = "EuropeanArticleNumber14".to_string();
+        Ok(b)
+    } else if n == "jan" {
+        let country = match parse_py_int(slice(code, 0, 3)) {
+            Some(c) => c,
+            None => return Err(exc("ValueError", f"invalid literal for int() with base 10: {str_repr(slice(code, 0, 3))}")),
+        };
+        if not ((country >= 450 and country < 460) or (country >= 490 and country < 500)) {
+            return Err(exc("WrongCountryCodeError", "Country code isn't between 450-460 or 490-500.".to_string()));
+        }
+        let mut b = new_ean("EuropeanArticleNumber13", "JAN", 12, code, kw, false, w)?;
+        b.cls = "JapanArticleNumber".to_string();
+        Ok(b)
+    } else if n == "isbn" or n == "isbn13" or n == "gs1" {
+        check_kwargs("InternationalStandardBookNumber13", kw, vec!["no_checksum", "guardbar"])?;
+        new_isbn13("InternationalStandardBookNumber13", "ISBN-13", 12, code, kw, w)
+    } else if n == "isbn10" {
+        new_isbn10(code, kw, w)
+    } else if n == "issn" {
+        new_issn(code, kw, w)
+    } else if n == "upc" or n == "upca" {
+        new_upc(code, kw, w)
+    } else if n == "code39" {
+        check_kwargs("Code39", kw, vec!["add_checksum"])?;
+        new_code39("Code39", "Code 39", code, kw_bool(kw, "add_checksum", true), w)
+    } else if n == "pzn" {
+        new_pzn(code, kw, w)
+    } else if n == "code128" {
+        check_kwargs("Code128", kw, Vec.new())?;
+        new_code128("Code128", "Code 128", code, false, w)
+    } else if n == "gs1_128" {
+        check_kwargs("Gs1_128", kw, Vec.new())?;
+        new_code128("Gs1_128", "GS1-128", code, true, w)
+    } else if n == "codabar" or n == "nw-7" {
+        new_bars(Kind.Codabar, "CODABAR", "Codabar (NW-7)", code, kw, w)
+    } else if n == "itf" {
+        new_bars(Kind.Itf, "ITF", "ITF", code, kw, w)
+    } else {
+        Err(exc("BarcodeNotFoundError", f"The barcode {str_repr(name)} is not known."))
+    }
+}
+
+fn provided_barcodes() -> Vec[Str] {
+    vec![
+        "codabar", "code128", "code39", "ean", "ean13", "ean13-guard", "ean14", "ean8", "ean8-guard", "gs1",
+        "gs1_128", "gtin", "isbn", "isbn10", "isbn13", "issn", "itf", "jan", "nw-7", "pzn", "upc", "upca",
+    ]
+}
+
+// Expands W/w/N/n into bars and spaces.
+fn expand(data: ref String, narrow: i64, wide: i64) -> String {
+    let mut raw = String.new();
+    for e in data.chars() {
+        let (ch, n) = if e == 'W' {
+            ('1', wide)
+        } else if e == 'w' {
+            ('0', wide)
+        } else if e == 'N' {
+            ('1', narrow)
+        } else if e == 'n' {
+            ('0', narrow)
+        } else {
+            (' ', 0)
+        };
+        let mut i = 0;
+        while i < n {
+            raw.push(ch);
+            i += 1;
+        }
+    }
+    raw
+}
+
+fn codabar_code(c: char) -> Option[Str] {
+    let mut i = 0;
+    for k in CODABAR_KEYS.chars() {
+        if k == c {
+            return Some(codabar_codes()[i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn codabar_startstop(c: char) -> Option[Str] {
+    let mut i = 0;
+    for k in CODABAR_SS_KEYS.chars() {
+        if k == c {
+            return Some(codabar_ss()[i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+impl Bc {
+    fn fullcode(ref self) -> String {
+        match self.kind {
+            Kind.Ean => {
+                if not self.guardbar {
+                    return self.ean.clone();
+                }
+                if self.ean8 {
+                    return f"< {slice(self.ean, 0, 4)} {slice(self.ean, 4, 99)} >";
+                }
+                f"{slice(self.ean, 0, 1)} {slice(self.ean, 1, 7)} {slice(self.ean, 7, 99)} >"
+            }
+            Kind.Upc => if self.make_ean { f"0{self.upc}" } else { self.upc.clone() },
+            Kind.Code39 => match self.pzn {
+                Some(p) => f"PZN-{p}",
+                None => self.code.clone(),
+            },
+            Kind.Code128 => if self.gs1 { slice(self.code, 1, chars(self.code).len()) } else { self.code.clone() },
+            _ => self.code.clone(),
+        }
+    }
+
+    fn py_str(ref self) -> String {
+        match self.kind {
+            Kind.Ean => match self.own_str {
+                Some(t) => t.clone(),
+                None => self.ean.clone(),
+            },
+            Kind.Upc => self.fullcode(),
+            _ => self.code.clone(),
+        }
+    }
+
+    fn py_repr(ref self) -> String {
+        f"<{self.cls}({str_repr(self.fullcode())})>"
+    }
+
+    fn checksum(ref self) -> Result[String, Exc] {
+        match self.kind {
+            Kind.Ean => Ok(f"{ean_checksum(slice(self.ean, 0, self.digits), self.ean14)}"),
+            Kind.Upc => Ok(f"{upc_checksum(self.upc)}"),
+            Kind.Code39 => Ok(str_repr(c39_checksum(self.code)?.to_string())),
+            _ => Err(exc("AttributeError", f"'{self.cls}' object has no attribute 'calculate_checksum'")),
+        }
+    }
+
+    fn build_ean(ref self) -> String {
+        let cs = chars(self.ean);
+        let mut code = self.edge.clone();
+        if self.ean8 {
+            let mut i = 0;
+            while i < cs.len() {
+                if i == 4 {
+                    code.push_str(self.middle);
+                }
+                code.push_str(if i < 4 { ean_a()[digit(cs[i])] } else { ean_c()[digit(cs[i])] });
+                i += 1;
+            }
+            if cs.len() <= 4 {
+                code.push_str(self.middle);
+            }
+        } else {
+            let pattern = chars(ean_left_pattern()[digit(cs[0])].to_string());
+            let mut i = 1;
+            while i < cs.len() and i < 7 {
+                let table = if pattern[i - 1] == 'A' { ean_a() } else { ean_b() };
+                code.push_str(table[digit(cs[i])]);
+                i += 1;
+            }
+            code.push_str(self.middle);
+            let mut i = 7;
+            while i < cs.len() {
+                code.push_str(ean_c()[digit(cs[i])]);
+                i += 1;
+            }
+        }
+        code.push_str(self.edge);
+        code
+    }
+
+    fn build_upc(ref self) -> String {
+        let cs = chars(self.upc);
+        let mut code = EAN_EDGE.to_string();
+        let mut i = 0;
+        while i < 6 and i < cs.len() {
+            code.push_str(ean_a()[digit(cs[i])]);
+            i += 1;
+        }
+        code.push_str(EAN_MIDDLE);
+        while i < cs.len() {
+            code.push_str(ean_c()[digit(cs[i])]);
+            i += 1;
+        }
+        code.push_str(EAN_EDGE);
+        code
+    }
+
+    fn build_code39(ref self) -> String {
+        let mut parts: Vec[String] = vec![C39_EDGE.to_string()];
+        for c in self.code.chars() {
+            parts.push(c39_codes()[c39_index(c).unwrap_or(0)].to_string());
+        }
+        parts.push(C39_EDGE.to_string());
+        join(parts, C39_MIDDLE)
+    }
+
+    // Code128._new_charset.
+    fn new_charset(mut ref self, which: char) -> Result[i64, Exc] {
+        if which == self.charset {
+            return Err(exc("ValueError", f"Already in charset {which}"));
+        }
+        let code = if which == 'A' { 101 } else if which == 'B' { 100 } else { 99 };
+        self.charset = which;
+        Ok(code)
+    }
+
+    // Code128._convert: None while a digit waits for its partner.
+    fn convert(mut ref self, c: char) -> Result[Option[i64], Exc] {
+        if self.charset == 'A' {
+            if not c128_in_a(c) {
+                return Err(exc("KeyError", str_repr(c.to_string())));
+            }
+            return Ok(Some(c128_a(c)));
+        }
+        if self.charset == 'B' {
+            if not c128_in_b(c) {
+                return Err(exc("KeyError", str_repr(c.to_string())));
+            }
+            return Ok(Some(c128_b(c)));
+        }
+        if c == 'ñ' {
+            return Ok(Some(102));
+        }
+        if is_dig(c) {
+            self.buffer.push(c);
+            if chars(self.buffer).len() == 2 {
+                let bs = chars(self.buffer);
+                let value = digit(bs[0]) * 10 + digit(bs[1]);
+                self.buffer = String.new();
+                return Ok(Some(value));
+            }
+            return Ok(None);
+        }
+        Err(exc("RuntimeError", f"Character {c} could not be converted in charset {self.charset}."))
+    }
+
+    fn maybe_switch(mut ref self, cs: ref Vec[char], pos: i64) -> Result[Vec[i64], Exc] {
+        let c = cs[pos];
+        let mut run = 0;
+        let mut i = pos;
+        while i < cs.len() and i < pos + 10 and is_dig(cs[i]) {
+            run += 1;
+            i += 1;
+        }
+        let look_next = run > 3;
+        let mut codes: Vec[i64] = Vec.new();
+        if self.charset == 'C' and not is_dig(c) {
+            if self.gs1 and c == 'ñ' and self.buffer.len() == 0 {
+                return Ok(codes);
+            }
+            if c128_in_b(c) {
+                codes = vec![self.new_charset('B')?];
+            } else if c128_in_a(c) {
+                codes = vec![self.new_charset('A')?];
+            }
+            if chars(self.buffer).len() == 1 {
+                let waiting = chars(self.buffer)[0];
+                if let Some(v) = self.convert(waiting)? {
+                    codes.push(v);
+                }
+                self.buffer = String.new();
+            }
+        } else if self.charset == 'B' {
+            if look_next {
+                codes = vec![self.new_charset('C')?];
+            } else if not c128_in_b(c) and c128_in_a(c) {
+                codes = vec![self.new_charset('A')?];
+            }
+        } else if self.charset == 'A' {
+            if look_next {
+                codes = vec![self.new_charset('C')?];
+            } else if not c128_in_a(c) and c128_in_b(c) {
+                codes = vec![self.new_charset('B')?];
+            }
+        }
+        Ok(codes)
+    }
+
+    // Code128._build, which starts in whatever charset the last build
+    // ended in.
+    fn encoded(mut ref self) -> Result[Vec[i64], Exc] {
+        let mut encoded: Vec[i64] = vec![start_code(self.charset)];
+        let cs = chars(self.code);
+        let mut i = 0;
+        while i < cs.len() {
+            for v in self.maybe_switch(cs, i)?.iter() {
+                encoded.push(*v);
+            }
+            if let Some(v) = self.convert(cs[i])? {
+                encoded.push(v);
+            }
+            i += 1;
+        }
+        if chars(self.buffer).len() == 1 {
+            encoded.push(self.new_charset('B')?);
+            let waiting = chars(self.buffer)[0];
+            if let Some(v) = self.convert(waiting)? {
+                encoded.push(v);
+            }
+            self.buffer = String.new();
+        }
+        if encoded.len() < 2 {
+            return Err(exc("IndexError", "list index out of range".to_string()));
+        }
+        let to = encoded[1];
+        if to == 101 or to == 100 or to == 99 {
+            let mut out: Vec[i64] = vec![if to == 101 { 103 } else if to == 100 { 104 } else { 105 }];
+            let mut k = 2;
+            while k < encoded.len() {
+                out.push(encoded[k]);
+                k += 1;
+            }
+            return Ok(out);
+        }
+        Ok(encoded)
+    }
+
+    fn build_code128(mut ref self) -> Result[String, Exc] {
+        let mut encoded = self.encoded()?;
+        let mut total = encoded[0];
+        let mut i = 1;
+        while i < encoded.len() {
+            total += i * encoded[i];
+            i += 1;
+        }
+        encoded.push(total % 103);
+        let mut code = String.new();
+        for v in encoded.iter() {
+            code.push_str(c128_codes()[*v]);
+        }
+        code.push_str(C128_STOP);
+        code.push_str("11");
+        Ok(code)
+    }
+
+    fn build_codabar(ref self) -> Result[String, Exc] {
+        let cs = chars(self.code);
+        if cs.len() == 0 {
+            return Err(exc("IndexError", "string index out of range".to_string()));
+        }
+        let mut data = match codabar_startstop(cs[0]) {
+            Some(p) => f"{p}n",
+            None => return Err(exc("BarcodeError", "Codabar should start with either A,B,C or D".to_string())),
+        };
+        let mut middle: Vec[String] = Vec.new();
+        let mut i = 1;
+        while i + 1 < cs.len() {
+            match codabar_code(cs[i]) {
+                Some(p) => middle.push(p.to_string()),
+                None => return Err(illegal("Codabar can only contain numerics or $:/.+-".to_string())),
+            }
+            i += 1;
+        }
+        data.push_str(join(middle, "n"));
+        match codabar_startstop(cs[cs.len() - 1]) {
+            Some(p) => {
+                data.push('n');
+                data.push_str(p);
+            }
+            None => return Err(exc("BarcodeError", "Codabar should end with either A,B,C or D".to_string())),
+        }
+        Ok(expand(data, self.narrow, self.wide))
+    }
+
+    fn build_itf(ref self) -> String {
+        let cs = chars(self.code);
+        let mut data = ITF_START.to_string();
+        let mut i = 0;
+        while i < cs.len() {
+            let bars = chars(itf_codes()[digit(cs[i])].to_string());
+            let spaces = chars(itf_codes()[digit(cs[i + 1])].to_string());
+            let mut j = 0;
+            while j < 5 {
+                data.push(bars[j]);
+                data.push(if spaces[j] == 'W' { 'w' } else { 'n' });
+                j += 1;
+            }
+            i += 2;
+        }
+        data.push_str(ITF_STOP);
+        expand(data, self.narrow, self.wide)
+    }
+
+    fn build(mut ref self) -> Result[String, Exc] {
+        match self.kind {
+            Kind.Ean => Ok(self.build_ean()),
+            Kind.Upc => Ok(self.build_upc()),
+            Kind.Code39 => Ok(self.build_code39()),
+            Kind.Code128 => self.build_code128(),
+            Kind.Codabar => self.build_codabar(),
+            Kind.Itf => Ok(self.build_itf()),
+        }
+    }
+
+    fn to_ascii(mut ref self) -> Result[String, Exc] {
+        let code = self.build()?;
+        let mut out = String.new();
+        for c in code.chars() {
+            let x = match self.kind {
+                Kind.Ean => if c == '0' { ' ' } else { '|' },
+                Kind.Upc => if c == '0' { '_' } else { '|' },
+                _ => if c == '1' { 'X' } else if c == '0' { ' ' } else { c },
+            };
+            out.push(x);
+        }
+        Ok(out)
+    }
+
+    // The options a class's render() puts before the caller's.
+    fn class_options(ref self) -> Result[Vec[Member], Exc] {
+        match self.kind {
+            Kind.Ean => Ok(vec![Member { key: "module_width".to_string(), val: J.Float(0.33) }]),
+            Kind.Upc => Ok(vec![Member { key: "module_width".to_string(), val: J.Float(0.33) }]),
+            Kind.Code39 => Ok(vec![
+                Member { key: "module_width".to_string(), val: J.Float(0.2) },
+                Member { key: "quiet_zone".to_string(), val: J.Float(2.54) },
+            ]),
+            Kind.Code128 => Ok(vec![
+                Member { key: "module_width".to_string(), val: J.Float(0.2) },
+                Member { key: "quiet_zone".to_string(), val: J.Float(2.54) },
+            ]),
+            Kind.Codabar => Ok(Vec.new()),
+            Kind.Itf => {
+                if self.narrow == 0 {
+                    return Err(exc("ZeroDivisionError", "float division by zero".to_string()));
+                }
+                Ok(vec![
+                    Member { key: "module_width".to_string(), val: J.Float(0.2 / self.narrow as f64) },
+                    Member { key: "quiet_zone".to_string(), val: J.Float(6.4) },
+                ])
+            }
+        }
+    }
+
+    // Barcode.render(writer_options, text), through the class's own
+    // render() first.
+    fn render(mut ref self, writer_options: ref J, text: ref Option[String]) -> Result[String, Exc] {
+        let mut given = self.class_options()?;
+        for m in members_of(writer_options).iter() {
+            update(mut given, m.key, m.val.clone());
+        }
+        let mut options: Vec[Member] = vec![
+            Member { key: "module_width".to_string(), val: J.Float(0.2) },
+            Member { key: "module_height".to_string(), val: J.Float(15.0) },
+            Member { key: "quiet_zone".to_string(), val: J.Float(6.5) },
+            Member { key: "font_size".to_string(), val: J.Int("10".to_string()) },
+            Member { key: "text_distance".to_string(), val: J.Float(5.0) },
+            Member { key: "background".to_string(), val: J.Str("white".to_string()) },
+            Member { key: "foreground".to_string(), val: J.Str("black".to_string()) },
+            Member { key: "write_text".to_string(), val: J.Bool(true) },
+            Member { key: "text".to_string(), val: J.Str(String.new()) },
+        ];
+        for m in given.iter() {
+            update(mut options, m.key, m.val.clone());
+        }
+        let write_text = match member(options, "write_text") {
+            Some(v) => truthy(v),
+            None => false,
+        };
+        if write_text or text.is_some() {
+            let t = match text {
+                Some(t) => t.clone(),
+                None => self.fullcode(),
+            };
+            update(mut options, "text".to_string(), J.Str(t));
+        }
+        self.writer.set_options(options);
+        let line = self.build()?;
+        Ok(self.writer.render(line))
+    }
+}
+// ------------------------------------------------------------------ jobs
+
+fn err_text(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+fn io_exc(e: ref IoError) -> Exc {
+    exc("OSError", f"{e}")
+}
+
+fn read_text(p: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(p.clone()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn make_dirs(p: Str) -> Result[(), Exc] {
+    match fs.create_dir_all(p.to_string()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn byte_len(t: ref String) -> i64 {
+    t.bytes().len()
+}
+
+fn file_size(p: ref String) -> Result[i64, Exc] {
+    Ok(byte_len(read_text(p)?))
+}
+
+fn svg_lines(out: ref String) -> Vec[String] {
+    let mut lines = split_on(out, '\n');
+    if lines.len() > 0 and lines[lines.len() - 1] == "" {
+        lines.pop();
+    }
+    lines
+}
+
+fn is_bar(line: ref String) -> bool {
+    line.starts_with("        <rect x=")
+}
+
+// The document as the oracle prints it: whole, or with the bars between
+// the first and the last counted.
+fn print_svg(lines: ref Vec[String], mode: Str, indent: Str) {
+    if mode == "full" {
+        for line in lines.iter() {
+            println(f"{indent}{line}");
+        }
+        return;
+    }
+    let mut bars: Vec[String] = Vec.new();
+    for line in lines.iter() {
+        if is_bar(line) {
+            bars.push(line.clone());
+        }
+    }
+    let mut done = false;
+    for line in lines.iter() {
+        if not is_bar(line) {
+            println(f"{indent}{line}");
+        } else if not done {
+            done = true;
+            println(f"{indent}{bars[0]}");
+            if bars.len() > 2 {
+                println(f"{indent}        ({bars.len() - 2} more bars)");
+            }
+            if bars.len() > 1 {
+                println(f"{indent}{bars[bars.len() - 1]}");
+            }
+        }
+    }
+}
+
+fn svg_tag(p: ref String) -> Result[String, Exc] {
+    for line in svg_lines(read_text(p)?).iter() {
+        if line.starts_with("<svg ") {
+            return Ok(line.clone());
+        }
+    }
+    Ok("?".to_string())
+}
+
+fn attr_of(tag: ref String, name: Str) -> String {
+    let key = f" {name}=\"";
+    match tag.find(key) {
+        Some(i) => {
+            let rest = slice(tag, i + chars(key).len(), chars(tag).len());
+            match rest.find("\"") {
+                Some(j) => slice(rest, 0, j),
+                None => "?".to_string(),
+            }
+        }
+        None => "?".to_string(),
+    }
+}
+
+// SVGWriter.save, after Barcode.save rendered the document.
+fn write_svg(b: ref Bc, filename: ref String, output: ref String) -> Result[String, Exc] {
+    if b.writer.compress {
+        return Err(exc("NotImplementedError", "mini_barcode does not gzip".to_string()));
+    }
+    let path = f"{filename}.svg";
+    match fs.write(path.clone(), output.clone()) {
+        Ok(_) => Ok(path),
+        Err(_) => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")),
+    }
+}
+
+// Barcode.save(filename, options, text).
+fn save(b: mut ref Bc, filename: ref String, options: ref J, text: ref Option[String]) -> Result[String, Exc] {
+    let given = match text {
+        Some(t) => if t.len() > 0 { Some(t.clone()) } else { None },
+        None => None,
+    };
+    let output = b.render(options, given)?;
+    write_svg(b, filename, output)
+}
+
+// barcode.generate(name, code, writer, output, writer_options, text).
+fn generate(name: ref String, code: ref String, writer: own Writer, output: ref Option[String], options: ref J, text: ref Option[String]) -> Result[String, Exc] {
+    let out = match output {
+        Some(o) => o.clone(),
+        None => return Err(exc("TypeError", "'output' cannot be None".to_string())),
+    };
+    let mut w = writer;
+    w.set_options(members_of(options));
+    let mut b = get_barcode(name, code, Vec.new(), Some(w))?;
+    save(mut b, out, options, text)
+}
+
+struct Env {
+    names: Vec[String],
+    vals: Vec[Bc],
+}
+
+impl Env {
+    fn find(ref self, name: ref String) -> Option[i64] {
+        let mut i = 0;
+        while i < self.names.len() {
+            if self.names[i] == *name {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn put(mut ref self, name: ref String, b: own Bc) {
+        match self.find(name) {
+            Some(i) => self.vals[i] = b,
+            None => {
+                self.names.push(name.clone());
+                self.vals.push(b);
+            }
+        }
+    }
+
+    fn drop_name(mut ref self, name: ref String) {
+        if let Some(i) = self.find(name) {
+            self.names.remove(i);
+            self.vals.remove(i);
+        }
+    }
+}
+
+fn items_of(j: ref J) -> Vec[J] {
+    match j {
+        J.Arr(items) => items.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn show_value(b: mut ref Bc, what: ref String) -> Result[String, Exc] {
+    if *what == "repr" {
+        Ok(b.py_repr())
+    } else if *what == "str" {
+        Ok(str_repr(b.py_str()))
+    } else if *what == "full" {
+        Ok(str_repr(b.fullcode()))
+    } else if *what == "build" {
+        Ok(f"[{str_repr(b.build()?)}]")
+    } else if *what == "ascii" {
+        Ok(str_repr(b.to_ascii()?))
+    } else if *what == "encoded" {
+        match b.kind {
+            Kind.Code128 => Ok(ints_repr(b.encoded()?)),
+            _ => Err(exc("AttributeError", f"'{b.cls}' object has no attribute 'encoded'")),
+        }
+    } else {
+        b.checksum()
+    }
+}
+
+fn show_label(var: ref String, what: ref String) -> String {
+    if *what == "repr" {
+        f"repr({var})"
+    } else if *what == "str" {
+        f"str({var})"
+    } else if *what == "full" {
+        f"{var}.get_fullcode()"
+    } else if *what == "build" {
+        f"{var}.build()"
+    } else if *what == "ascii" {
+        f"{var}.to_ascii()"
+    } else if *what == "encoded" {
+        f"{var}.encoded"
+    } else {
+        f"{var}.calculate_checksum()"
+    }
+}
+
+fn step(st: ref Vec[J], env: mut ref Env) -> Result[(), Exc] {
+    let op = text_of(st[0]);
+    if op == "new" {
+        let var = text_of(st[1]);
+        let kind = text_of(st[2]);
+        let code = text_of(st[3]);
+        let kw = members_of(st[4]);
+        let mut shown = f"{str_repr(kind)}, {str_repr(code)}";
+        if kw.len() > 0 {
+            shown.push_str(f", options={py_repr(st[4])}");
+        }
+        match get_barcode(kind, code, kw, None) {
+            Ok(b) => {
+                println(f"  {var} = get({shown}) = {b.py_repr()}");
+                env.put(var, b);
+            }
+            Err(e) => {
+                env.drop_name(var);
+                println(f"  {var} = get({shown}) raised {err_text(e)}");
+            }
+        }
+    } else if op == "show" {
+        let var = text_of(st[1]);
+        let mut k = 2;
+        while k < st.len() {
+            let what = text_of(st[k]);
+            let label = show_label(var, what);
+            k += 1;
+            let i = match env.find(var) {
+                Some(i) => i,
+                None => {
+                    println(f"  {label}: {var} was not made");
+                    continue;
+                }
+            };
+            match show_value(mut env.vals[i], what) {
+                Ok(t) => println(f"  {label} = {t}"),
+                Err(e) => println(f"  {label} raised {err_text(e)}"),
+            }
+        }
+    } else if op == "render" {
+        let var = text_of(st[1]);
+        let text = opt_text(st[3]);
+        let mode = text_of(st[4]);
+        println(f"  {var}.render({py_repr(st[2])}, {opt_repr(text)}):");
+        let i = match env.find(var) {
+            Some(i) => i,
+            None => {
+                println(f"    {var} was not made");
+                return Ok(());
+            }
+        };
+        match env.vals[i].render(st[2], text) {
+            Ok(out) => print_svg(svg_lines(out), mode.as_str(), "    "),
+            Err(e) => println(f"    raised {err_text(e)}"),
+        }
+    } else if op == "save" {
+        let var = text_of(st[1]);
+        let name = text_of(st[2]);
+        let text = opt_text(st[4]);
+        let call = f"{var}.save({str_repr(name)}, {py_repr(st[3])}, {opt_repr(text)})";
+        let i = match env.find(var) {
+            Some(i) => i,
+            None => {
+                println(f"  {var}.save: {var} was not made");
+                return Ok(());
+            }
+        };
+        match save(mut env.vals[i], name, st[3], text) {
+            Ok(path) => println(f"  {call} -> {str_repr(path)} ({file_size(path)?} bytes)"),
+            Err(e) => println(f"  {call} raised {err_text(e)}"),
+        }
+    } else if op == "generate" {
+        let kind = text_of(st[1]);
+        let code = text_of(st[2]);
+        let output = opt_text(st[3]);
+        let text = opt_text(st[5]);
+        let shown = f"generate({str_repr(kind)}, {str_repr(code)}, output={opt_repr(output)}, writer_options={py_repr(st[4])}, text={opt_repr(text)})";
+        match generate(kind, code, svg_writer(), output, st[4], text) {
+            Ok(path) => println(f"  {shown} -> {str_repr(path)} ({file_size(path)?} bytes)"),
+            Err(e) => println(f"  {shown} raised {err_text(e)}"),
+        }
+    } else if op == "cli" {
+        let mut argv: Vec[String] = Vec.new();
+        for a in items_of(st[1]).iter() {
+            argv.push(text_of(a));
+        }
+        run_cli(argv);
+    }
+    Ok(())
+}
+
+fn field(j: ref J, name: Str) -> J {
+    match j {
+        J.Obj(ms) => member(ms, name).unwrap_or(J.Null),
+        _ => J.Null,
+    }
+}
+
+fn run_jobs() -> Result[(), Exc] {
+    make_dirs("data/out/jobs")?;
+    make_dirs("data/out/cli/sub")?;
+    let text = read_text("data/jobs.jsonl".to_string())?;
+    for line in text.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let j = loads_str(line.to_string())?;
+        println(f"== {text_of(field(j, "name"))}");
+        let mut env = Env { names: Vec.new(), vals: Vec.new() };
+        for st in items_of(field(j, "steps")).iter() {
+            step(items_of(st), mut env)?;
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------- the CLI
+
+const MAIN_USAGE: Str = "python-barcode [-h] [-v] {create,list} ...";
+const CREATE_USAGE: Str = "python-barcode create [-h] [-c] [-b BARCODE] [--text TEXT] code output";
+
+struct Cli {
+    out: String,
+    err: String,
+    code: i64,
+    raised: Option[Exc],
+}
+
+fn cli_error(usage: Str, prog: Str, msg: own String) -> Cli {
+    Cli { out: String.new(), err: f"usage: {usage}\n{prog}: error: {msg}\n", code: 2, raised: None }
+}
+
+fn cli_ok(out: own String) -> Cli {
+    Cli { out: out, err: String.new(), code: 0, raised: None }
+}
+
+// os.path.normpath for a relative path.
+fn normpath(p: ref String) -> String {
+    let absolute = p.starts_with("/");
+    let mut parts: Vec[String] = Vec.new();
+    for part in split_on(p, '/').iter() {
+        if *part == "" or *part == "." {
+            continue;
+        }
+        if *part == ".." and parts.len() > 0 and parts[parts.len() - 1] != ".." {
+            parts.pop();
+        } else if *part == ".." and absolute {
+            continue;
+        } else {
+            parts.push(part.clone());
+        }
+    }
+    let joined = join(parts, "/");
+    if absolute {
+        f"/{joined}"
+    } else if joined == "" {
+        ".".to_string()
+    } else {
+        joined
+    }
+}
+
+// A long option as argparse matches it: exactly, or by a prefix only one
+// option has.
+fn long_option(name: ref String) -> Option[String] {
+    let mut found: Option[String] = None;
+    for opt in vec!["--help", "--compress", "--barcode", "--text"] {
+        if *name == opt {
+            return Some(opt.to_string());
+        }
+        if opt.starts_with(name.as_str()) {
+            found = Some(opt.to_string());
+        }
+    }
+    found
+}
+
+fn list_types() -> String {
+    let mut out = "\npython-barcode available barcode formats:\n".to_string();
+    let mut names: Vec[String] = Vec.new();
+    for n in provided_barcodes() {
+        names.push(n.to_string());
+    }
+    out.push_str(join(names, ", "));
+    out.push_str("\n\n\nAvailable image formats\nStandard: svg\nPillow: disabled\n\n\n");
+    out
+}
+
+fn cli_create(args: ref Vec[String]) -> Cli {
+    let mut positionals: Vec[String] = Vec.new();
+    let mut extras: Vec[String] = Vec.new();
+    let mut barcode = "code39".to_string();
+    let mut text: Option[String] = None;
+    let mut i = 0;
+    while i < args.len() {
+        let tok = args[i].clone();
+        i += 1;
+        if tok.starts_with("--") {
+            let (name, inline) = match tok.find("=") {
+                Some(k) => (slice(tok, 0, k), Some(slice(tok, k + 1, chars(tok).len()))),
+                None => (tok.clone(), None),
+            };
+            let opt = match long_option(name) {
+                Some(o) => o,
+                None => {
+                    extras.push(tok.clone());
+                    continue;
+                }
+            };
+            if opt == "--compress" {
+                continue;
+            }
+            let value = match inline {
+                Some(v) => v,
+                None => {
+                    if i >= args.len() or args[i].starts_with("-") {
+                        let label = if opt == "--barcode" { "-b/--barcode" } else { "--text" };
+                        return cli_error(CREATE_USAGE, "python-barcode create", f"argument {label}: expected one argument");
+                    }
+                    i += 1;
+                    args[i - 1].clone()
+                }
+            };
+            if opt == "--barcode" {
+                barcode = value;
+            } else {
+                text = Some(value);
+            }
+        } else if tok.starts_with("-") and chars(tok).len() > 1 {
+            let flag = slice(tok, 1, 2);
+            if flag == "c" {
+                continue;
+            }
+            if flag != "b" {
+                extras.push(tok.clone());
+                continue;
+            }
+            if chars(tok).len() > 2 {
+                barcode = slice(tok, 2, chars(tok).len());
+            } else if i >= args.len() or args[i].starts_with("-") {
+                return cli_error(CREATE_USAGE, "python-barcode create", "argument -b/--barcode: expected one argument".to_string());
+            } else {
+                barcode = args[i].clone();
+                i += 1;
+            }
+        } else {
+            positionals.push(tok.clone());
+        }
+    }
+    if positionals.len() == 0 {
+        return cli_error(CREATE_USAGE, "python-barcode create", "the following arguments are required: code, output".to_string());
+    }
+    if positionals.len() == 1 {
+        return cli_error(CREATE_USAGE, "python-barcode create", "the following arguments are required: output".to_string());
+    }
+    let mut k = 2;
+    while k < positionals.len() {
+        extras.push(positionals[k].clone());
+        k += 1;
+    }
+    if extras.len() > 0 {
+        return cli_error(MAIN_USAGE, "python-barcode", f"unrecognized arguments: {join(extras, " ")}");
+    }
+    let name = barcode.to_lowercase();
+    let mut known = false;
+    for n in provided_barcodes() {
+        if name == n {
+            known = true;
+        }
+    }
+    if not known {
+        return cli_error(MAIN_USAGE, "python-barcode", f"Unknown barcode {name}. Try list action for available barcodes.");
+    }
+    let opts = J.Obj(vec![Member { key: "compress".to_string(), val: J.Bool(false) }]);
+    let out = normpath(positionals[1]);
+    match generate(name, positionals[0], svg_writer(), Some(out), opts, text) {
+        Ok(path) => cli_ok(f"New barcode saved as ./{path}.\n"),
+        Err(e) => Cli { out: String.new(), err: String.new(), code: 0, raised: Some(e) },
+    }
+}
+
+// python-barcode's main().
+fn cli_main(argv: ref Vec[String]) -> Cli {
+    let mut i = 0;
+    while i < argv.len() {
+        let tok = argv[i].clone();
+        i += 1;
+        if tok == "-v" or tok == "--version" {
+            return cli_ok("python-barcode 0.16.1\n".to_string());
+        }
+        let mut rest: Vec[String] = Vec.new();
+        while i < argv.len() {
+            rest.push(argv[i].clone());
+            i += 1;
+        }
+        if tok == "list" {
+            if rest.len() > 0 {
+                return cli_error(MAIN_USAGE, "python-barcode", f"unrecognized arguments: {join(rest, " ")}");
+            }
+            return cli_ok(list_types());
+        }
+        if tok == "create" {
+            return cli_create(rest);
+        }
+        return cli_error(MAIN_USAGE, "python-barcode", f"argument {{create,list}}: invalid choice: {str_repr(tok)} (choose from 'create', 'list')");
+    }
+    cli_error(MAIN_USAGE, "python-barcode", "You need to tell me what to do.".to_string())
+}
+
+fn print_stream(text: ref String, mark: Str) {
+    let lines = split_on(text, '\n');
+    let mut k = 0;
+    while k + 1 < lines.len() {
+        let line = f"  {mark} {lines[k]}";
+        println(line.trim_end());
+        k += 1;
+    }
+}
+
+fn run_cli(argv: ref Vec[String]) {
+    let mut words: Vec[String] = vec!["python-barcode".to_string()];
+    for a in argv.iter() {
+        words.push(shell_quote(a));
+    }
+    println(f"  $ {join(words, " ")}");
+    let r = cli_main(argv);
+    print_stream(r.out, "|");
+    print_stream(r.err, "!");
+    match r.raised {
+        Some(e) => println(f"  raised {err_text(e)}"),
+        None => println(f"  exit {r.code}"),
+    }
+}
+// ------------------------------------------------------------- programs
+
+fn label_options() -> J {
+    J.Obj(vec![
+        Member { key: "module_height".to_string(), val: J.Int("10".to_string()) },
+        Member { key: "font_size".to_string(), val: J.Int("8".to_string()) },
+        Member { key: "text_distance".to_string(), val: J.Int("3".to_string()) },
+        Member { key: "quiet_zone".to_string(), val: J.Int("2".to_string()) },
+    ])
+}
+
+fn write_text(p: ref String, text: ref String) -> Result[(), Exc] {
+    match fs.write(p.clone(), text.clone()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(io_exc(e)),
+    }
+}
+
+fn last_char(s: ref String) -> String {
+    let cs = chars(s);
+    if cs.len() == 0 { String.new() } else { cs[cs.len() - 1].to_string() }
+}
+
+struct LabelRow {
+    sku: String,
+    path: String,
+    width: String,
+    height: String,
+    size: i64,
+}
+
+fn labels() -> Result[(), Exc] {
+    println("== program: shelf labels");
+    make_dirs("data/out/labels")?;
+    let mut rows: Vec[LabelRow] = Vec.new();
+    let mut rejects: Vec[String] = Vec.new();
+    let text = read_text("data/products.csv".to_string())?;
+    let mut first = true;
+    for line in text.lines() {
+        if first {
+            first = false;
+            continue;
+        }
+        let cols = split_on(line.to_string(), ',');
+        let sku = cols[0].clone();
+        let digits = cols[3].replace(" ", "").replace("-", "");
+        let n = chars(digits).len();
+        let (kind, code) = if n == 0 {
+            println(f"{sku}: no code, labelled with the SKU");
+            ("code128", sku.clone())
+        } else if n == 8 {
+            ("ean8", digits.clone())
+        } else if n == 12 {
+            ("upca", digits.clone())
+        } else if n == 13 {
+            ("ean13", digits.clone())
+        } else if n == 14 {
+            ("itf", digits.clone())
+        } else {
+            println(f"{sku}: rejected, a code of {n} digits");
+            rejects.push(sku.clone());
+            continue;
+        };
+        let mut b = match get_barcode(kind.to_string(), code, Vec.new(), None) {
+            Ok(b) => b,
+            Err(e) => {
+                println(f"{sku}: rejected, {err_text(e)}");
+                rejects.push(sku.clone());
+                continue;
+            }
+        };
+        let full = if kind == "itf" {
+            let head = slice(digits, 0, 13);
+            f"{head}{gs1_check(head)}"
+        } else {
+            b.fullcode()
+        };
+        if n > 0 and last_char(full) != last_char(digits) {
+            println(f"{sku}: rejected, check digit {last_char(digits)} should be {last_char(full)}");
+            rejects.push(sku.clone());
+            continue;
+        }
+        let path = save(mut b, f"data/out/labels/{sku}", label_options(), None)?;
+        let tag = svg_tag(path)?;
+        println(f"{sku}: {b.name} {full} -> {path}");
+        rows.push(LabelRow { sku: sku.clone(), path: path.clone(), width: attr_of(tag, "width"), height: attr_of(tag, "height"), size: file_size(path)? });
+    }
+    let mut index = "sku,file,width,height,bytes\n".to_string();
+    for r in rows.iter() {
+        index.push_str(f"{r.sku},{r.path},{r.width},{r.height},{r.size}\n");
+    }
+    write_text("data/out/labels/index.csv".to_string(), index)?;
+    println("-- data/out/labels/index.csv");
+    print(read_text("data/out/labels/index.csv".to_string())?);
+    println(f"{rows.len()} labels, {rejects.len()} rejected: {join(rejects, ", ")}");
+    println("-- data/out/labels/CHO-100.svg");
+    print_svg(svg_lines(read_text("data/out/labels/CHO-100.svg".to_string())?), "full", "");
+    Ok(())
+}
+
+fn valid_date(d: ref String) -> bool {
+    if chars(d).len() != 6 or not all_digits(d) {
+        return false;
+    }
+    let cs = chars(d);
+    let month = digit(cs[2]) * 10 + digit(cs[3]);
+    let day = digit(cs[4]) * 10 + digit(cs[5]);
+    month >= 1 and month <= 12 and day >= 1 and day <= 31
+}
+
+#[derive(Clone)]
+struct Element {
+    ai: String,
+    val: String,
+    variable: bool,
+}
+
+fn small_options(height: Str, font: Option[Str]) -> J {
+    let mut ms = vec![Member { key: "module_height".to_string(), val: J.Int(height.to_string()) }];
+    if let Some(f) = font {
+        ms.push(Member { key: "font_size".to_string(), val: J.Int(f.to_string()) });
+    }
+    J.Obj(ms)
+}
+
+fn shipping() -> Result[(), Exc] {
+    println("== program: shipping labels");
+    make_dirs("data/out/shipping")?;
+    let mut first: Option[String] = None;
+    let text = read_text("data/shipments.jsonl".to_string())?;
+    for line in text.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let s = loads_str(line.to_string())?;
+        let sid = text_of(field(s, "id"));
+        let mut problems: Vec[String] = Vec.new();
+        let mut elements: Vec[Element] = Vec.new();
+        if let J.Str(sscc) = field(s, "sscc") {
+            if chars(sscc).len() != 17 {
+                problems.push("SSCC must have 17 digits before its check digit".to_string());
+            } else {
+                elements.push(Element { ai: "00".to_string(), val: f"{sscc}{gs1_check(sscc)}", variable: false });
+            }
+        }
+        let gtin = text_of(field(s, "gtin"));
+        if chars(gtin).len() != 13 {
+            problems.push("GTIN must have 13 digits before its check digit".to_string());
+        } else {
+            elements.push(Element { ai: "01".to_string(), val: f"{gtin}{gs1_check(gtin)}", variable: false });
+        }
+        if let J.Str(expiry) = field(s, "expiry") {
+            if not valid_date(expiry) {
+                problems.push(f"bad expiry date {expiry}");
+            } else {
+                elements.push(Element { ai: "17".to_string(), val: expiry.clone(), variable: false });
+            }
+        }
+        elements.push(Element { ai: "10".to_string(), val: text_of(field(s, "batch")), variable: true });
+        let serial = field(s, "serial");
+        if truthy(serial) {
+            elements.push(Element { ai: "21".to_string(), val: text_of(serial), variable: true });
+        }
+        let count = field(s, "count");
+        if let J.Int(c) = count {
+            elements.push(Element { ai: "37".to_string(), val: c.clone(), variable: true });
+        }
+        if problems.len() > 0 {
+            println(f"{sid}: not labelled: {join(problems, "; ")}");
+            continue;
+        }
+        let mut code = String.new();
+        let mut hri = String.new();
+        let mut gtin14 = String.new();
+        let mut i = 0;
+        while i < elements.len() {
+            let e = elements[i].clone();
+            code.push_str(e.ai);
+            code.push_str(e.val);
+            if e.variable and i + 1 < elements.len() {
+                code.push('ñ');
+            }
+            hri.push_str(f"({e.ai}){e.val}");
+            if e.ai == "01" {
+                gtin14 = e.val.clone();
+            }
+            i += 1;
+        }
+        let mut b = get_barcode("gs1_128".to_string(), code, Vec.new(), None)?;
+        let values = b.encoded()?;
+        println(f"{sid}: {hri}");
+        println(f"  symbol values {ints_repr(values)}, {values.len()} symbols");
+        let path = save(mut b, f"data/out/shipping/{sid}", small_options("12", Some("6")), Some(hri))?;
+        println(f"  {path}: {attr_of(svg_tag(path)?, "width")} wide, {file_size(path)?} bytes");
+        let mut itf = get_barcode("itf".to_string(), gtin14, Vec.new(), None)?;
+        let ipath = save(mut itf, f"data/out/shipping/{sid}-itf", small_options("12", None), None)?;
+        println(f"  {ipath}: ITF-14 {itf.fullcode()}, {attr_of(svg_tag(ipath)?, "width")} wide, {file_size(ipath)?} bytes");
+        if first.is_none() {
+            first = Some(path);
+        }
+    }
+    let p = first.unwrap_or(String.new());
+    println(f"-- {p}");
+    print_svg(svg_lines(read_text(p)?), "brief", "");
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CatEntry {
+    ean: String,
+    kind: String,
+    number: String,
+    title: String,
+    path: String,
+}
+
+// The tuples' order: field by field.
+fn entry_lt(a: ref CatEntry, b: ref CatEntry) -> bool {
+    let xs = vec![a.ean.clone(), a.kind.clone(), a.number.clone(), a.title.clone(), a.path.clone()];
+    let ys = vec![b.ean.clone(), b.kind.clone(), b.number.clone(), b.title.clone(), b.path.clone()];
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] != ys[i] {
+            return xs[i] < ys[i];
+        }
+        i += 1;
+    }
+    false
+}
+
+// line.split(None, 2).
+fn split_words(line: ref String, max: i64) -> Vec[String] {
+    let cs = chars(line);
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        while i < cs.len() and is_py_space(cs[i]) {
+            i += 1;
+        }
+        if i >= cs.len() {
+            break;
+        }
+        if out.len() == max {
+            let mut end = cs.len();
+            while end > i and is_py_space(cs[end - 1]) {
+                end -= 1;
+            }
+            out.push(from_chars(cs, i, end));
+            break;
+        }
+        let start = i;
+        while i < cs.len() and not is_py_space(cs[i]) {
+            i += 1;
+        }
+        out.push(from_chars(cs, start, i));
+    }
+    out
+}
+
+fn library() -> Result[(), Exc] {
+    println("== program: library catalogue");
+    make_dirs("data/out/spines")?;
+    let mut entries: Vec[CatEntry] = Vec.new();
+    let text = read_text("data/books.txt".to_string())?;
+    for raw in text.lines() {
+        let line = raw.to_string();
+        if line.trim().len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let words = split_words(line, 2);
+        let kind = words[0].clone();
+        let number = words[1].clone();
+        let title = words[2].clone();
+        let digits = number.replace("-", "").to_uppercase();
+        let b = match get_barcode(kind, number, Vec.new(), None) {
+            Ok(b) => b,
+            Err(e) => {
+                println(f"{title}: {kind} {number} refused: {err_text(e)}");
+                continue;
+            }
+        };
+        let shown = b.py_str();
+        let note = if shown != digits { f" (check digit should make it {shown})" } else { String.new() };
+        let mut ean = b.fullcode();
+        println(f"{title}: {kind} {number} -> {b.name} {shown}, EAN {ean}{note}");
+        if chars(ean).len() != 13 {
+            // ISBN-10 and ISSN keep their own digit count when they
+            // build the EAN, so ask EAN-13 for the whole one.
+            ean = if kind == "isbn10" {
+                get_barcode("isbn13".to_string(), f"978{slice(shown, 0, 9)}", Vec.new(), None)?.fullcode()
+            } else {
+                get_barcode("ean13".to_string(), issn_make_ean(b.issn)?, Vec.new(), None)?.fullcode()
+            };
+            println(f"  that EAN is cut short; the whole one is {ean}");
+        }
+        let mut spine = get_barcode("ean13-guard".to_string(), ean, Vec.new(), None)?;
+        let path = save(mut spine, f"data/out/spines/{ean}", small_options("10", Some("6")), None)?;
+        entries.push(CatEntry { ean: ean.clone(), kind: kind.clone(), number: shown.clone(), title: title.clone(), path: path });
+    }
+    // Sort as Python sorts the tuples.
+    let mut a = 1;
+    while a < entries.len() {
+        let mut b = a;
+        while b > 0 and entry_lt(entries[b], entries[b - 1]) {
+            let t = entries[b].clone();
+            entries[b] = entries[b - 1].clone();
+            entries[b - 1] = t;
+            b -= 1;
+        }
+        a += 1;
+    }
+    let mut out = String.new();
+    for e in entries.iter() {
+        out.push_str(f"{e.ean}\t{e.kind}\t{e.number}\t{e.title}\t{e.path}\n");
+    }
+    write_text("data/out/catalog.tsv".to_string(), out)?;
+    println("-- data/out/catalog.tsv");
+    print(read_text("data/out/catalog.tsv".to_string())?);
+    let mut names = match fs.read_dir("data/out/spines".to_string()) {
+        Ok(n) => n,
+        Err(e) => return Err(io_exc(e)),
+    };
+    names.sort();
+    for n in names.iter() {
+        let p = f"data/out/spines/{n}";
+        println(f"{p}: {svg_tag(p)?}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), Exc] {
+    run_jobs()?;
+    labels()?;
+    shipping()?;
+    library()?;
+    Ok(())
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# kind  number  title\n");
+    t.push_str("isbn10  0-13-235418-7  Clean Code\n");
+    t.push_str("isbn10  0-306-40615-2  A sample book\n");
+    t.push_str("isbn10  0-8044-2957-X  The Old Man and the Sea\n");
+    t.push_str("isbn10  0-8044-2957-5  The same book, mistyped\n");
+    t.push_str("isbn13  978-1-59327-928-8  The Rust Programming Language\n");
+    t.push_str("isbn13  979-10-90636-07-1  Un livre\n");
+    t.push_str("isbn13  979-2-12-345678-1  An old 979 number\n");
+    t.push_str("isbn13  978-0-13-235418-0  Clean Code, wrong check digit\n");
+    t.push_str("issn    0317-8471  Journal of Things\n");
+    t.push_str("issn    2434-561X  Bulletin of Ten\n");
+    t.push_str("issn    0378-5955  Hearing Research\n");
+    t.push_str("issn    0378-5950  Hearing Research, mistyped\n");
+    t.push_str("issn    0000-0000  Placeholder\n");
+    v.push(DataFile { path: "books.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"ean13 from twelve digits\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\", \"checksum\"], [\"render\", \"b\", null, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"ean13 with its check digit given\", \"steps\": [[\"new\", \"b\", \"ean13\", \"5901234123457\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"ean13 with a wrong check digit\", \"steps\": [[\"new\", \"b\", \"ean13\", \"5901234123450\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean13 too long is cut\", \"steps\": [[\"new\", \"b\", \"ean13\", \"40063813339312345\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"ean13 too short\", \"steps\": [[\"new\", \"b\", \"ean13\", \"40063813339\", {}]]}\n");
+    t.push_str("{\"name\": \"ean13 with a letter\", \"steps\": [[\"new\", \"b\", \"ean13\", \"4006a8133393\", {}]]}\n");
+    t.push_str("{\"name\": \"ean13 letter after the twelfth digit\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393x\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean13 empty\", \"steps\": [[\"new\", \"b\", \"ean13\", \"\", {}]]}\n");
+    t.push_str("{\"name\": \"ean13 no_checksum keeps the thirteenth\", \"steps\": [[\"new\", \"b\", \"ean13\", \"4006381333932\", {\"no_checksum\": true}], [\"show\", \"b\", \"repr\", \"checksum\"]]}\n");
+    t.push_str("{\"name\": \"ean13 no_checksum pads with zero\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393\", {\"no_checksum\": true}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean13 no_checksum with a letter last\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393x\", {\"no_checksum\": true}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean name is ean13\", \"steps\": [[\"new\", \"b\", \"EAN\", \"978014300723\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean13 with guards\", \"steps\": [[\"new\", \"b\", \"ean13-guard\", \"590123412345\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\"], [\"render\", \"b\", null, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"ean13 guardbar keyword\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393\", {\"guardbar\": true}], [\"show\", \"b\", \"repr\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"ean13-guard with guardbar turned off\", \"steps\": [[\"new\", \"b\", \"ean13-guard\", \"400638133393\", {\"guardbar\": false}], [\"show\", \"b\", \"repr\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"ean13 unknown keyword\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393\", {\"make_ean\": true}]]}\n");
+    t.push_str("{\"name\": \"ean8\", \"steps\": [[\"new\", \"b\", \"ean8\", \"5512345\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\", \"checksum\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"ean8 with guards and human text\", \"steps\": [[\"new\", \"b\", \"ean8-guard\", \"4006381\", {}], [\"show\", \"b\", \"full\", \"ascii\"], [\"render\", \"b\", {\"human\": \"Milk 1L\"}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"ean8 too short\", \"steps\": [[\"new\", \"b\", \"ean8\", \"551234\", {}]]}\n");
+    t.push_str("{\"name\": \"ean8-guard unknown keyword\", \"steps\": [[\"new\", \"b\", \"ean8-guard\", \"5512345\", {\"make_ean\": true}]]}\n");
+    t.push_str("{\"name\": \"ean14\", \"steps\": [[\"new\", \"b\", \"ean14\", \"1234567890123\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\", \"checksum\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"gtin is ean14\", \"steps\": [[\"new\", \"b\", \"gtin\", \"0950110153000\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"ean14 with guards\", \"steps\": [[\"new\", \"b\", \"ean14\", \"0950110153000\", {\"guardbar\": true}], [\"show\", \"b\", \"full\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"jan 490\", \"steps\": [[\"new\", \"b\", \"jan\", \"490123456789\", {}], [\"show\", \"b\", \"repr\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"jan 459\", \"steps\": [[\"new\", \"b\", \"JAN\", \"4591234567890\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"jan outside Japan\", \"steps\": [[\"new\", \"b\", \"jan\", \"400638133393\", {}]]}\n");
+    t.push_str("{\"name\": \"jan with letters\", \"steps\": [[\"new\", \"b\", \"jan\", \"ab1234567890\", {}]]}\n");
+    t.push_str("{\"name\": \"jan with a space\", \"steps\": [[\"new\", \"b\", \"jan\", \" 49123456789\", {}]]}\n");
+    t.push_str("{\"name\": \"jan with underscores\", \"steps\": [[\"new\", \"b\", \"jan\", \"4_91234567890\", {}]]}\n");
+    t.push_str("{\"name\": \"jan unknown keyword\", \"steps\": [[\"new\", \"b\", \"jan\", \"490123456789\", {\"make_ean\": true}]]}\n");
+    t.push_str("{\"name\": \"isbn13 with hyphens\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"978-0-13-235418-9\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"checksum\"]]}\n");
+    t.push_str("{\"name\": \"isbn is isbn13\", \"steps\": [[\"new\", \"b\", \"isbn\", \"9781593279288\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"isbn13 979-10\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"979-10-90636-07-1\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"isbn13 979-8\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"979-8-6024-0545-3\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"isbn13 979-2\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"979-2-12-345678-1\", {}]]}\n");
+    t.push_str("{\"name\": \"isbn13 not a book\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"400638133393\", {}]]}\n");
+    t.push_str("{\"name\": \"gs1 is isbn13\", \"steps\": [[\"new\", \"b\", \"gs1\", \"5901234123457\", {}]]}\n");
+    t.push_str("{\"name\": \"isbn13 with guards\", \"steps\": [[\"new\", \"b\", \"isbn13\", \"9780132354189\", {\"guardbar\": true}], [\"show\", \"b\", \"repr\", \"full\"], [\"render\", \"b\", {\"module_height\": 20}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"isbn10\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"0132354187\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"isbn10 with hyphens\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"0-306-40615-2\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"isbn10 with X\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"080442957X\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"isbn10 wrong check digit\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"0306406153\", {}], [\"show\", \"b\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"isbn10 too short\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"12345\", {}]]}\n");
+    t.push_str("{\"name\": \"isbn10 keyword\", \"steps\": [[\"new\", \"b\", \"isbn10\", \"0132354187\", {\"guardbar\": true}]]}\n");
+    t.push_str("{\"name\": \"issn\", \"steps\": [[\"new\", \"b\", \"issn\", \"0317-8471\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"issn check digit 10\", \"steps\": [[\"new\", \"b\", \"issn\", \"2434-561X\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"issn check digit 11\", \"steps\": [[\"new\", \"b\", \"issn\", \"0000000\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"issn real 0378-5955\", \"steps\": [[\"new\", \"b\", \"issn\", \"03785955\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"issn with a letter past the seventh digit\", \"steps\": [[\"new\", \"b\", \"issn\", \"0317-847a\", {}]]}\n");
+    t.push_str("{\"name\": \"issn too short\", \"steps\": [[\"new\", \"b\", \"issn\", \"123\", {}]]}\n");
+    t.push_str("{\"name\": \"upca\", \"steps\": [[\"new\", \"b\", \"upca\", \"03600029145\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\", \"checksum\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"upc twelve digits are cut\", \"steps\": [[\"new\", \"b\", \"upc\", \"036000291452\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"upc make_ean\", \"steps\": [[\"new\", \"b\", \"upc\", \"03600029145\", {\"make_ean\": true}], [\"show\", \"b\", \"repr\", \"str\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"upc too short\", \"steps\": [[\"new\", \"b\", \"upc\", \"0360002914\", {}]]}\n");
+    t.push_str("{\"name\": \"upc with a letter\", \"steps\": [[\"new\", \"b\", \"upc\", \"03600a29145\", {}]]}\n");
+    t.push_str("{\"name\": \"upc check digit zero\", \"steps\": [[\"new\", \"b\", \"upc\", \"01234567895\", {}], [\"show\", \"b\", \"str\", \"checksum\"]]}\n");
+    t.push_str("{\"name\": \"code39\", \"steps\": [[\"new\", \"b\", \"code39\", \"WIKIPEDIA\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"build\", \"ascii\", \"checksum\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"code39 lower case\", \"steps\": [[\"new\", \"b\", \"code39\", \"hello world\", {}], [\"show\", \"b\", \"repr\", \"str\"]]}\n");
+    t.push_str("{\"name\": \"code39 without checksum\", \"steps\": [[\"new\", \"b\", \"code39\", \"CODE-39\", {\"add_checksum\": false}], [\"show\", \"b\", \"repr\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"code39 bad character in the checksum\", \"steps\": [[\"new\", \"b\", \"code39\", \"abc@\", {}]]}\n");
+    t.push_str("{\"name\": \"code39 bad characters\", \"steps\": [[\"new\", \"b\", \"code39\", \"A@B#\", {\"add_checksum\": false}]]}\n");
+    t.push_str("{\"name\": \"code39 sharp s\", \"steps\": [[\"new\", \"b\", \"code39\", \"straße\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"code39 empty\", \"steps\": [[\"new\", \"b\", \"code39\", \"\", {}], [\"show\", \"b\", \"repr\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"code39 small render\", \"steps\": [[\"new\", \"b\", \"code39\", \"LOT 42\", {}], [\"render\", \"b\", {\"quiet_zone\": 1, \"module_height\": 5, \"font_size\": 0}, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"pzn\", \"steps\": [[\"new\", \"b\", \"pzn\", \"123456\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"pzn cut to six\", \"steps\": [[\"new\", \"b\", \"pzn\", \"6543217\", {}], [\"show\", \"b\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"pzn check 10\", \"steps\": [[\"new\", \"b\", \"pzn\", \"222222\", {}]]}\n");
+    t.push_str("{\"name\": \"pzn too short\", \"steps\": [[\"new\", \"b\", \"pzn\", \"12345\", {}]]}\n");
+    t.push_str("{\"name\": \"pzn letter\", \"steps\": [[\"new\", \"b\", \"pzn\", \"12a456\", {}]]}\n");
+    t.push_str("{\"name\": \"code128 text\", \"steps\": [[\"new\", \"b\", \"code128\", \"Wikipedia\", {}], [\"show\", \"b\", \"repr\", \"encoded\", \"build\", \"ascii\"]]}\n");
+    t.push_str("{\"name\": \"code128 digits\", \"steps\": [[\"new\", \"b\", \"code128\", \"123456\", {}], [\"show\", \"b\", \"encoded\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"code128 odd digits\", \"steps\": [[\"new\", \"b\", \"code128\", \"12345\", {}], [\"show\", \"b\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 one digit\", \"steps\": [[\"new\", \"b\", \"code128\", \"7\", {}], [\"show\", \"b\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 remembers its charset\", \"steps\": [[\"new\", \"b\", \"code128\", \"12a\", {}], [\"show\", \"b\", \"encoded\", \"encoded\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"code128 into C and back\", \"steps\": [[\"new\", \"b\", \"code128\", \"AB12345C\", {}], [\"show\", \"b\", \"encoded\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 four digits switch\", \"steps\": [[\"new\", \"b\", \"code128\", \"ab1234cd123ef\", {}], [\"show\", \"b\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 control characters\", \"steps\": [[\"new\", \"b\", \"code128\", \"\\tTab\\nNL\", {}], [\"show\", \"b\", \"repr\", \"encoded\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 lower then control\", \"steps\": [[\"new\", \"b\", \"code128\", \"a\\n\", {}], [\"show\", \"b\", \"encoded\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 FNC characters\", \"steps\": [[\"new\", \"b\", \"code128\", \"xó1ò\", {}], [\"show\", \"b\", \"repr\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"code128 empty\", \"steps\": [[\"new\", \"b\", \"code128\", \"\", {}], [\"show\", \"b\", \"repr\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"code128 bad characters\", \"steps\": [[\"new\", \"b\", \"code128\", \"café €5\", {}]]}\n");
+    t.push_str("{\"name\": \"code128 render twice\", \"steps\": [[\"new\", \"b\", \"code128\", \"12a\", {}], [\"render\", \"b\", null, null, \"brief\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"gs1_128\", \"steps\": [[\"new\", \"b\", \"gs1_128\", \"0109501101530003172012311000A1\", {}], [\"show\", \"b\", \"repr\", \"str\", \"full\", \"encoded\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"gs1_128 with a separator\", \"steps\": [[\"new\", \"b\", \"gs1_128\", \"10ABC123ñ21123\", {}], [\"show\", \"b\", \"repr\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"gs1_128 separator after an odd digit\", \"steps\": [[\"new\", \"b\", \"gs1_128\", \"123ñ45\", {}], [\"show\", \"b\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"gs1_128 in charset A\", \"steps\": [[\"new\", \"b\", \"gs1_128\", \"\\nñ1\", {}], [\"show\", \"b\", \"encoded\"]]}\n");
+    t.push_str("{\"name\": \"codabar\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A40156B\", {}], [\"show\", \"b\", \"repr\", \"str\", \"build\", \"ascii\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"nw-7 money\", \"steps\": [[\"new\", \"b\", \"nw-7\", \"C$1.00+D\", {}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar one letter\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A\", {}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar narrow and wide\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A12B\", {\"narrow\": 1, \"wide\": 3}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar bad start\", \"steps\": [[\"new\", \"b\", \"codabar\", \"a1b\", {}], [\"show\", \"b\", \"repr\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar bad end\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A12\", {}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar bad middle\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A1x9B\", {}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"codabar empty\", \"steps\": [[\"new\", \"b\", \"codabar\", \"\", {}], [\"show\", \"b\", \"build\"]]}\n");
+    t.push_str("{\"name\": \"itf\", \"steps\": [[\"new\", \"b\", \"itf\", \"1234567\", {}], [\"show\", \"b\", \"repr\", \"str\", \"build\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"itf narrow 1 wide 2\", \"steps\": [[\"new\", \"b\", \"itf\", \"12\", {\"narrow\": 1, \"wide\": 2}], [\"show\", \"b\", \"build\", \"ascii\"]]}\n");
+    t.push_str("{\"name\": \"itf with a letter\", \"steps\": [[\"new\", \"b\", \"itf\", \"12a\", {}]]}\n");
+    t.push_str("{\"name\": \"itf empty\", \"steps\": [[\"new\", \"b\", \"itf\", \"\", {}]]}\n");
+    t.push_str("{\"name\": \"itf narrow zero\", \"steps\": [[\"new\", \"b\", \"itf\", \"12\", {\"narrow\": 0}], [\"show\", \"b\", \"build\"], [\"render\", \"b\", null, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"unknown barcode\", \"steps\": [[\"new\", \"b\", \"qr\", \"hello\", {}]]}\n");
+    t.push_str("{\"name\": \"names ignore case\", \"steps\": [[\"new\", \"b\", \"Code128\", \"x\", {}], [\"new\", \"c\", \"UPCA\", \"03600029145\", {}], [\"show\", \"b\", \"repr\"], [\"show\", \"c\", \"repr\"]]}\n");
+    t.push_str("{\"name\": \"svg without doctype\", \"steps\": [[\"new\", \"b\", \"itf\", \"12\", {}], [\"render\", \"b\", {\"with_doctype\": false}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg compressed\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A1B\", {}], [\"render\", \"b\", {\"compress\": true}, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"svg no text\", \"steps\": [[\"new\", \"b\", \"ean8\", \"5512345\", {}], [\"render\", \"b\", {\"write_text\": false}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg own text without write_text\", \"steps\": [[\"new\", \"b\", \"ean8\", \"5512345\", {}], [\"render\", \"b\", {\"write_text\": false}, \"custom\", \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg text with lines\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"text_line_distance\": 2}, \"Line one\\nLine two\", \"full\"]]}\n");
+    t.push_str("{\"name\": \"svg text ending in a newline\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", null, \"x\\n\", \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg text not centred\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"center_text\": false}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg same colours\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"foreground\": \"white\"}, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"svg no background\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"background\": null}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg awkward colours\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"background\": \"#fff\\\"><\", \"foreground\": \"rgb(0, 0, 0)&\\t\"}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg font sizes\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"font_size\": 8.5}, null, \"brief\"], [\"render\", \"b\", {\"font_size\": 12.0}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg underscore option\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"_quiet_zone\": 0, \"_unknown\": 3, \"dpi\": 600}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg sixteenth modules\", \"steps\": [[\"new\", \"b\", \"codabar\", \"A1B\", {}], [\"render\", \"b\", {\"module_width\": 0.0625}, null, \"full\"]]}\n");
+    t.push_str("{\"name\": \"svg margins\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"margin_top\": 0, \"margin_bottom\": 3, \"text_distance\": 1}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg escaped text\", \"steps\": [[\"new\", \"b\", \"code128\", \"a<b&c>\\\"d'\", {}], [\"render\", \"b\", {\"human\": \"<&>\\\"'\"}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg guard blocks with less text\", \"steps\": [[\"new\", \"b\", \"ean13-guard\", \"400638133393\", {}], [\"render\", \"b\", null, \"ABC\", \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg guard blocks with more text\", \"steps\": [[\"new\", \"b\", \"ean13-guard\", \"400638133393\", {}], [\"render\", \"b\", null, \"a b c d e f\", \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg guards at height 1\", \"steps\": [[\"new\", \"b\", \"ean13-guard\", \"400638133393\", {}], [\"render\", \"b\", {\"guard_height_factor\": 1}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg guard height 1.5\", \"steps\": [[\"new\", \"b\", \"ean8-guard\", \"5512345\", {}], [\"render\", \"b\", {\"guard_height_factor\": 1.5}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"svg options stay on the writer\", \"steps\": [[\"new\", \"b\", \"code39\", \"A1\", {}], [\"render\", \"b\", {\"human\": \"first\", \"center_text\": false}, null, \"brief\"], [\"render\", \"b\", null, null, \"brief\"], [\"render\", \"b\", {\"human\": \"\"}, null, \"brief\"]]}\n");
+    t.push_str("{\"name\": \"save\", \"steps\": [[\"new\", \"b\", \"ean13\", \"400638133393\", {}], [\"save\", \"b\", \"data/out/jobs/ean13\", null, null], [\"save\", \"b\", \"data/out/jobs/ean13-small\", {\"module_height\": 5}, \"small\"]]}\n");
+    t.push_str("{\"name\": \"save to a missing directory\", \"steps\": [[\"new\", \"b\", \"ean8\", \"5512345\", {}], [\"save\", \"b\", \"data/out/nowhere/x\", null, null]]}\n");
+    t.push_str("{\"name\": \"generate\", \"steps\": [[\"generate\", \"isbn10\", \"0132354187\", \"data/out/jobs/book\", {\"module_height\": 8}, null], [\"generate\", \"itf\", \"1234\", \"data/out/jobs/itf\", null, null], [\"generate\", \"code128\", \"LOT-7\", \"data/out/jobs/lot\", null, \"\"], [\"generate\", \"code128\", \"LOT-7\", \"data/out/jobs/lot-text\", null, \"Lot seven\"]]}\n");
+    t.push_str("{\"name\": \"generate errors\", \"steps\": [[\"generate\", \"qr\", \"x\", \"data/out/jobs/qr\", null, null], [\"generate\", \"ean13\", \"12\", \"data/out/jobs/short\", null, null], [\"generate\", \"ean13\", \"400638133393\", null, null, null]]}\n");
+    t.push_str("{\"name\": \"cli list\", \"steps\": [[\"cli\", [\"list\"]]]}\n");
+    t.push_str("{\"name\": \"cli version\", \"steps\": [[\"cli\", [\"-v\"]], [\"cli\", [\"--version\"]]]}\n");
+    t.push_str("{\"name\": \"cli create code39\", \"steps\": [[\"cli\", [\"create\", \"WIKIPEDIA\", \"data/out/cli/wiki\"]]]}\n");
+    t.push_str("{\"name\": \"cli create ean13\", \"steps\": [[\"cli\", [\"create\", \"-b\", \"EAN13\", \"400638133393\", \"data/out/cli/ean\"]]]}\n");
+    t.push_str("{\"name\": \"cli create isbn10 with text\", \"steps\": [[\"cli\", [\"create\", \"--barcode=isbn10\", \"0132354187\", \"data/out/cli/./sub/../book\", \"--text\", \"ISBN 0-13-235418-7\"]]]}\n");
+    t.push_str("{\"name\": \"cli create abbreviated\", \"steps\": [[\"cli\", [\"create\", \"--barc\", \"upca\", \"--tex\", \"UPC\", \"03600029145\", \"data/out/cli/upc\"]]]}\n");
+    t.push_str("{\"name\": \"cli create attached short option\", \"steps\": [[\"cli\", [\"create\", \"-bitf\", \"1234\", \"data/out/cli/itf\"]]]}\n");
+    t.push_str("{\"name\": \"cli create empty text\", \"steps\": [[\"cli\", [\"create\", \"--text\", \"\", \"-b\", \"ean\", \"590123412345\", \"data/out/cli/empty-text\"]]]}\n");
+    t.push_str("{\"name\": \"cli errors\", \"steps\": [[\"cli\", []], [\"cli\", [\"frob\"]], [\"cli\", [\"create\", \"x\"]], [\"cli\", [\"create\", \"x\", \"o\", \"--bogus\"]], [\"cli\", [\"create\", \"-b\", \"qr\", \"x\", \"o\"]], [\"cli\", [\"create\", \"x\", \"o\", \"--text\"]], [\"cli\", [\"create\", \"-b\", \"ean13\", \"12\", \"data/out/cli/bad\"]]]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("sku,name,price,code\n");
+    t.push_str("MLK-1L,Whole milk 1 L,1.19,4006381333931\n");
+    t.push_str("BRD-500,Rye bread 500 g,2.49,5901234123457\n");
+    t.push_str("EGG-10,Free-range eggs x10,3.29,4006381-333932\n");
+    t.push_str("CHO-100,Dark chocolate 100 g,1.79,55123457\n");
+    t.push_str("CHO-101,Milk chocolate 100 g,1.79,55123450\n");
+    t.push_str("SOD-033,Cola 0.33 L,0.89,036000291452\n");
+    t.push_str("SOD-050,Cola 0.5 L,1.29,0360 0029 1453\n");
+    t.push_str("TEA-025,Green tea 25 bags,2.99,10950110153003\n");
+    t.push_str("TEA-026,Black tea 25 bags,2.99,10950110153004\n");
+    t.push_str("JAM-450,Strawberry jam 450 g,2.69,4006381-33393\n");
+    t.push_str("OIL-750,Olive oil 0.75 L,6.99,40063813339A1\n");
+    t.push_str("SPC-001,Salt & pepper set,4.50,\n");
+    v.push(DataFile { path: "products.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"id\": \"PAL-0001\", \"sscc\": \"03765432100000001\", \"gtin\": \"0950110153000\", \"batch\": \"B2024-11\", \"expiry\": \"261231\", \"count\": 48}\n");
+    t.push_str("{\"id\": \"PAL-0002\", \"sscc\": \"03765432100000002\", \"gtin\": \"0400638133393\", \"batch\": \"L7\", \"expiry\": \"270115\", \"count\": 120}\n");
+    t.push_str("{\"id\": \"CTN-0450\", \"sscc\": null, \"gtin\": \"1950110153000\", \"batch\": \"X1\", \"expiry\": null, \"count\": null, \"serial\": \"SN000451\"}\n");
+    t.push_str("{\"id\": \"CTN-0451\", \"sscc\": null, \"gtin\": \"195011015300\", \"batch\": \"X1\", \"expiry\": null, \"count\": null}\n");
+    t.push_str("{\"id\": \"PAL-0003\", \"sscc\": \"0376543210000003\", \"gtin\": \"0950110153000\", \"batch\": \"B2024-12\", \"expiry\": \"261301\", \"count\": 12}\n");
+    v.push(DataFile { path: "shipments.jsonl".to_string(), hex: false, body: t });
+}
