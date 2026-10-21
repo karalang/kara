@@ -190,7 +190,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-63 | 2026-10-21 | typecheck | low | `Option.unwrap_or_default` (core-types.md, `T: Default`) does not exist: "no method 'unwrap_or_default' on type 'Option'"; runtime/stdlib/source/option.kara has no such method | — |
 | B-2026-10-21-64 | 2026-10-21 | codegen | medium | `Result.or_else` whose closure changes the error type, or whose body is `Err(..)`, checks but both MIR backends refuse it: "the method call `.or_else` with no resolved callee is not lowered yet" / "a closure with no function type is not lowered yet" | — |
 | B-2026-10-21-65 | 2026-10-21 | typecheck+interp | low | `iN.checked_from(f: f64) -> Option[iN]` (core-types.md, every integer type) does not exist on any backend, and `f32.parse` is missing where core-types.md says every integer and float type has `parse` | — |
-| B-2026-10-21-66 | 2026-10-21 | interp+codegen | low | Number `parse` trims surrounding whitespace (`i64.parse(" 5")`, `"5 "`, `"\t5\n"` give `Ok(5)`; `f64.parse(" 2.5")` gives `Ok(2.5)`), where core-types.md's `InvalidDigit` covers "a character that cannot appear in a number" and its own example trims first | — |
 | B-2026-10-21-67 | 2026-10-21 | codegen | low | Compiled MIR has no lowering for `f64.cbrt`, `asinh`, `acosh`, `atanh` ("native `f64.cbrt` is not lowered yet"); `__mir-run` computes them and every other float method lowers | — |
 | B-2026-10-21-68 | 2026-10-21 | interp+codegen | high | `par { consume(rx), produce(tx) }` over a `channel(1)` panics "deadlock: every task waits on a channel that no running task sends to or receives from" on both MIR backends: `par` branches run one after another, so a producer that outruns the channel capacity can never be drained | — |
 | B-2026-10-21-69 | 2026-10-21 | interp+codegen+runtime | medium | A `TaskGroup` task that spins on an `Atomic` starves its siblings: concurrency.md's `publish` / `wait_ready` flag hangs when `wait_ready` is spawned first, because tasks run one at a time on one worker with no preemption | — |
@@ -4367,6 +4366,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-52 | typecheck | high | `karac check` refuses most of regex.md's surface unless the program contains the word `captures`: `re.replace(..)`, `re.split(..)` and `re.captures_a… | 4e2142e1bb |
 | B-2026-10-21-54 | effect | medium | `karac check` demands `with panics` on a `pub fn` that can panic, contradicting design.md § Default-permitted effects ("`allocates(Heap)` and `panics… | d3632749b0 |
 | B-2026-10-21-57 | interp+codegen | low | MIR path appends std.cli whenever the source text contains `Parser` or `Arg` as a substring (`MidiParser`, `Args`, a string literal "Parser()"), not… | bd339f6d4b |
+| B-2026-10-21-66 | interp+codegen | low | Number `parse` trims surrounding whitespace (`i64.parse(" 5")`, `"5 "`, `"\t5\n"` give `Ok(5)`; `f64.parse(" 2.5")` gives `Ok(2.5)`), where core-type… | c5d5d680f3 |
 
 </details>
 
