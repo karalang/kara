@@ -2564,7 +2564,7 @@ fn process_event(w: mut ref World, bi: i64, m: ref String, event: own Option[V],
 }
 
 // event % args when there are args.
-fn emit(w: mut ref World, bi: i64, name: Str, event: own V, extra: own Vec[V], kw: own Vec[Item]) -> Result[V, Exc] {
+fn emit(w: mut ref World, bi: i64, name: Str, event: own V, extra: ref Vec[V], kw: own Vec[Item]) -> Result[V, Exc] {
     if extra.len() == 0 {
         return proxy_to_logger(mut w, bi, name.to_string(), Some(event), kw);
     }

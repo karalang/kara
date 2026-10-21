@@ -4404,8 +4404,7 @@ fn op_validate(op: ref J, last: mut ref String, dns: ref Dns, t: ref Tables) {
         println(f"-- opts: {text}");
         *last = text;
     }
-    // The binding's type is written out for B-2026-10-21-19.
-    let (email, raw): (Vec[i64], Option[Vec[i64]]) = if j_present(op, "bytes") {
+    let (email, raw) = if j_present(op, "bytes") {
         let b = unhex_cps(j_str(op, "bytes"));
         println(t.bytes_repr(b));
         (Vec.new(), Some(b))
