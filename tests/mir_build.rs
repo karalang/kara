@@ -7242,3 +7242,51 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_iter_mut_loops_over_deques_and_maps() {
+    // B-2026-10-21-25: `for x in c.iter_mut()` over a `VecDeque`, `Map` or
+    // `SortedMap` was refused ("a `for` loop over a collection"); it lends
+    // each element (a map's value) in place, as over a `Vec`.
+    let src = r#"
+fn bump(m: mut ref Map[String, Vec[i64]]) {
+    for (k, v) in m.iter_mut() {
+        v.push(k.len() as i64);
+    }
+}
+
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    m.insert("ab".to_string(), [1]);
+    m.insert("xyz".to_string(), Vec.new());
+    bump(mut m);
+    println(f"{m["ab"]} {m["xyz"]}");
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back("a".to_string());
+    d.push_front("b".to_string());
+    for (i, s) in d.iter_mut().enumerate() {
+        if i == 1 { break; }
+        s.push_str("!");
+    }
+    for s in d.iter() { println(s); }
+    let mut t: SortedMap[i64, String] = SortedMap.new();
+    t.insert(2, "two".to_string());
+    t.insert(1, "one".to_string());
+    for (_, v) in t.iter_mut() { *v = v.to_uppercase(); }
+    for (k, v) in t.iter() { println(f"{k} {v}"); }
+}
+"#;
+    let want = "[1, 2] [3]
+b!
+a
+1 ONE
+2 TWO
+";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

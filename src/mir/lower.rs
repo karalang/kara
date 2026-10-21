@@ -8408,6 +8408,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     | IntrinsicKind::SortedMap),
                 args,
             } if mode == Mode::Ref
+                // `iter_mut` lends each element (a map's value) in place
+                // (B-2026-10-21-25); a set's elements are its keys.
+                || (mode == Mode::Mut
+                    && !matches!(kind, IntrinsicKind::Set | IntrinsicKind::SortedSet))
                 || (mode == Mode::Owned
                     && self
                         .tys()
@@ -8418,7 +8422,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             {
                 // `c.into_iter()` over `Copy` elements reads them as a lent
                 // loop does; the collection goes when its scope ends.
-                mode = Mode::Ref;
+                if mode == Mode::Owned {
+                    mode = Mode::Ref;
+                }
                 let tcx = self.tys().tcx();
                 let args = tcx.list(args);
                 match kind {
