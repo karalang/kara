@@ -156,20 +156,20 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())?;
             }
-            "as_bytes" => {
+            "bytes" | "as_bytes" => {
                 let n = self.mrt_i64("cstr_len", &[h.into()])?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())?;
                 self.store(self.offset(d, 8)?, n.into())?;
             }
-            "to_string" | "to_string_slice" if base == "CStr" => {
+            "to_string" | "to_str" | "to_string_slice" if base == "CStr" => {
                 let d = self.place_ptr(dest)?;
                 let ok = self.variant_of(dty, "Ok")?;
                 let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
                 let view = self
                     .llcx
                     .i8_type()
-                    .const_int(u64::from(method == "to_string_slice"), false);
+                    .const_int(u64::from(method != "to_string"), false);
                 let i32t = self.llcx.i32_type();
                 let f = self.extern_fn(
                     "karac_mir_cstr_to_string",

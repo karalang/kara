@@ -13475,6 +13475,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+        // The library's `From[VarError] for IoError`, which `?` uses too
+        // (B-2026-10-21-16).
+        if (self.tys().display(st), self.tys().display(dt)) == ("VarError".into(), "IoError".into())
+        {
+            let mut ops = vec![self.expr_operand(object)?];
+            if self.variant_from(dt, st, &mut ops) {
+                if let Some(op) = ops.pop() {
+                    self.assign(dest, Rvalue::Use(op));
+                    return Ok(true);
+                }
+            }
+        }
         let Some(d) = self.user_from(dt, st) else {
             return Ok(false);
         };

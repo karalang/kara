@@ -1045,8 +1045,10 @@ impl<'a> super::TypeChecker<'a> {
                 require_no_args(self, "is_empty");
                 Type::Bool
             }
-            "as_bytes" => {
-                require_no_args(self, "as_bytes");
+            // `bytes` is strings.md's name; `as_bytes` the earlier one
+            // (B-2026-10-21-31).
+            "bytes" | "as_bytes" => {
+                require_no_args(self, method);
                 Type::Slice {
                     element: Box::new(Type::UInt(UIntSize::U8)),
                     mutable: false,
@@ -1078,8 +1080,9 @@ impl<'a> super::TypeChecker<'a> {
             // view (and its `c"..."`-literal-static or `from_ptr`-borrowed
             // source) must outlive it. Codegen builds the `{ptr,len,cap=0}`
             // view; the interpreter validates via `String.from_utf8` semantics.
-            "to_string_slice" => {
-                require_no_args(self, "to_string_slice");
+            // `to_str` is strings.md's name (B-2026-10-21-31).
+            "to_str" | "to_string_slice" => {
+                require_no_args(self, method);
                 Type::Named {
                     name: "Result".to_string(),
                     args: vec![
@@ -1097,14 +1100,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "CStr",
                 method,
-                &[
-                    "as_bytes",
-                    "as_ptr",
-                    "is_empty",
-                    "len",
-                    "to_string",
-                    "to_string_slice",
-                ],
+                &["as_ptr", "bytes", "is_empty", "len", "to_str", "to_string"],
                 args,
                 span,
             ),
@@ -1152,8 +1148,10 @@ impl<'a> super::TypeChecker<'a> {
                 require_no_args(self, "is_empty");
                 Type::Bool
             }
-            "as_bytes" => {
-                require_no_args(self, "as_bytes");
+            // `bytes` is strings.md's name; `as_bytes` the earlier one
+            // (B-2026-10-21-31).
+            "bytes" | "as_bytes" => {
+                require_no_args(self, method);
                 Type::Slice {
                     element: Box::new(Type::UInt(UIntSize::U8)),
                     mutable: false,
@@ -1162,7 +1160,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "CString",
                 method,
-                &["as_bytes", "as_ptr", "is_empty", "len"],
+                &["as_ptr", "bytes", "is_empty", "len"],
                 args,
                 span,
             ),

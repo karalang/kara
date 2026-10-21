@@ -1634,6 +1634,62 @@ pub fn gated_module_public_items(path: &[String], span: Span) -> Option<Vec<Impo
     )
 }
 
+/// Whether the gated module at `path` has an item `name` that an import
+/// splices (the items [`gated_items_for_import`] matches).
+pub fn gated_module_defines(path: &[String], name: &str) -> bool {
+    GATED_STDLIB_PROGRAMS
+        .iter()
+        .find(|(p, _)| p.as_slice() == path)
+        .is_some_and(|(_, program)| {
+            program.items.iter().any(|item| match item {
+                Item::Function(f) => f.name == name,
+                Item::StructDef(s) => s.name == name,
+                Item::EnumDef(e) => e.name == name,
+                Item::TraitDef(t) => t.name == name,
+                Item::EffectResource(r) => r.name == name,
+                _ => false,
+            })
+        })
+}
+
+/// Why `import <path>.{name}` from the gated module at `path` does not
+/// resolve, once [`expand_gated_stdlib_imports`] has spliced every name the
+/// module defines: the message, and the name to write instead when one is
+/// close. A name another gated module defines points there (`sha1` is in
+/// `std.crypto.legacy`, not `std.crypto.sha2`) (B-2026-10-21-7).
+pub fn gated_module_item_error(path: &[String], name: &str) -> (String, Option<String>) {
+    let module = path.join(".");
+    let mut message = format!("unknown item `{name}` in module `{module}`");
+    let homes: Vec<String> = GATED_STDLIB_PROGRAMS
+        .iter()
+        .filter(|(p, _)| p.as_slice() != path)
+        .filter(|(p, _)| {
+            gated_module_public_items(p, Span::default())
+                .is_some_and(|items| items.iter().any(|ii| ii.name == name))
+        })
+        .map(|(p, _)| p.join("."))
+        .collect();
+    if let Some(home) = homes.first() {
+        message.push_str(&format!(
+            "; `{name}` is in `{home}`: `import {home}.{{{name}}};`"
+        ));
+        return (message, None);
+    }
+    let names: Vec<String> = gated_module_public_items(path, Span::default())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ii| ii.name)
+        .collect();
+    let candidates: Vec<&str> = names.iter().map(String::as_str).collect();
+    let suggestion = crate::edit_distance::suggest_similar(name, &candidates);
+    if let Some(s) = &suggestion {
+        message.push_str(&format!(", did you mean `{s}`?"));
+    } else if !names.is_empty() && names.len() <= 10 {
+        message.push_str(&format!("; available: {}", names.join(", ")));
+    }
+    (message, suggestion)
+}
+
 pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<Vec<Item>> {
     let (_, program) = GATED_STDLIB_PROGRAMS
         .iter()

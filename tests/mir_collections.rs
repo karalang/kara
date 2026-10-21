@@ -517,3 +517,52 @@ const WANT_CHECKED_FROM: &str = "127 -128 None None\n-9223372036854775808 None N
 fn checked_from_and_f32_parse_agree_on_both_backends() {
     agrees(CHECKED_FROM, WANT_CHECKED_FROM, 0);
 }
+
+/// strings.md's `CStr` names: `bytes` and `to_str`, beside `to_string`; a
+/// `CString` has `bytes` too (B-2026-10-21-31).
+const CSTR_NAMES: &str = r#"fn main() {
+    let c = c"hello";
+    println(c.bytes().len());
+    println(c.bytes()[0]);
+    match c.to_str() {
+        Ok(s) => println(f"Ok({s})"),
+        Err(_) => println("Err"),
+    }
+    match c"a\xffb".to_str() {
+        Ok(s) => println(f"Ok({s})"),
+        Err(_) => println("Err"),
+    }
+    match c.to_string() {
+        Ok(s) => println(f"Ok({s.len()})"),
+        Err(_) => println("Err"),
+    }
+    match "xyz".to_string().to_cstring() {
+        Ok(cs) => println(cs.bytes().len()),
+        Err(_) => println("nul"),
+    }
+}
+"#;
+
+#[test]
+fn cstr_bytes_and_to_str_agree_on_both_backends() {
+    agrees(CSTR_NAMES, "5\n104\nOk(hello)\nErr\nOk(5)\n3\n", 0);
+}
+
+/// `.into()` from a `VarError` to an `IoError` goes through the library's
+/// `From[VarError] for IoError`, as `?` does (io.md; B-2026-10-21-16).
+const VAR_ERROR_INTO: &str = r#"fn missing() -> VarError { VarError.NotPresent }
+fn main() {
+    let v = VarError.NotUnicode;
+    let e1: IoError = v.into();
+    println(e1);
+    let e2: IoError = missing().into();
+    println(e2);
+    let e3: IoError = IoError.from(VarError.NotUnicode);
+    println(e3);
+}
+"#;
+
+#[test]
+fn var_error_into_io_error_agrees_on_both_backends() {
+    agrees(VAR_ERROR_INTO, "InvalidUtf8\nNotFound\nInvalidUtf8\n", 0);
+}

@@ -5697,7 +5697,7 @@ impl<'a> Interp<'a> {
                 Some(at) => Ok(Value::Ref(at.child(0))),
                 None => err(format!("{name} of an unborrowed value")),
             },
-            "as_bytes" => {
+            "bytes" | "as_bytes" => {
                 let Some(at) = at else {
                     return err(format!("{name} of an unborrowed value"));
                 };
@@ -5710,20 +5710,22 @@ impl<'a> Interp<'a> {
             // UTF-8-validated into a `String` (a `StringSlice` is held as
             // one): a cut-off final sequence is `IncompleteSequence`, any
             // other bad byte `InvalidByte`, as `String.from_utf8`.
-            "to_string" | "to_string_slice" if base == "CStr" => match String::from_utf8(bytes) {
-                Ok(text) => {
-                    let s = self.alloc_box("String", Value::Str(text));
-                    self.variant_named(ret, None, "Ok", vec![s])
+            "to_string" | "to_str" | "to_string_slice" if base == "CStr" => {
+                match String::from_utf8(bytes) {
+                    Ok(text) => {
+                        let s = self.alloc_box("String", Value::Str(text));
+                        self.variant_named(ret, None, "Ok", vec![s])
+                    }
+                    Err(e) => {
+                        let which = match e.utf8_error().error_len() {
+                            None => "IncompleteSequence",
+                            Some(_) => "InvalidByte",
+                        };
+                        let e = self.variant_named(ret, Some("Err"), which, Vec::new())?;
+                        self.variant_named(ret, None, "Err", vec![e])
+                    }
                 }
-                Err(e) => {
-                    let which = match e.utf8_error().error_len() {
-                        None => "IncompleteSequence",
-                        Some(_) => "InvalidByte",
-                    };
-                    let e = self.variant_named(ret, Some("Err"), which, Vec::new())?;
-                    self.variant_named(ret, None, "Err", vec![e])
-                }
-            },
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }

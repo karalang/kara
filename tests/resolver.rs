@@ -287,7 +287,9 @@ fn test_valid_std_and_user_imports_still_accepted() {
     // The fix must NOT flag real gated stdlib modules, the prelude, a trusted
     // user cross-file `import` (single-file mode can't see its module tree).
     resolve_ok("import std.autograd.{Tape};\nfn main() { }");
-    resolve_ok("import std.web.{Server};\nfn main() { }");
+    // `std.web` has no `Server` (that is the prelude's HTTP server): an
+    // unknown item is refused at the import (B-2026-10-21-7).
+    resolve_ok("import std.web.{Display};\nfn main() { }");
     resolve_ok("import std.prelude.{Vec};\nfn main() { }");
     resolve_ok("import mymod.{Foo};\nfn main() { }");
 }

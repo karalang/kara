@@ -10976,3 +10976,54 @@ fn an_open_range_takes_iterator_adaptors() {
         "let s: i64 = (1..).take(2).sum();",
     );
 }
+
+/// An item a library module does not define is refused at its import,
+/// naming the sibling module that has it, or the nearest name, or the
+/// module's items (B-2026-10-21-7); a project build says the same.
+#[test]
+fn an_unknown_item_in_a_library_import_is_refused_at_the_import() {
+    rejected(
+        "gated-item-elsewhere",
+        "import std.crypto.sha2.{sha1};\nfn main() { println(\"x\"); }\n",
+        "unknown item `sha1` in module `std.crypto.sha2`; `sha1` is in `std.crypto.legacy`",
+    );
+    rejected(
+        "gated-item-typo",
+        "import std.crypto.sha2.{sha265};\nfn main() { println(\"x\"); }\n",
+        "unknown item `sha265` in module `std.crypto.sha2`, did you mean `sha256`?",
+    );
+    rejected(
+        "gated-item-none",
+        "import std.encoding.{nonexistent};\nfn main() { println(\"x\"); }\n",
+        "unknown item `nonexistent` in module `std.encoding`; available: DecodeError",
+    );
+    rejected(
+        "gated-module-call",
+        "import std.path;\nfn main() { println(path.parnt(\"a/b\") ?? \"none\"); }\n",
+        "unknown item `parnt` in module `std.path`, did you mean `parent`?",
+    );
+    accepted(
+        "gated-item-known",
+        "import std.crypto.legacy.{sha1};\nimport std.encoding.{hex_encode};\nfn main() { println(\"x\"); }\n",
+    );
+    let (dir, _) = fixture("gated-item-project", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import std.crypto.sha2.{sha1};\nfn main() { println(\"x\"); }\n",
+    )
+    .unwrap();
+    let out = karac().arg("check").current_dir(&dir).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "project check must reject: {err}");
+    assert!(
+        err.contains("`sha1` is in `std.crypto.legacy`"),
+        "project check: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

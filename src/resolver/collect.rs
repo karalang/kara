@@ -1795,6 +1795,39 @@ impl<'a> super::Resolver<'a> {
             }
             return;
         }
+        // A gated module's item the module does not define (B-2026-10-21-7).
+        // A pipeline that splices imports has dropped the items that resolve;
+        // one that resolves without splicing still carries them.
+        if crate::prelude::is_gated_stdlib_module(&imp.path) && !imp.is_wildcard {
+            for it in &imp.items {
+                if crate::prelude::gated_module_defines(&imp.path, &it.name) {
+                    continue;
+                }
+                let (message, suggestion) =
+                    crate::prelude::gated_module_item_error(&imp.path, &it.name);
+                // Only an item spanning exactly its name is rewritten: one
+                // desugared from `path.f(..)` carries the use's span.
+                let replacement = suggestion
+                    .as_ref()
+                    .filter(|_| it.span.length == it.name.len())
+                    .map(|s| {
+                        Box::new(TextEdit {
+                            offset: it.span.offset,
+                            length: it.span.length,
+                            replacement: s.clone(),
+                        })
+                    });
+                self.errors.push(ResolveError {
+                    message,
+                    span: it.span,
+                    kind: ResolveErrorKind::UnknownItemInModule,
+                    suggestion,
+                    replacement,
+                    stub_hint: None,
+                });
+            }
+            return;
+        }
         if crate::prelude::is_importable_stdlib_module(&imp.path) {
             return;
         }
@@ -2012,7 +2045,7 @@ impl<'a> super::Resolver<'a> {
                 siblings.sort_unstable();
                 candidates_owned.extend(siblings);
                 let candidates: Vec<&str> = candidates_owned.iter().map(|s| s.as_str()).collect();
-                let suggestion = suggest_similar(&item.name, &candidates);
+                let mut suggestion = suggest_similar(&item.name, &candidates);
 
                 let module_label = if imp.path.is_empty() {
                     "<crate root>".to_string()
@@ -2021,7 +2054,12 @@ impl<'a> super::Resolver<'a> {
                 };
                 let mut message =
                     format!("unknown item `{}` in module `{module_label}`", item.name);
-                if let Some(ref s) = suggestion {
+                if crate::prelude::is_gated_stdlib_module(&imp.path) {
+                    // A library module names the sibling that has the item
+                    // (B-2026-10-21-7).
+                    (message, suggestion) =
+                        crate::prelude::gated_module_item_error(&imp.path, &item.name);
+                } else if let Some(ref s) = suggestion {
                     message.push_str(&format!(", did you mean `{s}`?"));
                 } else if candidates_owned.len() <= 10 && !candidates_owned.is_empty() {
                     // Design.md § Path resolution algorithm — for small
