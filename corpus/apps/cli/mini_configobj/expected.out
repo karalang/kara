@@ -1,0 +1,1066 @@
+== load and repr
+-- load webapp etc/webapp.ini {}
+ok
+-- repr webapp
+ConfigObj({'name': 'shop-frontend', 'version': '2.14.0', 'owners': ['alice@example.com', 'bob@example.com'], 'debug': 'off', 'motd': 'Welcome to the shop.\nOrders placed after 18:00 ship the next day.', 'server': {'host': '0.0.0.0', 'port': '8080', 'workers': '8', 'allowed_hosts': ['shop.example.com', 'www.shop.example.com', 'localhost, 127.0.0.1'], 'timeout': '30.5', 'keepalive': '5'}, 'database': {'engine': 'postgresql', 'primary': {'host': 'db1.internal', 'port': '5432', 'user': 'shop', 'password': 's3cr3t#with#hashes'}, 'replica': {'host': 'db2.internal', 'port': '5433', 'options': ['sslmode=require', 'connect_timeout=10']}}, 'logging': {'level': 'INFO', 'format': '%(asctime)s %(levelname)s %(message)s', 'handlers': {'console': {'class': 'StreamHandler', 'stream': 'ext://sys.stdout'}, 'file': {'class': 'RotatingFileHandler', 'filename': '/var/log/shop/app.log', 'maxBytes': '10485760', 'backupCount': '5'}}}, 'cache': {'backend': 'redis', 'servers': [], 'ttl': ''}})
+-- load quotes etc/quotes.ini {}
+ok
+-- repr quotes
+ConfigObj({'plain': 'hello world', 'spaced': '  padded  ', 'hash': 'has # inside', 'both': 'it\'s "quoted" here', 'single_item': ['alpha'], 'empty_list': [], 'empty_quoted': '', 'empty': '', 'commas': ['a, b', 'c'], 'nested_quotes': ["it's", 'say "hi"'], 'tab': 'a\tb', 'trailing_comma': ['a', 'b', 'c'], 'key with = sign': 'yes', 'quoted key': '1', 'key#hash': 'value', 'spaces in key': 'fine', 'multi': 'first\nsecond', 'multi_double': 'a\nb\nc', 'oneline_triple': 'just one'})
+-- load crlf etc/crlf.ini {}
+ok
+-- repr crlf
+ConfigObj({'a': '1', 's': {'b': 'two words'}})
+-- load unicode etc/unicode.ini {}
+ok
+-- repr unicode
+ConfigObj({'greeting': ['Grüße', '世界'], 'name': 'Zoë', 'ünïcode': {'key': 'naïve'}})
+-- load dropback etc/dropback.ini {}
+ok
+-- repr dropback
+ConfigObj({'a': {'b': {'c': {'leaf': '1'}}, 'd': {'x': '2'}}, 'e': {'y': '3', 'f': {'g': {'z': '4'}}}, 'h': {}})
+-- load indent etc/indent.ini {}
+ok
+-- repr indent
+ConfigObj({'top': '1', 'a': {'x': '1', 'b': {'y': '2'}}})
+-- load empty etc/empty.ini {}
+ok
+-- repr empty
+ConfigObj({})
+-- load missing etc/missing.ini {}
+ok
+-- repr missing
+ConfigObj({})
+-- get webapp server/port
+'8080'
+-- get webapp server/allowed_hosts
+['shop.example.com', 'www.shop.example.com', 'localhost, 127.0.0.1']
+-- get webapp database/replica/options
+['sslmode=require', 'connect_timeout=10']
+-- get webapp logging/format
+! MissingInterpolationOption: missing option "asctime" in interpolation.
+-- get webapp logging/handlers/file
+{'class': 'RotatingFileHandler', 'filename': '/var/log/shop/app.log', 'maxBytes': '10485760', 'backupCount': '5'}
+-- get webapp cache/servers
+[]
+-- get webapp cache/ttl
+''
+-- get webapp nope
+! KeyError: 'nope'
+-- get webapp server/nope
+! KeyError: 'nope'
+-- keys webapp
+['name', 'version', 'owners', 'debug', 'motd', 'server', 'database', 'logging', 'cache']
+-- keys webapp database
+['engine', 'primary', 'replica']
+-- items webapp database/primary
+[('host', 'db1.internal'), ('port', '5432'), ('user', 'shop'), ('password', 's3cr3t#with#hashes')]
+-- dict webapp database
+{'engine': 'postgresql', 'primary': {'host': 'db1.internal', 'port': '5432', 'user': 'shop', 'password': 's3cr3t#with#hashes'}, 'replica': {'host': 'db2.internal', 'port': '5433', 'options': ['sslmode=require', 'connect_timeout=10']}}
+-- comments webapp
+initial ['# webapp.ini: settings for the shop front end', '# edit with care, the deploy tool rewrites this file', '']
+name [] None
+version [] None
+owners [] None
+debug [] '# never on in production'
+motd [] None
+server ['', '# the HTTP server'] None
+database [''] None
+logging [''] None
+cache [] None
+final ['# end of file']
+-- comments webapp server
+host [] None
+port [] None
+workers [] None
+allowed_hosts [] None
+timeout [] None
+keepalive ['    # keep-alive in seconds'] None
+-- comments quotes
+initial []
+plain [] None
+spaced [] None
+hash [] None
+both [] None
+single_item [] None
+empty_list [] None
+empty_quoted [] None
+empty [] None
+commas [] None
+nested_quotes [] None
+tab [] None
+trailing_comma [] None
+key with = sign [] None
+quoted key [] None
+key#hash [] None
+spaces in key [] None
+multi [] None
+multi_double [] '# inline after multiline'
+oneline_triple [] '# comment'
+final []
+== write
+-- write webapp
+# webapp.ini: settings for the shop front end
+# edit with care, the deploy tool rewrites this file
+
+name = shop-frontend
+version = 2.14.0
+owners = alice@example.com, bob@example.com
+debug = off    # never on in production
+motd = '''Welcome to the shop.
+Orders placed after 18:00 ship the next day.'''
+
+# the HTTP server
+[server]
+    host = 0.0.0.0
+    port = 8080
+    workers = 8
+    allowed_hosts = shop.example.com, www.shop.example.com, "localhost, 127.0.0.1"
+    timeout = 30.5
+    # keep-alive in seconds
+    keepalive = 5
+
+[database]
+    engine = postgresql
+    [[primary]]
+        host = db1.internal
+        port = 5432
+        user = shop
+        password = "s3cr3t#with#hashes"
+    [[replica]]
+        host = db2.internal
+        port = 5433
+        options = sslmode=require, connect_timeout=10
+
+[logging]
+    level = INFO
+    format = %(asctime)s %(levelname)s %(message)s
+    [[handlers]]
+        [[[console]]]
+            class = StreamHandler
+            stream = ext://sys.stdout
+        [[[file]]]
+            class = RotatingFileHandler
+            filename = /var/log/shop/app.log
+            maxBytes = 10485760
+            backupCount = 5
+[cache]
+    backend = redis
+    servers = ,
+    ttl = ""
+# end of file
+<EOF>
+-- write quotes
+plain = hello world
+spaced = "  padded  "
+hash = "has # inside"
+both = '''it's "quoted" here'''
+single_item = alpha,
+empty_list = ,
+empty_quoted = ""
+empty = ""
+commas = "a, b", c
+nested_quotes = it's, 'say "hi"'
+tab = a	b
+trailing_comma = a, b, c
+key with = sign = yes
+quoted key = 1
+"key#hash" = value
+spaces in key = fine
+multi = '''first
+second'''
+multi_double = '''a
+b
+c'''# inline after multiline
+oneline_triple = just one# comment
+<EOF>
+-- write crlf
+# windows line endings<CR>
+a = 1<CR>
+[s]<CR>
+b = two words<CR>
+<EOF>
+-- write dropback
+[a]
+    [[b]]
+        [[[c]]]
+            leaf = 1
+    [[d]]
+        x = 2
+[e]
+    y = 3
+    [[f]]
+        [[[g]]]
+            z = 4
+[h]
+<EOF>
+-- write indent
+top = 1
+[a]
+	x = 1
+	[[b]]
+		y = 2
+<EOF>
+-- write empty
+
+<EOF>
+-- write unicode
+! UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 5: ordinal not in range(128)
+-- load unicode8 etc/unicode.ini {"encoding": "utf-8"}
+ok
+-- write unicode8
+# café settings
+greeting = Grüße, 世界
+name = Zoë
+[ünïcode]
+key = naïve
+<EOF>
+-- repr unicode8
+ConfigObj({'greeting': ['Grüße', '世界'], 'name': 'Zoë', 'ünïcode': {'key': 'naïve'}})
+-- load ind2 etc/webapp.ini {"indent_type": "\\t"}
+ok
+-- write ind2 database
+	engine = postgresql
+	[[primary]]
+		host = db1.internal
+		port = 5432
+		user = shop
+		password = "s3cr3t#with#hashes"
+	[[replica]]
+		host = db2.internal
+		port = 5433
+		options = sslmode=require, connect_timeout=10
+-- load wev etc/webapp.ini {"write_empty_values": true}
+ok
+-- write wev cache
+    backend = redis
+    servers = ,
+    ttl = 
+== errors
+-- load broken etc/broken.ini {}
+! ConfigObjError: Parsing failed with several errors.
+First error at line 3.
+  ParseError at 3: Invalid line ('this line has no equals sign') (matched as neither section nor keyword) at line 3. 'this line has no equals sign'
+  DuplicateError at 4: Duplicate keyword name at line 4. 'good = 2'
+  ParseError at 6: Parse error in value at line 6. 'x = "unclosed'
+  ParseError at 7: Parse error in value at line 7. 'y = \'mixed"'
+  NestingError at 10: Section too nested at line 10. '[[[[too deep]]]]'
+  DuplicateError at 11: Duplicate section name at line 11. '[section]'
+  NestingError at 12: Cannot compute the section depth at line 12. '[a]]'
+  ParseError at 13: Parse error in multiline value at line 13. 'w = """never closed'
+-- load broken_r etc/broken.ini {"raise_errors": true}
+! ParseError: Invalid line ('this line has no equals sign') (matched as neither section nor keyword) at line 3.
+-- load broken_one etc/broken_one.ini {}
+! DuplicateError: Duplicate keyword name at line 3.
+-- load broken_one_r etc/broken_one.ini {"raise_errors": true}
+! DuplicateError: Duplicate keyword name at line 3.
+-- load nesting etc/nesting.ini {}
+! NestingError: Cannot compute the section depth at line 4.
+-- load nesting_r etc/nesting.ini {"raise_errors": true}
+! NestingError: Cannot compute the section depth at line 4.
+-- load badmulti etc/badmulti.ini {}
+! ConfigObjError: Parsing failed with several errors.
+First error at line 3.
+  ParseError at 3: Parse error in multiline value at line 3. 'c = """line one'
+  ParseError at 4: Invalid line ('line two""" trailing') (matched as neither section nor keyword) at line 4. 'line two""" trailing'
+-- load badmulti_r etc/badmulti.ini {"raise_errors": true}
+! ParseError: Parse error in multiline value at line 3.
+-- load nolist etc/nolist.ini {"list_values": false}
+! ParseError: Parse error in value at line 6.
+-- repr nolist
+ConfigObj({'a': '1, 2, 3', 'b': '"quoted, still one"', 'c': "'single'", 'd': '', 'e': 'value'})
+-- write nolist
+a = 1, 2, 3
+b = "quoted, still one"# comment
+c = 'single'# c
+d = ""
+e = value# trailing
+<EOF>
+-- load nolist2 etc/nolist.ini {}
+! ParseError: Parse error in value at line 6.
+== interpolation
+-- load ip etc/interp.ini {}
+ok
+-- get ip log_dir
+'/srv/shop/logs'
+-- get ip pid
+'/srv/shop/run/shop.pid'
+-- get ip loop_a
+! InterpolationLoopError: interpolation loop detected in value "loop_a".
+-- get ip self_ref
+! InterpolationLoopError: interpolation loop detected in value "self_ref".
+-- get ip broken
+! MissingInterpolationOption: missing option "nothing_here" in interpolation.
+-- get ip percent
+'100%'
+-- get ip uses_list
+! TypeError: expected string or bytes-like object, got 'list'
+-- get ip plain_list
+['/srv/shop/a', 'shop/b']
+-- get ip storage/path
+'/srv/shop/storage'
+-- get ip storage/url
+'s3://shop-eu-west-1/shop'
+-- get ip storage/nested/path
+'/opt/other/nested'
+-- get ip storage/nested/deep
+'/opt/other/nested/deeper'
+-- get ip storage/nested/leaf/where
+'us-east-1 in shop-us-east-1'
+-- get ip workers/cmd
+'run --workers=4 --log=/srv/shop/logs'
+-- get ip workers/odd
+'%(count)'
+-- get ip workers/empty
+! MissingInterpolationOption: missing option "" in interpolation.
+-- get ip DEFAULT/bucket
+'shop-eu-west-1'
+-- get ip hosts
+['a', 'b']
+-- repr ip storage
+{'path': '/srv/shop/storage', 'url': 's3://shop-eu-west-1/shop', 'nested': {'home': '/opt/other', 'path': '/opt/other/nested', 'deep': '/opt/other/nested/deeper', 'DEFAULT': {'region': 'us-east-1'}, 'leaf': {'where': 'us-east-1 in shop-us-east-1'}}}
+-- repr ip
+! InterpolationLoopError: interpolation loop detected in value "loop_a".
+-- write ip workers
+! MissingInterpolationOption: missing option "" in interpolation.
+-- load ipoff etc/interp.ini {"interpolation": false}
+ok
+-- get ipoff pid
+'%(home)s/run/%(user)s.pid'
+-- get ipoff loop_a
+'%(loop_b)s'
+-- load tp etc/template.ini {"interpolation": "template"}
+ok
+-- get tp data
+'/srv/app/data'
+-- get tp logs
+'/srv/app/logs/staging'
+-- get tp price
+'$5 per seat'
+-- get tp dollar
+'costs $ 5'
+-- get tp digits
+'$1abc'
+-- get tp mixed
+! MissingInterpolationOption: missing option "ROOT" in interpolation.
+-- get tp unknown
+! MissingInterpolationOption: missing option "nope" in interpolation.
+-- get tp braced_bad
+'${not closed'
+-- get tp nested
+'/srv/app/data/cache'
+-- get tp service/name
+'api-staging'
+-- get tp service/tier_note
+'tier gold'
+-- get tp service/path
+'/srv/app/data/api-staging'
+-- load tp2 etc/template.ini {"interpolation": "Template"}
+ok
+-- get tp2 logs
+'/srv/app/logs/staging'
+-- load tpbad etc/template.ini {"interpolation": "jinja"}
+ok
+-- get tpbad logs
+'${root}/logs/${env}'
+-- get tpbad data
+'$root/data'
+-- load cp etc/template.ini {"interpolation": "configparser"}
+ok
+-- get cp logs
+'${root}/logs/${env}'
+== as_ helpers
+-- load ints etc/ints.ini {}
+ok
+-- as_int ints a
+10
+-- as_int ints b
+-3
+-- as_int ints c
+1000
+-- as_int ints d
+! ValueError: invalid literal for int() with base 10: '0x10'
+-- as_int ints e
+! ValueError: invalid literal for int() with base 10: 'abc'
+-- as_int ints f
+! TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'
+-- as_int ints s/g
+42
+-- as_int ints s/h
+! ValueError: invalid literal for int() with base 10: '4.0'
+-- as_int ints s
+! TypeError: int() argument must be a string, a bytes-like object or a real number, not 'Section'
+-- as_int ints zz
+! KeyError: 'zz'
+-- load bools etc/bools.ini {}
+ok
+-- as_bool bools a
+True
+-- as_float bools a
+! ValueError: could not convert string to float: 'Yes'
+-- as_bool bools b
+False
+-- as_float bools b
+! ValueError: could not convert string to float: 'off'
+-- as_bool bools c
+True
+-- as_float bools c
+! ValueError: could not convert string to float: 'TRUE'
+-- as_bool bools d
+False
+-- as_float bools d
+0.0
+-- as_bool bools e
+! ValueError: Value "maybe" is neither True nor False
+-- as_float bools e
+! ValueError: could not convert string to float: 'maybe'
+-- as_bool bools f
+! ValueError: Value "['1', '2']" is neither True nor False
+-- as_float bools f
+! TypeError: float() argument must be a string or a real number, not 'list'
+-- as_bool bools g
+! ValueError: Value "1.5" is neither True nor False
+-- as_float bools g
+1.5
+-- as_bool bools h
+! ValueError: Value "2e3" is neither True nor False
+-- as_float bools h
+2000.0
+-- as_bool bools i
+! ValueError: Value "inf" is neither True nor False
+-- as_float bools i
+inf
+-- as_bool bools j
+! ValueError: Value "-nan" is neither True nor False
+-- as_float bools j
+nan
+-- as_bool bools k
+! ValueError: Value "1_0.5" is neither True nor False
+-- as_float bools k
+10.5
+-- as_bool bools l
+! ValueError: Value ".5" is neither True nor False
+-- as_float bools l
+0.5
+-- as_bool bools m
+! ValueError: Value "5." is neither True nor False
+-- as_float bools m
+5.0
+-- as_bool bools n
+! ValueError: Value "1e" is neither True nor False
+-- as_float bools n
+! ValueError: could not convert string to float: '1e'
+-- as_bool bools o
+! ValueError: Value "٣.٥" is neither True nor False
+-- as_float bools o
+3.5
+-- as_list ints a
+['10']
+-- as_list ints f
+['1', '2']
+-- as_list ints s
+[{'g': ' 42 ', 'h': '4.0'}]
+== editing
+-- load ed etc/webapp.ini {}
+ok
+-- set ed server/port "9090"
+ok
+-- set ed server/aliases ["shop", "store"]
+ok
+-- set ed newsec {"a": "1", "inner": {"b": "2"}}
+ok
+-- set ed server/empty []
+ok
+-- set ed server/one ["only"]
+ok
+-- set ed server/tricky "it's \\"both\\""
+ok
+-- set ed server/lead " leading space"
+ok
+-- set ed server/hashy "a#b"
+ok
+-- set ed server/withnl "line1\\nline2"
+ok
+-- set ed server/num 42
+ok
+-- set ed server/flt 0.1
+ok
+-- set ed server/none null
+ok
+-- set ed server/yes true
+ok
+-- rename ed server workers processes
+ok
+-- rename ed  database db
+ok
+-- rename ed server missing x
+! KeyError: 'Key "missing" not found.'
+-- del ed server/keepalive
+ok
+-- del ed cache
+ok
+-- pop ed name
+'shop-frontend'
+-- pop ed name
+! KeyError: 'name'
+-- setdefault ed server/host x
+'0.0.0.0'
+-- setdefault ed server/backlog 128
+'128'
+-- popitem ed logging/handlers
+('console', {'class': 'StreamHandler', 'stream': 'ext://sys.stdout'})
+-- write ed
+# webapp.ini: settings for the shop front end
+# edit with care, the deploy tool rewrites this file
+
+version = 2.14.0
+owners = alice@example.com, bob@example.com
+debug = off    # never on in production
+motd = '''Welcome to the shop.
+Orders placed after 18:00 ship the next day.'''
+
+# the HTTP server
+[server]
+    host = 0.0.0.0
+    port = 9090
+    processes = 8
+    allowed_hosts = shop.example.com, www.shop.example.com, "localhost, 127.0.0.1"
+    timeout = 30.5
+    aliases = shop, store
+    empty = ,
+    one = only,
+    tricky = '''it's "both"'''
+    lead = " leading space"
+    hashy = "a#b"
+    withnl = '''line1
+line2'''
+    num = 42
+    flt = 0.1
+    none = None
+    yes = True
+    backlog = 128
+
+[db]
+    engine = postgresql
+    [[primary]]
+        host = db1.internal
+        port = 5432
+        user = shop
+        password = "s3cr3t#with#hashes"
+    [[replica]]
+        host = db2.internal
+        port = 5433
+        options = sslmode=require, connect_timeout=10
+
+[logging]
+    level = INFO
+    format = %(asctime)s %(levelname)s %(message)s
+    [[handlers]]
+        [[[file]]]
+            class = RotatingFileHandler
+            filename = /var/log/shop/app.log
+            maxBytes = 10485760
+            backupCount = 5
+[newsec]
+    a = 1
+    [[inner]]
+        b = 2
+# end of file
+<EOF>
+-- load bad1 etc/webapp.ini {}
+ok
+-- set bad1 server/bad "a'b\\"c\\nd'''e\\"\\"\\""
+ok
+-- write bad1 server
+! ConfigObjError: Value "a'b"c
+d'''e"""" cannot be safely quoted.
+-- load bad2 etc/webapp.ini {}
+ok
+-- set bad2 server/both ["it's", "say \\"x\\""]
+ok
+-- write bad2 server
+    host = 0.0.0.0
+    port = 8080
+    workers = 8
+    allowed_hosts = shop.example.com, www.shop.example.com, "localhost, 127.0.0.1"
+    timeout = 30.5
+    # keep-alive in seconds
+    keepalive = 5
+    both = it's, 'say "x"'
+-- load bad3 etc/webapp.ini {"stringify": false}
+ok
+-- set bad3 server/num 42
+! TypeError: Value is not a string "42".
+-- set bad3 server/nums [1, 2]
+! TypeError: Value is not a string "1".
+-- set bad3 server/fine ["1", "2"]
+ok
+-- write bad3 server
+! KeyError: 'num'
+-- load keyq etc/empty.ini {}
+ok
+-- set keyq a=b "1"
+ok
+-- set keyq  spaced "2"
+ok
+-- set keyq both'" "3"
+ok
+-- write keyq
+! ConfigObjError: Value "both'"" cannot be safely quoted.
+-- load keyq2 etc/empty.ini {}
+ok
+-- set keyq2 multi\nline "4"
+ok
+-- write keyq2
+! ConfigObjError: Value "multi
+line" cannot be safely quoted.
+== merge
+-- load base etc/merge/base.ini {"interpolation": false}
+ok
+-- load prod etc/merge/production.ini {"interpolation": false}
+ok
+-- load local etc/merge/local.ini {"interpolation": false}
+ok
+-- merge base prod
+ok
+-- merge base local
+ok
+-- repr base
+ConfigObj({'app': 'billing', 'debug': 'true', 'server': {'host': '0.0.0.0', 'port': '9000', 'tls': {'enabled': 'true', 'cert': '/etc/ssl/billing.pem'}}, 'queues': {'names': ['invoices', 'reminders', 'dunning'], 'workers': '16'}, 'old': 'replaced by a value', 'audit': {'sink': 'file', 'old': 'scalar now', 'file': {'path': '/tmp/audit.log'}}})
+-- write base
+# shipped defaults
+app = billing
+debug = true
+[server]
+host = 0.0.0.0
+port = 9000
+[[tls]]
+enabled = true
+cert = /etc/ssl/billing.pem
+[queues]
+names = invoices, reminders, dunning
+workers = 16
+old = replaced by a value
+[audit]
+sink = file
+old = scalar now
+[[file]]
+path = /tmp/audit.log
+<EOF>
+== walk
+-- load rn etc/rename.ini {}
+ok
+-- walk_rename rn XXXX CLIENT1
+{'CLIENT1section': {'CLIENT1key': None, 'other': None, 'CLIENT1sub': {'list': None}}}
+-- repr rn
+ConfigObj({'CLIENT1section': {'CLIENT1key': 'CLIENT1value', 'other': 'keep CLIENT1 here', 'CLIENT1sub': {'list': ['XXXXa', 'b']}}})
+-- write rn
+# client template
+[CLIENT1section]
+CLIENT1key = CLIENT1value
+other = keep CLIENT1 here
+[[CLIENT1sub]]
+list = XXXXa, b
+<EOF>
+-- load wi etc/ints.ini {}
+ok
+-- walk_int wi lenient
+{'a': None, 'b': None, 'c': None, 'd': False, 'e': False, 'f': False, 's': {'g': None, 'h': False}}
+-- repr wi
+ConfigObj({'a': 10, 'b': -3, 'c': 1000, 'd': '0x10', 'e': 'abc', 'f': ['1', '2'], 's': {'g': 42, 'h': '4.0'}})
+-- load wi2 etc/ints.ini {}
+ok
+-- walk_int wi2 strict
+! ValueError: invalid literal for int() with base 10: '0x10'
+-- repr wi2
+ConfigObj({'a': 10, 'b': -3, 'c': 1000, 'd': '0x10', 'e': 'abc', 'f': ['1', '2'], 's': {'g': ' 42 ', 'h': '4.0'}})
+== validate
+-- load app etc/app.ini {"configspec": "etc/app.spec"}
+ok
+-- validate app {}
+{'name': True, 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'database': True, 'features': {'search': True, 'export': False, 'beta': True}, 'metrics': True}
+-- repr app
+ConfigObj({'name': 'inventory', 'port': 8443, 'workers': 12, 'debug': True, 'ratio': 0.75, 'admin_ip': '10.0.0.1', 'hosts': ['alpha.example.com', 'beta.example.com'], 'log_level': 'WARNING', 'retry': [3, 0.5], 'unexpected': '1', 'timeout': 30.0, 'tags': [], 'owner': None, 'greeting': 'hello, world', 'database': {'url': 'postgres://inv@db/inv', 'pool': 20, 'backup': False, 'replicas': {'east': {'host': 'db-east', 'port': 5433}, 'west': {'host': 'db-west', 'port': 5432}}}, 'features': {'search': True, 'export': 'maybe', 'beta': False}, 'extra_section': {'x': '1'}, 'metrics': {'enabled': True, 'interval': 60}})
+-- extra app
+[((), 'unexpected'), ((), 'extra_section')]
+-- write app
+# application settings
+name = inventory
+port = 8443
+workers = 12
+debug = True
+ratio = 0.75
+admin_ip = 10.0.0.1
+hosts = alpha.example.com, beta.example.com
+log_level = WARNING
+retry = 3, 0.5
+unexpected = 1
+[database]
+    url = postgres://inv@db/inv
+    pool = 20
+    [[replicas]]
+        [[[east]]]
+            host = db-east
+            port = 5433
+        [[[west]]]
+            host = db-west
+[features]
+    search = True
+    export = maybe
+    beta = False
+[extra_section]
+    x = 1
+[metrics]
+<EOF>
+-- restore_defaults app
+ok
+-- repr app database
+{'url': 'postgres://inv@db/inv', 'pool': 5, 'backup': False, 'replicas': {'east': {'host': 'db-east', 'port': 5432}, 'west': {'host': 'db-west', 'port': 5432}}}
+-- load app_p etc/app.ini {"configspec": "etc/app.spec"}
+ok
+-- validate app_p {"preserve_errors": true}
+{'name': True, 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'database': True, 'features': {'search': True, 'export': VdtTypeError('the value "maybe" is of the wrong type.'), 'beta': True}, 'metrics': True}
+-- flatten app_p
+(['features'], 'export', VdtTypeError('the value "maybe" is of the wrong type.'))
+-- load bad etc/app_bad.ini {"configspec": "etc/app.spec"}
+ok
+-- validate bad {}
+{'name': False, 'port': False, 'workers': False, 'timeout': True, 'debug': False, 'ratio': False, 'admin_ip': False, 'hosts': False, 'log_level': False, 'tags': True, 'retry': False, 'owner': True, 'greeting': True, 'database': {'url': False, 'pool': False, 'backup': True, 'replicas': True}, 'features': False, 'metrics': True}
+-- flatten bad
+([], 'admin_ip', False)
+([], 'debug', False)
+([], 'hosts', False)
+([], 'log_level', False)
+([], 'name', False)
+([], 'port', False)
+([], 'ratio', False)
+([], 'retry', False)
+([], 'workers', False)
+(['database'], 'pool', False)
+(['database'], 'url', False)
+(['features'], None, False)
+-- load badp etc/app_bad.ini {"configspec": "etc/app.spec"}
+ok
+-- validate badp {"preserve_errors": true}
+{'name': VdtValueTooShortError('the value "x" is too short.'), 'port': VdtValueTooBigError('the value "70000" is too big.'), 'workers': VdtTypeError('the value "zero" is of the wrong type.'), 'timeout': True, 'debug': VdtTypeError('the value "sometimes" is of the wrong type.'), 'ratio': VdtValueTooBigError('the value "1.5" is too big.'), 'admin_ip': VdtValueError('the value "10.0.0.300" is unacceptable.'), 'hosts': VdtTypeError('the value "single.example.com" is of the wrong type.'), 'log_level': VdtValueError('the value "TRACE" is unacceptable.'), 'tags': True, 'retry': VdtValueTooLongError('the value "[\'1\', \'2\', \'3\']" is too long.'), 'owner': True, 'greeting': True, 'database': {'url': False, 'pool': VdtValueTooSmallError('the value "0" is too small.'), 'backup': True, 'replicas': True}, 'features': {'search': VdtTypeError('the value "2" is of the wrong type.')}, 'metrics': True}
+-- flatten badp
+([], 'admin_ip', VdtValueError('the value "10.0.0.300" is unacceptable.'))
+([], 'debug', VdtTypeError('the value "sometimes" is of the wrong type.'))
+([], 'hosts', VdtTypeError('the value "single.example.com" is of the wrong type.'))
+([], 'log_level', VdtValueError('the value "TRACE" is unacceptable.'))
+([], 'name', VdtValueTooShortError('the value "x" is too short.'))
+([], 'port', VdtValueTooBigError('the value "70000" is too big.'))
+([], 'ratio', VdtValueTooBigError('the value "1.5" is too big.'))
+([], 'retry', VdtValueTooLongError('the value "[\'1\', \'2\', \'3\']" is too long.'))
+([], 'workers', VdtTypeError('the value "zero" is of the wrong type.'))
+(['database'], 'pool', VdtValueTooSmallError('the value "0" is too small.'))
+(['database'], 'url', False)
+(['features'], 'search', VdtTypeError('the value "2" is of the wrong type.'))
+-- extra badp
+[]
+-- repr badp
+ConfigObj({'name': 'x', 'port': '70000', 'workers': 'zero', 'debug': 'sometimes', 'ratio': '1.5', 'admin_ip': '10.0.0.300', 'hosts': 'single.example.com', 'log_level': 'TRACE', 'retry': ['1', '2', '3'], 'timeout': 30.0, 'tags': [], 'owner': None, 'greeting': 'hello, world', 'database': {'pool': '0', 'backup': False, 'replicas': {}}, 'features': {'search': '2'}, 'metrics': {'enabled': True, 'interval': 60}})
+-- load bad2 etc/app_bad2.ini {"configspec": "etc/app.spec"}
+ok
+-- validate bad2 {"preserve_errors": true}
+{'name': VdtValueTooShortError('the value "ok" is too short.'), 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'metrics': True, 'database': True, 'features': True}
+-- flatten bad2
+([], 'name', VdtValueTooShortError('the value "ok" is too short.'))
+-- load ss etc/scalar_section.ini {"configspec": "etc/app.spec"}
+ok
+-- validate ss {"preserve_errors": true}
+{'name': True, 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'features': ValidateError("Section 'features' was provided as a single value"), 'database': {'url': True, 'pool': True, 'backup': True, 'replicas': {'one': {'host': False, 'port': True}}}, 'metrics': True}
+-- flatten ss
+([], 'features', ValidateError("Section 'features' was provided as a single value"))
+(['database', 'replicas', 'one'], 'host', False)
+-- load ss2 etc/scalar_section.ini {"configspec": "etc/app.spec"}
+ok
+-- validate ss2 {}
+{'name': True, 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'features': False, 'database': {'url': True, 'pool': True, 'backup': True, 'replicas': False}, 'metrics': True}
+-- load fresh etc/empty.ini {"configspec": "etc/app.spec"}
+ok
+-- validate fresh {"copy": true}
+{'name': False, 'port': False, 'workers': True, 'timeout': True, 'debug': True, 'ratio': False, 'admin_ip': False, 'hosts': False, 'log_level': True, 'tags': True, 'retry': False, 'owner': True, 'greeting': True, 'database': {'url': False, 'pool': True, 'backup': True, 'replicas': True}, 'features': True, 'metrics': True}
+-- write fresh
+# the settings an inventory service understands
+workers = 4
+timeout = 30.0
+debug = False
+log_level = INFO
+tags = ,
+owner = None
+greeting = "hello, world"
+[database]
+pool = 5
+backup = False
+[[replicas]]
+[features]
+[metrics]
+enabled = True
+interval = 60
+<EOF>
+-- load fresh2 etc/empty.ini {"configspec": "etc/app.spec"}
+ok
+-- validate fresh2 {}
+{'name': False, 'port': False, 'workers': True, 'timeout': True, 'debug': True, 'ratio': False, 'admin_ip': False, 'hosts': False, 'log_level': True, 'tags': True, 'retry': False, 'owner': True, 'greeting': True, 'database': {'url': False, 'pool': True, 'backup': True, 'replicas': True}, 'features': True, 'metrics': True}
+-- write fresh2
+[database]
+[[replicas]]
+[features]
+[metrics]
+<EOF>
+-- repr fresh2
+ConfigObj({'workers': 4, 'timeout': 30.0, 'debug': False, 'log_level': 'INFO', 'tags': [], 'owner': None, 'greeting': 'hello, world', 'database': {'pool': 5, 'backup': False, 'replicas': {}}, 'features': {}, 'metrics': {'enabled': True, 'interval': 60}})
+-- load nostr etc/app.ini {"configspec": "etc/app.spec", "stringify": false}
+ok
+-- validate nostr {}
+{'name': True, 'port': True, 'workers': True, 'timeout': True, 'debug': True, 'ratio': True, 'admin_ip': True, 'hosts': True, 'log_level': True, 'tags': True, 'retry': True, 'owner': True, 'greeting': True, 'database': True, 'features': {'search': True, 'export': False, 'beta': True}, 'metrics': True}
+-- repr nostr
+ConfigObj({'name': 'inventory', 'port': '8443', 'workers': '12', 'debug': 'Yes', 'ratio': '0.75', 'admin_ip': '10.0.0.1', 'hosts': ['alpha.example.com', 'beta.example.com'], 'log_level': 'WARNING', 'retry': ['3', '0.5'], 'unexpected': '1', 'timeout': '30.0', 'tags': [], 'owner': '', 'greeting': 'hello, world', 'database': {'url': 'postgres://inv@db/inv', 'pool': '20', 'backup': 'False', 'replicas': {'east': {'host': 'db-east', 'port': '5433'}, 'west': {'host': 'db-west', 'port': '5432'}}}, 'features': {'search': 'on', 'export': 'maybe', 'beta': '0'}, 'extra_section': {'x': '1'}, 'metrics': {'enabled': 'True', 'interval': '60'}})
+-- load nospec etc/app.ini {}
+ok
+-- validate nospec {}
+! ValueError: No configspec supplied.
+-- load brk etc/tiny.ini {"configspec": "etc/broken.spec"}
+ok
+-- validate brk {}
+! VdtParamError: passed an incorrect value "abc" for parameter "min".
+-- load unk etc/tiny.ini {"configspec": "etc/unknown.spec"}
+ok
+-- validate unk {"preserve_errors": true}
+{'a': VdtUnknownCheckError('the check "frobnicate" is unknown.'), 'b': True, 'c': True, 'd': True, 'e': True, 'f': True}
+-- repr unk
+ConfigObj({'a': '5', 'b': 6, 'c': '7', 'd': 8, 'e': '9', 'f': '10'})
+-- load kw etc/tiny.ini {"configspec": "etc/kwarg.spec"}
+ok
+-- validate kw {}
+! TypeError: is_integer() got an unexpected keyword argument 'foo'
+-- load nospecfile etc/tiny.ini {"configspec": "etc/nothere.spec"}
+! OSError: Reading configspec failed: Config file not found: "data/etc/nothere.spec".
+-- load badspecfile etc/tiny.ini {"configspec": "etc/broken.ini"}
+! ConfigspecError: Parsing configspec failed: Invalid line ('this line has no equals sign') (matched as neither section nor keyword) at line 3.
+== checks
+-- check integer "12"
+12
+-- check integer " 12 "
+12
+-- check integer "-0"
+0
+-- check integer "1_000"
+1000
+-- check integer "1__0"
+! VdtTypeError: the value "1__0" is of the wrong type.
+-- check integer "12.0"
+! VdtTypeError: the value "12.0" is of the wrong type.
+-- check integer "0x10"
+! VdtTypeError: the value "0x10" is of the wrong type.
+-- check integer "\\u0663\\u0664"
+34
+-- check integer ["1"]
+! VdtTypeError: the value "['1']" is of the wrong type.
+-- check integer(0, 9) "10"
+! VdtValueTooBigError: the value "10" is too big.
+-- check integer(0, 9) "-1"
+! VdtValueTooSmallError: the value "-1" is too small.
+-- check integer(max=5) "5"
+5
+-- check integer(min=x) "1"
+! VdtParamError: passed an incorrect value "x" for parameter "min".
+-- check integer(1, 2, 3) "1"
+! TypeError: is_integer() takes from 1 to 3 positional arguments but 4 were given
+-- check integer(1, min=2) "1"
+! TypeError: is_integer() got multiple values for argument 'min'
+-- check integer(bogus=1) "1"
+! TypeError: is_integer() got an unexpected keyword argument 'bogus'
+-- check integer() "7"
+7
+-- check float "1.5"
+1.5
+-- check float "1e400"
+inf
+-- check float "-inf"
+-inf
+-- check float "nan"
+nan
+-- check float "1_000.25"
+1000.25
+-- check float ".5e-3"
+0.0005
+-- check float "abc"
+! VdtTypeError: the value "abc" is of the wrong type.
+-- check float(0.5, 2) "0.25"
+! VdtValueTooSmallError: the value "0.25" is too small.
+-- check float(max=1e2) "101"
+! VdtValueTooBigError: the value "101.0" is too big.
+-- check float(min='1') "0"
+! VdtValueTooSmallError: the value "0.0" is too small.
+-- check float "  2  "
+2.0
+-- check boolean "YES"
+True
+-- check boolean "On"
+True
+-- check boolean "nah"
+! VdtTypeError: the value "nah" is of the wrong type.
+-- check boolean ["1"]
+! VdtTypeError: the value "['1']" is of the wrong type.
+-- check boolean(1) "1"
+! TypeError: is_boolean() takes 1 positional argument but 2 were given
+-- check ip_addr "192.168.1.1"
+'192.168.1.1'
+-- check ip_addr " 10.1 "
+'10.1'
+-- check ip_addr "0x7f.1"
+'0x7f.1'
+-- check ip_addr "017.0.0.1"
+'017.0.0.1'
+-- check ip_addr "08.1.1.1"
+! VdtValueError: the value "08.1.1.1" is unacceptable.
+-- check ip_addr "1.2.3.4 junk"
+'1.2.3.4 junk'
+-- check ip_addr "1.2.65536"
+! VdtValueError: the value "1.2.65536" is unacceptable.
+-- check ip_addr "4294967295"
+'4294967295'
+-- check ip_addr "4294967296"
+! VdtValueError: the value "4294967296" is unacceptable.
+-- check ip_addr "1.2.3."
+! VdtValueError: the value "1.2.3." is unacceptable.
+-- check ip_addr "0x"
+! VdtValueError: the value "0x" is unacceptable.
+-- check ip_addr ["1"]
+! VdtTypeError: the value "['1']" is of the wrong type.
+-- check string "abc"
+'abc'
+-- check string(2, 3) "abcd"
+! VdtValueTooLongError: the value "abcd" is too long.
+-- check string(min=5) "abc"
+! VdtValueTooShortError: the value "abc" is too short.
+-- check string ["a"]
+! VdtTypeError: the value "['a']" is of the wrong type.
+-- check string(max=3) "\\u65e5\\u672c\\u8a9e"
+'日本語'
+-- check list ["a", "b"]
+['a', 'b']
+-- check list "a"
+! VdtTypeError: the value "a" is of the wrong type.
+-- check list(min=3) ["a"]
+! VdtValueTooShortError: the value "['a']" is too short.
+-- check list(max=1) ["a", "b"]
+! VdtValueTooLongError: the value "['a', 'b']" is too long.
+-- check tuple ["a", "b"]
+('a', 'b')
+-- check tuple []
+()
+-- check int_list ["1", "2"]
+[1, 2]
+-- check int_list ["1", "x"]
+! VdtTypeError: the value "x" is of the wrong type.
+-- check int_list(min=1) []
+! VdtValueTooShortError: the value "[]" is too short.
+-- check float_list ["1", "2.5"]
+[1.0, 2.5]
+-- check bool_list ["yes", "no"]
+[True, False]
+-- check bool_list ["yes", "x"]
+! VdtTypeError: the value "x" is of the wrong type.
+-- check string_list ["a", "b"]
+['a', 'b']
+-- check string_list "a"
+! VdtTypeError: the value "a" is of the wrong type.
+-- check ip_addr_list ["1.2.3.4", "5.6.7.8"]
+['1.2.3.4', '5.6.7.8']
+-- check ip_addr_list ["1.2.3.4", "x"]
+! VdtValueError: the value "x" is unacceptable.
+-- check force_list "solo"
+['solo']
+-- check force_list ["a"]
+['a']
+-- check force_list(min=2) "solo"
+! VdtValueTooShortError: the value "['solo']" is too short.
+-- check mixed_list('integer', 'string', 'boolean') ["1", "x", "yes"]
+[1, 'x', True]
+-- check mixed_list('integer', 'string') ["1"]
+! VdtValueTooShortError: the value "['1']" is too short.
+-- check mixed_list('integer') ["1", "2"]
+! VdtValueTooLongError: the value "['1', '2']" is too long.
+-- check mixed_list('integer') "7"
+[7]
+-- check mixed_list('integer', 'nope') ["1", "2"]
+! VdtParamError: passed an incorrect value "'nope'" for parameter "mixed_list".
+-- check mixed_list(integer, float) ["1", "2"]
+[1, 2.0]
+-- check mixed_list('ip_addr', 'float') ["1.2.3.4", "x"]
+! VdtTypeError: the value "x" is of the wrong type.
+-- check option('a', 'b') "a"
+'a'
+-- check option('a', 'b') "c"
+! VdtValueError: the value "c" is unacceptable.
+-- check option('a', 'b') ["a"]
+! VdtTypeError: the value "['a']" is of the wrong type.
+-- check option(a, "b c", 'd,e') "b c"
+'b c'
+-- check option(a, "b c", 'd,e') "d,e"
+'d,e'
+-- check pass "anything"
+'anything'
+-- check  "blank"
+'blank'
+-- check pass(1) "x"
+! TypeError: Validator._pass() takes 2 positional arguments but 3 were given
+-- check nope "1"
+! VdtUnknownCheckError: the check "nope" is unknown.
+-- check nope(1) "1"
+! VdtUnknownCheckError: the check "nope" is unknown.
+-- check   integer "1"
+! VdtUnknownCheckError: the check "  integer" is unknown.
+-- check integer(default=3) null
+3
+-- check integer null
+! VdtMissingValue: 
+-- check string(default=None) null
+None
+-- check string(default='None') null
+'None'
+-- check string(default="None") null
+'None'
+-- check integer(default=x) null
+! VdtTypeError: the value "x" is of the wrong type.
+-- check list(default=list('a', 'b c', "d")) null
+['a', 'b c', 'd']
+-- check list(default=list()) null
+[]
+-- check int_list(default=list(1, 2)) null
+[1, 2]
+-- check integer(default=4, min=5) null
+! VdtValueTooSmallError: the value "4" is too small.
+-- check option('x', 'y', default='y') null
+'y'
+-- check string(default='it''s') null
+"it''s"
+-- check string(default="a, b") null
+'a, b'
+-- check integer(default=1) # comment null
+1
+-- check integer(min=1,max=3) "2"
+2
+-- check integer( min = 1 , max = 3 ) "4"
+! VdtValueTooBigError: the value "4" is too big.
+-- check string(default=list(a, b), min=1) null
+! VdtTypeError: the value "['a', 'b']" is of the wrong type.
+-- check float(default=-1.5e3) null
+-1500.0
+-- check boolean(default=On) null
+True
+-- default integer(default=3)
+3
+-- default string
+! KeyError: 'Check "string" has no default value.'
+-- default string(default=None)
+None
+-- default list(default=list(x))
+['x']
+-- default integer(default=abc)
+! VdtTypeError: the value "abc" is of the wrong type.
+-- default nope(default=1)
+! VdtUnknownCheckError: the check "nope" is unknown.
