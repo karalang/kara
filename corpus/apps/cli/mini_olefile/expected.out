@@ -1,0 +1,1181 @@
+== open q3_board_report.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open budget_2019.xls
+  sectors 512/64 cutoff 4096 nb_sect 16 fat 16 entries 4 loaded 4
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020820-0000-0000-C000-000000000046'
+== open invoice_2291.doc
+  sectors 512/64 cutoff 4096 nb_sect 14 fat 14 entries 12 loaded 11
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open re_unit4_lease.msg
+  sectors 512/64 cutoff 4096 nb_sect 28 fat 28 entries 24 loaded 24
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020D0B-0000-0000-C000-000000000046'
+== open locked_minutes.doc
+  sectors 512/64 cutoff 4096 nb_sect 15 fat 15 entries 8 loaded 6
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open site_survey_4k.doc
+  sectors 4096/64 cutoff 4096 nb_sect 4 fat 4 entries 32 loaded 3
+  version 62.4 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open not_ole.doc
+  ! NotOleFileError: 'not an OLE2 structured storage file'
+== open short.doc
+  ! NotOleFileError: 'not an OLE2 structured storage file'
+== open odd_header.xls
+  sectors 512/64 cutoff 4096 nb_sect 16 fat 16 entries 4 loaded 4
+  version 62.3 byte order FEFF difat 1/0
+  header clsid '00020820-0000-0000-C000-000000000046' root 'Root Entry' root clsid '00020820-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect CLSID in OLE header
+    OleFileError: incorrect ByteOrder in OLE header
+    OleFileError: incorrect OLE header (non-null reserved bytes)
+    OleFileError: incorrect OLE header (transaction_signature_number>0)
+    OleFileError: incorrect mini_stream_cutoff_size in OLE header
+== open transacted.xls
+  sectors 512/64 cutoff 4096 nb_sect 16 fat 16 entries 4 loaded 4
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020820-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect OLE header (transaction_signature_number>0)
+== open cut_short.doc
+  sectors 512/64 cutoff 4096 nb_sect 16 fat 16 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open looped_chain.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open bad_chain.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open bad_sizes.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open dir_badtype.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: unhandled OLE storage type
+== open dir_longname.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect DirEntry name length >64 bytes
+== open dir_dupname.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: Duplicate filename in OLE storage
+== open dir_loop.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 7
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect OLE stream size
+    OleFileError: OLE storage with size>0
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: OLE Entry referenced more than once
+== open dir_range.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 7
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: OLE DirEntry index out of range
+    OleFileError: Stream referenced twice
+== open dir_kinds.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect OLE root entry
+    OleFileError: OLE storage with size>0
+    OleFileError: unhandled OLE storage type
+== open no_directory.doc
+  ! OleFileError: 'OLE directory index out of range'
+== open no_minifat.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open bad_times.doc
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open difat.xls
+  sectors 512/64 cutoff 4096 nb_sect 17 fat 17 entries 4 loaded 4
+  version 62.3 byte order FFFE difat 110/1
+  header clsid '' root 'Root Entry' root clsid '00020820-0000-0000-C000-000000000046'
+== open difat_count.xls
+  ! OSError: 'incorrect DIFAT'
+== open difat_end.xls
+  ! OSError: 'incorrect end of DIFAT'
+== open difat_range.xls
+  ! OleFileError: 'incorrect DIFAT, first index out of range'
+== open difat_few.xls
+  ! OSError: 'incorrect DIFAT'
+== open damaged_props.doc
+  sectors 512/64 cutoff 4096 nb_sect 15 fat 15 entries 12 loaded 12
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open odd_header.xls 30
+  ! OleFileError: 'incorrect CLSID in OLE header'
+== open odd_header.xls 20
+  ! OleFileError: 'incorrect CLSID in OLE header'
+== open odd_header.xls 10
+  ! OleFileError: 'incorrect CLSID in OLE header'
+== open transacted.xls 30
+  sectors 512/64 cutoff 4096 nb_sect 16 fat 16 entries 4 loaded 4
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020820-0000-0000-C000-000000000046'
+  issues:
+    OleFileError: incorrect OLE header (transaction_signature_number>0)
+== open transacted.xls 20
+  ! OleFileError: 'incorrect OLE header (transaction_signature_number>0)'
+== open transacted.xls 10
+  ! OleFileError: 'incorrect OLE header (transaction_signature_number>0)'
+== open dir_loop.doc 30
+  ! OleFileError: 'double reference for OLE stream/storage'
+== open dir_loop.doc 20
+  ! OleFileError: 'OLE storage with size>0'
+== open dir_loop.doc 10
+  ! OleFileError: 'incorrect OLE stream size'
+== open dir_range.doc 30
+  ! OleFileError: 'OLE DirEntry index out of range'
+== open dir_range.doc 20
+  ! OleFileError: 'OLE DirEntry index out of range'
+== open dir_range.doc 10
+  ! OleFileError: 'OLE DirEntry index out of range'
+== open bad_sizes.doc 30
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open bad_sizes.doc 20
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== open bad_sizes.doc 10
+  sectors 512/64 cutoff 4096 nb_sect 22 fat 22 entries 12 loaded 10
+  version 62.3 byte order FFFE difat 1/0
+  header clsid '' root 'Root Entry' root clsid '00020906-0000-0000-C000-000000000046'
+== tree q3_board_report.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+      '_1632925377' storage {0003000C-0000-0000-C000-000000000046}
+        '\x01Ole10Native' stream 62 mini
+        '\x03ObjInfo' stream 6 mini
+    'WordDocument' stream 5212
+== tree budget_2019.xls
+  'Root Entry' root 704 {00020820-0000-0000-C000-000000000046}
+    '\x05DocumentSummaryInformation' stream 352 mini
+    '\x05SummaryInformation' stream 316 mini
+    'Workbook' stream 5200
+== tree invoice_2291.doc
+  'Root Entry' root 4224 {00020906-0000-0000-C000-000000000046}
+    '\x05SummaryInformation' stream 372 mini
+    '1Table' stream 700 mini
+    'Macros' storage
+      'PROJECT' stream 79 mini
+      'PROJECTwm' stream 41 mini
+      'VBA' storage
+        'ThisDocument' stream 93 mini
+        '_VBA_PROJECT' stream 7 mini
+        'dir' stream 301 mini
+    'WordDocument' stream 2411 mini
+== tree re_unit4_lease.msg
+  'Root Entry' root 4160 {00020D0B-0000-0000-C000-000000000046}
+    '__attach_version1.0_#00000000' storage
+      '__properties_version1.0' stream 24 mini
+      '__substg1.0_37010102' stream 2216 mini
+      '__substg1.0_3707001F' stream 54 mini
+    '__attach_version1.0_#00000001' storage
+      '__properties_version1.0' stream 24 mini
+      '__substg1.0_37010102' stream 904 mini
+      '__substg1.0_3707001F' stream 52 mini
+    '__nameid_version1.0' storage
+      '__substg1.0_00020102' stream 16 mini
+      '__substg1.0_00030102' stream 0
+      '__substg1.0_00040102' stream 0
+    '__properties_version1.0' stream 64 mini
+    '__recip_version1.0_#00000000' storage
+      '__properties_version1.0' stream 24 mini
+      '__substg1.0_3001001F' stream 28 mini
+      '__substg1.0_39FE001F' stream 48 mini
+    '__substg1.0_001A001F' stream 16 mini
+    '__substg1.0_0037001F' stream 74 mini
+    '__substg1.0_0C1A001F' stream 22 mini
+    '__substg1.0_0C1F001F' stream 58 mini
+    '__substg1.0_0E04001F' stream 28 mini
+    '__substg1.0_1000001F' stream 5304
+== tree locked_minutes.doc
+  'Root Entry' root 5376 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' stream 1300 mini
+    'WordDocument' stream 2612 mini
+== tree site_survey_4k.doc
+  'Root Entry' root 3904 {00020906-0000-0000-C000-000000000046}
+    '\x05SummaryInformation' stream 340 mini
+    'WordDocument' stream 3512 mini
+== tree dir_loop.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+      'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046} (again)
+    'WordDocument' stream 5212
+  issues:
+    OleFileError: incorrect OLE stream size
+    OleFileError: OLE storage with size>0
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: OLE Entry referenced more than once
+== tree dir_kinds.doc
+  'Root Entry' storage {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' lockbytes
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+      '_1632925377' storage {0003000C-0000-0000-C000-000000000046}
+        '\x01Ole10Native' stream 62 mini
+        '\x03ObjInfo' stream 6 mini
+    'WordDocument' stream 5212
+  issues:
+    OleFileError: incorrect OLE root entry
+    OleFileError: OLE storage with size>0
+    OleFileError: unhandled OLE storage type
+== tree dir_dupname.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+      '_1632925377' storage {0003000C-0000-0000-C000-000000000046}
+        '\x01Ole10Native' stream 62 mini
+        '\x03ObjInfo' stream 6 mini
+    'WordDocument' stream 5212
+    'worddocument' stream 552 mini
+  issues:
+    OleFileError: Duplicate filename in OLE storage
+== tree dir_badtype.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' type 7
+    'ObjectPool' storage
+      '_1632925377' storage {0003000C-0000-0000-C000-000000000046}
+        '\x01Ole10Native' stream 62 mini
+        '\x03ObjInfo' stream 6 mini
+    'WordDocument' stream 5212
+  issues:
+    OleFileError: unhandled OLE storage type
+== tree dir_range.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 4296
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+    'WordDocument' stream 5212
+  issues:
+    OleFileError: OLE DirEntry index out of range
+    OleFileError: Stream referenced twice
+== tree cut_short.doc
+  'Root Entry' root 2880 {00020906-0000-0000-C000-000000000046}
+    '\x01CompObj' stream 110 mini
+    '\x05DocumentSummaryInformation' stream 680 mini
+    '\x05SummaryInformation' stream 552 mini
+    '1Table' stream 1300 mini
+    'ObjectPool' storage
+      '_1632925377' storage {0003000C-0000-0000-C000-000000000046}
+        '\x01Ole10Native' stream 62 mini
+        '\x03ObjInfo' stream 6 mini
+    'WordDocument' stream 5212
+== tree difat.xls
+  'Root Entry' root 704 {00020820-0000-0000-C000-000000000046}
+    '\x05DocumentSummaryInformation' stream 352 mini
+    '\x05SummaryInformation' stream 316 mini
+    'Workbook' stream 5200
+== list q3_board_report.doc
+  ['\x01CompObj']
+  ['\x05DocumentSummaryInformation']
+  ['\x05SummaryInformation']
+  ['1Table']
+  ['ObjectPool', '_1632925377', '\x01Ole10Native']
+  ['ObjectPool', '_1632925377', '\x03ObjInfo']
+  ['WordDocument']
+== list q3_board_report.doc storages
+  ['ObjectPool']
+  ['ObjectPool', '_1632925377']
+== list q3_board_report.doc both
+  ['\x01CompObj']
+  ['\x05DocumentSummaryInformation']
+  ['\x05SummaryInformation']
+  ['1Table']
+  ['ObjectPool']
+  ['ObjectPool', '_1632925377']
+  ['ObjectPool', '_1632925377', '\x01Ole10Native']
+  ['ObjectPool', '_1632925377', '\x03ObjInfo']
+  ['WordDocument']
+== list invoice_2291.doc both
+  ['\x05SummaryInformation']
+  ['1Table']
+  ['Macros']
+  ['Macros', 'PROJECT']
+  ['Macros', 'PROJECTwm']
+  ['Macros', 'VBA']
+  ['Macros', 'VBA', 'ThisDocument']
+  ['Macros', 'VBA', '_VBA_PROJECT']
+  ['Macros', 'VBA', 'dir']
+  ['WordDocument']
+== list re_unit4_lease.msg
+  ['__attach_version1.0_#00000000', '__properties_version1.0']
+  ['__attach_version1.0_#00000000', '__substg1.0_37010102']
+  ['__attach_version1.0_#00000000', '__substg1.0_3707001F']
+  ['__attach_version1.0_#00000001', '__properties_version1.0']
+  ['__attach_version1.0_#00000001', '__substg1.0_37010102']
+  ['__attach_version1.0_#00000001', '__substg1.0_3707001F']
+  ['__nameid_version1.0', '__substg1.0_00020102']
+  ['__nameid_version1.0', '__substg1.0_00030102']
+  ['__nameid_version1.0', '__substg1.0_00040102']
+  ['__properties_version1.0']
+  ['__recip_version1.0_#00000000', '__properties_version1.0']
+  ['__recip_version1.0_#00000000', '__substg1.0_3001001F']
+  ['__recip_version1.0_#00000000', '__substg1.0_39FE001F']
+  ['__substg1.0_001A001F']
+  ['__substg1.0_0037001F']
+  ['__substg1.0_0C1A001F']
+  ['__substg1.0_0C1F001F']
+  ['__substg1.0_0E04001F']
+  ['__substg1.0_1000001F']
+== list re_unit4_lease.msg storages
+  ['__attach_version1.0_#00000000']
+  ['__attach_version1.0_#00000001']
+  ['__nameid_version1.0']
+  ['__recip_version1.0_#00000000']
+== list dir_kinds.doc
+  ['\x01CompObj']
+  ['\x05DocumentSummaryInformation']
+  ['1Table']
+  ['ObjectPool', '_1632925377', '\x01Ole10Native']
+  ['ObjectPool', '_1632925377', '\x03ObjInfo']
+  ['WordDocument']
+  issues:
+    OleFileError: incorrect OLE root entry
+    OleFileError: OLE storage with size>0
+    OleFileError: unhandled OLE storage type
+    OleFileError: The directory tree contains an entry which is not a stream nor a storage.
+== list dir_kinds.doc both 30
+  ! OleFileError: 'incorrect OLE root entry'
+== list dir_loop.doc both
+  ['\x01CompObj']
+  ['\x05DocumentSummaryInformation']
+  ['\x05SummaryInformation']
+  ['1Table']
+  ['ObjectPool']
+  ['WordDocument']
+  issues:
+    OleFileError: incorrect OLE stream size
+    OleFileError: OLE storage with size>0
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: double reference for OLE stream/storage
+    OleFileError: OLE Entry referenced more than once
+    OleFileError: The directory tree contains an entry which is not a stream nor a storage.
+== list dir_badtype.doc
+  ['\x01CompObj']
+  ['\x05DocumentSummaryInformation']
+  ['\x05SummaryInformation']
+  ['ObjectPool', '_1632925377', '\x01Ole10Native']
+  ['ObjectPool', '_1632925377', '\x03ObjInfo']
+  ['WordDocument']
+  issues:
+    OleFileError: unhandled OLE storage type
+    OleFileError: The directory tree contains an entry which is not a stream nor a storage.
+== entry q3_board_report.doc WordDocument
+  exists True type 2
+  size 5212
+  clsid ''
+  mtime None
+  ctime None
+== entry q3_board_report.doc worddocument
+  exists True type 2
+  size 5212
+  clsid ''
+  mtime None
+  ctime None
+== entry q3_board_report.doc ObjectPool
+  exists True type 1
+  size ! TypeError: 'object is not an OLE stream'
+  clsid ''
+  mtime 2019-10-02 14:31:07
+  ctime 2019-03-04 09:12:00
+== entry q3_board_report.doc ObjectPool/_1632925377
+  exists True type 1
+  size ! TypeError: 'object is not an OLE stream'
+  clsid '0003000C-0000-0000-C000-000000000046'
+  mtime 2019-10-02 14:31:07
+  ctime 2019-03-04 09:12:00
+== entry q3_board_report.doc objectpool/_1632925377/\x01ole10native
+  exists True type 2
+  size 62
+  clsid ''
+  mtime None
+  ctime None
+== entry q3_board_report.doc Macros
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+== entry q3_board_report.doc ObjectPool/Missing
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+== entry q3_board_report.doc ObjectPool/
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+== entry q3_board_report.doc /WordDocument
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+== entry invoice_2291.doc Macros/VBA/ThisDocument
+  exists True type 2
+  size 93
+  clsid ''
+  mtime None
+  ctime None
+== entry invoice_2291.doc Macros/VBA
+  exists True type 1
+  size ! TypeError: 'object is not an OLE stream'
+  clsid ''
+  mtime None
+  ctime None
+== entry invoice_2291.doc Macros/VBA/ThisDocument/x
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+== entry re_unit4_lease.msg __attach_version1.0_#00000000/__substg1.0_37010102
+  exists True type 2
+  size 2216
+  clsid ''
+  mtime None
+  ctime None
+== entry bad_times.doc ObjectPool
+  exists True type 1
+  size ! TypeError: 'object is not an OLE stream'
+  clsid ''
+  mtime ! OverflowError: 'date value out of range'
+  ctime 1970-01-01 00:00:00
+== entry dir_longname.doc \x01CompObj
+  exists False type False
+  size ! OSError: 'file not found'
+  clsid ! OSError: 'file not found'
+  mtime ! OSError: 'file not found'
+  ctime ! OSError: 'file not found'
+  issues:
+    OleFileError: incorrect DirEntry name length >64 bytes
+== entry dir_dupname.doc WordDocument
+  exists True type 2
+  size 5212
+  clsid ''
+  mtime None
+  ctime None
+  issues:
+    OleFileError: Duplicate filename in OLE storage
+== stream q3_board_report.doc WordDocument
+  5212 bytes adler32 6a2708cc
+  head eca5c100626a090400000002000000000000000000000000
+== stream q3_board_report.doc 1Table
+  1300 bytes adler32 7aa9f196
+  head 7363686564756c65207072656d697365732064656661756c
+== stream q3_board_report.doc \x01CompObj
+  110 bytes adler32 5a861a6d
+  head 0100feff030a0000ffffffff0609020000000000c0000000
+== stream q3_board_report.doc ObjectPool
+  ! OSError: 'this file is not a stream'
+== stream q3_board_report.doc Nothing
+  ! OSError: 'file not found'
+== stream q3_board_report.doc ObjectPool/_1632925377/\x03ObjInfo
+  6 bytes adler32 001a0008
+  head 000003000400
+== stream re_unit4_lease.msg __substg1.0_1000001F
+  5304 bytes adler32 6adc8a0a
+  head 440065006100720020004d00730020004f006b0061006600
+== stream re_unit4_lease.msg __nameid_version1.0/__substg1.0_00030102
+  0 bytes adler32 00000001
+  head 
+== stream site_survey_4k.doc WordDocument
+  3512 bytes adler32 e58e7ed4
+  head eca5c100626a090400000002000000000000000000000000
+== stream looped_chain.doc WordDocument
+  5212 bytes adler32 30a4c72e
+  head eca5c100626a090400000002000000000000000000000000
+== stream bad_chain.doc WordDocument
+  2048 bytes adler32 d0cd4eff
+  head eca5c100626a090400000002000000000000000000000000
+  issues:
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== stream bad_chain.doc 1Table
+  384 bytes adler32 ca8e92ec
+  head 7363686564756c65207072656d697365732064656661756c
+  issues:
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== stream bad_chain.doc 1Table 30
+  ! OleFileError: 'incorrect OLE FAT, sector index out of range'
+== stream bad_sizes.doc WordDocument
+  5632 bytes adler32 d9a908cc
+  head eca5c100626a090400000002000000000000000000000000
+  issues:
+    OleFileError: malformed OLE document, stream too large
+    OleFileError: incomplete OLE stream
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== stream bad_sizes.doc \x01CompObj
+  0 bytes adler32 00000001
+  head 
+  issues:
+    OleFileError: incorrect OLE sector index for empty stream
+== stream cut_short.doc WordDocument
+  2099 bytes adler32 7c3c6235
+  head eca5c100626a090400000002000000000000000000000000
+  issues:
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== stream cut_short.doc 1Table
+  1300 bytes adler32 7aa9f196
+  head 7363686564756c65207072656d697365732064656661756c
+== stream no_minifat.doc 1Table
+  0 bytes adler32 00000001
+  head 
+  issues:
+    OleFileError: OLE MiniStream is larger than MiniFAT
+    OleFileError: malformed OLE document, stream too large
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== stream no_minifat.doc WordDocument
+  5212 bytes adler32 6a2708cc
+  head eca5c100626a090400000002000000000000000000000000
+== stream dir_range.doc \x05DocumentSummaryInformation
+  4296 bytes adler32 5992aa18
+  head eca5c100626a090400000002000000000000000000000000
+  issues:
+    OleFileError: OLE DirEntry index out of range
+    OleFileError: Stream referenced twice
+== stream difat.xls Workbook
+  5200 bytes adler32 57df270c
+  head 09081000000605007527cd07c10001000604000003020e00
+== props q3_board_report.doc \x05SummaryInformation
+  19 properties
+  1: 1252
+  2: b'Q3 Board Report'
+  3: b'Quarterly results'
+  4: b'M. Okafor'
+  5: b'board; q3; results'
+  6: b'Draft for the October meeting'
+  7: b'Normal.dotm'
+  8: b'J. Lindqvist'
+  9: b'14'
+  10: 12840
+  11: 13214425530
+  12: 13196164320
+  13: 13214500267
+  14: 7
+  15: 2210
+  16: 12608
+  17: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  18: b'Microsoft Office Word'
+  19: 0
+== props q3_board_report.doc \x05SummaryInformation convert
+  19 properties
+  1: 1252
+  2: b'Q3 Board Report'
+  3: b'Quarterly results'
+  4: b'M. Okafor'
+  5: b'board; q3; results'
+  6: b'Draft for the October meeting'
+  7: b'Normal.dotm'
+  8: b'J. Lindqvist'
+  9: b'14'
+  10: 12840
+  11: datetime.datetime(2019, 10, 1, 17, 45, 30, 500000)
+  12: datetime.datetime(2019, 3, 4, 9, 12)
+  13: datetime.datetime(2019, 10, 2, 14, 31, 7)
+  14: 7
+  15: 2210
+  16: 12608
+  17: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  18: b'Microsoft Office Word'
+  19: 0
+== props q3_board_report.doc \x05DocumentSummaryInformation convert
+  14 properties
+  1: 1252
+  2: b'Board papers'
+  5: 211
+  6: 58
+  11: False
+  12: [b'Title', None, None, None]
+  13: [b'Q3 Board Report', b'Results', b'Outlook', b'Risks']
+  14: b'R. Achebe'
+  15: b'Harwell & Co'
+  16: False
+  17: 12871
+  19: False
+  22: False
+  23: 720896
+== props budget_2019.xls \x05SummaryInformation convert
+  12 properties
+  1: 1252
+  2: b'FY2019 Budget'
+  4: b'P. Varga'
+  8: b'P. Varga'
+  10: 0
+  12: datetime.datetime(2018, 11, 20, 8, 0)
+  13: datetime.datetime(2019, 1, 7, 16, 2, 44)
+  14: 0
+  15: 0
+  16: 0
+  18: b'Microsoft Excel'
+  19: 0
+== props damaged_props.doc \x05BrokenHeader
+  0 properties
+  issues:
+    AssertionError: Error while parsing properties header in stream '\x05BrokenHeader': 
+== props damaged_props.doc \x05BrokenHeader 30
+  ! AssertionError: "Error while parsing properties header in stream '\\x05BrokenHeader': "
+== props damaged_props.doc \x05BadOffset
+  0 properties
+  issues:
+    error: Error while parsing properties header in stream '\x05BadOffset': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05Kinds
+  19 properties
+  1: -535
+  2: None
+  3: 65535
+  4: 3735928559
+  5: 42
+  6: 2147942405
+  7: 1844674407370
+  8: 12591158399
+  9: '00020D0B-0000-0000-C000-000000000046'
+  10: b'\x00\x01binary\xff'
+  11: [10, 4294967276, 30]
+  12: [-1, 7]
+  13: [b'Lot', b'Lot 4', b'Unit 4a@\x10\x01\xc0\x9d\xc8\x85s\xc0\x01\x0c\x10\x02\x03\x05\x0b\xff\xffB\x03 Hshort\x0b\x1f\rLeeds office']
+  14: [12622780800]
+  15: [5, True]
+  16: None
+  17: None
+  2147483648: '726F6873-0B74-0000-001F-0000000D0000'
+  18: 'Leeds office\x00\x00'
+  issues:
+    error: Error while parsing property id 21 in stream '\x05Kinds': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05Kinds convert
+  18 properties
+  1: -535
+  2: None
+  3: 65535
+  4: 3735928559
+  5: 42
+  6: 2147942405
+  8: datetime.datetime(1999, 12, 31, 23, 59, 59, 999999)
+  9: '00020D0B-0000-0000-C000-000000000046'
+  10: b'\x00\x01binary\xff'
+  11: [10, 4294967276, 30]
+  12: [-1, 7]
+  13: [b'Lot', b'Lot 4', b'Unit 4a@\x10\x01\xc0\x9d\xc8\x85s\xc0\x01\x0c\x10\x02\x03\x05\x0b\xff\xffB\x03 Hshort\x0b\x1f\rLeeds office']
+  14: [datetime.datetime(2001, 1, 1, 0, 0)]
+  15: [5, True]
+  16: None
+  17: None
+  2147483648: '726F6873-0B74-0000-001F-0000000D0000'
+  18: 'Leeds office\x00\x00'
+  issues:
+    OverflowError: Error while parsing property id 7 in stream '\x05Kinds': date value out of range
+    error: Error while parsing property id 21 in stream '\x05Kinds': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05Kinds convert 30
+  ! OverflowError: "Error while parsing property id 7 in stream '\\x05Kinds': date value out of range"
+== props damaged_props.doc \x05TruncTime
+  2 properties
+  1: 1252
+  2: b'Ann'
+  issues:
+    error: Error while parsing property id 3 in stream '\x05TruncTime': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05TruncTime convert
+  2 properties
+  1: 1252
+  2: b'Ann'
+  issues:
+    error: Error while parsing property id 3 in stream '\x05TruncTime': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05TruncByte
+  1 properties
+  1: 1252
+  issues:
+    IndexError: Error while parsing property id 2 in stream '\x05TruncByte': index out of range
+== props damaged_props.doc \x05TruncByte 30
+  ! IndexError: "Error while parsing property id 2 in stream '\\x05TruncByte': index out of range"
+== props damaged_props.doc \x05Clamped
+  3 properties
+  1: 1252
+  2: b'x'
+  30: None
+  issues:
+    error: Error while parsing property id 2 in stream '\x05Clamped': unpack requires a buffer of 4 bytes
+    error: Error while parsing property id 120 in stream '\x05Clamped': unpack requires a buffer of 4 bytes
+== props damaged_props.doc \x05TinySection
+  2 properties
+  1: 1252
+  3: 9
+  issues:
+    error: Error while parsing property id 2 in stream '\x05TinySection': unpack requires a buffer of 4 bytes
+== props damaged_props.doc Missing
+  ! OSError: 'file not found'
+== props q3_board_report.doc ObjectPool
+  ! OSError: 'this file is not a stream'
+== props cut_short.doc \x05SummaryInformation
+  19 properties
+  1: 1252
+  2: b'Q3 Board Report'
+  3: b'Quarterly results'
+  4: b'M. Okafor'
+  5: b'board; q3; results'
+  6: b'Draft for the October meeting'
+  7: b'Normal.dotm'
+  8: b'J. Lindqvist'
+  9: b'14'
+  10: 12840
+  11: 13214425530
+  12: 13196164320
+  13: 13214500267
+  14: 7
+  15: 2210
+  16: 12608
+  17: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  18: b'Microsoft Office Word'
+  19: 0
+== userprops q3_board_report.doc \x05DocumentSummaryInformation
+  5 properties
+  'Client': b'Harwell & Co'
+  'Matter No': 4471
+  'Reviewed': True
+  'Due': 13215614400
+  'Office': 'Leeds\x00'
+== userprops budget_2019.xls \x05DocumentSummaryInformation
+  0 properties
+== userprops damaged_props.doc \x05DocumentSummaryInformation
+  7 properties
+  'Matter': b'Unit 4'
+  'Fee': 4294966096
+  'Billable': False
+  'Opened': 13193485200
+  'Partner': 'A. Rahman\x00'
+  'Ref': b'R-9'
+  'Rate': None
+== userprops damaged_props.doc \x05DocumentSummaryInformation convert
+  7 properties
+  'Matter': b'Unit 4'
+  'Fee': 4294966096
+  'Billable': False
+  'Opened': datetime.datetime(2019, 2, 1, 9, 0)
+  'Partner': 'A. Rahman\x00'
+  'Ref': b'R-9'
+  'Rate': None
+== userprops damaged_props.doc \x05BadDictionary
+  2 properties
+  'Matter': None
+  'Fee': None
+  issues:
+    UnicodeDecodeError: Error while parsing properties header in stream '\x05BadDictionary': 'utf-8' codec can't decode byte 0xc3 in position 1: invalid continuation byte
+== userprops damaged_props.doc \x05LongName
+  2 properties
+  'Matter': None
+  'Fee': None
+  issues:
+    UnicodeDecodeError: Error while parsing properties header in stream '\x05LongName': 'utf-8' codec can't decode byte 0xe4 in position 69: invalid continuation byte
+== userprops damaged_props.doc \x05LongName 30
+  ! TypeError: 'function takes exactly 5 arguments (1 given)'
+== userprops damaged_props.doc \x05BrokenHeader
+  ! AssertionError: ''
+== userprops damaged_props.doc \x05SummaryInformation
+  ! OSError: 'file not found'
+== meta q3_board_report.doc
+  codepage: 1252
+  title: b'Q3 Board Report'
+  subject: b'Quarterly results'
+  author: b'M. Okafor'
+  keywords: b'board; q3; results'
+  comments: b'Draft for the October meeting'
+  template: b'Normal.dotm'
+  last_saved_by: b'J. Lindqvist'
+  revision_number: b'14'
+  total_edit_time: 12840
+  last_printed: datetime.datetime(2019, 10, 1, 17, 45, 30, 500000)
+  create_time: datetime.datetime(2019, 3, 4, 9, 12)
+  last_saved_time: datetime.datetime(2019, 10, 2, 14, 31, 7)
+  num_pages: 7
+  num_words: 2210
+  num_chars: 12608
+  thumbnail: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  creating_application: b'Microsoft Office Word'
+  security: 0
+  codepage_doc: 1252
+  category: b'Board papers'
+  lines: 211
+  paragraphs: 58
+  scale_crop: False
+  heading_pairs: [b'Title', None, None, None]
+  titles_of_parts: [b'Q3 Board Report', b'Results', b'Outlook', b'Risks']
+  manager: b'R. Achebe'
+  company: b'Harwell & Co'
+  links_dirty: False
+  chars_with_spaces: 12871
+  shared_doc: False
+  hlinks_changed: False
+  version: 720896
+== meta budget_2019.xls
+  codepage: 1252
+  title: b'FY2019 Budget'
+  author: b'P. Varga'
+  last_saved_by: b'P. Varga'
+  total_edit_time: 0
+  create_time: datetime.datetime(2018, 11, 20, 8, 0)
+  last_saved_time: datetime.datetime(2019, 1, 7, 16, 2, 44)
+  num_pages: 0
+  num_words: 0
+  num_chars: 0
+  creating_application: b'Microsoft Excel'
+  security: 0
+  codepage_doc: 1252
+  lines: 0
+  paragraphs: 0
+  scale_crop: False
+  heading_pairs: [b'Title', None, None, None]
+  company: b'Harwell & Co'
+  links_dirty: False
+  chars_with_spaces: 0
+  shared_doc: False
+  hlinks_changed: False
+  version: 720896
+  issues:
+    error: Error while parsing property id 13 in stream '\x05DocumentSummaryInformation': unpack requires a buffer of 4 bytes
+== meta invoice_2291.doc
+  codepage: 1252
+  title: b'Invoice 2291'
+  author: b'accounts'
+  template: b'Normal.dotm'
+  last_saved_by: b'accounts'
+  revision_number: b'2'
+  total_edit_time: 60
+  create_time: datetime.datetime(2019, 9, 30, 23, 58)
+  last_saved_time: datetime.datetime(2019, 9, 30, 23, 59, 1)
+  num_pages: 1
+  num_words: 120
+  num_chars: 700
+  creating_application: b'Microsoft Office Word'
+  security: 0
+== meta re_unit4_lease.msg
+== meta locked_minutes.doc
+  codepage: 1252
+  title: b'Q3 Board Report'
+  subject: b'Quarterly results'
+  author: b'M. Okafor'
+  keywords: b'board; q3; results'
+  comments: b'Draft for the October meeting'
+  template: b'Normal.dotm'
+  last_saved_by: b'J. Lindqvist'
+  revision_number: b'14'
+  total_edit_time: 12840
+  last_printed: datetime.datetime(2019, 10, 1, 17, 45, 30, 500000)
+  create_time: datetime.datetime(2019, 3, 4, 9, 12)
+  last_saved_time: datetime.datetime(2019, 10, 2, 14, 31, 7)
+  num_pages: 7
+  num_words: 2210
+  num_chars: 12608
+  thumbnail: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  creating_application: b'Microsoft Office Word'
+  security: 0
+  codepage_doc: 1252
+  category: b'Board papers'
+  lines: 211
+  paragraphs: 58
+  scale_crop: False
+  heading_pairs: [b'Title', None, None, None]
+  titles_of_parts: [b'Q3 Board Report', b'Results', b'Outlook', b'Risks']
+  manager: b'R. Achebe'
+  company: b'Harwell & Co'
+  links_dirty: False
+  chars_with_spaces: 12871
+  shared_doc: False
+  hlinks_changed: False
+  version: 720896
+== meta site_survey_4k.doc
+  codepage: 1252
+  title: b'Site survey'
+  author: b'K. Mensah'
+  last_saved_by: b'K. Mensah'
+  revision_number: b'1'
+  total_edit_time: 300
+  create_time: datetime.datetime(2020, 2, 3, 10, 0)
+  last_saved_time: datetime.datetime(2020, 2, 3, 11, 20)
+  num_pages: 2
+  num_words: 900
+  num_chars: 5100
+  creating_application: b'Microsoft Office Word'
+  security: 0
+== meta damaged_props.doc
+  codepage_doc: 1252
+  lines: 4
+  paragraphs: 2
+  scale_crop: False
+  heading_pairs: [b'Title', None, None, None]
+  titles_of_parts: [b'Lease', b'Recitals\x1e\x0cBrennan Law\x0b\x03\xf4\x0b\x0b\x03\x0b']
+  company: b'Brennan Law'
+  links_dirty: False
+  chars_with_spaces: 244
+  shared_doc: False
+  hlinks_changed: False
+  version: 720896
+== meta cut_short.doc
+  codepage: 1252
+  title: b'Q3 Board Report'
+  subject: b'Quarterly results'
+  author: b'M. Okafor'
+  keywords: b'board; q3; results'
+  comments: b'Draft for the October meeting'
+  template: b'Normal.dotm'
+  last_saved_by: b'J. Lindqvist'
+  revision_number: b'14'
+  total_edit_time: 12840
+  last_printed: datetime.datetime(2019, 10, 1, 17, 45, 30, 500000)
+  create_time: datetime.datetime(2019, 3, 4, 9, 12)
+  last_saved_time: datetime.datetime(2019, 10, 2, 14, 31, 7)
+  num_pages: 7
+  num_words: 2210
+  num_chars: 12608
+  thumbnail: b'\xff\xff\xff\xff\x08\x00\x10\x00thumbnail'
+  creating_application: b'Microsoft Office Word'
+  security: 0
+  codepage_doc: 1252
+  category: b'Board papers'
+  lines: 211
+  paragraphs: 58
+  scale_crop: False
+  heading_pairs: [b'Title', None, None, None]
+  titles_of_parts: [b'Q3 Board Report', b'Results', b'Outlook', b'Risks']
+  manager: b'R. Achebe'
+  company: b'Harwell & Co'
+  links_dirty: False
+  chars_with_spaces: 12871
+  shared_doc: False
+  hlinks_changed: False
+  version: 720896
+== extract re_unit4_lease.msg __attach_version1.0_#00000000/__substg1.0_37010102 lease_signed.pdf
+  wrote out/lease_signed.pdf, 2216 bytes adler32 01364c9c
+== extract re_unit4_lease.msg __attach_version1.0_#00000001/__substg1.0_37010102 schedule.docx
+  wrote out/schedule.docx, 904 bytes adler32 ad2e58f2
+== extract invoice_2291.doc Macros/VBA/ThisDocument ThisDocument.vba
+  wrote out/ThisDocument.vba, 93 bytes adler32 808a1c84
+== extract q3_board_report.doc ObjectPool/_1632925377/\x01Ole10Native chart.bin
+  wrote out/chart.bin, 62 bytes adler32 da5a0b78
+== extract cut_short.doc WordDocument cut_short.WordDocument
+  wrote out/cut_short.WordDocument, 2099 bytes adler32 7c3c6235
+  issues:
+    OleFileError: incorrect OLE FAT, sector index out of range
+    OleFileError: OLE stream size is less than declared
+== extract q3_board_report.doc Missing missing.bin
+  ! OSError: 'file not found'
+== report q3_board_report.doc budget_2019.xls invoice_2291.doc re_unit4_lease.msg locked_minutes.doc site_survey_4k.doc not_ole.doc short.doc odd_header.xls transacted.xls cut_short.doc looped_chain.doc bad_chain.doc bad_sizes.doc dir_badtype.doc dir_longname.doc dir_dupname.doc dir_loop.doc dir_range.doc dir_kinds.doc no_directory.doc no_minifat.doc bad_times.doc difat.xls difat_count.xls difat_end.xls difat_range.xls difat_few.xls damaged_props.doc
+  q3_board_report.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    flags: embedded objects; strict ok; archive
+  budget_2019.xls
+    excel document 'FY2019 Budget' by P. Varga, last saved by P. Varga
+    created 2018-11-20 08:00:00, saved 2019-01-07 16:02:44
+    company Harwell & Co
+    defect error: Error while parsing property id 13 in stream '\x05DocumentSummaryInformation': unpack requires a buffer of 4 bytes
+    flags: 1 defects; strict ok; review
+  invoice_2291.doc
+    word document 'Invoice 2291' by accounts, last saved by accounts
+    created 2019-09-30 23:58:00, saved 2019-09-30 23:59:01
+    1 pages, 120 words
+    flags: macros; strict ok; quarantine
+  re_unit4_lease.msg
+    outlook message 'RE: Unit 4 lease - signed counterpart' from Tom Brennan <t.brennan@brennan-law.example>
+    attachment Lease - Unit 4 (signed).pdf, 2216 bytes
+    attachment Schedule of condition.docx, 904 bytes
+    flags: 2 attachments; strict ok; archive
+  locked_minutes.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    flags: encrypted; strict ok; quarantine
+  site_survey_4k.doc
+    word document 'Site survey' by K. Mensah, last saved by K. Mensah
+    created 2020-02-03 10:00:00, saved 2020-02-03 11:20:00
+    2 pages, 900 words
+    flags: none; strict ok; archive
+  not_ole.doc
+    rejected: ! NotOleFileError: 'not an OLE2 structured storage file'
+  short.doc
+    rejected: ! NotOleFileError: 'not an OLE2 structured storage file'
+  odd_header.xls
+    excel document 'FY2019 Budget' by P. Varga, last saved by P. Varga
+    created 2018-11-20 08:00:00, saved 2019-01-07 16:02:44
+    company Harwell & Co
+    defect OleFileError: incorrect CLSID in OLE header
+    defect OleFileError: incorrect ByteOrder in OLE header
+    defect OleFileError: incorrect OLE header (non-null reserved bytes)
+    strict open: ! OleFileError: 'incorrect CLSID in OLE header'
+    flags: 6 defects; strict rejected; quarantine
+  transacted.xls
+    excel document 'FY2019 Budget' by P. Varga, last saved by P. Varga
+    created 2018-11-20 08:00:00, saved 2019-01-07 16:02:44
+    company Harwell & Co
+    defect OleFileError: incorrect OLE header (transaction_signature_number>0)
+    defect error: Error while parsing property id 13 in stream '\x05DocumentSummaryInformation': unpack requires a buffer of 4 bytes
+    flags: 2 defects; strict ok; review
+  cut_short.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: incorrect OLE FAT, sector index out of range
+    defect OleFileError: OLE stream size is less than declared
+    flags: embedded objects, 2 defects; strict ok; review
+  looped_chain.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    flags: embedded objects; strict ok; archive
+  bad_chain.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: incorrect OLE FAT, sector index out of range
+    defect OleFileError: OLE stream size is less than declared
+    flags: embedded objects, 2 defects; strict ok; review
+  bad_sizes.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: malformed OLE document, stream too large
+    defect OleFileError: incomplete OLE stream
+    defect OleFileError: incorrect OLE FAT, sector index out of range
+    flags: embedded objects, 4 defects; strict ok; review
+  dir_badtype.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: unhandled OLE storage type
+    strict open: ! OleFileError: 'unhandled OLE storage type'
+    flags: embedded objects, 1 defects; strict rejected; quarantine
+  dir_longname.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: incorrect DirEntry name length >64 bytes
+    strict open: ! OleFileError: 'incorrect DirEntry name length >64 bytes'
+    flags: embedded objects, 1 defects; strict rejected; quarantine
+  dir_dupname.doc
+    word document '' by None, last saved by None
+    company Harwell & Co
+    defect OleFileError: Duplicate filename in OLE storage
+    strict open: ! OleFileError: 'Duplicate filename in OLE storage'
+    flags: embedded objects, 1 defects; strict rejected; quarantine
+  dir_loop.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    defect OleFileError: incorrect OLE stream size
+    defect OleFileError: OLE storage with size>0
+    defect OleFileError: double reference for OLE stream/storage
+    strict open: ! OleFileError: 'double reference for OLE stream/storage'
+    flags: embedded objects, 5 defects; strict rejected; quarantine
+  dir_range.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    defect OleFileError: OLE DirEntry index out of range
+    defect OleFileError: Stream referenced twice
+    defect error: Error while parsing property id 1936945008 in stream '\x05DocumentSummaryInformation': unpack requires a buffer of 4 bytes
+    strict open: ! OleFileError: 'OLE DirEntry index out of range'
+    flags: embedded objects, 476 defects; strict rejected; quarantine
+  dir_kinds.doc
+    unreadable: ! OSError: 'this file is not a stream'
+    defect OleFileError: incorrect OLE root entry
+    defect OleFileError: OLE storage with size>0
+    defect OleFileError: unhandled OLE storage type
+    strict open: ! OleFileError: 'incorrect OLE root entry'
+    flags: unreadable, 3 defects; strict rejected; quarantine
+  no_directory.doc
+    rejected: ! OleFileError: 'OLE directory index out of range'
+  no_minifat.doc
+    word document '' by None, last saved by None
+    defect OleFileError: OLE MiniStream is larger than MiniFAT
+    defect OleFileError: malformed OLE document, stream too large
+    defect OleFileError: incorrect OLE FAT, sector index out of range
+    flags: embedded objects, 9 defects; strict ok; review
+  bad_times.doc
+    word document 'Q3 Board Report' by M. Okafor, last saved by J. Lindqvist
+    created 2019-03-04 09:12:00, saved 2019-10-02 14:31:07
+    7 pages, 2210 words
+    company Harwell & Co
+    flags: embedded objects; strict ok; archive
+  difat.xls
+    excel document 'FY2019 Budget' by P. Varga, last saved by P. Varga
+    created 2018-11-20 08:00:00, saved 2019-01-07 16:02:44
+    company Harwell & Co
+    defect error: Error while parsing property id 13 in stream '\x05DocumentSummaryInformation': unpack requires a buffer of 4 bytes
+    flags: 1 defects; strict ok; review
+  difat_count.xls
+    rejected: ! OSError: 'incorrect DIFAT'
+  difat_end.xls
+    rejected: ! OSError: 'incorrect end of DIFAT'
+  difat_range.xls
+    rejected: ! OleFileError: 'incorrect DIFAT, first index out of range'
+  difat_few.xls
+    rejected: ! OSError: 'incorrect DIFAT'
+  damaged_props.doc
+    word document '' by None, last saved by None
+    company Brennan Law
+    flags: none; strict ok; archive
+  archive 6, review 7, quarantine 9, rejected 7
+  wrote out/manifest.csv, 1264 bytes adler32 ac1ab34b
