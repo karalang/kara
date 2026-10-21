@@ -747,6 +747,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `ceil(capacity/8)`-byte validity bitmap. Stores all four fields;
     /// the caller fills the data + bitmap. Neither buffer is
     /// zero-initialised (the caller writes exactly the live slots).
+    /// `bytes`, or 1 when it is 0, for a `malloc` whose block may later be
+    /// grown with `karac_realloc_or_panic`.
+    fn column_nonzero_bytes(&self, bytes: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                bytes,
+                i64_t.const_zero(),
+                "col.bytes.zero",
+            )
+            .unwrap();
+        self.builder
+            .build_select(is_zero, i64_t.const_int(1, false), bytes, "col.bytes.nz")
+            .unwrap()
+            .into_int_value()
+    }
+
     fn column_alloc(
         &self,
         elem: BasicTypeEnum<'ctx>,
@@ -769,6 +788,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_mul(capacity, elem_size, "col.data.bytes")
             .unwrap();
+        // Never `malloc(0)`: the first push grows this buffer through
+        // `karac_realloc_or_panic`, whose small-buffer path copies
+        // `malloc_usable_size` bytes, and GCC 15's ASan poisons the one byte a
+        // zero-size block reports.
+        let data_bytes = self.column_nonzero_bytes(data_bytes);
         let data = self
             .builder
             .build_call(self.runtime_fns.malloc_fn, &[data_bytes.into()], "col.data")
@@ -789,6 +813,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 "col.bm.bytes",
             )
             .unwrap();
+        let bm_bytes = self.column_nonzero_bytes(bm_bytes);
         let bitmap = self
             .builder
             .build_call(self.runtime_fns.malloc_fn, &[bm_bytes.into()], "col.bm")
