@@ -17096,6 +17096,12 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     // (B-2026-10-18-45).
     "Field",
     "Variant",
+    // The program-rooted resources (core semantics §14.7), which library
+    // functions name in their effect clauses (`reads(Env)` in cli.kara) and
+    // the backends dispatch on by name (B-2026-10-21-49).
+    "Env",
+    "Clock",
+    "RandomSource",
 ];
 
 /// `src` with each of its own top-level types named like one the compiler

@@ -7328,3 +7328,47 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-21-49: a program's own `Env` or `Clock` is its own type, and
+/// the library's `reads(Env)` and `env.args()` keep the resource.
+#[test]
+fn mir_a_user_type_named_like_a_resource_is_its_own() {
+    let src = r#"
+// The Parser keeps cli.kara, whose `parse` reads(Env).
+struct Env {
+    n: i64,
+}
+
+struct Clock {
+    t: i64,
+}
+
+fn show(e: ref Env) -> i64 {
+    e.n
+}
+
+fn main() {
+    let e = Env { n: 3 };
+    let c = Clock { t: 4 };
+    println(f"{e.n} {show(e)} {c.t}");
+    let a = env.args();
+    println(f"{a.len() > 0}");
+}
+"#;
+    let want = "3 3 4\ntrue\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    // An error names the program's type by its own name.
+    let err = karac::mir::lower::build_source(&src.replace(
+        "let a = env.args();",
+        "let bad: i64 = e;\n    let a = env.args();",
+    ))
+    .err()
+    .expect("refused");
+    assert!(err.contains("found 'Env'"), "{err}");
+}
