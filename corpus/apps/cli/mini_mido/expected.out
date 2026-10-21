@@ -1,0 +1,1904 @@
+== note_on with defaults
+  m = Message('note_on', channel=0, note=0, velocity=64, time=0)
+  m.repr: Message('note_on', channel=0, note=0, velocity=64, time=0)
+  m.str: note_on channel=0 note=0 velocity=64 time=0
+  m.bytes: [144, 0, 64]
+  m.hex: '90 00 40'
+  m.len: 3
+  m.dict: {'type': 'note_on', 'time': 0, 'channel': 0, 'note': 0, 'velocity': 64}
+  m.is_meta: False
+  m.is_realtime: False
+  m.is_cc: False
+== note_on with values
+  m = Message('note_on', channel=9, note=36, velocity=100, time=12)
+  m.repr: Message('note_on', channel=9, note=36, velocity=100, time=12)
+  m.str: note_on channel=9 note=36 velocity=100 time=12
+  m.bytes: [153, 36, 100]
+  m.hex: '99 24 64'
+  m.len: 3
+  m.dict: {'type': 'note_on', 'time': 12, 'channel': 9, 'note': 36, 'velocity': 100}
+  m.a:note: 36
+  m.a:channel: 9
+== note_off
+  m = Message('note_off', channel=0, note=60, velocity=64, time=0)
+  m.repr: Message('note_off', channel=0, note=60, velocity=64, time=0)
+  m.hex: '80 3C 40'
+  m.dict: {'type': 'note_off', 'time': 0, 'channel': 0, 'note': 60, 'velocity': 64}
+== every channel message
+  a = Message('polytouch', channel=2, note=61, value=30, time=0)
+  a.repr: Message('polytouch', channel=2, note=61, value=30, time=0)
+  a.hex: 'A2 3D 1E'
+  a.len: 3
+  b = Message('control_change', channel=3, control=7, value=90, time=0)
+  b.repr: Message('control_change', channel=3, control=7, value=90, time=0)
+  b.hex: 'B3 07 5A'
+  b.is_cc: True
+  b.is_cc=7: True
+  b.is_cc=10: False
+  c = Message('program_change', channel=4, program=19, time=0)
+  c.repr: Message('program_change', channel=4, program=19, time=0)
+  c.hex: 'C4 13'
+  c.len: 2
+  d = Message('aftertouch', channel=5, value=64, time=0)
+  d.repr: Message('aftertouch', channel=5, value=64, time=0)
+  d.hex: 'D5 40'
+  d.len: 2
+  e = Message('pitchwheel', channel=6, pitch=-8192, time=0)
+  e.repr: Message('pitchwheel', channel=6, pitch=-8192, time=0)
+  e.hex: 'E6 00 00'
+  e.len: 3
+  f = Message('pitchwheel', channel=0, pitch=8191, time=0)
+  f.hex: 'E0 7F 7F'
+  g = Message('pitchwheel', channel=0, pitch=0, time=0)
+  g.hex: 'E0 00 40'
+== system common messages
+  a = Message('sysex', data=(1, 2, 3), time=0)
+  a.repr: Message('sysex', data=(1, 2, 3), time=0)
+  a.str: sysex data=(1,2,3) time=0
+  a.bytes: [240, 1, 2, 3, 247]
+  a.hex: 'F0 01 02 03 F7'
+  a.len: 5
+  a.dict: {'type': 'sysex', 'time': 0, 'data': [1, 2, 3]}
+  b = Message('quarter_frame', frame_type=3, frame_value=9, time=0)
+  b.repr: Message('quarter_frame', frame_type=3, frame_value=9, time=0)
+  b.hex: 'F1 39'
+  b.len: 2
+  c = Message('songpos', pos=16383, time=0)
+  c.repr: Message('songpos', pos=16383, time=0)
+  c.hex: 'F2 7F 7F'
+  c.len: 3
+  d = Message('song_select', song=5, time=0)
+  d.repr: Message('song_select', song=5, time=0)
+  d.hex: 'F3 05'
+  e = Message('tune_request', time=0)
+  e.repr: Message('tune_request', time=0)
+  e.hex: 'F6'
+  e.is_realtime: True
+== realtime messages
+  a = Message('clock', time=0)
+  a.repr: Message('clock', time=0)
+  a.hex: 'F8'
+  a.is_realtime: True
+  b = Message('start', time=0)
+  b.hex: 'FA'
+  b.is_realtime: True
+  c = Message('continue', time=0)
+  c.hex: 'FB'
+  c.is_realtime: True
+  d = Message('stop', time=0)
+  d.hex: 'FC'
+  d.is_realtime: True
+  e = Message('active_sensing', time=0)
+  e.hex: 'FE'
+  e.is_realtime: False
+  f = Message('reset', time=0)
+  f.hex: 'FF'
+  f.is_realtime: False
+  f.len: 1
+== sysex data forms
+  a = Message('sysex', data=(), time=0)
+  a.repr: Message('sysex', data=(), time=0)
+  a.str: sysex data=() time=0
+  a.len: 2
+  a.hex: 'F0 F7'
+  b = Message('sysex', data=(125,), time=0)
+  b.repr: Message('sysex', data=(125,), time=0)
+  b.str: sysex data=(125) time=0
+  b.dict: {'type': 'sysex', 'time': 0, 'data': [125]}
+  c = Message('sysex', data=(65, 16, 66), time=0)
+  c.repr: Message('sysex', data=(65, 16, 66), time=0)
+  c.str: sysex data=(65,16,66) time=0
+  c.bin: bytearray(b'\xf0A\x10B\xf7')
+  d: TypeError: data byte must be int
+  e: TypeError: 'int' object is not iterable
+  f: ValueError: data byte must be in range 0..127
+  g = Message('sysex', data=(True, False), time=0)
+  g.repr: Message('sysex', data=(True, False), time=0)
+  g.hex: 'F0 01 00 F7'
+  g.bytes: [240, True, False, 247]
+== hex with a separator
+  m = Message('note_on', channel=1, note=60, velocity=127, time=0)
+  m.hex: '91 3C 7F'
+  m.hex/:: '91:3C:7F'
+  m.hex/: '913C7F'
+  m.hex/ - : '91 - 3C - 7F'
+== bin keeps the bytes
+  m = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  m.bin: bytearray(b'\x90<@')
+  q = Message('sysex', data=(9, 10, 13, 39, 92, 34), time=0)
+  q.bin: bytearray(b'\xf0\t\n\r\'\\"\xf7')
+  r = Message('sysex', data=(39,), time=0)
+  r.bin: bytearray(b"\xf0\'\xf7")
+  s = Message('sysex', data=(39, 34), time=0)
+  s.bin: bytearray(b'\xf0\'"\xf7')
+== unknown type
+  m: LookupError: Unknown message type 'note_up'
+  n: LookupError: Unknown message type 'Note_on'
+== checks on values
+  a: ValueError: channel must be in range 0..15
+  b: ValueError: channel must be in range 0..15
+  c: TypeError: channel must be int
+  d: ValueError: data byte must be in range 0..127
+  e: TypeError: data byte must be int
+  f: TypeError: data byte must be int
+  g: ValueError: pitchwheel value must be in range -8192..8191
+  h: TypeError: pichwheel value must be int
+  i: ValueError: song pos must be in range 0..16383
+  j: TypeError: song pos must be int
+  k: ValueError: frame_type must be in range 0..7
+  l: ValueError: frame_value must be in range 0..15
+  m: TypeError: frame_type must be int
+  n: ValueError: data byte must be in range 0..127
+== bools pass as ints
+  a = Message('note_on', channel=True, note=False, velocity=True, time=0)
+  a.repr: Message('note_on', channel=True, note=False, velocity=True, time=0)
+  a.str: note_on channel=True note=False velocity=True time=0
+  a.hex: '91 00 01'
+  a.dict: {'type': 'note_on', 'time': 0, 'channel': True, 'note': False, 'velocity': True}
+  b = Message('pitchwheel', channel=0, pitch=True, time=0)
+  b.repr: Message('pitchwheel', channel=0, pitch=True, time=0)
+  b.hex: 'E0 01 40'
+== time checks
+  a = Message('clock', time=0.25)
+  a.repr: Message('clock', time=0.25)
+  a.str: clock time=0.25
+  b = Message('clock', time=-3)
+  b.repr: Message('clock', time=-3)
+  c = Message('clock', time=True)
+  c.repr: Message('clock', time=True)
+  d: TypeError: time must be int or float
+  e: TypeError: time must be int or float
+  f = Message('clock', time=1e-05)
+  f.repr: Message('clock', time=1e-05)
+  f.str: clock time=1e-05
+  g = Message('clock', time=123456789.5)
+  g.repr: Message('clock', time=123456789.5)
+  h = Message('clock', time=1e+16)
+  h.repr: Message('clock', time=1e+16)
+== unknown attribute
+  a: ValueError: note_on message has no attribute pitch
+  b: ValueError: clock message has no attribute channel
+  c: ValueError: channel must be in range 0..15
+  d: ValueError: channel must be in range 0..15
+  e: TypeError: time must be int or float
+== skip_checks lets anything in
+  a = Message('note_on', channel=99, note=-5, velocity=64, time=0)
+  a.repr: Message('note_on', channel=99, note=-5, velocity=64, time=0)
+  a.str: note_on channel=99 note=-5 velocity=64 time=0
+  a.dict: {'type': 'note_on', 'time': 0, 'channel': 99, 'note': -5, 'velocity': 64}
+  b = Message('note_on', channel=0, note=0, velocity=64, time=0)
+  b.repr: Message('note_on', channel=0, note=0, velocity=64, time=0)
+  b.dict: {'type': 'note_on', 'time': 0, 'channel': 0, 'note': 0, 'velocity': 64, 'pitch': 3}
+  c = Message('note_on', channel=20, note=1, velocity=2, time=0)
+  c.hex: '94 01 02'
+== set attributes
+  m = Message('note_on', channel=0, note=0, velocity=64, time=0)
+  m.note = 72: ok
+  m.velocity = 0: ok
+  m.channel = 15: ok
+  m.time = 0.5: ok
+  m.repr: Message('note_on', channel=15, note=72, velocity=0, time=0.5)
+  m.str: note_on channel=15 note=72 velocity=0 time=0.5
+  m.type = 'note_off': AttributeError: type attribute is read only
+  m.pitch = 3: AttributeError: note_on message has no attribute pitch
+  m.note = 300: ValueError: data byte must be in range 0..127
+  m.channel = '1': TypeError: channel must be int
+  m.time = 'late': TypeError: time must be int or float
+  m.repr: Message('note_on', channel=15, note=72, velocity=0, time=0.5)
+== set sysex data
+  m = Message('sysex', data=(1,), time=0)
+  m.data = [4, 5, 6]: ok
+  m.repr: Message('sysex', data=(4, 5, 6), time=0)
+  m.len: 5
+  m.data = 'xy': TypeError: data byte must be int
+  m.data = 3: TypeError: 'int' object is not iterable
+  m.data = [300]: ValueError: data byte must be in range 0..127
+  m.data = (): ok
+  m.repr: Message('sysex', data=(), time=0)
+  m.hex: 'F0 F7'
+== copy
+  m = Message('note_on', channel=2, note=60, velocity=90, time=5)
+  a = Message('note_on', channel=2, note=60, velocity=90, time=5)
+  a.repr: Message('note_on', channel=2, note=60, velocity=90, time=5)
+  a.dict: {'type': 'note_on', 'time': 5, 'channel': 2, 'note': 60, 'velocity': 90}
+  b = Message('note_on', channel=2, note=64, velocity=90, time=0)
+  b.repr: Message('note_on', channel=2, note=64, velocity=90, time=0)
+  b.dict: {'type': 'note_on', 'time': 0, 'channel': 2, 'note': 64, 'velocity': 90}
+  c = Message('note_on', channel=2, note=60, velocity=1, time=5)
+  c.repr: Message('note_on', channel=2, note=60, velocity=1, time=5)
+  d: ValueError: copy must be same message type
+  e: ValueError: data byte must be in range 0..127
+  f = Message('note_on', channel=2, note=200, velocity=90, time=5)
+  f.repr: Message('note_on', channel=2, note=200, velocity=90, time=5)
+  g: ValueError: note_on message has no attribute pitch
+  h: ValueError: note_on message has no attribute data
+  m == a: True
+  m == b: False
+== copy order follows the type
+  m = Message('note_on', channel=2, note=60, velocity=90, time=0)
+  m.dict: {'type': 'note_on', 'time': 0, 'note': 60, 'velocity': 90, 'channel': 2}
+  a = Message('note_on', channel=2, note=60, velocity=90, time=0)
+  a.dict: {'type': 'note_on', 'time': 0, 'note': 60, 'velocity': 90, 'channel': 2}
+  b = Message('note_on', channel=2, note=60, velocity=90, time=3)
+  b.dict: {'type': 'note_on', 'time': 3, 'channel': 2, 'note': 60, 'velocity': 90}
+== copy sysex data
+  s = Message('sysex', data=(1, 2), time=0)
+  a = Message('sysex', data=(3, 4, 5), time=0)
+  a.repr: Message('sysex', data=(3, 4, 5), time=0)
+  a.dict: {'type': 'sysex', 'time': 0, 'data': [3, 4, 5]}
+  b = Message('sysex', data=(0, 0, 0), time=0)
+  b.repr: Message('sysex', data=(0, 0, 0), time=0)
+  c: TypeError: string argument without an encoding
+  d: ValueError: byte must be in range(0, 256)
+  e: TypeError: 'float' object cannot be interpreted as an integer
+  f: ValueError: negative count
+  g: ValueError: data byte must be in range 0..127
+  h = Message('sysex', data=(1,), time=0)
+  h.repr: Message('sysex', data=(1,), time=0)
+== equality
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  c = Message('note_on', channel=0, note=60, velocity=64, time=1)
+  d = Message('note_on', channel=0, note=60, velocity=64, time=0.0)
+  e = Message('note_on', channel=0, note=60, velocity=True, time=0)
+  f = Message('note_off', channel=0, note=60, velocity=64, time=0)
+  a == b: True
+  a == c: False
+  a == d: True
+  a == e: False
+  a == f: False
+  a == 60: TypeError: can't compare message to <class 'int'>
+  a == 'note_on': TypeError: can't compare message to <class 'str'>
+== equality of data
+  a = Message('sysex', data=(1, 2), time=0)
+  b = Message('sysex', data=(1, 2), time=0)
+  c = Message('sysex', data=(1, 2), time=0)
+  a == b: True
+  a == c: True
+  x = MetaMessage('sequencer_specific', data=[1, 2], time=0)
+  y = MetaMessage('sequencer_specific', data=(1, 2), time=0)
+  x.repr: MetaMessage('sequencer_specific', data=[1, 2], time=0)
+  y.repr: MetaMessage('sequencer_specific', data=(1, 2), time=0)
+  x == y: False
+== from_bytes
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  a.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  a.dict: {'type': 'note_on', 'time': 0, 'note': 60, 'velocity': 64, 'channel': 0}
+  b = Message('note_off', channel=15, note=1, velocity=2, time=7)
+  b.repr: Message('note_off', channel=15, note=1, velocity=2, time=7)
+  b.dict: {'type': 'note_off', 'time': 7, 'note': 1, 'velocity': 2, 'channel': 15}
+  c = Message('pitchwheel', channel=3, pitch=0, time=0)
+  c.repr: Message('pitchwheel', channel=3, pitch=0, time=0)
+  c.dict: {'type': 'pitchwheel', 'time': 0, 'channel': 3, 'pitch': 0}
+  d = Message('pitchwheel', channel=3, pitch=8191, time=0)
+  d.repr: Message('pitchwheel', channel=3, pitch=8191, time=0)
+  e = Message('pitchwheel', channel=3, pitch=-8191, time=0)
+  e.repr: Message('pitchwheel', channel=3, pitch=-8191, time=0)
+  f = Message('quarter_frame', frame_type=5, frame_value=10, time=0)
+  f.repr: Message('quarter_frame', frame_type=5, frame_value=10, time=0)
+  f.dict: {'type': 'quarter_frame', 'time': 0, 'frame_type': 5, 'frame_value': 10}
+  g = Message('songpos', pos=255, time=0)
+  g.repr: Message('songpos', pos=255, time=0)
+  h = Message('sysex', data=(), time=0)
+  h.repr: Message('sysex', data=(), time=0)
+  h.len: 2
+  i = Message('sysex', data=(1, 2, 3), time=0.5)
+  i.repr: Message('sysex', data=(1, 2, 3), time=0.5)
+  i.dict: {'type': 'sysex', 'time': 0.5, 'data': [1, 2, 3]}
+  j = Message('program_change', channel=5, program=3, time=0)
+  j.repr: Message('program_change', channel=5, program=3, time=0)
+  j.dict: {'type': 'program_change', 'time': 0, 'program': 3, 'channel': 5}
+  k = Message('reset', time=0)
+  k.repr: Message('reset', time=0)
+  k.dict: {'type': 'reset', 'time': 0}
+== from_bytes errors
+  a: ValueError: message is 0 bytes long
+  b: ValueError: wrong number of bytes for note_on message
+  c: ValueError: wrong number of bytes for note_on message
+  d: ValueError: invalid status byte 244
+  e: ValueError: invalid status byte 96
+  f: ValueError: data byte must be in range 0..127
+  g: ValueError: sysex without end byte
+  h: ValueError: invalid sysex end byte 2
+  i: ValueError: data byte must be in range 0..127
+  j: ValueError: wrong number of bytes for tune_request message
+  k: ValueError: invalid status byte 249
+== from_hex
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  a.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  c = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  c.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  d = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  d.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  e = Message('sysex', data=(1, 2), time=0)
+  e.repr: Message('sysex', data=(1, 2), time=0)
+  f: ValueError: wrong number of bytes for note_on message
+  g: ValueError: non-hexadecimal number found in fromhex() arg at position 1
+  h: ValueError: non-hexadecimal number found in fromhex() arg at position 4
+  i: ValueError: message is 0 bytes long
+  j: ValueError: non-hexadecimal number found in fromhex() arg at position 1
+  k = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  l = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  m = Message('clock', time=0)
+  m.repr: Message('clock', time=0)
+== from_str
+  a = Message('note_on', channel=1, note=60, velocity=64, time=0)
+  a.repr: Message('note_on', channel=1, note=60, velocity=64, time=0)
+  b = Message('note_on', channel=0, note=0, velocity=64, time=0)
+  b.repr: Message('note_on', channel=0, note=0, velocity=64, time=0)
+  c = Message('control_change', channel=0, control=7, value=100, time=0.5)
+  c.repr: Message('control_change', channel=0, control=7, value=100, time=0.5)
+  c.dict: {'type': 'control_change', 'time': 0.5, 'channel': 0, 'control': 7, 'value': 100}
+  d = Message('sysex', data=(1, 2, 3), time=0)
+  d.repr: Message('sysex', data=(1, 2, 3), time=0)
+  e: ValueError: unable to parse data bytes
+  f: ValueError: unable to parse data bytes
+  g: ValueError: unable to parse data bytes
+  h = Message('sysex', data=(1, 2), time=0)
+  h.repr: Message('sysex', data=(1, 2), time=0)
+  i = Message('note_on', channel=0, note=5, velocity=10, time=-2)
+  i.repr: Message('note_on', channel=0, note=5, velocity=10, time=-2)
+  j: ValueError: invalid literal for int() with base 10: '0x10'
+  k: ValueError: not enough values to unpack (expected 2, got 1)
+  l: ValueError: invalid literal for int() with base 10: '1=2'
+  m = Message('clock', time=1000.0)
+  m.repr: Message('clock', time=1000.0)
+  n = Message('clock', time=inf)
+  n.repr: Message('clock', time=inf)
+  n.str: clock time=inf
+  o = Message('clock', time=0.5)
+  o.repr: Message('clock', time=0.5)
+  p: ValueError: invalid time 'soon'
+  q: LookupError: Unknown message type 'clocks'
+  r: ValueError: channel must be in range 0..15
+  s = Message('pitchwheel', channel=0, pitch=-8192, time=0)
+  s.repr: Message('pitchwheel', channel=0, pitch=-8192, time=0)
+  s.hex: 'E0 00 00'
+  t: IndexError: list index out of range
+  u = Message('note_on', channel=0, note=0, velocity=64, time=2)
+  u.repr: Message('note_on', channel=0, note=0, velocity=64, time=2)
+== str round trip
+  a = Message('sysex', data=(1, 2), time=0)
+  a.str: sysex data=(1,2) time=0
+  b = Message('sysex', data=(1, 2), time=0)
+  a == b: True
+  c = Message('sysex', data=(), time=0)
+  c.str: sysex data=() time=0
+  d: ValueError: unable to parse data bytes
+  format_as_string(a, include_time=True): 'sysex data=(1,2) time=0'
+  format_as_string(a, include_time=False): 'sysex data=(1,2)'
+== meta sequence_number
+  m = MetaMessage('sequence_number', number=513, time=0)
+  m.repr: MetaMessage('sequence_number', number=513, time=0)
+  m.str: MetaMessage('sequence_number', number=513, time=0)
+  m.bytes: [255, 0, 2, 2, 1]
+  m.hex: 'FF 00 02 02 01'
+  m.dict: {'type': 'sequence_number', 'number': 513, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta text
+  m = MetaMessage('text', text='hello', time=0)
+  m.repr: MetaMessage('text', text='hello', time=0)
+  m.str: MetaMessage('text', text='hello', time=0)
+  m.bytes: [255, 1, 5, 104, 101, 108, 108, 111]
+  m.hex: 'FF 01 05 68 65 6C 6C 6F'
+  m.dict: {'type': 'text', 'text': 'hello', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta copyright default
+  m = MetaMessage('copyright', text='', time=0)
+  m.repr: MetaMessage('copyright', text='', time=0)
+  m.str: MetaMessage('copyright', text='', time=0)
+  m.bytes: [255, 2, 0]
+  m.hex: 'FF 02 00'
+  m.dict: {'type': 'copyright', 'text': '', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta track_name
+  m = MetaMessage('track_name', name='Lead', time=0)
+  m.repr: MetaMessage('track_name', name='Lead', time=0)
+  m.str: MetaMessage('track_name', name='Lead', time=0)
+  m.bytes: [255, 3, 4, 76, 101, 97, 100]
+  m.hex: 'FF 03 04 4C 65 61 64'
+  m.dict: {'type': 'track_name', 'name': 'Lead', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta instrument_name
+  m = MetaMessage('instrument_name', name='Fretless Bass', time=0)
+  m.repr: MetaMessage('instrument_name', name='Fretless Bass', time=0)
+  m.str: MetaMessage('instrument_name', name='Fretless Bass', time=0)
+  m.bytes: [255, 4, 13, 70, 114, 101, 116, 108, 101, 115, 115, 32, 66, 97, 115, 115]
+  m.hex: 'FF 04 0D 46 72 65 74 6C 65 73 73 20 42 61 73 73'
+  m.dict: {'type': 'instrument_name', 'name': 'Fretless Bass', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta lyrics latin1
+  m = MetaMessage('lyrics', text='café', time=0)
+  m.repr: MetaMessage('lyrics', text='café', time=0)
+  m.str: MetaMessage('lyrics', text='café', time=0)
+  m.bytes: [255, 5, 4, 99, 97, 102, 233]
+  m.hex: 'FF 05 04 63 61 66 E9'
+  m.dict: {'type': 'lyrics', 'text': 'café', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta marker
+  m = MetaMessage('marker', text='chorus', time=960)
+  m.repr: MetaMessage('marker', text='chorus', time=960)
+  m.str: MetaMessage('marker', text='chorus', time=960)
+  m.bytes: [255, 6, 6, 99, 104, 111, 114, 117, 115]
+  m.hex: 'FF 06 06 63 68 6F 72 75 73'
+  m.dict: {'type': 'marker', 'text': 'chorus', 'time': 960}
+  m.is_meta: True
+  m.is_realtime: False
+== meta cue_marker
+  m = MetaMessage('cue_marker', text='fade', time=0)
+  m.repr: MetaMessage('cue_marker', text='fade', time=0)
+  m.str: MetaMessage('cue_marker', text='fade', time=0)
+  m.bytes: [255, 7, 4, 102, 97, 100, 101]
+  m.hex: 'FF 07 04 66 61 64 65'
+  m.dict: {'type': 'cue_marker', 'text': 'fade', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta device_name
+  m = MetaMessage('device_name', name='Synth 1', time=0)
+  m.repr: MetaMessage('device_name', name='Synth 1', time=0)
+  m.str: MetaMessage('device_name', name='Synth 1', time=0)
+  m.bytes: [255, 9, 7, 83, 121, 110, 116, 104, 32, 49]
+  m.hex: 'FF 09 07 53 79 6E 74 68 20 31'
+  m.dict: {'type': 'device_name', 'name': 'Synth 1', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta channel_prefix
+  m = MetaMessage('channel_prefix', channel=9, time=0)
+  m.repr: MetaMessage('channel_prefix', channel=9, time=0)
+  m.str: MetaMessage('channel_prefix', channel=9, time=0)
+  m.bytes: [255, 32, 1, 9]
+  m.hex: 'FF 20 01 09'
+  m.dict: {'type': 'channel_prefix', 'channel': 9, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta midi_port
+  m = MetaMessage('midi_port', port=3, time=0)
+  m.repr: MetaMessage('midi_port', port=3, time=0)
+  m.str: MetaMessage('midi_port', port=3, time=0)
+  m.bytes: [255, 33, 1, 3]
+  m.hex: 'FF 21 01 03'
+  m.dict: {'type': 'midi_port', 'port': 3, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta end_of_track
+  m = MetaMessage('end_of_track', time=0)
+  m.repr: MetaMessage('end_of_track', time=0)
+  m.str: MetaMessage('end_of_track', time=0)
+  m.bytes: [255, 47, 0]
+  m.hex: 'FF 2F 00'
+  m.dict: {'type': 'end_of_track', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta set_tempo
+  m = MetaMessage('set_tempo', tempo=461538, time=0)
+  m.repr: MetaMessage('set_tempo', tempo=461538, time=0)
+  m.str: MetaMessage('set_tempo', tempo=461538, time=0)
+  m.bytes: [255, 81, 3, 7, 10, 226]
+  m.hex: 'FF 51 03 07 0A E2'
+  m.dict: {'type': 'set_tempo', 'tempo': 461538, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta smpte_offset
+  m = MetaMessage('smpte_offset', frame_rate=29.97, hours=1, minutes=2, seconds=3, frames=4, sub_frames=5, time=0)
+  m.repr: MetaMessage('smpte_offset', frame_rate=29.97, hours=1, minutes=2, seconds=3, frames=4, sub_frames=5, time=0)
+  m.str: MetaMessage('smpte_offset', frame_rate=29.97, hours=1, minutes=2, seconds=3, frames=4, sub_frames=5, time=0)
+  m.bytes: [255, 84, 5, 65, 2, 3, 4, 5]
+  m.hex: 'FF 54 05 41 02 03 04 05'
+  m.dict: {'type': 'smpte_offset', 'frame_rate': 29.97, 'hours': 1, 'minutes': 2, 'seconds': 3, 'frames': 4, 'sub_frames': 5, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta time_signature
+  m = MetaMessage('time_signature', numerator=6, denominator=8, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  m.repr: MetaMessage('time_signature', numerator=6, denominator=8, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  m.str: MetaMessage('time_signature', numerator=6, denominator=8, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  m.bytes: [255, 88, 4, 6, 3, 24, 8]
+  m.hex: 'FF 58 04 06 03 18 08'
+  m.dict: {'type': 'time_signature', 'numerator': 6, 'denominator': 8, 'clocks_per_click': 24, 'notated_32nd_notes_per_beat': 8, 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta key_signature
+  m = MetaMessage('key_signature', key='F#m', time=0)
+  m.repr: MetaMessage('key_signature', key='F#m', time=0)
+  m.str: MetaMessage('key_signature', key='F#m', time=0)
+  m.bytes: [255, 89, 2, 3, 1]
+  m.hex: 'FF 59 02 03 01'
+  m.dict: {'type': 'key_signature', 'key': 'F#m', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta sequencer_specific
+  m = MetaMessage('sequencer_specific', data=[0, 0, 65], time=0)
+  m.repr: MetaMessage('sequencer_specific', data=[0, 0, 65], time=0)
+  m.str: MetaMessage('sequencer_specific', data=[0, 0, 65], time=0)
+  m.bytes: [255, 127, 3, 0, 0, 65]
+  m.hex: 'FF 7F 03 00 00 41'
+  m.dict: {'type': 'sequencer_specific', 'data': [0, 0, 65], 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta sequencer_specific tuple
+  m = MetaMessage('sequencer_specific', data=(1, 2), time=0)
+  m.repr: MetaMessage('sequencer_specific', data=(1, 2), time=0)
+  m.str: MetaMessage('sequencer_specific', data=(1, 2), time=0)
+  m.bytes: [255, 127, 2, 1, 2]
+  m.hex: 'FF 7F 02 01 02'
+  m.dict: {'type': 'sequencer_specific', 'data': (1, 2), 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta long text
+  m = MetaMessage('text', text='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', time=0)
+  m.repr: MetaMessage('text', text='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', time=0)
+  m.str: MetaMessage('text', text='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', time=0)
+  m.bytes: [255, 1, 129, 2, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120]
+  m.hex: 'FF 01 81 02 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78 78'
+  m.dict: {'type': 'text', 'text': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'time': 0}
+  m.is_meta: True
+  m.is_realtime: False
+== meta errors
+  a: KeyError: 'tempo'
+  b: ValueError: bpm is not a valid argument for this message type
+  c: ValueError: attribute must be in range 0..16777215
+  d: TypeError: attribute must be an integer
+  e: TypeError: attribute must be a string
+  f: ValueError: invalid key 'H'
+  g: TypeError: unhashable type: 'list'
+  h: TypeError: sequence item 0: expected str instance, int found
+  i: ValueError: attribute must be in range 0..59
+  j: ValueError: attribute must be in range 0..99
+  k: ValueError: denominator must be a power of 2
+  l: ValueError: attribute must be in range 1..57896044618658097711785492504343953926634992332820282019728792003956564819968
+  m: ValueError: denominator must be a power of 2
+  n: ValueError: attribute must be in range 0..255
+  o: ValueError: attribute must be in range 0..255
+  p: ValueError: attribute must be in range 0..65535
+  q: TypeError: time must be int or float
+  r: ValueError: attribute must be in range 0..255
+  s: ValueError: text is not a valid argument for this message type
+== meta odd but allowed
+  a = MetaMessage('time_signature', numerator=4, denominator=1024, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  a.repr: MetaMessage('time_signature', numerator=4, denominator=1024, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  a.hex: 'FF 58 04 04 0A 18 08'
+  b = MetaMessage('time_signature', numerator=4, denominator=True, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  b.repr: MetaMessage('time_signature', numerator=4, denominator=True, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  b.hex: 'FF 58 04 04 00 18 08'
+  c = MetaMessage('smpte_offset', frame_rate=24.0, hours=0, minutes=0, seconds=0, frames=0, sub_frames=0, time=0)
+  c.repr: MetaMessage('smpte_offset', frame_rate=24.0, hours=0, minutes=0, seconds=0, frames=0, sub_frames=0, time=0)
+  c.hex: 'FF 54 05 00 00 00 00 00'
+  d: TypeError: sequence item 0: expected str instance, int found
+  e = MetaMessage('set_tempo', tempo=True, time=0)
+  e.repr: MetaMessage('set_tempo', tempo=True, time=0)
+  e.hex: 'FF 51 03 00 00 01'
+  f = MetaMessage('sequencer_specific', data='ab', time=0)
+  f.repr: MetaMessage('sequencer_specific', data='ab', time=0)
+  g = MetaMessage('text', text='€', time=0)
+  g.repr: MetaMessage('text', text='€', time=0)
+  g.hex: UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+  h: AttributeError: key_signature message has no attribute tempo
+  h: no value
+== meta set and copy
+  m = MetaMessage('set_tempo', tempo=500000, time=0)
+  m.tempo = 400000: ok
+  m.time = 10: ok
+  m.repr: MetaMessage('set_tempo', tempo=400000, time=10)
+  m.tempo = -1: ValueError: attribute must be in range 0..16777215
+  m.type = 'text': AttributeError: type attribute is read only
+  m.text = 'x': AttributeError: set_tempo message has no attribute text
+  m.time = None: TypeError: time must be int or float
+  a = MetaMessage('set_tempo', tempo=400000, time=10)
+  a.repr: MetaMessage('set_tempo', tempo=400000, time=10)
+  b = MetaMessage('set_tempo', tempo=300000, time=10)
+  b.repr: MetaMessage('set_tempo', tempo=300000, time=10)
+  b.dict: {'type': 'set_tempo', 'tempo': 300000, 'time': 10}
+  c: ValueError: copy must be same message type
+  d = MetaMessage('set_tempo', tempo=400000, time=2)
+  d.repr: MetaMessage('set_tempo', tempo=400000, time=2)
+  e: ValueError: text is not a valid argument for this message type
+  m == a: True
+  m == b: False
+== meta from_bytes
+  a = MetaMessage('set_tempo', tempo=500000, time=0)
+  a.repr: MetaMessage('set_tempo', tempo=500000, time=0)
+  b = MetaMessage('track_name', name='Lead', time=0)
+  b.repr: MetaMessage('track_name', name='Lead', time=0)
+  c = MetaMessage('end_of_track', time=0)
+  c.repr: MetaMessage('end_of_track', time=0)
+  d = MetaMessage('key_signature', key='Gm', time=0)
+  d.repr: MetaMessage('key_signature', key='Gm', time=0)
+  e = UnknownMetaMessage(type_byte=96, data=(9, 9), time=0)
+  e.repr: UnknownMetaMessage(type_byte=96, data=(9, 9), time=0)
+  e.hex: 'FF 60 02 09 09'
+  e.dict: {'type': 'unknown_meta', 'type_byte': 96, 'data': (9, 9), 'time': 0}
+  f = MetaMessage('time_signature', numerator=4, denominator=8, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  f.repr: MetaMessage('time_signature', numerator=4, denominator=8, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  g: ValueError: bytes does not correspond to a MetaMessage.
+  h: ValueError: Bad data. Cannot be converted to message.
+  i: ValueError: Bad data. Cannot be converted to message.
+  j = MetaMessage('text', text='\x00AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', time=0)
+  j.len_text: 129
+  k = MetaMessage('smpte_offset', frame_rate=30, hours=0, minutes=0, seconds=0, frames=0, sub_frames=0, time=0)
+  k.repr: MetaMessage('smpte_offset', frame_rate=30, hours=0, minutes=0, seconds=0, frames=0, sub_frames=0, time=0)
+  l: KeyError: 4
+  m: KeySignatureError: Could not decode key with 1 flats and mode 5
+  n: KeySignatureError: Could not decode key with 9 flats and mode 0
+  o: KeySignatureError: Could not decode key with 8 sharps and mode 0
+  p = MetaMessage('sequence_number', number=0, time=0)
+  p.repr: MetaMessage('sequence_number', number=0, time=0)
+  q: IndexError: list index out of range
+== unknown meta
+  u = UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=5)
+  u.repr: UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=5)
+  u.str: UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=5)
+  u.hex: 'FF 60 03 01 02 03'
+  u.bytes: [255, 96, 3, 1, 2, 3]
+  u.dict: {'type': 'unknown_meta', 'type_byte': 96, 'data': (1, 2, 3), 'time': 5}
+  u.is_meta: True
+  v = UnknownMetaMessage(type_byte=10, data=(), time=0)
+  v.repr: UnknownMetaMessage(type_byte=10, data=(), time=0)
+  v.hex: 'FF 0A 00'
+  u.anything = 7: ok
+  u.repr: UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=5)
+  u.dict: {'type': 'unknown_meta', 'type_byte': 96, 'data': (1, 2, 3), 'time': 5, 'anything': 7}
+  w = UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=9)
+  w.repr: UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=9)
+  x = UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=5)
+  w == x: False
+  u == x: False
+== freeze and thaw
+  m = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  f = FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  f.repr: FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  f.str: note_on channel=0 note=60 velocity=64 time=0
+  f.frozen: True
+  f.hex: '90 3C 40'
+  f.dict: {'type': 'note_on', 'time': 0, 'channel': 0, 'note': 60, 'velocity': 64}
+  f.note = 61: ValueError: frozen message is immutable
+  m == f: True
+  g = FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  g.repr: FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  t = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  t.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  t.frozen: False
+  t.note = 62: ok
+  t.repr: Message('note_on', channel=0, note=62, velocity=64, time=0)
+  u = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  u.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  u.frozen: False
+  c = FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  c.repr: FrozenMessage('note_on', channel=0, note=60, velocity=64, time=0)
+  c.frozen: True
+  d = FrozenMessage('note_on', channel=0, note=70, velocity=64, time=0)
+  d.repr: FrozenMessage('note_on', channel=0, note=70, velocity=64, time=0)
+  d.frozen: True
+== freeze meta and unknown
+  m = MetaMessage('key_signature', key='D', time=0)
+  f = FrozenMetaMessage('key_signature', key='D', time=0)
+  f.repr: FrozenMetaMessage('key_signature', key='D', time=0)
+  f.frozen: True
+  f.key = 'A': ValueError: frozen message is immutable
+  t = MetaMessage('key_signature', key='D', time=0)
+  t.key = 'A': ok
+  t.repr: MetaMessage('key_signature', key='A', time=0)
+  u = UnknownMetaMessage(type_byte=96, data=(1,), time=0)
+  g = FrozenUnknownMetaMessage(type_byte=96, data=(1,), time=0)
+  g.repr: FrozenUnknownMetaMessage(type_byte=96, data=(1,), time=0)
+  g.frozen: True
+  g.data = [2]: ValueError: frozen message is immutable
+  h = UnknownMetaMessage(type_byte=96, data=(1,), time=0)
+  h.repr: UnknownMetaMessage(type_byte=96, data=(1,), time=0)
+  h.frozen: False
+== parse
+  parse [144, 60, 64]: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  parse [144, 60]: None
+  parse []: None
+  parse [128, 1, 2, 144, 3, 4]: Message('note_off', channel=0, note=1, velocity=2, time=0)
+  parse [48, 144, 1, 2]: Message('note_on', channel=0, note=1, velocity=2, time=0)
+  parse_all [144, 60, 64, 128, 60, 0, 248, 193, 5]: [Message('note_on', channel=0, note=60, velocity=64, time=0), Message('note_off', channel=0, note=60, velocity=0, time=0), Message('clock', time=0), Message('program_change', channel=1, program=5, time=0)]
+  parse_all [144, 60, 248, 64]: [Message('clock', time=0)]
+  parse_all [240, 1, 2, 248, 3, 247]: [Message('clock', time=0), Message('sysex', data=(1, 2, 3), time=0)]
+  parse_all [240, 1, 2, 144, 60, 64, 247]: [Message('note_on', channel=0, note=60, velocity=64, time=0)]
+  parse_all [247, 244, 1, 2, 249, 253, 254]: [Message('active_sensing', time=0)]
+  parse_all [144, 60, 145, 61, 62]: [Message('note_on', channel=1, note=61, velocity=62, time=0)]
+  parse_all [246, 241, 9, 242, 1, 2, 243, 4]: [Message('tune_request', time=0), Message('quarter_frame', frame_type=0, frame_value=9, time=0), Message('songpos', pos=257, time=0), Message('song_select', song=4, time=0)]
+  parse_all [144, 60, 64, 61, 64]: [Message('note_on', channel=0, note=60, velocity=64, time=0)]
+  parse_all [256]: ValueError: invalid byte value 256
+  parse_all [-1]: ValueError: invalid byte value -1
+  parse_all [1.5]: TypeError: message byte must be integer
+== parser fed a little at a time
+  p = Parser()
+  feed [144]: ok
+  pending: 0
+  feed [60]: ok
+  pending: 0
+  feed [100, 128, 60]: ok
+  pending: 1
+  feed_byte 0: ok
+  pending: 2
+  get_message: Message('note_on', channel=0, note=60, velocity=100, time=0)
+  get_message: Message('note_off', channel=0, note=60, velocity=0, time=0)
+  get_message: None
+  feed [248, 250]: ok
+  drained: [Message('clock', time=0), Message('start', time=0)]
+  pending: 0
+  feed_byte 300: ValueError: invalid byte value 300
+  feed_byte 'x': TypeError: message byte must be integer
+== tokenizer
+  tokens of [144, 60, 64, 240, 1, 2, 247, 254, 244, 5, 192, 1]: [[144, 60, 64], [240, 1, 2, 247], [254], [192, 1]]
+  tokens of [240, 1, 255, 2, 247]: [[255], [240, 1, 2, 247]]
+  tokens of [127, 247]: []
+== string streams
+  stream:
+    Message('note_on', channel=0, note=60, velocity=64, time=0), None
+    Message('note_off', channel=0, note=60, velocity=64, time=0), None
+    None, 'line 5: channel must be in range 0..15'
+    None, "line 6: invalid literal for int() with base 10: 'x'"
+    Message('sysex', data=(1, 2), time=0), None
+    None, 'line 8: data byte must be in range 0..127'
+  stream:
+    Message('clock', time=0), None
+    LookupError: Unknown message type 'fish'
+== tick2second and second2tick
+  tick2second(480, 480, 500000): 0.5
+  tick2second(1, 480, 500000): 0.0010416666666666667
+  tick2second(0, 96, 500000): 0.0
+  tick2second(1000, 96, 461538): 4.8076875
+  tick2second(960, 480, 600000): 1.2
+  tick2second(100, -6360, 500000): -0.007861635220125786
+  second2tick(1.0, 480, 500000): 960
+  second2tick(0.5, 480, 500000): 480
+  second2tick(0.0010417, 480, 500000): 1
+  second2tick(0.003125, 96, 500000): 1
+  second2tick(0.009375, 96, 500000): 2
+  second2tick(2.5, 1, 1000000): 2
+  second2tick(3.5, 1, 1000000): 4
+  second2tick(1, 0, 500000): ZeroDivisionError: float division by zero
+== bpm2tempo and tempo2bpm
+  bpm2tempo(120,): 500000
+  bpm2tempo(130,): 461538
+  bpm2tempo(140.5,): 427046
+  bpm2tempo(60, (6, 8)): 2000000
+  bpm2tempo(90, (3, 2)): 333333
+  bpm2tempo(0,): ZeroDivisionError: float division by zero
+  tempo2bpm(500000,): 120.0
+  tempo2bpm(461538,): 130.00013000013
+  tempo2bpm(600000, (6, 8)): 200.0
+  tempo2bpm(333333,): 180.00018000018
+  tempo2bpm(1,): 60000000.0
+  tempo2bpm(0,): ZeroDivisionError: float division by zero
+== variable length ints
+  encode_variable_int(0): [0]
+  encode_variable_int(127): [127]
+  encode_variable_int(128): [129, 0]
+  encode_variable_int(8192): [192, 0]
+  encode_variable_int(16383): [255, 127]
+  encode_variable_int(16384): [129, 128, 0]
+  encode_variable_int(268435455): [255, 255, 255, 127]
+  encode_variable_int(2000000): [250, 137, 0]
+  encode_variable_int(-1): ValueError: variable int must be a non-negative integer
+  encode_variable_int(1.0): ValueError: variable int must be a non-negative integer
+  encode_variable_int(True): [1]
+  decode_variable_int([0]): 0
+  decode_variable_int([129, 0]): 128
+  decode_variable_int([255, 127]): 16383
+  decode_variable_int([129, 128, 0]): 16384
+  decode_variable_int([127, 127]): 16383
+  decode_variable_int([]): 0
+== signed and unsigned
+  signed('byte', 251): -5
+  signed('byte', 5): 5
+  unsigned('byte', -5): 251
+  signed('short', 32768): -32768
+  unsigned('short', -1): 65535
+  signed('long', 4294967295): 4294967295
+  signed('byte', 256): ValueError: 'B' format requires 0 <= number <= 255
+  unsigned('byte', 200): ValueError: 'b' format requires -128 <= number <= 127
+  signed('nibble', 3): ValueError: invalid integer type nibble
+== tracks
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_off', channel=0, note=60, velocity=64, time=96)
+  n = MetaMessage('track_name', name='Piano', time=0)
+  e = MidiTrack of 0
+  e.repr:
+    MidiTrack()
+  e.len: 0
+  e.name: ''
+  one = MidiTrack of 1
+  one.repr:
+    MidiTrack([note_on channel=0 note=60 velocity=64 time=0])
+  onemeta = MidiTrack of 1
+  onemeta.repr:
+    MidiTrack([MetaMessage('track_name', name='Piano', time=0)])
+  t = MidiTrack of 3
+  t.repr:
+    MidiTrack([
+      MetaMessage('track_name', name='Piano', time=0),
+      Message('note_on', channel=0, note=60, velocity=64, time=0),
+      Message('note_off', channel=0, note=60, velocity=64, time=96)])
+  t.len: 3
+  t.name: 'Piano'
+== track names
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  t = MidiTrack of 1
+  t.name = 'Strings': ok
+  t.repr:
+    MidiTrack([
+      MetaMessage('track_name', name='Strings', time=0),
+      Message('note_on', channel=0, note=60, velocity=64, time=0)])
+  t.name: 'Strings'
+  t.name = 'Violins': ok
+  t.repr:
+    MidiTrack([
+      MetaMessage('track_name', name='Violins', time=0),
+      Message('note_on', channel=0, note=60, velocity=64, time=0)])
+  t.name: 'Violins'
+  t.name = 5: TypeError: attribute must be a string
+  x = MetaMessage('track_name', name='first', time=0)
+  y = MetaMessage('track_name', name='second', time=0)
+  u = MidiTrack of 3
+  u.name: 'first'
+  u.name = 'renamed': ok
+  u.repr:
+    MidiTrack([
+      Message('note_on', channel=0, note=60, velocity=64, time=0),
+      MetaMessage('track_name', name='renamed', time=0),
+      MetaMessage('track_name', name='second', time=0)])
+== track slices and sums
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_off', channel=0, note=60, velocity=64, time=10)
+  c = Message('clock', time=0)
+  t = MidiTrack of 3
+  s = t[1:3]
+  s.repr:
+    MidiTrack([
+      Message('note_off', channel=0, note=60, velocity=64, time=10),
+      Message('clock', time=0)])
+  s2 = t[5:9]
+  s2.repr:
+    MidiTrack()
+  m = t[0]
+  m.repr: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  m2 = t[-1]
+  m2.repr: Message('clock', time=0)
+  m3: IndexError: list index out of range
+  u = t + s
+  u.repr:
+    MidiTrack([
+      Message('note_on', channel=0, note=60, velocity=64, time=0),
+      Message('note_off', channel=0, note=60, velocity=64, time=10),
+      Message('clock', time=0),
+      Message('note_off', channel=0, note=60, velocity=64, time=10),
+      Message('clock', time=0)])
+  u.len: 5
+  w = s * 2
+  w.repr:
+    MidiTrack([
+      Message('note_off', channel=0, note=60, velocity=64, time=10),
+      Message('clock', time=0),
+      Message('note_off', channel=0, note=60, velocity=64, time=10),
+      Message('clock', time=0)])
+  z = s * 0
+  z.repr:
+    MidiTrack()
+  z.append(c)
+  z.repr:
+    MidiTrack([clock time=0])
+== fix_end_of_track
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  e1 = MetaMessage('end_of_track', time=5)
+  b = Message('note_off', channel=0, note=60, velocity=64, time=10)
+  e2 = MetaMessage('end_of_track', time=7)
+  t = MidiTrack of 4
+  f = fix_end_of_track(t)
+  f.repr:
+    MidiTrack([
+      Message('note_on', channel=0, note=60, velocity=64, time=0),
+      Message('note_off', channel=0, note=60, velocity=64, time=15),
+      MetaMessage('end_of_track', time=7)])
+  e = MidiTrack of 0
+  g = fix_end_of_track(e)
+  g.repr:
+    MidiTrack([MetaMessage('end_of_track', time=0)])
+  only = MidiTrack of 2
+  h = fix_end_of_track(only)
+  h.repr:
+    MidiTrack([MetaMessage('end_of_track', time=12)])
+== merge_tracks
+  a1 = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  a2 = Message('note_off', channel=0, note=60, velocity=64, time=96)
+  ae = MetaMessage('end_of_track', time=0)
+  b1 = Message('note_on', channel=1, note=67, velocity=64, time=48)
+  b2 = Message('note_off', channel=1, note=67, velocity=64, time=96)
+  be = MetaMessage('end_of_track', time=20)
+  c1 = Message('program_change', channel=2, program=5, time=96)
+  ta = MidiTrack of 3
+  tb = MidiTrack of 3
+  tc = MidiTrack of 1
+  m = merge_tracks(ta, tb, tc)
+  m.repr:
+    MidiTrack([
+      Message('note_on', channel=0, note=60, velocity=64, time=0),
+      Message('note_on', channel=1, note=67, velocity=64, time=48),
+      Message('note_off', channel=0, note=60, velocity=64, time=48),
+      Message('program_change', channel=2, program=5, time=0),
+      Message('note_off', channel=1, note=67, velocity=64, time=48),
+      MetaMessage('end_of_track', time=20)])
+  m.len: 6
+  n = merge_tracks()
+  n.repr:
+    MidiTrack([MetaMessage('end_of_track', time=0)])
+  bad = Message('note_on', channel=99, note=0, velocity=64, time=0)
+  tbad = MidiTrack of 1
+  o: ValueError: channel must be in range 0..15
+  p = merge_tracks(tbad)
+  p.repr:
+    MidiTrack([
+      Message('note_on', channel=99, note=0, velocity=64, time=0),
+      MetaMessage('end_of_track', time=0)])
+== merge keeps floats
+  a = Message('note_on', channel=0, note=0, velocity=64, time=0.5)
+  b = Message('note_off', channel=0, note=0, velocity=64, time=0.25)
+  c = Message('note_on', channel=0, note=1, velocity=64, time=0.6)
+  x = MidiTrack of 2
+  y = MidiTrack of 1
+  m = merge_tracks(x, y)
+  m.repr:
+    MidiTrack([
+      Message('note_on', channel=0, note=0, velocity=64, time=0.5),
+      Message('note_on', channel=0, note=1, velocity=64, time=0.09999999999999998),
+      Message('note_off', channel=0, note=0, velocity=64, time=0.15000000000000002),
+      MetaMessage('end_of_track', time=0)])
+== new file
+  f = MidiFile with 0 tracks
+  repr:
+    MidiFile(type=1, ticks_per_beat=480)
+  type: 1
+  ticks_per_beat: 480
+  length: 0
+  add_track(None): MidiTrack()
+  add_track('Bass'): MidiTrack([MetaMessage('track_name', name='Bass', time=0)])
+  repr:
+    MidiFile(type=1, ticks_per_beat=480, tracks=[
+      MidiTrack(),
+      MidiTrack([MetaMessage('track_name', name='Bass', time=0)])
+    ])
+  saved out/new.mid: 46 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 02 01 e0 4d 54
+    0010: 72 6b 00 00 00 04 00 ff 2f 00 4d 54 72 6b 00 00
+    0020: 00 0c 00 ff 03 04 42 61 73 73 00 ff 2f 00
+  repr:
+    MidiFile(type=1, ticks_per_beat=480, tracks=[
+      MidiTrack(),
+      MidiTrack([MetaMessage('track_name', name='Bass', time=0)])
+    ])
+== file errors
+  a: ValueError: invalid format <built-in function format> (must be 0, 1 or 2)
+  b: ValueError: invalid format <built-in function format> (must be 0, 1 or 2)
+  c = MidiFile with 0 tracks
+  save out/type0.mid: ValueError: type 0 file must have exactly 1 track
+  d = MidiFile with 0 tracks
+  save out/tpb.mid: error: 'h' format requires -32768 <= number <= 32767
+  e = MidiFile with 0 tracks
+  length: ValueError: impossible to compute length for type 2 (asynchronous) file
+  merged: TypeError: can't merge tracks in type 2 (asynchronous) file
+  play:
+    TypeError: can't merge tracks in type 2 (asynchronous) file
+== save and load a small song
+  p = Message('program_change', channel=0, program=12, time=0)
+  a = Message('note_on', channel=0, note=60, velocity=90, time=0)
+  b = Message('note_on', channel=0, note=64, velocity=90, time=0)
+  c = Message('note_off', channel=0, note=60, velocity=0, time=480)
+  d = Message('note_off', channel=0, note=64, velocity=0, time=0)
+  e = Message('note_on', channel=0, note=67, velocity=90, time=0)
+  g = Message('note_off', channel=0, note=67, velocity=64, time=240)
+  n = MetaMessage('track_name', name='Vibes', time=0)
+  s = MetaMessage('set_tempo', tempo=400000, time=0)
+  k = MetaMessage('key_signature', key='Eb', time=0)
+  ts = MetaMessage('time_signature', numerator=2, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+  t0 = MidiTrack of 4
+  t1 = MidiTrack of 7
+  f = MidiFile with 2 tracks
+  saved out/vibes.mid: 95 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 02 00 f0 4d 54
+    0010: 72 6b 00 00 00 22 00 ff 03 05 56 69 62 65 73 00
+    0020: ff 51 03 06 1a 80 00 ff 59 02 fd 00 00 ff 58 04
+    0030: 02 02 18 08 00 ff 2f 00 4d 54 72 6b 00 00 00 1f
+    0040: 00 c0 0c 00 90 3c 5a 00 40 5a 83 60 80 3c 00 00
+    0050: 40 00 00 90 43 5a 81 70 80 43 40 00 ff 2f 00
+  g = out/vibes.mid: type 1, 2 tracks
+  repr:
+    MidiFile(type=1, ticks_per_beat=240, tracks=[
+      MidiTrack([
+        MetaMessage('track_name', name='Vibes', time=0),
+        MetaMessage('set_tempo', tempo=400000, time=0),
+        MetaMessage('key_signature', key='Eb', time=0),
+        MetaMessage('time_signature', numerator=2, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0),
+        MetaMessage('end_of_track', time=0)]),
+      MidiTrack([
+        Message('program_change', channel=0, program=12, time=0),
+        Message('note_on', channel=0, note=60, velocity=90, time=0),
+        Message('note_on', channel=0, note=64, velocity=90, time=0),
+        Message('note_off', channel=0, note=60, velocity=0, time=480),
+        Message('note_off', channel=0, note=64, velocity=0, time=0),
+        Message('note_on', channel=0, note=67, velocity=90, time=0),
+        Message('note_off', channel=0, note=67, velocity=64, time=240),
+        MetaMessage('end_of_track', time=0)])
+    ])
+  length: 1.2
+  play:
+    MetaMessage('track_name', name='Vibes', time=0)
+    MetaMessage('set_tempo', tempo=400000, time=0)
+    MetaMessage('key_signature', key='Eb', time=0)
+    MetaMessage('time_signature', numerator=2, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+    Message('program_change', channel=0, program=12, time=0)
+    Message('note_on', channel=0, note=60, velocity=90, time=0)
+    Message('note_on', channel=0, note=64, velocity=90, time=0)
+    Message('note_off', channel=0, note=60, velocity=0, time=0.7999999999999999)
+    Message('note_off', channel=0, note=64, velocity=0, time=0)
+    Message('note_on', channel=0, note=67, velocity=90, time=0)
+    Message('note_off', channel=0, note=67, velocity=64, time=0.39999999999999997)
+    MetaMessage('end_of_track', time=0)
+  saved out/vibes2.mid: 95 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 02 00 f0 4d 54
+    0010: 72 6b 00 00 00 22 00 ff 03 05 56 69 62 65 73 00
+    0020: ff 51 03 06 1a 80 00 ff 59 02 fd 00 00 ff 58 04
+    0030: 02 02 18 08 00 ff 2f 00 4d 54 72 6b 00 00 00 1f
+    0040: 00 c0 0c 00 90 3c 5a 00 40 5a 83 60 80 3c 00 00
+    0050: 40 00 00 90 43 5a 81 70 80 43 40 00 ff 2f 00
+  out/vibes.mid == out/vibes2.mid: True
+== running status on save
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_on', channel=0, note=60, velocity=0, time=10)
+  c = Message('note_on', channel=1, note=62, velocity=64, time=0)
+  d = Message('note_on', channel=1, note=62, velocity=0, time=10)
+  e = Message('song_select', song=2, time=0)
+  f = Message('song_select', song=3, time=0)
+  s = Message('sysex', data=(1,), time=0)
+  h = Message('note_on', channel=1, note=64, velocity=64, time=0)
+  m = MetaMessage('marker', text='x', time=0)
+  i = Message('note_on', channel=1, note=65, velocity=64, time=0)
+  t = MidiTrack of 10
+  f = MidiFile with 1 tracks
+  saved out/running.mid: 64 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 00 00 01 01 e0 4d 54
+    0010: 72 6b 00 00 00 2a 00 90 3c 40 0a 3c 00 00 91 3e
+    0020: 40 0a 3e 00 00 f3 02 00 f3 03 00 f0 02 01 f7 00
+    0030: 91 40 40 00 ff 06 01 78 00 91 41 40 00 ff 2f 00
+  g = out/running.mid: type 0, 1 tracks
+  print_tracks:
+=== Track 0
+Message('note_on', channel=0, note=60, velocity=64, time=0)
+Message('note_on', channel=0, note=60, velocity=0, time=10)
+Message('note_on', channel=1, note=62, velocity=64, time=0)
+Message('note_on', channel=1, note=62, velocity=0, time=10)
+Message('song_select', song=2, time=0)
+Message('song_select', song=3, time=0)
+Message('sysex', data=(1,), time=0)
+Message('note_on', channel=1, note=64, velocity=64, time=0)
+MetaMessage('marker', text='x', time=0)
+Message('note_on', channel=1, note=65, velocity=64, time=0)
+MetaMessage('end_of_track', time=0)
+== save refuses
+  a = Message('clock', time=0)
+  t = MidiTrack of 1
+  f = MidiFile with 1 tracks
+  save out/clock.mid: ValueError: realtime messages are not allowed in MIDI files
+  b = Message('note_on', channel=0, note=0, velocity=64, time=0.5)
+  u = MidiTrack of 1
+  g = MidiFile with 1 tracks
+  save out/float.mid: ValueError: message time must be int in MIDI file
+  c = Message('note_on', channel=0, note=0, velocity=64, time=-1)
+  v = MidiTrack of 1
+  h = MidiFile with 1 tracks
+  save out/neg.mid: ValueError: message time must be non-negative in MIDI file
+  d = Message('note_on', channel=0, note=0, velocity=64, time=True)
+  w = MidiTrack of 1
+  i = MidiFile with 1 tracks
+  saved out/bool.mid: 30 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 01 01 e0 4d 54
+    0010: 72 6b 00 00 00 08 01 90 00 40 00 ff 2f 00
+  e = MetaMessage('text', text='€', time=0)
+  x = MidiTrack of 1
+  j = MidiFile with 1 tracks
+  save out/euro.mid: UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+  k = MidiFile with 1 tracks
+  saved out/euro8.mid: 33 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 01 01 e0 4d 54
+    0010: 72 6b 00 00 00 0b 00 ff 01 03 e2 82 ac 00 ff 2f
+    0020: 00
+  l = out/euro8.mid: type 1, 1 tracks
+  print_tracks:
+=== Track 0
+MetaMessage('text', text='â\x82¬', time=0)
+MetaMessage('end_of_track', time=0)
+  m = out/euro8.mid: type 1, 1 tracks
+  print_tracks:
+=== Track 0
+MetaMessage('text', text='€', time=0)
+MetaMessage('end_of_track', time=0)
+== load the minuet
+  f = songs/minuet.mid: type 1, 3 tracks
+  type: 1
+  ticks_per_beat: 480
+  length: 13.2
+  print_meta:
+=== Track 0
+MetaMessage('track_name', name='Minuet in G', time=0)
+MetaMessage('copyright', text='public domain', time=0)
+MetaMessage('time_signature', numerator=3, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+MetaMessage('key_signature', key='G', time=0)
+MetaMessage('set_tempo', tempo=500000, time=0)
+MetaMessage('marker', text='slower', time=5760)
+MetaMessage('set_tempo', tempo=600000, time=0)
+MetaMessage('end_of_track', time=5760)
+=== Track 1
+MetaMessage('track_name', name='Harpsichord RH', time=0)
+MetaMessage('end_of_track', time=0)
+=== Track 2
+MetaMessage('track_name', name='Harpsichord LH', time=0)
+MetaMessage('end_of_track', time=0)
+== minuet track by track
+  f = songs/minuet.mid: type 1, 3 tracks
+  print_tracks:
+=== Track 0
+MetaMessage('track_name', name='Minuet in G', time=0)
+MetaMessage('copyright', text='public domain', time=0)
+MetaMessage('time_signature', numerator=3, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+MetaMessage('key_signature', key='G', time=0)
+MetaMessage('set_tempo', tempo=500000, time=0)
+MetaMessage('marker', text='slower', time=5760)
+MetaMessage('set_tempo', tempo=600000, time=0)
+MetaMessage('end_of_track', time=5760)
+=== Track 1
+MetaMessage('track_name', name='Harpsichord RH', time=0)
+Message('program_change', channel=0, program=6, time=0)
+Message('note_on', channel=0, note=74, velocity=80, time=0)
+Message('note_on', channel=0, note=74, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=240)
+Message('note_on', channel=0, note=69, velocity=80, time=0)
+Message('note_on', channel=0, note=69, velocity=0, time=240)
+Message('note_on', channel=0, note=71, velocity=80, time=0)
+Message('note_on', channel=0, note=71, velocity=0, time=240)
+Message('note_on', channel=0, note=72, velocity=80, time=0)
+Message('note_on', channel=0, note=72, velocity=0, time=240)
+Message('note_on', channel=0, note=74, velocity=80, time=0)
+Message('note_on', channel=0, note=74, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=480)
+Message('note_on', channel=0, note=76, velocity=80, time=0)
+Message('note_on', channel=0, note=76, velocity=0, time=480)
+Message('note_on', channel=0, note=72, velocity=80, time=0)
+Message('note_on', channel=0, note=72, velocity=0, time=240)
+Message('note_on', channel=0, note=74, velocity=80, time=0)
+Message('note_on', channel=0, note=74, velocity=0, time=240)
+Message('note_on', channel=0, note=76, velocity=80, time=0)
+Message('note_on', channel=0, note=76, velocity=0, time=240)
+Message('note_on', channel=0, note=78, velocity=80, time=0)
+Message('note_on', channel=0, note=78, velocity=0, time=240)
+Message('note_on', channel=0, note=79, velocity=80, time=0)
+Message('note_on', channel=0, note=79, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=480)
+Message('note_on', channel=0, note=72, velocity=80, time=0)
+Message('note_on', channel=0, note=72, velocity=0, time=480)
+Message('note_on', channel=0, note=74, velocity=80, time=0)
+Message('note_on', channel=0, note=74, velocity=0, time=240)
+Message('note_on', channel=0, note=72, velocity=80, time=0)
+Message('note_on', channel=0, note=72, velocity=0, time=240)
+Message('note_on', channel=0, note=71, velocity=80, time=0)
+Message('note_on', channel=0, note=71, velocity=0, time=240)
+Message('note_on', channel=0, note=69, velocity=80, time=0)
+Message('note_on', channel=0, note=69, velocity=0, time=240)
+Message('note_on', channel=0, note=71, velocity=80, time=0)
+Message('note_on', channel=0, note=71, velocity=0, time=480)
+Message('note_on', channel=0, note=72, velocity=80, time=0)
+Message('note_on', channel=0, note=72, velocity=0, time=240)
+Message('note_on', channel=0, note=71, velocity=80, time=0)
+Message('note_on', channel=0, note=71, velocity=0, time=240)
+Message('note_on', channel=0, note=69, velocity=80, time=0)
+Message('note_on', channel=0, note=69, velocity=0, time=240)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=240)
+Message('note_on', channel=0, note=66, velocity=80, time=0)
+Message('note_on', channel=0, note=66, velocity=0, time=480)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=240)
+Message('note_on', channel=0, note=69, velocity=80, time=0)
+Message('note_on', channel=0, note=69, velocity=0, time=240)
+Message('note_on', channel=0, note=71, velocity=80, time=0)
+Message('note_on', channel=0, note=71, velocity=0, time=240)
+Message('note_on', channel=0, note=67, velocity=80, time=0)
+Message('note_on', channel=0, note=67, velocity=0, time=240)
+Message('note_on', channel=0, note=69, velocity=80, time=0)
+Message('note_on', channel=0, note=69, velocity=0, time=1440)
+MetaMessage('end_of_track', time=0)
+=== Track 2
+MetaMessage('track_name', name='Harpsichord LH', time=0)
+Message('program_change', channel=1, program=6, time=0)
+Message('control_change', channel=1, control=7, value=90, time=0)
+Message('note_on', channel=1, note=55, velocity=64, time=0)
+Message('note_off', channel=1, note=55, velocity=64, time=960)
+Message('note_on', channel=1, note=57, velocity=64, time=0)
+Message('note_off', channel=1, note=57, velocity=64, time=480)
+Message('note_on', channel=1, note=59, velocity=64, time=0)
+Message('note_off', channel=1, note=59, velocity=64, time=1440)
+Message('note_on', channel=1, note=60, velocity=64, time=0)
+Message('note_off', channel=1, note=60, velocity=64, time=1440)
+Message('note_on', channel=1, note=59, velocity=64, time=0)
+Message('note_off', channel=1, note=59, velocity=64, time=1440)
+Message('note_on', channel=1, note=57, velocity=64, time=0)
+Message('note_off', channel=1, note=57, velocity=64, time=1440)
+Message('note_on', channel=1, note=55, velocity=64, time=0)
+Message('note_off', channel=1, note=55, velocity=64, time=1440)
+Message('note_on', channel=1, note=62, velocity=64, time=0)
+Message('note_off', channel=1, note=62, velocity=64, time=480)
+Message('note_on', channel=1, note=59, velocity=64, time=0)
+Message('note_off', channel=1, note=59, velocity=64, time=480)
+Message('note_on', channel=1, note=55, velocity=64, time=0)
+Message('note_off', channel=1, note=55, velocity=64, time=480)
+Message('note_on', channel=1, note=62, velocity=64, time=0)
+Message('note_off', channel=1, note=62, velocity=64, time=480)
+Message('note_on', channel=1, note=50, velocity=64, time=0)
+Message('note_off', channel=1, note=50, velocity=64, time=480)
+Message('note_on', channel=1, note=60, velocity=64, time=0)
+Message('note_off', channel=1, note=60, velocity=64, time=480)
+MetaMessage('end_of_track', time=0)
+== minuet played
+  f = songs/minuet.mid: type 1, 3 tracks
+  play:
+    MetaMessage('track_name', name='Minuet in G', time=0)
+    MetaMessage('copyright', text='public domain', time=0)
+    MetaMessage('time_signature', numerator=3, denominator=4, clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0)
+    MetaMessage('key_signature', key='G', time=0)
+    MetaMessage('set_tempo', tempo=500000, time=0)
+    MetaMessage('track_name', name='Harpsichord RH', time=0)
+    Message('program_change', channel=0, program=6, time=0)
+    Message('note_on', channel=0, note=74, velocity=80, time=0)
+    MetaMessage('track_name', name='Harpsichord LH', time=0)
+    Message('program_change', channel=1, program=6, time=0)
+    Message('control_change', channel=1, control=7, value=90, time=0)
+    Message('note_on', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=0, note=74, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=69, velocity=80, time=0)
+    Message('note_on', channel=0, note=69, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=71, velocity=80, time=0)
+    Message('note_off', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=1, note=57, velocity=64, time=0)
+    Message('note_on', channel=0, note=71, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=72, velocity=80, time=0)
+    Message('note_on', channel=0, note=72, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=74, velocity=80, time=0)
+    Message('note_off', channel=1, note=57, velocity=64, time=0)
+    Message('note_on', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=0, note=74, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=76, velocity=80, time=0)
+    Message('note_off', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=1, note=60, velocity=64, time=0)
+    Message('note_on', channel=0, note=76, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=72, velocity=80, time=0)
+    Message('note_on', channel=0, note=72, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=74, velocity=80, time=0)
+    Message('note_on', channel=0, note=74, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=76, velocity=80, time=0)
+    Message('note_on', channel=0, note=76, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=78, velocity=80, time=0)
+    Message('note_on', channel=0, note=78, velocity=0, time=0.25)
+    Message('note_on', channel=0, note=79, velocity=80, time=0)
+    Message('note_off', channel=1, note=60, velocity=64, time=0)
+    Message('note_on', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=0, note=79, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.5)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    MetaMessage('marker', text='slower', time=0.5)
+    MetaMessage('set_tempo', tempo=600000, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0)
+    Message('note_on', channel=0, note=72, velocity=80, time=0)
+    Message('note_off', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=1, note=57, velocity=64, time=0)
+    Message('note_on', channel=0, note=72, velocity=0, time=0.6)
+    Message('note_on', channel=0, note=74, velocity=80, time=0)
+    Message('note_on', channel=0, note=74, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=72, velocity=80, time=0)
+    Message('note_on', channel=0, note=72, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=71, velocity=80, time=0)
+    Message('note_on', channel=0, note=71, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=69, velocity=80, time=0)
+    Message('note_on', channel=0, note=69, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=71, velocity=80, time=0)
+    Message('note_off', channel=1, note=57, velocity=64, time=0)
+    Message('note_on', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=0, note=71, velocity=0, time=0.6)
+    Message('note_on', channel=0, note=72, velocity=80, time=0)
+    Message('note_on', channel=0, note=72, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=71, velocity=80, time=0)
+    Message('note_on', channel=0, note=71, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=69, velocity=80, time=0)
+    Message('note_on', channel=0, note=69, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=66, velocity=80, time=0)
+    Message('note_off', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=1, note=62, velocity=64, time=0)
+    Message('note_on', channel=0, note=66, velocity=0, time=0.6)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_off', channel=1, note=62, velocity=64, time=0)
+    Message('note_on', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=69, velocity=80, time=0)
+    Message('note_on', channel=0, note=69, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=71, velocity=80, time=0)
+    Message('note_off', channel=1, note=59, velocity=64, time=0)
+    Message('note_on', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=0, note=71, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=67, velocity=80, time=0)
+    Message('note_on', channel=0, note=67, velocity=0, time=0.3)
+    Message('note_on', channel=0, note=69, velocity=80, time=0)
+    Message('note_off', channel=1, note=55, velocity=64, time=0)
+    Message('note_on', channel=1, note=62, velocity=64, time=0)
+    Message('note_off', channel=1, note=62, velocity=64, time=0.6)
+    Message('note_on', channel=1, note=50, velocity=64, time=0)
+    Message('note_off', channel=1, note=50, velocity=64, time=0.6)
+    Message('note_on', channel=1, note=60, velocity=64, time=0)
+    Message('note_on', channel=0, note=69, velocity=0, time=0.6)
+    Message('note_off', channel=1, note=60, velocity=64, time=0)
+    MetaMessage('end_of_track', time=0)
+== drums
+  f = songs/drums.mid: type 0, 1 tracks
+  repr:
+    MidiFile(type=0, ticks_per_beat=96, tracks=[
+      MidiTrack([
+        Message('sysex', data=(126, 127, 9, 1), time=0),
+        MetaMessage('track_name', name='Drums', time=0),
+        MetaMessage('set_tempo', tempo=461538, time=0),
+        Message('control_change', channel=9, control=7, value=100, time=0),
+        Message('note_on', channel=9, note=36, velocity=100, time=0),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('note_on', channel=9, note=38, velocity=100, time=44),
+        Message('note_on', channel=9, note=38, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('note_on', channel=9, note=36, velocity=100, time=44),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=36, velocity=70, time=44),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=38, velocity=100, time=44),
+        Message('note_on', channel=9, note=38, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('note_on', channel=9, note=36, velocity=100, time=44),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('note_on', channel=9, note=38, velocity=100, time=44),
+        Message('note_on', channel=9, note=38, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('note_on', channel=9, note=36, velocity=100, time=44),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=36, velocity=70, time=44),
+        Message('note_on', channel=9, note=36, velocity=0, time=4),
+        Message('note_on', channel=9, note=38, velocity=100, time=44),
+        Message('note_on', channel=9, note=38, velocity=0, time=4),
+        Message('note_on', channel=9, note=42, velocity=70, time=44),
+        Message('note_on', channel=9, note=42, velocity=0, time=4),
+        Message('pitchwheel', channel=9, pitch=1024, time=0),
+        MetaMessage('end_of_track', time=96)])
+    ])
+  length: 3.94230375
+== smpte division
+  f = songs/smpte.mid: type 0, 1 tracks
+  repr:
+    MidiFile(type=0, ticks_per_beat=-6360, tracks=[
+      MidiTrack([
+        MetaMessage('track_name', name='Timecode', time=0),
+        MetaMessage('smpte_offset', frame_rate=25, hours=1, minutes=0, seconds=0, frames=2, sub_frames=0, time=0),
+        Message('note_on', channel=0, note=60, velocity=90, time=0),
+        Message('note_on', channel=0, note=60, velocity=0, time=1000),
+        Message('note_on', channel=0, note=64, velocity=90, time=0),
+        Message('note_on', channel=0, note=64, velocity=0, time=1000),
+        MetaMessage('end_of_track', time=0)])
+    ])
+  ticks_per_beat: -6360
+  length: -0.15723270440251572
+  play:
+    MetaMessage('track_name', name='Timecode', time=0)
+    MetaMessage('smpte_offset', frame_rate=25, hours=1, minutes=0, seconds=0, frames=2, sub_frames=0, time=0)
+    Message('note_on', channel=0, note=60, velocity=90, time=0)
+    Message('note_on', channel=0, note=60, velocity=0, time=-0.07861635220125786)
+    Message('note_on', channel=0, note=64, velocity=90, time=0)
+    Message('note_on', channel=0, note=64, velocity=0, time=-0.07861635220125786)
+    MetaMessage('end_of_track', time=0)
+  saved out/smpte.mid: 62 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 00 00 01 e7 28 4d 54
+    0010: 72 6b 00 00 00 28 00 ff 03 08 54 69 6d 65 63 6f
+    0020: 64 65 00 ff 54 05 21 00 00 02 00 00 90 3c 5a 87
+    0030: 68 3c 00 00 40 5a 87 68 40 00 00 ff 2f 00
+  songs/smpte.mid == out/smpte.mid: False
+== lyrics in utf-8
+  a = songs/lyrics.mid: type 1, 1 tracks
+  print_meta:
+=== Track 0
+MetaMessage('track_name', name='FrÃ¨re Jacques', time=0)
+MetaMessage('lyrics', text='FrÃ¨-', time=0)
+MetaMessage('lyrics', text='re', time=0)
+MetaMessage('lyrics', text='Jac-', time=0)
+MetaMessage('lyrics', text='ques', time=0)
+MetaMessage('end_of_track', time=0)
+  b = songs/lyrics.mid: type 1, 1 tracks
+  print_meta:
+=== Track 0
+MetaMessage('track_name', name='Frère Jacques', time=0)
+MetaMessage('lyrics', text='Frè-', time=0)
+MetaMessage('lyrics', text='re', time=0)
+MetaMessage('lyrics', text='Jac-', time=0)
+MetaMessage('lyrics', text='ques', time=0)
+MetaMessage('end_of_track', time=0)
+  c: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 3: unexpected end of data
+  d: UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 2: ordinal not in range(128)
+== every meta kind
+  f = songs/odd.mid: type 1, 1 tracks
+  repr:
+    MidiFile(type=1, ticks_per_beat=120, tracks=[
+      MidiTrack([
+        MetaMessage('sequence_number', number=0, time=0),
+        MetaMessage('sequence_number', number=258, time=0),
+        MetaMessage('channel_prefix', channel=9, time=0),
+        MetaMessage('midi_port', port=0, time=0),
+        MetaMessage('midi_port', port=2, time=0),
+        MetaMessage('text', text='café', time=0),
+        MetaMessage('instrument_name', name='Organ', time=0),
+        MetaMessage('cue_marker', text='cue 1', time=0),
+        MetaMessage('device_name', name='Port A', time=0),
+        MetaMessage('key_signature', key='Bbm', time=0),
+        MetaMessage('smpte_offset', frame_rate=30, hours=1, minutes=1, seconds=2, frames=3, sub_frames=4, time=0),
+        MetaMessage('sequencer_specific', data=(0, 0, 65, 16), time=0),
+        UnknownMetaMessage(type_byte=96, data=(1, 2, 3), time=0),
+        Message('quarter_frame', frame_type=2, frame_value=3, time=5),
+        Message('songpos', pos=272, time=0),
+        Message('song_select', song=3, time=0),
+        Message('tune_request', time=0),
+        Message('clock', time=0),
+        Message('polytouch', channel=0, note=60, value=30, time=7),
+        Message('aftertouch', channel=0, value=40, time=0),
+        Message('pitchwheel', channel=0, pitch=-8192, time=0),
+        Message('pitchwheel', channel=0, pitch=8191, time=0),
+        MetaMessage('end_of_track', time=0)])
+    ])
+  length: 0.05
+  save out/odd.mid: ValueError: realtime messages are not allowed in MIDI files
+  g: EOFError: 
+  g: no value
+== debug load
+Header:
+  000008: 4d  M
+  000008: 54  T
+  000008: 68  h
+  000008: 64  d
+  000008: 00  .
+  000008: 00  .
+  000008: 00  .
+  000008: 06  .
+  00000e: 00  .
+  00000e: 00  .
+  00000e: 00  .
+  00000e: 01  .
+  00000e: 00  .
+  00000e: 60  `
+-> type=0, tracks=1, ticks_per_beat=96
+
+Track 0:
+  000016: 4d  M
+  000016: 54  T
+  000016: 72  r
+  000016: 6b  k
+  000016: 00  .
+  000016: 00  .
+  000016: 00  .
+  000016: 0b  .
+-> size=11
+
+Message:
+  000017: 00  .
+-> delta=0
+  000018: 90  .
+  000019: 3c  <
+  00001a: 50  P
+-> Message('note_on', channel=0, note=60, velocity=80, time=0)
+
+Message:
+  00001b: 60  `
+-> delta=96
+  00001c: 3c  <
+  00001d: 00  .
+-> Message('note_on', channel=0, note=60, velocity=0, time=96)
+
+Message:
+  00001e: 00  .
+-> delta=0
+  00001f: ff  .
+  000020: 2f  /
+  000021: 00  .
+-> MetaMessage('end_of_track', time=0)
+
+  f = songs/tiny.mid: type 0, 1 tracks
+== broken files
+  not_midi: OSError: MThd not found. Probably not a MIDI file
+  short_header: EOFError: 
+  no_track: EOFError: 
+  wrong_chunk: OSError: no MTrk header at start of track
+  truncated: EOFError: 
+  overrun: OSError: data byte must be in range 0..127
+  running_first: OSError: running status without last_status
+  undefined_status: OSError: undefined status byte 0xf4
+  hot_velocity: OSError: data byte must be in range 0..127
+  hot_sysex: ValueError: data byte must be in range 0..127
+  bad_key: KeySignatureError: Could not decode key with 1 flats and mode 2
+  bad_key_sharps: KeySignatureError: Could not decode key with 9 sharps and mode 0
+  bad_frame_rate: KeyError: 4
+  short_seq: IndexError: list index out of range
+  huge_sysex: OSError: Message length 2000000 exceeds maximum length 1000000
+  missing: FileNotFoundError: [Errno 2] No such file or directory: 'data/songs/missing.mid'
+== clip
+  a = songs/hot_velocity.mid: type 0, 1 tracks
+  print_tracks:
+=== Track 0
+Message('note_on', channel=0, note=60, velocity=127, time=0)
+Message('note_off', channel=0, note=60, velocity=0, time=96)
+MetaMessage('end_of_track', time=0)
+  b = songs/hot_sysex.mid: type 0, 1 tracks
+  print_tracks:
+=== Track 0
+Message('sysex', data=(67, 127, 1), time=0)
+MetaMessage('end_of_track', time=0)
+== async and format three
+  a = songs/async.mid: type 2, 2 tracks
+  repr:
+    MidiFile(type=2, ticks_per_beat=96, tracks=[
+      MidiTrack([
+        Message('note_on', channel=0, note=60, velocity=80, time=0),
+        Message('note_on', channel=0, note=60, velocity=0, time=96),
+        MetaMessage('end_of_track', time=0)]),
+      MidiTrack([
+        Message('note_on', channel=1, note=67, velocity=80, time=0),
+        Message('note_on', channel=1, note=67, velocity=0, time=48),
+        MetaMessage('end_of_track', time=0)])
+    ])
+  length: ValueError: impossible to compute length for type 2 (asynchronous) file
+  play:
+    TypeError: can't merge tracks in type 2 (asynchronous) file
+  b = songs/format_three.mid: type 3, 1 tracks
+  repr:
+    MidiFile(type=3, ticks_per_beat=96, tracks=[
+      MidiTrack([MetaMessage('end_of_track', time=0)])
+    ])
+  type: 3
+  saved out/three.mid: 26 bytes
+    0000: 4d 54 68 64 00 00 00 06 00 03 00 01 00 60 4d 54
+    0010: 72 6b 00 00 00 04 00 ff 2f 00
+  songs/format_three.mid == out/three.mid: True
+== read syx files
+  read_syx_file patches/jv1080.syx: 7 messages
+    Message('sysex', data=(65, 16, 106, 18, 0, 0, 0, 0, 127, 1), time=0)
+    Message('sysex', data=(65, 16, 106, 18, 3, 0, 0, 0, 87, 97, 114, 109, 32, 80, 97, 100, 32, 32, 32, 32, 49), time=0)
+    Message('sysex', data=(65, 16, 106, 18, 3, 0, 0, 12, 1, 2, 64, 46), time=0)
+    Message('sysex', data=(65, 16, 106, 18, 3, 0, 16, 0, 5, 107), time=0)
+    Message('sysex', data=(67, 16, 76, 0, 0, 126, 0), time=0)
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+    Message('sysex', data=(127, 127, 4, 1, 0, 96), time=0)
+  read_syx_file patches/bank.txt.syx: 3 messages
+    Message('sysex', data=(65, 16, 106, 18, 3, 0, 0, 0, 87, 97, 114, 109, 32, 80, 97, 100, 32, 32, 32, 32, 49), time=0)
+    Message('sysex', data=(67, 16, 76, 0, 0, 126, 0), time=0)
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+  read_syx_file patches/tabs.syx: 1 messages
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+  read_syx_file patches/empty.syx: 0 messages
+  read_syx_file patches/garbled.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 9
+  read_syx_file patches/odd_digit.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 7
+  read_syx_file patches/note.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 0
+  read_syx_file patches/unended.syx: 1 messages
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+  read_syx_file patches/missing.syx: FileNotFoundError: [Errno 2] No such file or directory: 'data/patches/missing.syx'
+== write syx files
+  a = Message('sysex', data=(126, 127, 9, 1), time=0)
+  b = Message('note_on', channel=0, note=0, velocity=64, time=0)
+  c = Message('sysex', data=(67, 16), time=0)
+  write_syx_file out/two.syx plaintext=False
+  read_syx_file out/two.syx: 2 messages
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+    Message('sysex', data=(67, 16), time=0)
+  out/two.syx: 10 bytes
+    0000: f0 7e 7f 09 01 f7 f0 43 10 f7
+  write_syx_file out/two.txt.syx plaintext=True
+  read_syx_file out/two.txt.syx: 2 messages
+    Message('sysex', data=(126, 127, 9, 1), time=0)
+    Message('sysex', data=(67, 16), time=0)
+  out/two.txt.syx: 30 bytes
+    0000: 46 30 20 37 45 20 37 46 20 30 39 20 30 31 20 46
+    0010: 37 0a 46 30 20 34 33 20 31 30 20 46 37 0a
+  write_syx_file out/none.syx plaintext=True
+  read_syx_file out/none.syx: 0 messages
+== echo port
+  p = <open I/O port 'loop' (EchoPort)>
+  p: <open I/O port 'loop' (EchoPort)>
+  a = Message('note_on', channel=0, note=60, velocity=64, time=0)
+  b = Message('note_off', channel=0, note=60, velocity=64, time=3)
+  send a: ok
+  send b: ok
+  a.note = 61: ok
+  poll: Message('note_on', channel=0, note=60, velocity=64, time=0)
+  receive: Message('note_off', channel=0, note=60, velocity=64, time=3)
+  poll: None
+  m = MetaMessage('marker', text='x', time=0)
+  send m: TypeError: argument to send() must be a Message
+  f = FrozenMessage('note_on', channel=0, note=61, velocity=64, time=0)
+  send f: ok
+  poll: FrozenMessage('note_on', channel=0, note=61, velocity=64, time=0)
+  closed p
+  p: <closed I/O port 'loop' (EchoPort)>
+  send a: ValueError: send() called on closed port
+  poll: None
+  receive: ValueError: receive() called on closed port
+  closed p
+== reset and panic
+  p = <open I/O port 'synth' (EchoPort)>
+  reset p
+  panic p
+  iter_pending: 48 messages
+    control_change channel=0 control=123 value=0 time=0
+    control_change channel=0 control=121 value=0 time=0
+    control_change channel=1 control=123 value=0 time=0
+    control_change channel=1 control=121 value=0 time=0
+    control_change channel=2 control=123 value=0 time=0
+    control_change channel=2 control=121 value=0 time=0
+    control_change channel=3 control=123 value=0 time=0
+    control_change channel=3 control=121 value=0 time=0
+    control_change channel=4 control=123 value=0 time=0
+    control_change channel=4 control=121 value=0 time=0
+    control_change channel=5 control=123 value=0 time=0
+    control_change channel=5 control=121 value=0 time=0
+    control_change channel=6 control=123 value=0 time=0
+    control_change channel=6 control=121 value=0 time=0
+    control_change channel=7 control=123 value=0 time=0
+    control_change channel=7 control=121 value=0 time=0
+    control_change channel=8 control=123 value=0 time=0
+    control_change channel=8 control=121 value=0 time=0
+    control_change channel=9 control=123 value=0 time=0
+    control_change channel=9 control=121 value=0 time=0
+    control_change channel=10 control=123 value=0 time=0
+    control_change channel=10 control=121 value=0 time=0
+    control_change channel=11 control=123 value=0 time=0
+    control_change channel=11 control=121 value=0 time=0
+    control_change channel=12 control=123 value=0 time=0
+    control_change channel=12 control=121 value=0 time=0
+    control_change channel=13 control=123 value=0 time=0
+    control_change channel=13 control=121 value=0 time=0
+    control_change channel=14 control=123 value=0 time=0
+    control_change channel=14 control=121 value=0 time=0
+    control_change channel=15 control=123 value=0 time=0
+    control_change channel=15 control=121 value=0 time=0
+    control_change channel=0 control=120 value=0 time=0
+    control_change channel=1 control=120 value=0 time=0
+    control_change channel=2 control=120 value=0 time=0
+    control_change channel=3 control=120 value=0 time=0
+    control_change channel=4 control=120 value=0 time=0
+    control_change channel=5 control=120 value=0 time=0
+    control_change channel=6 control=120 value=0 time=0
+    control_change channel=7 control=120 value=0 time=0
+    control_change channel=8 control=120 value=0 time=0
+    control_change channel=9 control=120 value=0 time=0
+    control_change channel=10 control=120 value=0 time=0
+    control_change channel=11 control=120 value=0 time=0
+    control_change channel=12 control=120 value=0 time=0
+    control_change channel=13 control=120 value=0 time=0
+    control_change channel=14 control=120 value=0 time=0
+    control_change channel=15 control=120 value=0 time=0
+  poll: None
+  q = <open I/O port '' (EchoPort)>
+  q: <open I/O port '' (EchoPort)>
+  send note_on: ok
+  closed q
+  pending on q: 33
+  reset q
+== program: report
+async.mid: format 2, 2 tracks, 96 ticks per beat
+  track 0 '(no name)': 3 messages: end_of_track 1, note_on 2
+    1 notes on channel 0, C4 to C4
+  track 1 '(no name)': 3 messages: end_of_track 1, note_on 2
+    1 notes on channel 1, G4 to G4
+  tracks play on their own; no tempo map or length
+bad_frame_rate.mid: cannot read: KeyError: 4
+bad_key.mid: cannot read: KeySignatureError: Could not decode key with 1 flats and mode 2
+bad_key_sharps.mid: cannot read: KeySignatureError: Could not decode key with 9 sharps and mode 0
+drums.mid: format 0, 1 tracks, 96 ticks per beat
+  track 0 'Drums': 38 messages: control_change 1, end_of_track 1, note_on 32, pitchwheel 1, set_tempo 1, sysex 1, track_name 1
+    16 notes on channel 9, C2 to F#2
+  tick 0: 130.00 bpm
+  ends at tick 820, 3.942 seconds
+format_three.mid: format 3, 1 tracks, 96 ticks per beat
+  track 0 '(no name)': 1 messages: end_of_track 1
+  ends at tick 0, 0.000 seconds
+hot_sysex.mid: cannot read: ValueError: data byte must be in range 0..127
+hot_velocity.mid: cannot read: OSError: data byte must be in range 0..127
+huge_sysex.mid: cannot read: OSError: Message length 2000000 exceeds maximum length 1000000
+lyrics.mid: format 1, 1 tracks, 240 ticks per beat
+  track 0 'FrÃ¨re Jacques': 14 messages: end_of_track 1, lyrics 4, note_off 4, note_on 4, track_name 1
+    4 notes on channel 0, C4 to E4
+  ends at tick 960, 2.000 seconds
+minuet.mid: format 1, 3 tracks, 480 ticks per beat
+  track 0 'Minuet in G': 8 messages: copyright 1, end_of_track 1, key_signature 1, marker 1, set_tempo 2, time_signature 1, track_name 1
+  track 1 'Harpsichord RH': 67 messages: end_of_track 1, note_on 64, program_change 1, track_name 1
+    32 notes on channel 0, F#4 to G5
+  track 2 'Harpsichord LH': 30 messages: control_change 1, end_of_track 1, note_off 13, note_on 13, program_change 1, track_name 1
+    13 notes on channel 1, D3 to D4
+  tick 0: 3/4 time
+  tick 0: key of G
+  tick 0: 120.00 bpm
+  tick 5760: 100.00 bpm
+  ends at tick 11520, 13.200 seconds
+no_track.mid: cannot read: EOFError: 
+not_midi.mid: cannot read: OSError: MThd not found. Probably not a MIDI file
+odd.mid: format 1, 1 tracks, 120 ticks per beat
+  track 0 '(no name)': 23 messages: aftertouch 1, channel_prefix 1, clock 1, cue_marker 1, device_name 1, end_of_track 1, instrument_name 1, key_signature 1, midi_port 2, pitchwheel 2, polytouch 1, quarter_frame 1, sequence_number 2, sequencer_specific 1, smpte_offset 1, song_select 1, songpos 1, text 1, tune_request 1, unknown_meta 1
+  tick 0: key of Bbm
+  ends at tick 12, 0.050 seconds
+overrun.mid: cannot read: OSError: data byte must be in range 0..127
+running_first.mid: cannot read: OSError: running status without last_status
+short_header.mid: cannot read: EOFError: 
+short_seq.mid: cannot read: IndexError: list index out of range
+smpte.mid: format 0, 1 tracks, -6360 ticks per beat
+  track 0 'Timecode': 7 messages: end_of_track 1, note_on 4, smpte_offset 1, track_name 1
+    2 notes on channel 0, C4 to E4
+  ends at tick 2000, -0.157 seconds
+tiny.mid: format 0, 1 tracks, 96 ticks per beat
+  track 0 '(no name)': 3 messages: end_of_track 1, note_on 2
+    1 notes on channel 0, C4 to C4
+  ends at tick 96, 0.500 seconds
+truncated.mid: cannot read: EOFError: 
+undefined_status.mid: cannot read: OSError: undefined status byte 0xf4
+wrong_chunk.mid: cannot read: OSError: no MTrk header at start of track
+== program: transpose
+  tempo 500000 -> 400000 (150.00 bpm)
+  tempo 600000 -> 480000 (125.00 bpm)
+  90 note messages moved
+  saved out/minuet_in_c.mid: 531 bytes, length 10.560 seconds
+    0000: 4d 54 68 64 00 00 00 06 00 01 00 03 01 e0 4d 54
+    0010: 72 6b 00 00 00 53 00 ff 03 12 4d 69 6e 75 65 74
+    0020: 20 69 6e 20 47 20 28 69 6e 20 43 29 00 ff 02 0d
+  reloaded: 3 tracks, same messages: True
+  track 0 'Minuet in G (in C)': 4 of 8 messages differ from the original
+  track 1 'Harpsichord RH (in C)': 65 of 67 messages differ from the original
+  track 2 'Harpsichord LH (in C)': 27 of 30 messages differ from the original
+  first notes:
+    note_on channel=0 note=79 velocity=80 time=0 (G5)
+    note_on channel=0 note=79 velocity=0 time=480 (G5)
+    note_on channel=0 note=72 velocity=80 time=0 (C5)
+    note_on channel=0 note=72 velocity=0 time=240 (C5)
+    note_on channel=0 note=74 velocity=80 time=0 (D5)
+    note_on channel=0 note=74 velocity=0 time=240 (D5)
+== program: librarian
+bank.txt.syx: 3 messages
+  Roland DT1 model 0x6a device 0x10 address 03000000 12 bytes 'Warm Pad    ' checksum 31 ok
+  Yamaha: XG system on
+  universal non-realtime: General MIDI on
+empty.syx: 0 messages
+garbled.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 9
+jv1080.syx: 7 messages
+  Roland DT1 model 0x6a device 0x10 address 00000000 1 bytes '.' checksum 01 ok
+  Roland DT1 model 0x6a device 0x10 address 03000000 12 bytes 'Warm Pad    ' checksum 31 ok
+  Roland DT1 model 0x6a device 0x10 address 0300000c 3 bytes '..@' checksum 2E ok
+  Roland DT1 model 0x6a device 0x10 address 03001000 1 bytes '.' checksum 6B bad, want 68
+  Yamaha: XG system on
+  universal non-realtime: General MIDI on
+  universal realtime: master volume 12288
+note.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 0
+odd_digit.syx: ValueError: non-hexadecimal number found in fromhex() arg at position 7
+tabs.syx: 1 messages
+  universal non-realtime: General MIDI on
+unended.syx: 1 messages
+  universal non-realtime: General MIDI on
+keeping 6 messages
+out/library.syx: 72 bytes, reads back 6 messages, same: True
+out/library.txt.syx: 216 bytes, reads back 6 messages, same: True
+F0 41 10 6A 12 03 00 00 00 57 61 72 6D 20 50 61 64 20 20 20 20 31 F7
+F0 43 10 4C 00 00 7E 00 F7
+F0 7E 7F 09 01 F7
+F0 41 10 6A 12 00 00 00 00 7F 01 F7
+F0 41 10 6A 12 03 00 00 0C 01 02 40 2E F7
+F0 7F 7F 04 01 00 60 F7
+== program: compose
+broken.txt:
+  stopped: LookupError: Unknown message type 'noteon'
+chords.txt:
+  9 messages, 2.45 seconds; saved out/chords.mid: 77 bytes, length 2.450
+=== Track 0
+MetaMessage('track_name', name='chords', time=0)
+MetaMessage('set_tempo', tempo=600000, time=0)
+Message('note_on', channel=1, note=48, velocity=70, time=0)
+Message('note_on', channel=1, note=55, velocity=70, time=0)
+Message('note_on', channel=1, note=64, velocity=70, time=0)
+Message('note_off', channel=1, note=48, velocity=64, time=960)
+Message('note_off', channel=1, note=55, velocity=64, time=0)
+Message('note_off', channel=1, note=64, velocity=64, time=0)
+Message('note_on', channel=1, note=50, velocity=70, time=0)
+Message('note_off', channel=1, note=50, velocity=64, time=800)
+Message('aftertouch', channel=1, value=40, time=200)
+MetaMessage('end_of_track', time=0)
+riff.txt:
+  skipped: line 10: channel must be in range 0..15
+  skipped: line 12: pitchwheel value must be in range -8192..8191
+  skipped: line 15: invalid literal for int() with base 10: '6O'
+  skipped: line 17: unable to parse data bytes
+  skipped: line 18: not enough values to unpack (expected 2, got 1)
+  15 messages, 3.8500000000000005 seconds; saved out/riff.mid: 108 bytes, length 3.850
+=== Track 0
+MetaMessage('track_name', name='riff', time=0)
+MetaMessage('set_tempo', tempo=600000, time=0)
+Message('program_change', channel=0, program=24, time=0)
+Message('control_change', channel=0, control=7, value=100, time=0)
+Message('note_on', channel=0, note=64, velocity=90, time=0)
+Message('note_off', channel=0, note=64, velocity=64, time=240)
+Message('note_on', channel=0, note=67, velocity=90, time=0)
+Message('note_off', channel=0, note=67, velocity=64, time=240)
+Message('note_on', channel=0, note=69, velocity=95, time=0)
+Message('note_off', channel=0, note=69, velocity=64, time=480)
+Message('pitchwheel', channel=0, pitch=-2048, time=40)
+Message('pitchwheel', channel=0, pitch=0, time=40)
+Message('sysex', data=(65, 16, 66, 18), time=80)
+Message('note_on', channel=0, note=72, velocity=100, time=800)
+Message('note_off', channel=0, note=72, velocity=64, time=360)
+Message('control_change', channel=0, control=64, value=127, time=0)
+Message('control_change', channel=0, control=64, value=0, time=800)
+MetaMessage('end_of_track', time=0)
+== program: thru
+  <open I/O port 'thru' (EchoPort)>
+  sent 92, dropped 1, played 13.200000000000003 seconds
+  received 1 control_change
+  received 13 note_off
+  received 77 note_on
+  received 1 program_change
+    program_change channel=0 program=6 time=0
+    note_on channel=0 note=74 velocity=64 time=0
+    control_change channel=1 control=7 value=90 time=0
+    note_on channel=1 note=55 velocity=64 time=0
+    note_on channel=0 note=74 velocity=0 time=0.5
+  <closed I/O port 'thru' (EchoPort)>
+  after close: 32 pending, first control_change channel=0 control=123 value=0 time=0, last control_change channel=15 control=121 value=0 time=0
+  receive: ValueError: receive() called on closed port
