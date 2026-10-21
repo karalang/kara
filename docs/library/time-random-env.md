@@ -10,9 +10,12 @@ In `std.time`:
 
 | Function | Effects | Returns |
 |---|---|---|
-| `Clock.now()` | `reads(Clock)` | An `Instant`: a reading of the monotonic clock |
+| `Instant.now()` | `reads(Clock)` | An `Instant`: a reading of the monotonic clock, which never goes backwards |
+| `Clock.now()` | `reads(Clock)` | An `i64`: whole seconds since the Unix epoch, read from the wall clock, so it can jump when the system clock is set. It is for protocols that count epoch seconds, such as a JWT `exp` claim |
 | `SystemTime.now()` | `reads(Clock)` | A `SystemTime`: the current wall-clock time |
 | `sleep(d: Duration)` | `blocks`, `suspends`, `reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
+
+Never measure elapsed time with `Clock.now()`: a wall-clock reading can jump, and whole seconds are too coarse. Use `Instant.now()`.
 
 All time sources are one resource, `Clock`: wall and monotonic time differ in the API, not in conflict analysis, and two calls that both read `Clock` do not conflict.
 
@@ -35,14 +38,14 @@ impl Duration {
 ```
 
 ```kara
-import std.time.{Clock, Duration, sleep};
+import std.time.{Duration, Instant, sleep};
 
 fn backoff(attempt: i64) {
     sleep(Duration.ms(100 * attempt));
 }
 
 fn timed(work: Fn()) -> Duration {
-    let start = Clock.now();
+    let start = Instant.now();
     work();
     start.elapsed()
 }
@@ -101,6 +104,8 @@ trait RandomProvider {
 ```
 
 Every method has a default body that panics, naming the resource and the method (`Env.var called on a provider that does not implement it`). So a fake states only the methods it uses, a test never reaches the real environment, clock or random source by accident, and a method added to a trait later breaks no existing fake.
+
+A `ClockProvider` fake implements the methods the code under test reaches: `Instant.now()` reads `monotonic_ns`, `SystemTime.now()` reads `wall_ns`, and `Clock.now()` reads `now`. Nothing keeps the three consistent with each other in a fake. That is acceptable, because a method the fake leaves out panics rather than answering.
 
 ```kara
 struct FakeEnv {}

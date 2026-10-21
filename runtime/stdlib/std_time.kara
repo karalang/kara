@@ -47,8 +47,8 @@ impl SystemTime {
 /// A point on the monotonic clock, for measuring elapsed time:
 /// `later - earlier` is a `Duration`, and `i + d` an `Instant`.
 ///
-/// The spec reads one with `Clock.now()`; until `Clock.now()` returns an
-/// `Instant` (B-2026-10-15-112), it is read with `Instant.now()`.
+/// Read one with `Instant.now()`. `Clock.now()` is wall-clock epoch
+/// seconds, not an `Instant` (docs/library/time-random-env.md).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Instant {
     ns: i64,
