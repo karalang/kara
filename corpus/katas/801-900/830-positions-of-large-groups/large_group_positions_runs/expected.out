@@ -1,0 +1,15 @@
+"abbxxxxzzy" -> [[3, 6]]
+"abc" -> []
+"abcdddeeeeaabbbcd" -> [[3, 5], [6, 9], [12, 14]]
+"aba" -> []
+"a" -> []
+"aa" -> []
+"aaa" -> [[0, 2]]
+"aaab" -> [[0, 2]]
+"baaa" -> [[1, 3]]
+"aaabbb" -> [[0, 2], [3, 5]]
+"aabbbaaaa" -> [[2, 4], [5, 8]]
+1000 letters of 2: 127 groups, checksum 567487260
+1000 letters of 3: 65 groups, checksum 246466077
+1000 letters of 1: 1 groups, checksum 999
+300 random strings: 376 groups, checksum 885782626

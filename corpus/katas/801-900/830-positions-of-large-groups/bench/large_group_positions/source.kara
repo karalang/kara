@@ -1,0 +1,56 @@
+// Benchmark for #830: Positions of Large Groups -- the ★ arm (two pointers).
+//
+// From the start i of each group, j runs on while the letter stays the
+// same, and the group s[i..j] is kept when it holds 3 or more.
+
+fn large_group_positions(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j < n and b[j] == b[i] {
+            j += 1;
+        }
+        if j - i >= 3 {
+            groups.push([i, j - 1]);
+        }
+        i = j;
+    }
+    groups
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 strings of 1,000 letters, LeetCode's longest, drawn once: the
+    // g-th over 1 + g % 3 letters, so that most hold many groups. Each
+    // round answers the next one.
+    let count = 64;
+    let rounds = 200000;
+    let n = 1000;
+    let mut seed: i64 = 830;
+    let mut strings: Vec[String] = Vec.new();
+    for g in 0..count {
+        let letters = 1 + g % 3;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        strings.push(s);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let groups = large_group_positions(strings[round % count]);
+        total += groups.len();
+        for g in groups.iter() {
+            checksum = (checksum * 131 + g[0] * 1009 + g[1]) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {count} strings: {total} groups, checksum {checksum}");
+}

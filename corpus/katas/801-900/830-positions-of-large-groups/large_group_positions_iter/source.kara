@@ -1,0 +1,76 @@
+// LeetCode #830: Positions of Large Groups -- an iterator chain.
+//
+// The starts of the groups a `filter` over the indices, each paired by
+// `map` with the next start, or n, to give its end, and the pairs of 3
+// or more kept by `filter` and `collect`ed. O(n).
+
+fn large_group_positions(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let starts: Vec[i64] = (0..n).filter(|i| i == 0 or b[i] != b[i - 1]).collect();
+    let m = starts.len();
+    (0..m)
+        .map(|k| (starts[k], if k + 1 < m { starts[k + 1] } else { n }))
+        .filter(|(a, z)| z - a >= 3)
+        .map(|(a, z)| [a, z - 1])
+        .collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(seed: mut ref i64, n: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {large_group_positions(s.clone())}");
+}
+
+fn summary(label: String, s: String) {
+    let groups = large_group_positions(s);
+    let mut check = 0;
+    for g in groups.iter() {
+        check = (check * 131 + g[0] * 1009 + g[1]) % 1000000007;
+    }
+    println(f"{label}: {groups.len()} groups, checksum {check}");
+}
+
+fn main() {
+    show("abbxxxxzzy");
+    show("abc");
+    show("abcdddeeeeaabbbcd");
+    show("aba");
+    show("a");
+    show("aa");
+    show("aaa");
+    show("aaab");
+    show("baaa");
+    show("aaabbb");
+    show("aabbbaaaa");
+    // LeetCode's longest, 1,000 letters: random over two letters, over
+    // three, and one letter throughout.
+    let mut seed = 830;
+    summary("1000 letters of 2", random_string(mut seed, 1000, 2));
+    summary("1000 letters of 3", random_string(mut seed, 1000, 3));
+    summary("1000 letters of 1", random_string(mut seed, 1000, 1));
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let letters = 1 + next_random(mut seed) % 3;
+        for g in large_group_positions(random_string(mut seed, n, letters)).iter() {
+            total += 1;
+            check = (check * 131 + g[0] * 1009 + g[1]) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {total} groups, checksum {check}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/830-positions-of-large-groups/bench/large_group_positions.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "eafbee214"
+extracted_src = "62eb4f0a"
+model_rev = "583cfb0d"
+model_src = "62eb4f0a"

@@ -1,0 +1,252 @@
+// LeetCode #830: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random strings,
+// against the statement read interval by interval.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn large_group_positions_star(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j < n and b[j] == b[i] {
+            j += 1;
+        }
+        if j - i >= 3 {
+            groups.push([i, j - 1]);
+        }
+        i = j;
+    }
+    groups
+}
+
+// ---- one-pass arm ---------------------------------------------------
+
+fn large_group_positions_pass(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    let mut start = 0;
+    for i in 1..n + 1 {
+        if i == n or b[i] != b[i - 1] {
+            if i - start >= 3 {
+                groups.push([start, i - 1]);
+            }
+            start = i;
+        }
+    }
+    groups
+}
+
+// ---- run-length arm -------------------------------------------------
+
+fn large_group_positions_runs(s: String) -> Vec[Vec[i64]] {
+    let mut runs: Vec[(u8, i64)] = Vec.new();
+    for c in s.bytes() {
+        let k = runs.len();
+        if k > 0 and runs[k - 1].0 == c {
+            runs[k - 1].1 += 1;
+        } else {
+            runs.push((c, 1));
+        }
+    }
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    let mut at = 0;
+    for (_, count) in runs.iter() {
+        if count >= 3 {
+            groups.push([at, at + count - 1]);
+        }
+        at += count;
+    }
+    groups
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn large_group_positions_iter(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let starts: Vec[i64] = (0..n).filter(|i| i == 0 or b[i] != b[i - 1]).collect();
+    let m = starts.len();
+    (0..m)
+        .map(|k| (starts[k], if k + 1 < m { starts[k + 1] } else { n }))
+        .filter(|(a, z)| z - a >= 3)
+        .map(|(a, z)| [a, z - 1])
+        .collect()
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: every interval [i, j] of 3 or more
+// letters that are all the same, kept when it cannot grow at either end.
+fn statement(s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        for j in i + 2..n {
+            let mut same = true;
+            for k in i..j + 1 {
+                if b[k] != b[i] {
+                    same = false;
+                }
+            }
+            let left = i == 0 or b[i - 1] != b[i];
+            let right = j == n - 1 or b[j + 1] != b[j];
+            if same and left and right {
+                groups.push([i, j]);
+            }
+        }
+    }
+    groups
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, s: String) -> Vec[Vec[i64]] {
+    if arm == 0 {
+        large_group_positions_star(s)
+    } else if arm == 1 {
+        large_group_positions_pass(s)
+    } else if arm == 2 {
+        large_group_positions_runs(s)
+    } else {
+        large_group_positions_iter(s)
+    }
+}
+
+fn reversed(s: String) -> String {
+    let b = s.bytes();
+    let mut r = String.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        r.push(b[i] as char);
+        i -= 1;
+    }
+    r
+}
+
+fn renamed(s: String, k: i64) -> String {
+    let mut r = String.new();
+    for c in s.bytes() {
+        r.push((b'a' + (((c - b'a') as i64 + k) % 26) as u8) as char);
+    }
+    r
+}
+
+// the groups of the string read backwards, put back in the forward order
+fn mirrored(groups: Vec[Vec[i64]], n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = groups.len() - 1;
+    while k >= 0 {
+        out.push([n - 1 - groups[k][1], n - 1 - groups[k][0]]);
+        k -= 1;
+    }
+    out
+}
+
+// the groups after the last letter is written three more times
+fn extended(groups: Vec[Vec[i64]], s: String) -> Vec[Vec[i64]] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut start = n - 1;
+    while start > 0 and b[start - 1] == b[n - 1] {
+        start -= 1;
+    }
+    let mut out = groups.clone();
+    let m = out.len();
+    if m > 0 and out[m - 1][1] == n - 1 {
+        out[m - 1][1] = n + 2;
+    } else {
+        out.push([start, n + 2]);
+    }
+    out
+}
+
+fn main() {
+    let names = ["star", "pass", "runs", "iter"];
+    let properties = ["answer", "reversed", "renamed", "last letter three more times"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 830;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 24;
+        let mut s = String.new();
+        if kind == 0 {
+            // one or two letters, so that long groups are common
+            let letters = 1 + next_random(mut seed) % 2;
+            for _ in 0..n {
+                s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+            }
+        } else if kind == 1 {
+            // up to 26 letters, so that groups are rare
+            let letters = 1 + next_random(mut seed) % 26;
+            for _ in 0..n {
+                s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+            }
+        } else if kind == 2 {
+            // runs of 1 to 5 of one letter, the next one different
+            let mut c = 0;
+            while s.len() < n {
+                c = (c + 1 + next_random(mut seed) % 3) % 4;
+                for _ in 0..1 + next_random(mut seed) % 5 {
+                    if s.len() < n {
+                        s.push((b'a' + c as u8) as char);
+                    }
+                }
+            }
+        } else {
+            // runs of exactly 2, 3 or 4, around the boundary of large
+            let mut c = 0;
+            while s.len() < n {
+                c = (c + 1) % 3;
+                for _ in 0..2 + next_random(mut seed) % 3 {
+                    if s.len() < n {
+                        s.push((b'a' + c as u8) as char);
+                    }
+                }
+            }
+        }
+        let want = statement(s.clone());
+        let k = 1 + next_random(mut seed) % 25;
+        let last = s.bytes()[s.len() - 1] as char;
+        let mut longer = s.clone();
+        for _ in 0..3 {
+            longer.push(last);
+        }
+        for arm in 0..4 {
+            let got = answer(arm, s.clone());
+            let oks = [
+                got == want,
+                mirrored(answer(arm, reversed(s.clone())), s.len()) == got,
+                answer(arm, renamed(s.clone(), k)) == got,
+                answer(arm, longer.clone()) == extended(got.clone(), s.clone()),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: \"{s}\" -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, pass {by_arm[1]}, runs {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, renamed {by_property[2]}, last letter three more times {by_property[3]}");
+}
