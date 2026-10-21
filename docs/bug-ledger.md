@@ -174,7 +174,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
 | B-2026-10-21-18 | 2026-10-21 | interp+codegen | medium | A user `struct Err` breaks the prelude `Err(..)` constructor in the MIR builder: `return Err(Err { msg: .. })` in a `Result[i64, Err]` fn passes `karac check` but `__mir-run` fails "call of unknown function Err" and `__mir-llvm-run` fails "native `Err` is not lowered yet"; `run --interp` prints the right answer. The struct sibling of the enum-variant case B-2026-10-15-3 | — |
 | B-2026-10-21-19 | 2026-10-21 | typecheck | low | An un-annotated `if`/`else` whose branches are tuples fails to unify when one branch leaves an inference variable (`Vec.new()`) and the other has a bare `None`: `if/else branches have incompatible types: '(Vec[?T0], Option[i64])' and '(Vec[i64], Option[T])'` | — |
-| B-2026-10-21-20 | 2026-10-21 | interp+codegen | medium | `env.var(name)` returns `Err(VarError.NotPresent)` for a variable whose value is not UTF-8, on both MIR backends, where time-random-env.md says `NotUnicode` | — |
 | B-2026-10-21-21 | 2026-10-21 | effect | medium | A random draw is still `reads(RandomSource)` in the library and the effect checker, though core semantics §14.7 (ruled 2026-10-20) says a draw writes `RandomSource`: `pub fn f() -> u64 with writes(RandomSource) { next_u64() }` is refused and `with reads(RandomSource)` is accepted | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
 
@@ -4313,6 +4312,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-13 | interp+codegen | medium | `IoError.from(VarError.NotPresent)` passes check but fails on both MIR backends: "call of unknown function IoError.from" | 3749d30728 |
 | B-2026-10-21-14 | typecheck | medium | `env.var(name)` with `name: Str` is refused ("expected 'ref String', found 'Str'"): runtime/stdlib/io.kara declares `Env.var(name: ref String)` where… | 3749d30728 |
 | B-2026-10-21-15 | interp+codegen | medium | `File.append(p)` with `p: String` moves `p` on the MIR backends ("use of _1, which may have been moved") though it takes `path: Str` like `File.open`… | 3749d30728 |
+| B-2026-10-21-20 | interp+codegen | medium | `env.var(name)` returns `Err(VarError.NotPresent)` for a variable whose value is not UTF-8, on both MIR backends, where time-random-env.md says `NotU… | 2b32e45cf9 |
 
 </details>
 
