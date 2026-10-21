@@ -960,12 +960,21 @@ impl Origins {
                 let d = destination.local.index();
                 assigned[d].insert(block);
                 let ins: Vec<usize> = std::iter::once(func).chain(args).filter_map(root).collect();
+                // `TaskGroup.spawn(&g, c)` stores the task's closure in the
+                // group and writes nothing into the closure, so the values
+                // two tasks capture stay apart (B-2026-10-21-68).
+                let spawn = matches!(
+                    func,
+                    Operand::Const(Const { kind: ConstKind::FnDef(i), .. })
+                        if i.name == "TaskGroup.spawn"
+                );
+                let task = args.get(1).and_then(root).filter(|_| spawn);
                 for &a in &ins {
                     flow(&mut preds, a, d, true);
                     // The callee may store `a` through any argument it can
                     // write through.
                     for &b in &ins {
-                        if by_ref[b] {
+                        if by_ref[b] && Some(b) != task {
                             flow(&mut preds, a, b, false);
                         }
                     }
@@ -1187,6 +1196,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             vec![]
         }
         ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
+        // A group's own natives; `spawn` is charged with its task's effects
+        // in `call_effects`.
+        ("TaskGroup", "new" | "end" | "drop" | "cancel") => vec![HEAP],
+        ("TaskHandle", "join") => vec![(Blocks, "", None)],
         ("Mutex", "release") => vec![],
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no
@@ -1784,6 +1797,13 @@ impl<'p> Analysis<'p> {
             }
             return;
         }
+        // A `par` branch runs as a task (B-2026-10-21-68): the spawn has the
+        // effects of the closure it starts.
+        if inst.name == "TaskGroup.spawn" {
+            eff.add(Effect::new(Verb::Allocates, "Heap", Key::Any));
+            eff.union(self.task_effects(body, defs, args.get(1), summaries));
+            return;
+        }
         let native = inst.def == DefId(u32::MAX);
         let (base, method) = split_native(&inst.name);
         match native_effects(base, method).filter(|_| native) {
@@ -1811,6 +1831,95 @@ impl<'p> Analysis<'p> {
             None if native => eff.union(EffectSet::unknown(format!("native {}", inst.name))),
             None => eff.union(EffectSet::unknown(format!("no body for {}", inst.name))),
         }
+    }
+
+    /// The effects of the task a `TaskGroup.spawn` starts with the closure
+    /// `arg`. When this body makes that closure, what the closure's body
+    /// reaches through its environment is keyed by the value the matching
+    /// capture took (`Param(1, [k, ..])` is the `k`-th capture's key), so a
+    /// task keeps the keys its code would have had in place. Every effect
+    /// when the closure cannot be found.
+    fn task_effects(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        arg: Option<&Operand>,
+        summaries: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let Some(arg) = arg else {
+            return opaque();
+        };
+        let made = arg
+            .place()
+            .filter(|p| p.projection.is_empty())
+            .and_then(|p| {
+                body.blocks
+                    .iter()
+                    .flat_map(|b| &b.statements)
+                    .find_map(|st| match &st.kind {
+                        StatementKind::Assign(
+                            d,
+                            Rvalue::Aggregate(AggregateKind::Closure { .. }, ops),
+                        ) if d.projection.is_empty() && d.local == p.local => Some(ops),
+                        _ => None,
+                    })
+            });
+        let Some(ops) = made else {
+            return self.fn_value_effects(body, defs, Some(arg), summaries);
+        };
+        let caps: Vec<Key> = ops
+            .iter()
+            .map(|o| match o.place() {
+                Some(p) => place_key(body, defs, p),
+                None => Key::Fresh,
+            })
+            .collect();
+        let bodies = self.fn_value_bodies(body, arg);
+        if bodies.is_empty() {
+            return opaque();
+        }
+        let mut out = EffectSet::default();
+        for b in bodies {
+            let Some(s) = summaries.get(&b) else {
+                continue;
+            };
+            out.unknown |= s.unknown;
+            out.why.extend(s.why.iter().cloned());
+            if !s.calls.is_empty() {
+                out.union(opaque());
+            }
+            for e in &s.effects {
+                let key = match &e.key {
+                    Key::Param(1, path) => match path.split_first() {
+                        Some((k, rest)) => match caps.get(*k as usize) {
+                            Some(Key::Param(r, base)) => {
+                                let mut base = base.clone();
+                                base.extend(rest);
+                                base.truncate(MAX_PATH);
+                                Key::Param(*r, base)
+                            }
+                            Some(Key::Local(r, base)) => {
+                                let mut base = base.clone();
+                                base.extend(rest);
+                                base.truncate(MAX_PATH);
+                                Key::Local(*r, base)
+                            }
+                            Some(Key::Fresh) => Key::Fresh,
+                            _ => Key::Any,
+                        },
+                        None => Key::Any,
+                    },
+                    Key::Param(..) => Key::Any,
+                    k => k.clone(),
+                };
+                out.add(Effect {
+                    verb: e.verb,
+                    class: e.class.clone(),
+                    key,
+                });
+            }
+        }
+        out
     }
 
     /// The effects of calling the function value passed as `arg`: the

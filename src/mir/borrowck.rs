@@ -213,6 +213,16 @@ pub fn check_borrows(
     }
 }
 
+/// Whether blocks `a` and `b` lie in two different branches of one `par`
+/// region of `body`.
+fn in_sibling_branches(body: &Body, a: usize, b: usize) -> bool {
+    let (a, b) = (BasicBlock(a as u32), BasicBlock(b as u32));
+    body.par_regions.iter().any(|r| {
+        let of = |x| r.branches.iter().position(|br| br.contains(&x));
+        matches!((of(a), of(b)), (Some(i), Some(j)) if i != j)
+    })
+}
+
 /// One error of [`check_borrows`], with what a report in the program's own
 /// terms needs (`karac check`, B-2026-10-19-7): where it is, its code, and
 /// the places it names as the program spells them, where it does.
@@ -304,6 +314,13 @@ pub fn borrow_errors(
                 for li in live_loans.iter() {
                     let loan = &loans[li];
                     if loan.at == at {
+                        continue;
+                    }
+                    // Two branches of one `par` run as tasks of one group,
+                    // so a branch's borrow lives while the others run; the
+                    // `par` check refuses that conflict, naming both branches
+                    // (core semantics §11.2; B-2026-10-21-68).
+                    if in_sibling_branches(body, loan.at.0, bi) {
                         continue;
                     }
                     if conflicts(loan, &place, access) {

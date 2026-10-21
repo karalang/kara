@@ -640,3 +640,197 @@ fn main() {
 "
     );
 }
+
+/// B-2026-10-21-68: `par` branches run as tasks, so a branch may wait on
+/// another. The consumer comes first and the channel holds one message, so
+/// running the branches one after another deadlocks (core semantics §11.1);
+/// the producer moves its `Sender` in and closes the channel as it ends.
+#[test]
+fn mir_tasks_par_branches_wait_on_each_other() {
+    let src = r#"
+fn produce(tx: own Sender[i64]) { for i in 1..4 { tx.send(i).unwrap(); } }
+fn consume(rx: own Receiver[i64]) -> i64 {
+    let mut s = 0;
+    for v in rx.into_iter() { println(v); s += v; }
+    s
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (s, _) = par { consume(rx), produce(tx) };
+    println(f"sum {s}");
+}
+"#;
+    assert_eq!(stdout_on_both("par_wait", src), "1\n2\n3\nsum 6\n");
+}
+
+/// B-2026-10-21-68: in a function that returns a `Result` or `Option`, each
+/// `par` task returns its branch wrapped, so a `?` ends that branch alone;
+/// once every task is joined the source-earliest error is returned and the
+/// other results drop, a `Drop` body included (core semantics §11.7).
+#[test]
+fn mir_tasks_par_branches_fail_after_every_task_is_joined() {
+    let src = r#"
+struct Loud { n: i64 }
+impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn loud(n: i64) -> Result[Loud, String] { Ok(Loud { n: n }) }
+fn fail(n: i64) -> Result[i64, String] { Err(f"fail {n}") }
+fn produce(tx: own Sender[i64], k: i64) -> i64 { for i in 0..k { tx.send(i).unwrap(); } k }
+fn sum(rx: own Receiver[i64]) -> Result[i64, String] {
+    let mut s = 0;
+    for v in rx.into_iter() { s += v; }
+    if s > 100 { fail(s) } else { Ok(s) }
+}
+fn pipe(k: i64) -> Result[i64, String] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (a, b) = par { produce(tx, k), sum(rx)? };
+    Ok(a + b)
+}
+fn three() -> Result[i64, String] {
+    let (x, y, z) = par { loud(1)?, fail(2)?, fail(3)? };
+    Ok(x.n + y + z)
+}
+fn pick(k: i64) -> Option[i64] { if k > 0 { Some(k) } else { None } }
+fn opt(k: i64) -> Option[i64] {
+    let (a, b) = par { pick(k)?, pick(2)? };
+    Some(a + b)
+}
+fn main() {
+    println(f"{pipe(5)}");
+    println(f"{pipe(20)}");
+    println(f"{three()}");
+    println(f"{opt(3)} {opt(0)}");
+}
+"#;
+    assert_eq!(
+        stdout_on_both("par_fail", src),
+        "Ok(15)\nErr(fail 190)\ndrop 1\nErr(fail 2)\nSome(5) None\n"
+    );
+}
+
+/// B-2026-10-21-68: the `par` conflict check sees through the branches'
+/// tasks. Two branches that each send on a channel of their own pass
+/// (design.md § Value-rooted resources). A branch that writes a place a sibling uses is refused
+/// on both backends as a `par` conflict naming both branches: the borrow
+/// check leaves a conflict between sibling branches to it, since their
+/// tasks overlap, so this check is the one that refuses it.
+#[test]
+fn mir_tasks_par_conflicts_are_seen_through_the_tasks() {
+    let two = r#"
+fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
+    for i in from..to { tx.send(i)?; }
+    Ok(())
+}
+fn main() {
+    let (tx1, rx1): (Sender[i64], Receiver[i64]) = channel(8);
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(8);
+    let (r1, r2) = par { produce(tx1, 0, 4), produce(tx2, 4, 8) };
+    println(f"{r1.is_ok()} {r2.is_ok()} {rx1.recv().unwrap()} {rx2.recv().unwrap()}");
+}
+"#;
+    assert_eq!(stdout_on_both("par_two_channels", two), "true true 0 4\n");
+    let bump = "fn bump(x: mut ref i64) -> i64 { *x += 1; *x }\n";
+    let racy = [
+        (
+            "par_two_pushes",
+            "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    \
+             let (a, b) = par { v.push(1), v.push(2) };\n    println(f\"{v}\");\n}\n"
+                .to_string(),
+            "at line 3, branches 1 and 2 of the `par` conflict: `mutable borrow of v` and `mutable borrow of v`",
+        ),
+        (
+            "par_push_and_read",
+            "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    \
+             let (a, b) = par { v.push(1), v.len() };\n    println(f\"{v} {b}\");\n}\n"
+                .to_string(),
+            "at line 3, branches 1 and 2 of the `par` conflict: `mutable borrow of v` and `read of v`",
+        ),
+        (
+            "par_mut_ref_and_read",
+            format!(
+                "{bump}fn main() {{\n    let mut n = 1;\n    \
+                 let (a, b) = par {{ bump(mut n), n + 1 }};\n    println(f\"{{a}} {{b}}\");\n}}\n"
+            ),
+            "at line 4, branches 1 and 2 of the `par` conflict: `mutable borrow of n` and `read of n`",
+        ),
+    ];
+    for (name, src, want) in racy {
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("karac-mir-tasks-r-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("main.kara");
+        std::fs::write(&file, &src).unwrap();
+        for lane in ["__mir-run", "__mir-llvm-run"] {
+            let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .args([lane, file.to_str().unwrap()])
+                .output()
+                .unwrap();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !out.status.success(),
+                "{name} on {lane} must be refused: {err}"
+            );
+            assert!(
+                err.contains(want),
+                "{name} on {lane}: expected `{want}` in: {err}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// B-2026-10-21-68: two `par` branches that each store a `frozen` handle
+/// (`work.push(g)`) take a counted copy of it, as they did when the branches
+/// ran in place, rather than both moving the one binding into their tasks.
+#[test]
+fn mir_tasks_par_branches_each_copy_a_frozen_handle() {
+    let src = r#"
+shared struct Node { val: i64, mut kids: Vec[Node] }
+fn build(depth: i64) -> Node {
+    if depth <= 0 { return Node { val: 1, kids: [] }; }
+    Node { val: depth, kids: [build(depth - 1), build(depth - 1)] }
+}
+fn walk(g: Node) -> i64 {
+    let mut work: Vec[Node] = Vec.new();
+    work.push(g);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < work.len() {
+        let n = work[i as u64];
+        acc = acc + n.val;
+        for k in n.kids { work.push(k); }
+        i = i + 1;
+    }
+    acc
+}
+fn main() {
+    let g = freeze build(3);
+    let (x, y) = par {
+        { let mut w: Vec[Node] = Vec.new(); w.push(g); walk(w[0]) },
+        { let mut w: Vec[Node] = Vec.new(); w.push(g); walk(w[0]) + 1 },
+    };
+    println(f"{x} {y} {walk(g)}");
+}
+"#;
+    // `karac build`'s legacy ownership pass refuses passing a `frozen`
+    // alias to `push`, so the two MIR runners are checked directly.
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("karac-mir-tasks-frozen-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    for lane in ["__mir-run", "__mir-llvm-run"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args([lane, file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "19 20 19\n",
+            "{lane}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
