@@ -8128,7 +8128,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
-    /// `for i in a..b { body }` over integers.
+    /// `for i in a..b { body }` over integers; `a..` runs until a `break`
+    /// (B-2026-10-21-48).
     fn for_range(
         &mut self,
         e: &'a Expr,
@@ -8138,17 +8139,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
-        let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &iterable.kind {
+        let (left, right, inclusive): (&'a Expr, Option<&'a Expr>, bool) = match &iterable.kind {
             ExprKind::Binary {
                 op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
                 left,
                 right,
-            } => (left, right, *op == AstBinOp::RangeInclusive),
+            } => (left, Some(right), *op == AstBinOp::RangeInclusive),
             ExprKind::Range {
                 start: Some(left),
-                end: Some(right),
+                end,
                 inclusive,
-            } => (left, right, *inclusive),
+            } if end.is_some() || !*inclusive => (left, end.as_deref(), *inclusive),
             _ => return self.for_collection(e, label, pattern, iterable, body, dest),
         };
         let name = match &pattern.kind {
@@ -8156,10 +8157,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Wildcard => None,
             _ => return self.unsupported(pattern.span, "this loop pattern"),
         };
-        let (lt, rt) = (self.expr_ty(left)?, self.expr_ty(right)?);
+        let lt = self.expr_ty(left)?;
+        let rt = match right {
+            Some(r) => self.expr_ty(r)?,
+            None => lt,
+        };
         self.push_scope();
         let start = self.expr_operand(left)?;
-        let end = self.expr_operand(right)?;
+        let end = match right {
+            Some(r) => Some(self.expr_operand(r)?),
+            None => None,
+        };
         // An unsuffixed literal bound takes the other bound's type (the
         // checker records `-1000i32..1000001`'s end as an `i64`).
         let scalar = |o: &Operand| match o {
@@ -8169,7 +8177,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }) => Some(*v),
             _ => None,
         };
-        let t = if scalar(&start).is_some() && scalar(&end).is_none() {
+        let t = if scalar(&start).is_some() && end.as_ref().is_some_and(|e| scalar(e).is_none()) {
             rt
         } else {
             lt
@@ -8181,9 +8189,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             }),
             None => o,
         };
-        let (start, end) = (retype(start), retype(end));
-        let end_t = self.temp(t);
-        self.assign(end_t, Rvalue::Use(end));
+        let (start, end) = (retype(start), end.map(retype));
+        let end_t = end.map(|end| {
+            let l = self.temp(t);
+            self.assign(l, Rvalue::Use(end));
+            l
+        });
         let i = self.temp(t);
         self.assign(i, Rvalue::Use(start));
         let var = name.map(|n| self.user_local(n, t, pattern.id));
@@ -8194,23 +8205,31 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.goto(head);
         self.cur = head;
         let bool_t = self.tys().bool();
-        let c = self.temp(bool_t);
-        let cmp = if inclusive { BinOp::Le } else { BinOp::Lt };
-        self.assign(
-            c,
-            Rvalue::BinaryOp(
-                cmp,
-                Operand::Copy(Place::local(i)),
-                Operand::Copy(Place::local(end_t)),
-            ),
-        );
-        self.goto_with(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::local(c)),
-                targets: SwitchTargets::if_else(body_bb, exit),
-            },
-            body_bb,
-        );
+        match end_t {
+            Some(end_t) => {
+                let c = self.temp(bool_t);
+                let cmp = if inclusive { BinOp::Le } else { BinOp::Lt };
+                self.assign(
+                    c,
+                    Rvalue::BinaryOp(
+                        cmp,
+                        Operand::Copy(Place::local(i)),
+                        Operand::Copy(Place::local(end_t)),
+                    ),
+                );
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(c)),
+                        targets: SwitchTargets::if_else(body_bb, exit),
+                    },
+                    body_bb,
+                );
+            }
+            None => {
+                self.goto(body_bb);
+                self.cur = body_bb;
+            }
+        }
         // The body sees a copy of the counter, so assigning to the loop
         // variable inside it cannot change the iteration.
         if let Some(v) = var {
@@ -8220,7 +8239,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.cur = step;
         // `a..=b` stops at `b` before stepping, since `b` may be the type's
         // largest value (`250u8..=255u8`).
-        if inclusive {
+        if let (true, Some(end_t)) = (inclusive, end_t) {
             let last = self.temp(bool_t);
             self.assign(
                 last,

@@ -7290,3 +7290,41 @@ a
         }
     }
 }
+
+#[test]
+fn mir_for_over_an_open_range_runs_until_break() {
+    // B-2026-10-21-48: `for i in (1..)` was refused as "a `for` loop over a
+    // collection"; it counts up until a `break`, `return` or labelled jump.
+    let src = r#"
+fn first_square_over(n: i64) -> i64 {
+    for i in (1..) {
+        if i * i > n { return i; }
+    }
+    -1
+}
+fn main() {
+    for i in (1..) { if i > 3 { break; } println(f"{i}"); }
+    let mut total = 0;
+    'outer: for a in (10..) {
+        for b in (a..) {
+            if b > a + 2 { continue 'outer; }
+            if a > 11 { break 'outer; }
+            total += b;
+        }
+    }
+    println(f"{total} {first_square_over(50)}");
+}
+"#;
+    let want = "1
+2
+3
+69 8
+";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
