@@ -1616,6 +1616,13 @@ impl Walk<'_, '_> {
             if let Some(m) = self.self_modes.get(&format!("{name}.{method}")) {
                 return Some(matches!(m, SelfParam::MutRef));
             }
+            // Every `Atomic` method takes a borrowed `self`: an atomic is
+            // written through a shared reference (concurrency.md § Atomics),
+            // so `swap` is not the collection method of that name
+            // (B-2026-10-21-75).
+            if name == "Atomic" {
+                return Some(false);
+            }
             // A baked stdlib impl is in the env only: its receiver is the
             // method signature's first parameter.
             self.tc.env.impls.iter().find_map(|imp| {

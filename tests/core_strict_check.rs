@@ -10908,3 +10908,24 @@ fn a_prelude_enum_variant_is_qualified_in_an_expression() {
          }\n",
     );
 }
+
+/// Every `Atomic` method takes a borrowed `self` (concurrency.md § Atomics),
+/// so `swap` on a borrowed parameter is accepted like `store` and the
+/// `fetch_*` family, not refused as the collection method of that name
+/// (B-2026-10-21-75).
+#[test]
+fn atomic_swap_on_a_borrowed_parameter_is_accepted() {
+    accepted_and_runs(
+        "atomic-swap-borrowed",
+        "import std.sync.{Atomic};\n\
+         pub fn tick(c: Atomic[i64]) -> i64 {\n\
+             c.fetch_add(1);\n\
+             c.swap(c.load())\n\
+         }\n\
+         fn main() {\n\
+             let c: Atomic[i64] = Atomic.new(0);\n\
+             println(tick(c));\n\
+         }\n",
+        "1\n",
+    );
+}
