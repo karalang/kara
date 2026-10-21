@@ -1,0 +1,87 @@
+// LeetCode #823: Binary Trees With Factors -- an iterator pipeline.
+//
+// A `fold` over the sorted values builds the map of counts, each value's
+// count 1 and the `sum` over a `filter_map` of its factor pairs; the
+// answer is the `sum` of the map's counts.
+
+fn num_factored_binary_trees(arr: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut values = arr.clone();
+    values.sort();
+    let trees: Map[i64, i64] = values.iter().fold([:], |trees, x| {
+        let mut trees: Map[i64, i64] = trees;
+        let pairs: i64 = trees
+            .iter()
+            .filter_map(|(left, count)| if x % left == 0 { trees.get(x / left).map(|right| count * right % modulus) } else { None })
+            .sum();
+        trees[x] = (1 + pairs) % modulus;
+        trees
+    });
+    trees.values().fold(0, |total, count| (total + count) % modulus)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    println(f"{arr} -> {num_factored_binary_trees(arr.clone())}");
+}
+
+fn main() {
+    show([2, 4]);
+    show([2, 4, 5, 10]);
+    show([2]);
+    show([2, 4, 8]);
+    show([2, 4, 8, 16]);
+    show([12, 6, 3, 2, 4]);
+    show([18, 3, 6, 2, 9]);
+    show([1000000000, 31622, 100000, 10000, 10]);
+    // LeetCode's largest, 1,000 values: the smallest numbers 2^a 3^b 5^c
+    // above 1, which have many factor pairs, and 1,000 odd values from a
+    // stride, which have few.
+    let mut smooth: Vec[i64] = Vec.new();
+    let mut p2 = 1;
+    while p2 <= 60000000 {
+        let mut p3 = p2;
+        while p3 <= 60000000 {
+            let mut p5 = p3;
+            while p5 <= 60000000 {
+                if p5 > 1 {
+                    smooth.push(p5);
+                }
+                p5 = p5 * 5;
+            }
+            p3 = p3 * 3;
+        }
+        p2 = p2 * 2;
+    }
+    smooth.sort();
+    smooth.truncate(1000);
+    println(f"1000 values 2^a 3^b 5^c up to {smooth[999]} -> {num_factored_binary_trees(smooth)}");
+    let mut odd: Vec[i64] = Vec.new();
+    for k in 0..1000 {
+        odd.push(999999999 - 2 * k * 7919);
+    }
+    println(f"1000 odd values -> {num_factored_binary_trees(odd)}");
+    let mut seed = 823;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 15;
+        let mut arr: Vec[i64] = Vec.new();
+        while arr.len() < count {
+            let v = 2 + next_random(mut seed) % 59;
+            if not arr.contains(v) {
+                arr.push(v);
+            }
+        }
+        let answer = num_factored_binary_trees(arr);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random sets: total {total}, checksum {check}");
+}

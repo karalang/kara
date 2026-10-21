@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/823-binary-trees-with-factors/num_factored_binary_trees_pointers.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3749d3072"
+extracted_src = "f5a6dcee"
+model_rev = "583cfb0d"
+model_src = "f5a6dcee"

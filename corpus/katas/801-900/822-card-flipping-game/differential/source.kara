@@ -1,0 +1,209 @@
+// LeetCode #822: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random hands,
+// against every way of turning the cards played out.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn flipgame_star(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let mut doubles: Set[i64] = Set.new();
+    for i in 0..fronts.len() {
+        if fronts[i] == backs[i] {
+            doubles.insert(fronts[i]);
+        }
+    }
+    let mut best = 0;
+    for i in 0..fronts.len() {
+        for x in [fronts[i], backs[i]] {
+            if not doubles.contains(x) and (best == 0 or x < best) {
+                best = x;
+            }
+        }
+    }
+    best
+}
+
+// ---- table arm ------------------------------------------------------
+
+fn flipgame_table(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let mut double: Vec[bool] = Vec.filled(2001, false);
+    let mut seen: Vec[bool] = Vec.filled(2001, false);
+    for i in 0..fronts.len() {
+        if fronts[i] == backs[i] {
+            double[fronts[i]] = true;
+        }
+        seen[fronts[i]] = true;
+        seen[backs[i]] = true;
+    }
+    for x in 1..2001 {
+        if seen[x] and not double[x] {
+            return x;
+        }
+    }
+    0
+}
+
+// ---- brute-force arm ------------------------------------------------
+
+fn can_be_good_brute(x: i64, fronts: Vec[i64], backs: Vec[i64]) -> bool {
+    for i in 0..fronts.len() {
+        if fronts[i] == x and backs[i] == x {
+            return false;
+        }
+    }
+    true
+}
+
+fn flipgame_brute(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..fronts.len() {
+        for x in [fronts[i], backs[i]] {
+            if (best == 0 or x < best) and can_be_good_brute(x, fronts, backs) {
+                best = x;
+            }
+        }
+    }
+    best
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn flipgame_iter(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let doubles: Set[i64] = fronts.iter().zip(backs.iter()).filter(|(f, b)| f == b).map(|(f, _)| f).collect();
+    fronts.iter().chain(backs.iter()).filter(|x| not doubles.contains(x)).min() ?? 0
+}
+
+// ---- the statement, every way of turning the cards ------------------------
+
+// Try every way of turning the cards over. In each, a card's back is
+// good when no card shows that number on its front; the answer is the
+// smallest good back over all the ways, or 0 if no way has one.
+fn statement(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let n = fronts.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut up: Vec[i64] = Vec.new();
+        let mut down: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                up.push(backs[i]);
+                down.push(fronts[i]);
+            } else {
+                up.push(fronts[i]);
+                down.push(backs[i]);
+            }
+        }
+        for i in 0..n {
+            let x = down[i];
+            let mut shown = false;
+            for j in 0..n {
+                if up[j] == x {
+                    shown = true;
+                }
+            }
+            if not shown and (best == 0 or x < best) {
+                best = x;
+            }
+        }
+    }
+    best
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    if arm == 0 {
+        flipgame_star(fronts, backs)
+    } else if arm == 1 {
+        flipgame_table(fronts, backs)
+    } else if arm == 2 {
+        flipgame_brute(fronts, backs)
+    } else {
+        flipgame_iter(fronts, backs)
+    }
+}
+
+fn main() {
+    let names = ["star", "table", "brute", "iter"];
+    let properties = ["answer", "sides swapped", "cards reversed", "answer doubled"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut none = 0;
+    let mut seed = 822;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let count = 1 + next_random(mut seed) % 10;
+        let mut fronts: Vec[i64] = Vec.new();
+        let mut backs: Vec[i64] = Vec.new();
+        for _ in 0..count {
+            if kind == 0 {
+                // numbers up to 4: doubles are common
+                fronts.push(1 + next_random(mut seed) % 4);
+                backs.push(1 + next_random(mut seed) % 4);
+            } else if kind == 1 {
+                // numbers up to 2,000: doubles are rare
+                fronts.push(1 + next_random(mut seed) % 2000);
+                backs.push(1 + next_random(mut seed) % 2000);
+            } else if kind == 2 {
+                // half the cards doubles, of numbers up to 6
+                let f = 1 + next_random(mut seed) % 6;
+                fronts.push(f);
+                if next_random(mut seed) % 2 == 0 {
+                    backs.push(f);
+                } else {
+                    backs.push(1 + next_random(mut seed) % 6);
+                }
+            } else {
+                // numbers from 1,996 to 2,000, the top of the range
+                fronts.push(1996 + next_random(mut seed) % 5);
+                backs.push(1996 + next_random(mut seed) % 5);
+            }
+        }
+        let want = statement(fronts.clone(), backs.clone());
+        if want == 0 {
+            none += 1;
+        }
+        let mut fronts_reversed = fronts.clone();
+        fronts_reversed.reverse();
+        let mut backs_reversed = backs.clone();
+        backs_reversed.reverse();
+        for arm in 0..4 {
+            let got = answer(arm, fronts.clone(), backs.clone());
+            let mut fronts_more = fronts.clone();
+            let mut backs_more = backs.clone();
+            fronts_more.push(got);
+            backs_more.push(got);
+            let doubled = if got == 0 { true } else {
+                let after = answer(arm, fronts_more, backs_more);
+                after == 0 or after > got
+            };
+            let oks = [
+                got == want,
+                answer(arm, backs.clone(), fronts.clone()) == got,
+                answer(arm, fronts_reversed.clone(), backs_reversed.clone()) == got,
+                doubled,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {fronts} {backs} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases ({none} with no good number), {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, table {by_arm[1]}, brute {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, sides swapped {by_property[1]}, cards reversed {by_property[2]}, answer doubled {by_property[3]}");
+}

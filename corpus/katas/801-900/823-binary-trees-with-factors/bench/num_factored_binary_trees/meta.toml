@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/823-binary-trees-with-factors/bench/num_factored_binary_trees.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3749d3072"
+extracted_src = "361dd774"
+model_rev = "583cfb0d"
+model_src = "361dd774"

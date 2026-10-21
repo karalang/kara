@@ -1,0 +1,260 @@
+// LeetCode #823: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random sets,
+// against the statement counted tree by tree.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn num_factored_binary_trees_star(arr: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut values = arr.clone();
+    values.sort();
+    let mut trees: Map[i64, i64] = [:];
+    let mut total = 0;
+    for i in 0..values.len() {
+        let x = values[i];
+        let mut count = 1;
+        for j in 0..i {
+            let left = values[j];
+            if x % left == 0 {
+                if let Some(right) = trees.get(x / left) {
+                    count = (count + trees[left] * right) % modulus;
+                }
+            }
+        }
+        trees[x] = count;
+        total = (total + count) % modulus;
+    }
+    total
+}
+
+// ---- two-pointer arm ------------------------------------------------
+
+fn num_factored_binary_trees_pointers(arr: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut values = arr.clone();
+    values.sort();
+    let n = values.len();
+    let mut trees: Vec[i64] = Vec.filled(n, 1);
+    let mut total = 0;
+    for i in 0..n {
+        let mut low = 0;
+        let mut high = i - 1;
+        while low <= high {
+            let product = values[low] * values[high];
+            if product < values[i] {
+                low += 1;
+            } else if product > values[i] {
+                high -= 1;
+            } else {
+                let ways = trees[low] * trees[high] % modulus;
+                if low == high {
+                    trees[i] = (trees[i] + ways) % modulus;
+                } else {
+                    trees[i] = (trees[i] + 2 * ways) % modulus;
+                }
+                low += 1;
+                high -= 1;
+            }
+        }
+        total = (total + trees[i]) % modulus;
+    }
+    total
+}
+
+// ---- memo arm -------------------------------------------------------
+
+fn trees_with_root_memo(x: i64, values: Set[i64], memo: mut ref Map[i64, i64]) -> i64 {
+    if let Some(known) = memo.get(x) {
+        return known;
+    }
+    let modulus = 1000000007;
+    let mut count = 1;
+    for a in values.iter() {
+        if x % a == 0 and values.contains(x / a) {
+            let left = trees_with_root_memo(a, values, mut memo);
+            let right = trees_with_root_memo(x / a, values, mut memo);
+            count = (count + left * right) % modulus;
+        }
+    }
+    memo[x] = count;
+    count
+}
+
+fn num_factored_binary_trees_memo(arr: Vec[i64]) -> i64 {
+    let mut values: Set[i64] = Set.new();
+    for x in arr.iter() {
+        values.insert(x);
+    }
+    let mut memo: Map[i64, i64] = [:];
+    let mut total = 0;
+    for x in arr.iter() {
+        total = (total + trees_with_root_memo(x, values, mut memo)) % 1000000007;
+    }
+    total
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn num_factored_binary_trees_iter(arr: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut values = arr.clone();
+    values.sort();
+    let trees: Map[i64, i64] = values.iter().fold([:], |trees, x| {
+        let mut trees: Map[i64, i64] = trees;
+        let pairs: i64 = trees
+            .iter()
+            .filter_map(|(left, count)| if x % left == 0 { trees.get(x / left).map(|right| count * right % modulus) } else { None })
+            .sum();
+        trees[x] = (1 + pairs) % modulus;
+        trees
+    });
+    trees.values().fold(0, |total, count| (total + count) % modulus)
+}
+
+// ---- the statement, tree by tree ------------------------------------------
+
+// The trees with root x are a leaf, and for every pair of values a and b,
+// in either order, whose product is x, each tree of a as the left child
+// beside each tree of b as the right. Both children are smaller than x,
+// so the values are taken smallest first and every pair of values is
+// tried by multiplying, with no division, no lookup and no modulus.
+fn statement(arr: Vec[i64]) -> i64 {
+    let mut values = arr.clone();
+    values.sort();
+    let n = values.len();
+    let mut trees: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for i in 0..n {
+        let mut count = 1;
+        for j in 0..i {
+            for k in 0..i {
+                if values[j] * values[k] == values[i] {
+                    count += trees[j] * trees[k];
+                }
+            }
+        }
+        trees.push(count);
+        total += count;
+    }
+    total % 1000000007
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, arr: Vec[i64]) -> i64 {
+    if arm == 0 {
+        num_factored_binary_trees_star(arr)
+    } else if arm == 1 {
+        num_factored_binary_trees_pointers(arr)
+    } else if arm == 2 {
+        num_factored_binary_trees_memo(arr)
+    } else {
+        num_factored_binary_trees_iter(arr)
+    }
+}
+
+fn add_new(arr: mut ref Vec[i64], v: i64) {
+    if not arr.contains(v) {
+        arr.push(v);
+    }
+}
+
+fn main() {
+    let names = ["star", "pointers", "memo", "iter"];
+    let properties = ["answer", "reversed", "a lone value added", "at least one a value"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut with_products = 0;
+    let mut seed = 823;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut arr: Vec[i64] = Vec.new();
+        let count = 1 + next_random(mut seed) % 12;
+        for _ in 0..count {
+            if kind == 0 {
+                // values up to 60
+                add_new(mut arr, 2 + next_random(mut seed) % 59);
+            } else if kind == 1 {
+                // 2^a 3^b up to 2^7 3^4: many factor pairs
+                let mut v = 1;
+                for _ in 0..next_random(mut seed) % 8 {
+                    v = v * 2;
+                }
+                for _ in 0..next_random(mut seed) % 5 {
+                    v = v * 3;
+                }
+                if v > 1 {
+                    add_new(mut arr, v);
+                }
+            } else if kind == 2 {
+                // values up to 1,000: few factor pairs
+                add_new(mut arr, 2 + next_random(mut seed) % 999);
+            } else {
+                // large values: a, b and a * b up to about 10^9, and random
+                // values up to 10^9
+                let a = 2 + next_random(mut seed) % 31622;
+                let b = 2 + next_random(mut seed) % 31622;
+                add_new(mut arr, a);
+                add_new(mut arr, b);
+                add_new(mut arr, a * b);
+                add_new(mut arr, 2 + next_random(mut seed) % 1000000000);
+            }
+        }
+        if arr.is_empty() {
+            arr.push(2);
+        }
+        let want = statement(arr.clone());
+        let mut products = false;
+        for a in arr.iter() {
+            for b in arr.iter() {
+                if arr.contains(a * b) {
+                    products = true;
+                }
+            }
+        }
+        if products {
+            with_products += 1;
+        }
+        let mut reversed = arr.clone();
+        reversed.reverse();
+        // a value above every product of two values divides none and is
+        // no product
+        let mut largest = 0;
+        for a in arr.iter() {
+            largest = largest.max(a);
+        }
+        let mut lone = arr.clone();
+        lone.insert(next_random(mut seed) % (arr.len() + 1), largest * largest + 1);
+        for arm in 0..4 {
+            let got = answer(arm, arr.clone());
+            let oks = [
+                got == want,
+                answer(arm, reversed.clone()) == got,
+                answer(arm, lone.clone()) == (got + 1) % 1000000007,
+                if products { got > arr.len() } else { got == arr.len() },
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {arr} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases ({with_products} with a value that is a product of two), {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, pointers {by_arm[1]}, memo {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, a lone value added {by_property[2]}, at least one a value {by_property[3]}");
+}

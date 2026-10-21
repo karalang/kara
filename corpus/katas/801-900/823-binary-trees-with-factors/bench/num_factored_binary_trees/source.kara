@@ -1,0 +1,87 @@
+// Benchmark for #823: Binary Trees With Factors -- the ★ arm (counts in a map).
+//
+// Sort the values, so that both factors of a value come before it, and
+// count each value's trees from its factors' counts, looked up by value
+// in a map. O(n^2) for n values.
+
+fn num_factored_binary_trees(arr: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut values = arr.clone();
+    values.sort();
+    let mut trees: Map[i64, i64] = [:];
+    let mut total = 0;
+    for i in 0..values.len() {
+        let x = values[i];
+        let mut count = 1;
+        for j in 0..i {
+            let left = values[j];
+            if x % left == 0 {
+                if let Some(right) = trees.get(x / left) {
+                    count = (count + trees[left] * right) % modulus;
+                }
+            }
+        }
+        trees[x] = count;
+        total = (total + count) % modulus;
+    }
+    total
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The numbers 2^a 3^b 5^c 7^d from 2 to 10^9, which have many factor
+    // pairs, and 64 sets of 1,000 of them, LeetCode's largest, drawn once
+    // and shuffled. Each round answers the next set afresh.
+    let limit = 1000000000;
+    let mut smooth: Vec[i64] = Vec.new();
+    let mut p2 = 1;
+    while p2 <= limit {
+        let mut p3 = p2;
+        while p3 <= limit {
+            let mut p5 = p3;
+            while p5 <= limit {
+                let mut p7 = p5;
+                while p7 <= limit {
+                    if p7 > 1 {
+                        smooth.push(p7);
+                    }
+                    p7 = p7 * 7;
+                }
+                p5 = p5 * 5;
+            }
+            p3 = p3 * 3;
+        }
+        p2 = p2 * 2;
+    }
+    smooth.sort();
+    let count = 64;
+    let rounds = 1000;
+    let mut seed: i64 = 823;
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut taken: Vec[bool] = Vec.filled(smooth.len(), false);
+        let mut set: Vec[i64] = Vec.new();
+        while set.len() < 1000 {
+            let k = next_random(mut seed) % smooth.len();
+            if not taken[k] {
+                taken[k] = true;
+                set.push(smooth[k]);
+            }
+        }
+        sets.push(set);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let answer = num_factored_binary_trees(sets[round % count]);
+        total += answer;
+        checksum = (checksum * 131 + answer) % 1000000007;
+    }
+    println(f"{smooth.len()} values, {rounds} rounds of {count} sets: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,72 @@
+// LeetCode #822: Card Flipping Game -- an iterator pipeline.
+//
+// The doubles `collect`ed into a set from a `zip` of the two sides and a
+// `filter`, and the answer the `min` of both sides `chain`ed together
+// with the doubles filtered out. O(n).
+
+fn flipgame(fronts: Vec[i64], backs: Vec[i64]) -> i64 {
+    let doubles: Set[i64] = fronts.iter().zip(backs.iter()).filter(|(f, b)| f == b).map(|(f, _)| f).collect();
+    fronts.iter().chain(backs.iter()).filter(|x| not doubles.contains(x)).min() ?? 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(fronts: Vec[i64], backs: Vec[i64]) {
+    println(f"{fronts} {backs} -> {flipgame(fronts.clone(), backs.clone())}");
+}
+
+fn main() {
+    show([1, 2, 4, 4, 7], [1, 3, 4, 1, 3]);
+    show([1], [1]);
+    show([1], [2]);
+    show([2, 2], [2, 2]);
+    show([5, 3], [3, 5]);
+    show([1, 1, 2], [1, 2, 1]);
+    show([2000, 1999], [2000, 1]);
+    show([3, 2, 1], [3, 2, 1]);
+    // LeetCode's largest, 1,000 cards: the numbers 1 to 500 each on both
+    // sides of a card and 500 cards of random numbers up to 2,000; and
+    // 1,000 cards of numbers up to 20, where most numbers are on both
+    // sides of some card.
+    let mut seed = 822;
+    let mut fronts: Vec[i64] = Vec.new();
+    let mut backs: Vec[i64] = Vec.new();
+    for k in 0..500 {
+        fronts.push(500 - k);
+        backs.push(500 - k);
+        fronts.push(1 + next_random(mut seed) % 2000);
+        backs.push(1 + next_random(mut seed) % 2000);
+    }
+    println(f"1000 cards, 1 to 500 doubled -> {flipgame(fronts, backs)}");
+    let mut fronts: Vec[i64] = Vec.new();
+    let mut backs: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        fronts.push(1 + next_random(mut seed) % 20);
+        backs.push(1 + next_random(mut seed) % 20);
+    }
+    println(f"1000 cards up to 20 -> {flipgame(fronts, backs)}");
+    let mut total = 0;
+    let mut check = 0;
+    let mut none = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 12;
+        let mut fronts: Vec[i64] = Vec.new();
+        let mut backs: Vec[i64] = Vec.new();
+        for _ in 0..count {
+            fronts.push(1 + next_random(mut seed) % 5);
+            backs.push(1 + next_random(mut seed) % 5);
+        }
+        let answer = flipgame(fronts, backs);
+        if answer == 0 {
+            none += 1;
+        }
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random hands: total {total}, {none} with no good number, checksum {check}");
+}

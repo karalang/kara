@@ -186,10 +186,7 @@ fn main() {
             random_text(mut seed, 1 + next_random(mut seed) % 30, letters)
         };
         let n = s.len();
-        // The binding's type is written out because the MIR backends do
-        // not yet take the `collect()` target from the other branch
-        // (B-2026-10-19-25); drop it once that is fixed.
-        let goal: String = if kind == 2 {
+        let goal = if kind == 2 {
             random_text(mut seed, n, letters)
         } else {
             let turned = rotated(s, next_random(mut seed) % n);
