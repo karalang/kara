@@ -1,0 +1,1580 @@
+== numbers
+-- basic 20 + 30
+50
+-- basic 20 + 30 - ( 10 * 5)
+0
+-- basic 7 / 2
+3.5
+-- basic 7 // 2
+3
+-- basic -7 // 2
+-4
+-- basic 7 % 3
+1
+-- basic -7 % 3
+2
+-- basic 7 % -3
+-2
+-- basic 7.5 // 2
+3.0
+-- basic -7.5 // 2
+-4.0
+-- basic 7.5 % 2
+1.5
+-- basic -7.5 % 2
+0.5
+-- basic 7.5 % -2
+-0.5
+-- basic 2 ** 10
+1024
+-- basic 2 ** -2
+0.25
+-- basic 2 ** 0.5
+1.4142135623730951
+-- basic (-8) ** 2
+64
+-- basic 2 ** 100
+1267650600228229401496703205376
+-- basic 10 ** 30
+1000000000000000000000000000000
+-- basic 1.5e3 * 2
+3000.0
+-- basic 0.1 + 0.2
+0.30000000000000004
+-- basic 1 / 3
+0.3333333333333333
+-- basic 2 / 3 * 3
+2.0
+-- basic 100 * 1.1
+110.00000000000001
+-- basic 1e16
+1e+16
+-- basic 1e15 + 0.5
+1000000000000000.5
+-- basic 12345678901234567.0
+1.2345678901234568e+16
+-- basic 1e-5
+1e-05
+-- basic 0.0001
+0.0001
+-- basic 1/1024
+0.0009765625
+-- basic -0.0
+-0.0
+-- basic 3.0
+3.0
+-- basic 1e300 * 1e10
+inf
+-- basic -(1e300 * 1e10)
+-inf
+-- basic 1e300 * 1e10 - 1e300 * 1e10
+nan
+-- basic 0x1F + 0o17 + 0b101
+51
+-- basic 1_000_000 + 1
+1000001
+-- basic 1 + True
+2
+-- basic True + True
+2
+-- basic True * 2.5
+2.5
+-- basic -True
+-1
+-- basic ~5
+-6
+-- basic ~-1
+0
+-- basic +3
+3
+-- basic --3
+3
+-- basic not 0
+True
+-- basic not 3
+False
+-- basic 5 & 3
+1
+-- basic 5 | 3
+7
+-- basic 5 ^ 3
+6
+-- basic True & False
+False
+-- basic True | False
+True
+-- basic True ^ True
+False
+-- basic 1 << 10
+1024
+-- basic 1024 >> 3
+128
+-- basic -1024 >> 3
+-128
+-- basic 3 * (2 + 4) ** 2 / 9
+12.0
+-- basic 2 ** 3 ** 2
+512
+-- basic -2 ** 2
+-4
+-- basic (-2) ** 2
+4
+-- basic 10 - 2 - 3
+5
+-- basic 1 / 0
+! ZeroDivisionError: division by zero
+-- basic 1.0 / 0
+! ZeroDivisionError: float division by zero
+-- basic 1 // 0
+! ZeroDivisionError: integer division or modulo by zero
+-- basic 1 % 0
+! ZeroDivisionError: integer modulo by zero
+-- basic 1.0 // 0
+! ZeroDivisionError: float floor division by zero
+-- basic 1.0 % 0
+! ZeroDivisionError: float modulo by zero
+-- basic 0 ** -1
+! ZeroDivisionError: 0.0 cannot be raised to a negative power
+-- basic 10.0 ** 400
+! OverflowError: (34, 'Numerical result out of range')
+-- basic 2 ** 4000001
+! NumberTooHigh: Sorry! I don't want to evaluate 2 ** 4000001
+-- basic 4000001 ** 2
+! NumberTooHigh: Sorry! I don't want to evaluate 4000001 ** 2
+-- basic 1 << 10001
+! NumberTooHigh: Sorry! I don't want to evaluate 1 << 10001
+-- basic 1 >> 10001
+! NumberTooHigh: Sorry! I don't want to evaluate 1 >> 10001
+-- basic 1.5 >> 1
+! TypeError: unsupported operand type(s) for >>: 'float' and 'int'
+-- basic 1 >> 1.5
+! TypeError: unsupported operand type(s) for >>: 'int' and 'float'
+-- basic (1e300 * 1e10) >> 1
+! NumberTooHigh: Sorry! I don't want to evaluate inf >> 1
+-- basic 1.5 & 1
+! TypeError: unsupported operand type(s) for &: 'float' and 'int'
+-- basic ~1.5
+! TypeError: bad operand type for unary ~: 'float'
+-- basic -'a'
+! TypeError: bad operand type for unary -: 'str'
+-- basic 999999999 * 999999999
+999999998000000001
+-- basic 2 ** 64 - 1
+18446744073709551615
+-- basic -(2 ** 63)
+-9223372036854775808
+-- basic 7 // -2
+-4
+-- basic -7 // -2
+3
+-- basic 0.5 // 0.1
+4.0
+-- basic 1 % 0.3
+0.10000000000000003
+-- basic 5 // 1.5
+3.0
+-- basic -5 % 1.5
+1.0
+-- basic 3.5 ** 2
+12.25
+-- basic 9 ** 0.5
+3.0
+-- basic 0 ** 0
+1
+-- basic int(7.9)
+7
+-- basic int(-7.9)
+-7
+-- basic int('  42 ')
+42
+-- basic int('1_000')
+1000
+-- basic int('-17')
+-17
+-- basic int('3.5')
+! ValueError: invalid literal for int() with base 10: '3.5'
+-- basic int('abc')
+! ValueError: invalid literal for int() with base 10: 'abc'
+-- basic int('')
+! ValueError: invalid literal for int() with base 10: ''
+-- basic int(True)
+1
+-- basic int(None)
+! TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+-- basic int('ff', 16)
+255
+-- basic int('0x1f', 16)
+31
+-- basic int('z', 36)
+35
+-- basic int('12', base=8)
+10
+-- basic int('9', 8)
+! ValueError: invalid literal for int() with base 8: '9'
+-- basic int()
+0
+-- basic float('1e3')
+1000.0
+-- basic float(' 2.5 ')
+2.5
+-- basic float('inf')
+inf
+-- basic float('-Infinity')
+-inf
+-- basic float('nan') == float('nan')
+False
+-- basic float('1_5.0')
+15.0
+-- basic float('abc')
+! ValueError: could not convert string to float: 'abc'
+-- basic float(None)
+! TypeError: float() argument must be a string or a real number, not 'NoneType'
+-- basic float(3)
+3.0
+-- basic float()
+0.0
+-- basic float('')
+! ValueError: could not convert string to float: ''
+-- basic int(float('inf'))
+! OverflowError: cannot convert float infinity to integer
+-- basic int(float('nan'))
+! ValueError: cannot convert float NaN to integer
+-- basic str(1.0)
+'1.0'
+-- basic str(2 ** 70)
+'1180591620717411303424'
+-- basic str(None)
+'None'
+-- basic str(True) + str(1/4)
+'True0.25'
+-- basic str()
+''
+-- basic str(1e22)
+'1e+22'
+-- basic str(-1e-7)
+'-1e-07'
+-- basic str(123456.789)
+'123456.789'
+-- basic randint(1)
+0
+-- basic rand() < 1
+True
+-- basic rand() >= 0
+True
+== strings
+-- basic 'hello' + ' ' + 'world'
+'hello world'
+-- basic 'ab' * 3
+'ababab'
+-- basic 3 * 'ab'
+'ababab'
+-- basic 'ab' * 0
+''
+-- basic 'ab' * -1
+''
+-- basic 'ab' * True
+'ab'
+-- basic 'ab' * 'cd'
+! TypeError: '>' not supported between instances of 'str' and 'int'
+-- basic [1] * 1.5
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic 'a' + 1
+! TypeError: can only concatenate str (not "int") to str
+-- basic 1 + 'a'
+! TypeError: unsupported operand type(s) for +: 'int' and 'str'
+-- basic 'x' * 100001
+! IterableTooLong: Sorry, I will not evaluate something that long.
+-- basic 'x' * 50000 + 'y' * 50001
+! IterableTooLong: Sorry, adding those two together would make something too long.
+-- basic 'abc'[0]
+'a'
+-- basic 'abc'[-1]
+'c'
+-- basic 'abc'[5]
+! IndexError: string index out of range
+-- basic 'abc'[1:]
+'bc'
+-- basic 'abcdef'[::2]
+'ace'
+-- basic 'abcdef'[::-1]
+'fedcba'
+-- basic 'abcdef'[-3:-1]
+'de'
+-- basic 'abcdef'[4:1]
+''
+-- basic 'abc'['x']
+! TypeError: string indices must be integers, not 'str'
+-- basic 'abc'[1.0]
+! TypeError: string indices must be integers, not 'float'
+-- basic 'abc'[::0]
+! ValueError: slice step cannot be zero
+-- basic 'abc'['a':]
+! TypeError: slice indices must be integers or None or have an __index__ method
+-- basic 'abc'[True]
+'b'
+-- basic 'hello world'.upper()
+'HELLO WORLD'
+-- basic 'Hello'.lower()
+'hello'
+-- basic '  pad  '.strip()
+'pad'
+-- basic 'xxpadxx'.strip('x')
+'pad'
+-- basic '  pad'.lstrip()
+'pad'
+-- basic 'pad  '.rstrip() + '|'
+'pad|'
+-- basic 'a,b,,c'.split(',')
+['a', 'b', '', 'c']
+-- basic ' a  b c '.split()
+['a', 'b', 'c']
+-- basic 'a,b,c'.split(',', 1)
+['a', 'b,c']
+-- basic 'k=v=w'.split('=', maxsplit=1)
+['k', 'v=w']
+-- basic 'report.csv'.endswith('.csv')
+True
+-- basic 'report.csv'.endswith(('.tsv', '.csv'))
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- basic 'https://x'.startswith('http')
+True
+-- basic 'a-b-c'.replace('-', '+')
+'a+b+c'
+-- basic 'a-b-c'.replace('-', '', 1)
+'ab-c'
+-- basic 'hello world'.title()
+'Hello World'
+-- basic 'hELLO'.capitalize()
+'Hello'
+-- basic ', '.join(['a', 'b'])
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic '-'.join('abc')
+'a-b-c'
+-- basic 'banana'.find('an')
+1
+-- basic 'banana'.find('x')
+-1
+-- basic 'banana'.count('a')
+3
+-- basic '2024'.isdigit()
+True
+-- basic 'abc'.isalpha()
+True
+-- basic '42'.zfill(5)
+'00042'
+-- basic '-42'.zfill(5)
+'-0042'
+-- basic 'ab'.ljust(5, '.')
+'ab...'
+-- basic 'ab'.rjust(5)
+'   ab'
+-- basic 'v1.2'.removeprefix('v')
+'1.2'
+-- basic 'file.tar.gz'.removesuffix('.gz')
+'file.tar'
+-- basic 'abc'.upper
+<built-in method upper of str object>
+-- basic 'abc'.nope
+! AttributeDoesNotExist: Attribute 'nope' does not exist in expression ''abc'.nope'
+-- basic 'abc'.nope()
+! AttributeDoesNotExist: Attribute 'nope' does not exist in expression ''abc'.nope()'
+-- basic 'abc'.__class__
+! FeatureNotAvailable: Sorry, access to __attributes  or func_ attributes is not available. (__class__)
+-- basic 'abc'.func_x
+! FeatureNotAvailable: Sorry, access to __attributes  or func_ attributes is not available. (func_x)
+-- basic 'abc'.format
+! FeatureNotAvailable: Sorry, this method is not available. (format)
+-- basic '{}'.format(1)
+! FeatureNotAvailable: Sorry, this method is not available. (format)
+-- basic 'a' in 'cat'
+True
+-- basic 'x' not in 'cat'
+True
+-- basic 1 in 'cat'
+! TypeError: 'in <string>' requires string as left operand, not int
+-- basic '' in 'cat'
+True
+-- basic 'apple' < 'banana'
+True
+-- basic 'Zebra' < 'apple'
+True
+-- basic 'a' < 1
+! TypeError: '<' not supported between instances of 'str' and 'int'
+-- basic 'abc' == 'abc'
+True
+-- basic 'a' != 'b'
+True
+-- basic '%s items' % 3
+'3 items'
+-- basic '%d%%' % 42
+'42%'
+-- basic '%5.2f|' % 3.14159
+' 3.14|'
+-- basic '%s and %s' % ('a', 'b')
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- basic '%r' % 'q'
+"'q'"
+-- basic '%x' % 255
+'ff'
+-- basic '%s' % (1, 2)
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- basic '%s %s' % 'a'
+! TypeError: not enough arguments for format string
+-- basic '%-6s|' % 'ab'
+'ab    |'
+-- basic '%05d' % 42
+'00042'
+-- basic '%+d' % 7
+'+7'
+-- basic '%.3s' % 'abcdef'
+'abc'
+-- basic '%i' % 3.9
+'3'
+-- basic '%d' % 'x'
+! TypeError: %d format: a real number is required, not str
+-- basic 'caf\\u00e9'.upper()
+'CAFÉ'
+-- basic 'stra\\u00dfe'.upper()
+'STRASSE'
+-- basic len('caf\\u00e9')
+! FunctionNotDefined: Function 'len' not defined, for expression 'len('caf\u00e9')'.
+-- basic '\\u00e9'[0]
+'é'
+-- basic 'tab\\there'
+'tab\there'
+-- basic 'quote\\'s'
+"quote's"
+-- basic "both ' and \\""
+'both \' and "'
+-- basic 'line\\nbreak'.split('\\n')
+['line', 'break']
+-- basic f'{1 + 1}'
+'2'
+-- basic f'x={3!r}'
+'x=3'
+-- basic f'{"a"!r}'
+'a'
+-- basic f'{3.14159:.2f}'
+'3.14'
+-- basic f'{42:>6}|'
+'    42|'
+-- basic f'{42:06d}'
+'000042'
+-- basic f'{1234567:,}'
+'1,234,567'
+-- basic f'{0.256:.1%}'
+'25.6%'
+-- basic f'{255:x}'
+'ff'
+-- basic f'{255:#x}'
+'0xff'
+-- basic f'{255:b}'
+'11111111'
+-- basic f'{7:o}'
+'7'
+-- basic f'{"ab":*^6}'
+'**ab**'
+-- basic f'{12.5:e}'
+'1.250000e+01'
+-- basic f'{-3:+d}'
+'-3'
+-- basic f'{3:+d}'
+'+3'
+-- basic f'{1e6:,.2f}'
+'1,000,000.00'
+-- basic f'{"x":5}|'
+'x    |'
+-- basic f'{3.0}'
+'3.0'
+-- basic f'{None}'
+'None'
+-- basic f'{"a":d}'
+! ValueError: Unknown format code 'd' for object of type 'str'
+-- basic f'{1.5:d}'
+! ValueError: Unknown format code 'd' for object of type 'float'
+-- basic f'{2:.{3}f}'
+'2.000'
+-- basic f'{1:{"<"}4}|'
+'1   |'
+-- basic f'{-0.0:.1f}'
+'-0.0'
+-- basic f'{0.125:.2f} {0.375:.2f} {2.5:.0f} {3.5:.0f}'
+'0.12 0.38 2 4'
+-- basic f'{1/3:.10f}'
+'0.3333333333'
+-- basic f'{1e-7:f}'
+'0.000000'
+-- basic f'{123.456:10.1f}|'
+'     123.5|'
+-- basic f'{-1.5:08.2f}'
+'-0001.50'
+-- basic f'{5:_}'
+'5'
+-- basic f'{10**10:_d}'
+'10_000_000_000'
+== logic
+-- basic 1 < 2 < 3
+True
+-- basic 1 < 3 < 2
+False
+-- basic 3 > 2 > 1 > 0
+True
+-- basic 1 == 1.0
+True
+-- basic 1 == True
+True
+-- basic 1 is 1
+True
+-- basic None is None
+True
+-- basic None is not None
+False
+-- basic 1 if True else 2
+1
+-- basic 'yes' if 0 else 'no'
+'no'
+-- basic 0 or 'default'
+'default'
+-- basic '' or 0
+0
+-- basic 1 and 2
+2
+-- basic 0 and 1/0
+0
+-- basic 1 or 1/0
+1
+-- basic None and 1
+None
+-- basic 1 and 2 and 3
+3
+-- basic 0 or '' or None
+None
+-- basic not None
+True
+-- basic not ''
+True
+-- basic not 'x'
+False
+-- basic 1 < 'a'
+! TypeError: '<' not supported between instances of 'int' and 'str'
+-- basic 1 == 'a'
+False
+-- basic None < 1
+! TypeError: '<' not supported between instances of 'NoneType' and 'int'
+-- basic 1 != 1.0
+False
+-- basic True == 1 == 1.0
+True
+-- basic 2 > 1 == True
+True
+-- basic 1 < 2 > 1.5
+True
+-- basic (1 < 2) + (2 < 3)
+2
+-- basic 1 in 2
+! TypeError: argument of type 'int' is not iterable
+-- basic 1 not in 2
+! TypeError: argument of type 'int' is not iterable
+-- basic x
+! NameNotDefined: 'x' is not defined for expression 'x'
+-- basic unknown_func(1)
+! FunctionNotDefined: Function 'unknown_func' not defined, for expression 'unknown_func(1)'.
+-- basic int
+<class 'int'>
+-- basic str(int)[:5]
+'<clas'
+-- basic x.y
+! NameNotDefined: 'x' is not defined for expression 'x.y'
+-- basic (1).real
+1
+-- basic (1).nope
+! AttributeDoesNotExist: Attribute 'nope' does not exist in expression '(1).nope'
+-- basic (2.5).real
+2.5
+-- basic (5).bit_length()
+3
+-- basic (2.0).is_integer()
+True
+-- basic True.real
+1
+-- basic None.x
+! AttributeDoesNotExist: Attribute 'x' does not exist in expression 'None.x'
+-- basic [1, 2]
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic (1, 2)
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- basic {1: 2}
+! FeatureNotAvailable: Sorry, Dict is not available in this evaluator
+-- basic {1, 2}
+! FeatureNotAvailable: Sorry, Set is not available in this evaluator
+-- basic [x for x in 'ab']
+! FeatureNotAvailable: Sorry, ListComp is not available in this evaluator
+-- basic 'a' if 1 else
+! SyntaxError: invalid syntax (<unknown>, line 1)
+-- basic 1 +
+! SyntaxError: invalid syntax (<unknown>, line 1)
+-- basic (1
+! SyntaxError: '(' was never closed (<unknown>, line 1)
+-- basic 1 2
+! SyntaxError: invalid syntax (<unknown>, line 1)
+-- basic 
+! InvalidExpression: Sorry, cannot evaluate empty string
+-- basic    
+! InvalidExpression: Sorry, cannot evaluate empty string
+-- basic # comment
+! InvalidExpression: Sorry, cannot evaluate empty string
+-- basic x = 5
+warning: AssignmentAttempted: Assignment (x = 5) attempted, but this is ignored
+5
+-- basic x = y = 2 + 3
+warning: AssignmentAttempted: Assignment (x = y = 2 + 3) attempted, but this is ignored
+5
+-- basic x += 1
+warning: AssignmentAttempted: Assignment (x += 1) attempted, but this is ignored
+1
+-- basic 1; 2
+warning: MultipleExpressions: '1; 2' contains multiple expressions. Only the first will be used.
+1
+-- basic a; b
+warning: MultipleExpressions: 'a; b' contains multiple expressions. Only the first will be used.
+! NameNotDefined: 'a' is not defined for expression 'a; b'
+-- basic import os
+! FeatureNotAvailable: Sorry, 'import' is not allowed.
+-- basic from os import path
+! FeatureNotAvailable: Sorry, ImportFrom is not available in this evaluator
+-- basic def f(): pass
+! FeatureNotAvailable: Sorry, FunctionDef is not available in this evaluator
+-- basic lambda: 1
+! FeatureNotAvailable: Sorry, Lambda is not available in this evaluator
+-- basic (lambda: 1)()
+! FeatureNotAvailable: Lambda Functions not implemented
+-- basic assert 1
+! FeatureNotAvailable: Sorry, Assert is not available in this evaluator
+-- basic for i in 'ab': pass
+! FeatureNotAvailable: Sorry, For is not available in this evaluator
+-- basic pass
+! FeatureNotAvailable: Sorry, Pass is not available in this evaluator
+-- basic del x
+! FeatureNotAvailable: Sorry, Delete is not available in this evaluator
+-- basic yield 1
+! FeatureNotAvailable: Sorry, Yield is not available in this evaluator
+-- basic await x
+! FeatureNotAvailable: Sorry, Await is not available in this evaluator
+-- basic x := 3
+! SyntaxError: invalid syntax (<unknown>, line 1)
+-- basic (y := 3)
+! FeatureNotAvailable: Sorry, NamedExpr is not available in this evaluator
+-- basic 1 @ 2
+! OperatorNotDefined: Operator '<ast.MatMult object>' does not exist in expression '1 @ 2'
+-- basic ...
+Ellipsis
+-- basic b'bytes'
+b'bytes'
+-- basic 1j
+1j
+-- basic print(1)
+! FunctionNotDefined: Function 'print' not defined, for expression 'print(1)'.
+-- basic type(1)
+! FunctionNotDefined: Function 'type' not defined, for expression 'type(1)'.
+-- basic eval('1')
+! FunctionNotDefined: Function 'eval' not defined, for expression 'eval('1')'.
+-- basic open('x')
+! FunctionNotDefined: Function 'open' not defined, for expression 'open('x')'.
+-- basic getattr(1, 'x')
+! FunctionNotDefined: Function 'getattr' not defined, for expression 'getattr(1, 'x')'.
+-- basic int.__name__
+! FeatureNotAvailable: Sorry, access to __attributes  or func_ attributes is not available. (__name__)
+-- basic ''.__class__
+! FeatureNotAvailable: Sorry, access to __attributes  or func_ attributes is not available. (__class__)
+-- basic (1).__class__
+! FeatureNotAvailable: Sorry, access to __attributes  or func_ attributes is not available. (__class__)
+-- basic 'abc'.mro
+! FeatureNotAvailable: Sorry, this method is not available. (mro)
+-- basic 'a'.format_map
+! FeatureNotAvailable: Sorry, this method is not available. (format_map)
+-- basic [1][0].x
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic 'abc'[1:2:None]
+'b'
+-- basic 'abc'[None:None]
+'abc'
+-- basic str(1)(2)
+! FeatureNotAvailable: Lambda Functions not implemented
+-- basic 'abc'.upper()()
+! FeatureNotAvailable: Lambda Functions not implemented
+-- basic 1(2)
+! FeatureNotAvailable: Lambda Functions not implemented
+-- basic int(*'1')
+! FeatureNotAvailable: Sorry, Starred is not available in this evaluator
+-- basic int(**{'base': 2})
+! FeatureNotAvailable: Sorry, Dict is not available in this evaluator
+-- basic int(nope1, base=nope2)
+! NameNotDefined: 'nope2' is not defined for expression 'int(nope1, base=nope2)'
+-- basic int(x='1')
+! TypeError: int() got an unexpected keyword argument 'x'
+-- basic 'ab'.upper(1)
+! TypeError: str.upper() takes no arguments (1 given)
+-- basic 'ab'.split(1)
+! TypeError: must be str or None, not int
+-- basic 'ab'.startswith(1)
+! TypeError: startswith first arg must be str or a tuple of str, not int
+-- basic ', '.join([1, 2])
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic 'ab'.replace('a')
+! TypeError: replace() takes at least 2 positional arguments (1 given)
+-- basic 'ab'.zfill('5')
+! TypeError: 'str' object cannot be interpreted as an integer
+-- basic 'abc'.find()
+! TypeError: find expected at least 1 argument, got 0
+-- basic 'ab'.count(1)
+! TypeError: count() argument 1 must be str, not int
+-- basic (1).bit_length(2)
+! TypeError: int.bit_length() takes no arguments (1 given)
+-- basic f'{x}'
+! NameNotDefined: 'x' is not defined for expression 'f'{x}''
+-- basic f'{1/0}'
+! ZeroDivisionError: division by zero
+-- basic f'{1:!}'
+! ValueError: Unknown format code '!' for object of type 'int'
+-- basic 'a' 'b'
+'ab'
+-- basic '''tri\nple'''
+'tri\nple'
+-- basic (1 +\n 2)
+3
+-- basic 1 if 2
+! SyntaxError: expected 'else' after 'if' expression (<unknown>, line 1)
+-- basic if 1: 2
+! FeatureNotAvailable: Sorry, If is not available in this evaluator
+-- basic 1 +* 2
+! SyntaxError: invalid syntax (<unknown>, line 1)
+-- basic 'unterminated
+! SyntaxError: unterminated string literal (detected at line 1) (<unknown>, line 1)
+-- basic \\\\
+! SyntaxError: unexpected character after line continuation character (<unknown>, line 1)
+-- basic ""
+''
+-- basic ''.join([])
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- basic 0.1 + 0.7
+0.7999999999999999
+-- basic float('0.1') * 3
+0.30000000000000004
+-- basic 1 if None else None
+None
+== names
+-- ctx name @user
+'Ada Lovelace'
+-- ctx age >= 18 @user
+True
+-- ctx plan == 'pro' and verified @user
+True
+-- ctx country in ('GB', 'IE') @user
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- ctx 'admin' in tags @user
+True
+-- ctx address.city @user
+'London'
+-- ctx address['city'] @user
+'London'
+-- ctx address.lines[0] @user
+'12 Mayfair Pl'
+-- ctx address.postcode.split()[0] @user
+'W1J'
+-- ctx email.endswith('@example.com') @user
+True
+-- ctx name.split()[-1].upper() @user
+'LOVELACE'
+-- ctx score / 100 @user
+0.875
+-- ctx round(score) @user
+88
+-- ctx round(score / 3, 2) @user
+29.17
+-- ctx round(2.5) @user
+2
+-- ctx round(3.5) @user
+4
+-- ctx round(-0.5) @user
+0
+-- ctx round(1234, -2) @user
+1200
+-- ctx round(1250, -2) @user
+1200
+-- ctx round(2.675, 2) @user
+2.67
+-- ctx round(0.125, 2) @user
+0.12
+-- ctx round(7.25) @user
+7
+-- ctx round(quota.used / quota.limit, 3) @user
+0.725
+-- ctx quota.limit - quota.used @user
+2.75
+-- ctx len(f'{"x" * 60000}{"y" * 50000}') @user
+110000
+-- ctx len(f'{"x" * 100001}') @user
+! IterableTooLong: Sorry, I will not evaluate something that long.
+-- ctx len(name) @user
+12
+-- ctx len(tags) @user
+3
+-- ctx len(address) @user
+3
+-- ctx len(age) @user
+! TypeError: object of type 'int' has no len()
+-- ctx len(items) @user
+! TypeError: object of type 'int' has no len()
+-- ctx items @user
+3
+-- ctx keys @user
+'k-17'
+-- ctx manager @user
+None
+-- ctx manager is None @user
+True
+-- ctx manager.name @user
+! AttributeDoesNotExist: Attribute 'name' does not exist in expression 'manager.name'
+-- ctx manager['name'] @user
+! TypeError: 'NoneType' object is not subscriptable
+-- ctx missing @user
+! NameNotDefined: 'missing' is not defined for expression 'missing'
+-- ctx missing.x @user
+! NameNotDefined: 'missing' is not defined for expression 'missing.x'
+-- ctx tags[3] @user
+! IndexError: list index out of range
+-- ctx tags[-1] @user
+'eu'
+-- ctx tags[1:] @user
+['beta', 'eu']
+-- ctx tags['a'] @user
+! TypeError: list indices must be integers or slices, not str
+-- ctx address.zip @user
+! AttributeDoesNotExist: Attribute 'zip' does not exist in expression 'address.zip'
+-- ctx address.get('zip', '-') @user
+'-'
+-- ctx address.get('city') @user
+'London'
+-- ctx address.keys @user
+<built-in method keys of dict object>
+-- ctx len(address.keys()) @user
+3
+-- ctx 'city' in address @user
+True
+-- ctx 'city' in address.keys() @user
+True
+-- ctx 'London' in address.values() @user
+True
+-- ctx address.items @user
+<built-in method items of dict object>
+-- ctx len(address.items) @user
+! TypeError: object of type 'builtin_function_or_method' has no len()
+-- ctx min(age, signup_days) @user
+36
+-- ctx max(3, 9, 4) @user
+9
+-- ctx max(tags) @user
+'eu'
+-- ctx min('b', 'a', 'c') @user
+'a'
+-- ctx max([]) @user
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- ctx max() @user
+! TypeError: max expected at least 1 argument, got 0
+-- ctx max(1, 'a') @user
+! TypeError: '>' not supported between instances of 'str' and 'int'
+-- ctx min(1, 'a') @user
+! TypeError: '<' not supported between instances of 'str' and 'int'
+-- ctx abs(-age) @user
+36
+-- ctx abs(-2.5) @user
+2.5
+-- ctx abs('a') @user
+! TypeError: bad operand type for abs(): 'str'
+-- ctx abs(True) @user
+1
+-- ctx age * 2 if verified else 0 @user
+72
+-- ctx f'{name} <{email}>' @user
+'Ada Lovelace <ada@example.com>'
+-- ctx f'{name.split()[0]}, you have {items} items' @user
+'Ada, you have 3 items'
+-- ctx f'{score:.1f}% of {quota.limit}' @user
+'87.5% of 10'
+-- ctx f'{age:>5}|{plan:<5}|' @user
+'   36|pro  |'
+-- ctx f'{tags}' @user
+"['admin', 'beta', 'eu']"
+-- ctx f'{address}' @user
+"{'city': 'London', 'postcode': 'W1J 7NT', 'lines': ['12 Mayfair Pl', 'Flat 3']}"
+-- ctx f'{manager}' @user
+'None'
+-- ctx f'{verified}' @user
+'True'
+-- ctx f'{quota}' @user
+"{'used': 7.25, 'limit': 10}"
+-- ctx str(tags) @user
+"['admin', 'beta', 'eu']"
+-- ctx tags + ['new'] @user
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- ctx tags + 'x' @user
+! TypeError: can only concatenate list (not "str") to list
+-- ctx tags * 2 @user
+['admin', 'beta', 'eu', 'admin', 'beta', 'eu']
+-- ctx tags == ['admin', 'beta', 'eu'] @user
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- ctx tags < ['b'] @user
+! FeatureNotAvailable: Sorry, List is not available in this evaluator
+-- ctx tags[0] < tags[1] @user
+True
+-- ctx address == address @user
+True
+-- ctx address < address @user
+! TypeError: '<' not supported between instances of 'dict' and 'dict'
+-- ctx verified + 1 @user
+2
+-- ctx len @user
+<built-in function len>
+-- ctx len(len) @user
+! TypeError: object of type 'builtin_function_or_method' has no len()
+-- ctx round @user
+<built-in function round>
+-- ctx round(None) @user
+! TypeError: type NoneType doesn't define __round__ method
+-- ctx round(1.5, 'a') @user
+! TypeError: 'str' object cannot be interpreted as an integer
+-- ctx round(1, 2) @user
+1
+-- ctx round(1.234567e10, -3) @user
+12345670000.0
+-- ctx round(-1.5) @user
+-2
+-- ctx round(float('inf')) @user
+! OverflowError: cannot convert float infinity to integer
+-- ctx round(float('nan'), 2) @user
+nan
+-- ctx locale.split('_') @user
+['en', 'GB']
+-- ctx locale[:2].lower() == 'en' @user
+True
+-- ctx name.lower().replace(' ', '.') + '@corp' @user
+'ada.lovelace@corp'
+-- ctx signup_days // 7 @user
+58
+-- ctx signup_days % 7 @user
+6
+-- ctx int(address.postcode[1]) @user
+1
+-- ctx address.lines.count('Flat 3') @user
+1
+-- ctx address.lines.index('Flat 3') @user
+1
+-- ctx address.lines.index('x') @user
+! ValueError: 'x' is not in list
+-- ctx tags.index('eu') @user
+2
+-- ctx name[0] + name.split()[1][0] @user
+'AL'
+-- ctx age > 30 and 'senior' or 'junior' @user
+'senior'
+-- ctx plan in 'enterprise pro' @user
+True
+-- ctx (age > 30) + (score > 50) + verified @user
+3
+-- ctx address.lines[1].startswith('Flat') @user
+True
+-- ctx id @order
+'A-1001'
+-- ctx currency @order
+'EUR'
+-- ctx coupon[:6] @order
+'SPRING'
+-- ctx items[0].name @order
+'Assam tea'
+-- ctx items[0]['qty'] * items[0]['price'] @order
+9.0
+-- ctx items[1].price @order
+12.0
+-- ctx len(items) @order
+3
+-- ctx items.price @order
+! AttributeDoesNotExist: Attribute 'price' does not exist in expression 'items.price'
+-- ctx customer.tier @order
+'gold'
+-- ctx customer.orders > 10 @order
+True
+-- ctx shipping.weight_kg * 4.2 @order
+5.670000000000001
+-- ctx round(shipping.weight_kg * 4.2, 2) @order
+5.67
+-- ctx shipping.express @order
+False
+-- ctx not shipping.express @order
+True
+-- ctx subtotal * 0.9 @order
+24.975
+-- ctx round(subtotal * 0.9, 2) @order
+24.98
+-- ctx subtotal - 5 if coupon == 'SPRING10' else subtotal @order
+22.75
+-- ctx gift @order
+None
+-- ctx gift or 'no gift' @order
+'no gift'
+-- ctx max(items[0].price, items[1].price, items[2].price) @order
+12.0
+-- ctx items[-1].sku.split('-')[0] @order
+'BIS'
+-- ctx customer.id // 100 @order
+5
+-- ctx f'{id}: {subtotal:.2f} {currency}' @order
+'A-1001: 27.75 EUR'
+-- ctx f'{items[1].name!r}' @order
+'Stoneware mug'
+-- ctx items[0].qty + items[1].qty + items[2].qty @order
+6
+-- ctx items[5] @order
+! IndexError: list index out of range
+-- ctx items.x @order
+! AttributeDoesNotExist: Attribute 'x' does not exist in expression 'items.x'
+-- ctx shipping.country.lower() @order
+'de'
+-- ctx headers['content-type'] @request
+'application/json'
+-- ctx headers.get('authorization') @request
+None
+-- ctx headers.get('x-request-id', '') @request
+'r-88'
+-- ctx method in ('POST', 'PUT') and body_bytes > 1024 @request
+! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+-- ctx path.startswith('/api/') @request
+True
+-- ctx path.split('/') @request
+['', 'api', 'v2', 'orders']
+-- ctx path.split('/')[2] @request
+'v2'
+-- ctx int(query.limit) <= 100 @request
+True
+-- ctx query.page @request
+'2'
+-- ctx int(query.page) * int(query.limit) @request
+100
+-- ctx query.sort.startswith('-') @request
+True
+-- ctx query.sort[1:] @request
+'created'
+-- ctx auth.scheme == 'Bearer' and 'orders:write' in auth.scopes @request
+True
+-- ctx len(auth.scopes) @request
+2
+-- ctx client_ip.split('.')[0] @request
+'203'
+-- ctx int(client_ip.split('.')[-1]) % 2 @request
+1
+-- ctx headers.user-agent @request
+! AttributeDoesNotExist: Attribute 'user' does not exist in expression 'headers.user-agent'
+-- ctx headers['user-agent'].split('/')[1] @request
+'8.5.0'
+-- ctx headers.keys @request
+<built-in method keys of dict object>
+-- ctx f'{method} {path} ({body_bytes} bytes)' @request
+'POST /api/v2/orders (1840 bytes)'
+-- ctx query.get('offset', '0') @request
+'0'
+== compound
+-- compound [1, 2, 3]
+[1, 2, 3]
+-- compound (1, 2, 3)
+(1, 2, 3)
+-- compound (1,)
+(1,)
+-- compound ()
+()
+-- compound []
+[]
+-- compound {}
+{}
+-- compound {1: 'a', 'b': 2}
+{1: 'a', 'b': 2}
+-- compound {1, 2, 3}
+{1, 2, 3}
+-- compound {3, 1, 2}
+{1, 2, 3}
+-- compound {1, 1, 1}
+{1}
+-- compound set()
+set()
+-- compound list('abc')
+['a', 'b', 'c']
+-- compound tuple([1, 2])
+(1, 2)
+-- compound dict(a=1, b=2)
+{'a': 1, 'b': 2}
+-- compound dict([(1, 2), (3, 4)])
+{1: 2, 3: 4}
+-- compound list((1, 2))
+[1, 2]
+-- compound list(5)
+! TypeError: 'int' object is not iterable
+-- compound dict(5)
+! TypeError: 'int' object is not iterable
+-- compound tuple()
+()
+-- compound list()
+[]
+-- compound dict()
+{}
+-- compound [1, 2] + [3]
+[1, 2, 3]
+-- compound [1, 2] * 2
+[1, 2, 1, 2]
+-- compound [[1, 2], [3]][1][0]
+3
+-- compound [1, 2, 3][1:]
+[2, 3]
+-- compound [1, 2, 3][::-1]
+[3, 2, 1]
+-- compound [1, 2, 3][-5]
+! IndexError: list index out of range
+-- compound (1, 2) + (3,)
+(1, 2, 3)
+-- compound (1, 2)[5]
+! IndexError: tuple index out of range
+-- compound {1: 2}[1]
+2
+-- compound {1: 2}[3]
+! KeyError: 3
+-- compound {'a': 1}['b']
+! KeyError: 'b'
+-- compound {'a': {'b': [10, 20]}}['a']['b'][1]
+20
+-- compound {'a': 1}.a
+1
+-- compound {'a': 1}.get('a')
+1
+-- compound {'a': 1}.keys()
+dict_keys(['a'])
+-- compound {'a': 1}.values()
+dict_values([1])
+-- compound {'a': 1, 'b': 2}.items()
+dict_items([('a', 1), ('b', 2)])
+-- compound list({'a': 1, 'b': 2}.items())
+[('a', 1), ('b', 2)]
+-- compound [x * 2 for x in [1, 2, 3]]
+[2, 4, 6]
+-- cctx [x for x in range(10) if x % 3 == 0] @order
+[0, 3, 6, 9]
+-- compound [x + y for x in 'ab' for y in 'cd']
+['ac', 'ad', 'bc', 'bd']
+-- cctx [(x, y) for x in range(3) for y in range(x)] @order
+[(1, 0), (2, 0), (2, 1)]
+-- cctx [[y for y in range(x)] for x in range(4)] @order
+[[], [0], [0, 1], [0, 1, 2]]
+-- cctx {x: x * x for x in range(4)} @order
+{0: 0, 1: 1, 2: 4, 3: 9}
+-- compound {k: v for k, v in [('a', 1), ('b', 2)]}
+{'a': 1, 'b': 2}
+-- compound [a for a, b in [(1, 2, 3)]]
+[1]
+-- compound [a for a, b in [1]]
+! TypeError: 'int' object is not iterable
+-- compound [x for x in 5]
+! TypeError: 'int' object is not iterable
+-- cctx sum(x for x in range(5)) @order
+10
+-- compound (x for x in [1, 2])
+[1, 2]
+-- compound {x for x in 'ab'}
+! FeatureNotAvailable: Sorry, SetComp is not available in this evaluator
+-- cctx [x for x in range(20000)] @order
+! IterableTooLong: Comprehension generates too many elements
+-- cctx [x for x in range(5000) for y in range(3)] @order
+! IterableTooLong: Comprehension generates too many elements
+-- cctx [x for x in range(3)] + [y for y in range(9999)] @order
+! IterableTooLong: Comprehension generates too many elements
+-- cctx len([x for x in range(9999)]) @order
+9999
+-- compound x
+! NameNotDefined: 'x' is not defined for expression 'x'
+-- compound [x for x in [1]] and x
+! NameNotDefined: 'x' is not defined for expression '[x for x in [1]] and x'
+-- compound [n for n in [1, 2] if n > q]
+! NameNotDefined: 'q' is not defined for expression '[n for n in [1, 2] if n > q]'
+-- compound [1, *[2, 3], *'ab']
+[1, 2, 3, 'a', 'b']
+-- compound [*5]
+! TypeError: 'int' object is not iterable
+-- compound {**{'a': 1}, 'b': 2}
+{'a': 1, 'b': 2}
+-- compound {**{'a': 1}, **{'a': 2}}
+{'a': 2}
+-- compound {**[(1, 2)]}
+{1: 2}
+-- compound {**[(1, 2, 3)]}
+! ValueError: dictionary update sequence element #0 has length 3; 2 is required
+-- compound {**[1]}
+! TypeError: cannot convert dictionary update sequence element #0 to a sequence
+-- compound {**5}
+! TypeError: 'int' object is not iterable
+-- compound {[1]: 2}
+! TypeError: unhashable type: 'list'
+-- compound [1] in {1: 2}
+! TypeError: unhashable type: 'list'
+-- compound {1: 2, 1: 3}
+{1: 3}
+-- compound {1, 1.0, True}
+{1}
+-- cctx len({1, 2, 2}) @order
+2
+-- compound 2 in {1, 2}
+True
+-- compound [1, 2] == [1, 2]
+True
+-- compound [1, 2] < [1, 3]
+True
+-- compound (1, 'a') < (1, 'b')
+True
+-- compound (1, 2) == [1, 2]
+False
+-- compound [1, 'a'] < [1, 2]
+! TypeError: '<' not supported between instances of 'str' and 'int'
+-- compound {'a': 1} == {'a': 1.0}
+True
+-- compound [] or [0]
+[0]
+-- compound [0] and 'non-empty'
+'non-empty'
+-- compound not []
+True
+-- compound not {}
+True
+-- compound {} == dict()
+True
+-- compound [1, 2, 3].count(2)
+1
+-- compound [1, 2, 3].index(3)
+2
+-- compound (1, 2).index(5)
+! ValueError: tuple.index(x): x not in tuple
+-- compound [3, 1, 2].sort
+<built-in method sort of list object>
+-- compound {'a': 1}.update
+<built-in method update of dict object>
+-- compound list({'b': 1, 'a': 2})
+['b', 'a']
+-- compound tuple('ab')
+('a', 'b')
+-- compound set('aab') == set('ab')
+True
+-- cctx len(set('hello')) @order
+4
+-- compound dict(zip='z')
+{'zip': 'z'}
+-- compound dict({'a': 1}, b=2)
+{'a': 1, 'b': 2}
+-- compound [x for x.y in [1]]
+! AttributeError: 'Attribute' object has no attribute 'elts'
+-- compound [x for (x) in [1]]
+[1]
+-- compound [x for [x, y] in [(1, 2)]]
+[1]
+-- cctx {1: [x for x in range(3)]} @order
+{1: [0, 1, 2]}
+-- compound f'{[1, 2]}'
+'[1, 2]'
+-- compound f'{(1,)}'
+'(1,)'
+-- compound f'{ {1: 2} }'
+'{1: 2}'
+-- cctx f'{[x * 2 for x in range(3)]}' @order
+'[0, 2, 4]'
+-- compound [1, 2][True]
+2
+-- compound [1, 2, 3][1:2:0]
+! ValueError: slice step cannot be zero
+-- compound [1, 2, 3]['a':]
+! TypeError: slice indices must be integers or None or have an __index__ method
+-- compound tuple([1, [2]])
+(1, [2])
+-- compound {(1, 2): 'pair'}[(1, 2)]
+'pair'
+-- compound {(1, [2]): 3}
+! TypeError: unhashable type: 'list'
+-- compound dict([(1, 2), (3,)])
+! ValueError: dictionary update sequence element #1 has length 1; 2 is required
+-- compound dict([1])
+! TypeError: cannot convert dictionary update sequence element #0 to a sequence
+-- compound list({1: 2}.keys()) + [3]
+[1, 3]
+-- compound 'b' in {'a': 1}.keys()
+False
+-- cctx len({'a': 1}.items()) @order
+1
+-- compound [k for k in {'x': 1, 'y': 2}]
+['x', 'y']
+-- compound [v for k, v in {'x': 1, 'y': 2}.items() if v > 1]
+[2]
+-- compound [c.upper() for c in 'abc']
+['A', 'B', 'C']
+-- cctx [i.sku for i in items] @order
+['TEA-01', 'MUG-07', 'BIS-03']
+-- cctx sum(i.qty for i in items) @order
+6
+-- cctx sum(i.qty * i.price for i in items) @order
+27.75
+-- cctx round(sum([i.qty * i.price for i in items]), 2) @order
+27.75
+-- cctx max(i.price for i in items) @order
+12.0
+-- cctx sorted(i.price for i in items) @order
+[2.25, 4.5, 12.0]
+-- cctx sorted([i.name for i in items], reverse=True) @order
+['Stoneware mug', 'Oat biscuits', 'Assam tea']
+-- cctx any(i.qty > 2 for i in items) @order
+True
+-- cctx all(i.price < 20 for i in items) @order
+True
+-- cctx [i.name for i in items if i.price > 3] @order
+['Assam tea', 'Stoneware mug']
+-- cctx {i.sku: i.qty for i in items} @order
+{'TEA-01': 2, 'MUG-07': 1, 'BIS-03': 3}
+-- cctx len([i for i in items if i.sku.startswith('TEA')]) @order
+1
+-- cctx sorted(items[0]) @order
+['name', 'price', 'qty', 'sku']
+-- cctx sorted(items) @order
+! TypeError: '<' not supported between instances of 'dict' and 'dict'
+-- cctx sum([]) @order
+0
+-- cctx sum(['a', 'b']) @order
+! TypeError: unsupported operand type(s) for +: 'int' and 'str'
+-- cctx sum([[1], [2]], []) @order
+[1, 2]
+-- cctx sum([1, 2], 10) @order
+13
+-- cctx min([i.qty for i in items]) @order
+1
+-- cctx any([]) @order
+False
+-- cctx all([]) @order
+True
+-- cctx list(range(3, 10, 3)) @order
+[3, 6, 9]
+-- cctx range(5) @order
+range(0, 5)
+-- cctx len(range(10)) @order
+10
+-- cctx list(range(-3)) @order
+[]
+-- cctx range(1, 2, 0) @order
+! ValueError: range() arg 3 must not be zero
+-- cctx list(range('a')) @order
+! TypeError: 'str' object cannot be interpreted as an integer
+-- cctx [x for x in range(3)][-1] @order
+2
+-- cctx sorted('banana') @order
+['a', 'a', 'a', 'b', 'n', 'n']
+-- cctx sorted([3, 1, 'a']) @order
+! TypeError: '<' not supported between instances of 'str' and 'int'
+-- cctx sorted([], reverse=True) @order
+[]
+-- cctx max([i.qty for i in items], default=0) @order
+3
+-- cctx max([], default=0) @order
+0
+-- cctx [s for s in customer] @order
+['id', 'tier', 'orders']
+-- cctx {**customer, 'tier': 'platinum'} @order
+{'id': 501, 'tier': 'platinum', 'orders': 14}
+-- cctx [k for k in shipping if shipping[k]] @order
+['country', 'weight_kg']
+-- cctx sorted(shipping.keys()) @order
+['country', 'express', 'weight_kg']
+-- cctx list(shipping.values()) @order
+['DE', 1.35, False]
+-- cctx len(shipping.items()) @order
+3
+-- cctx [p for p in [i.price for i in items] if p > 3] @order
+[4.5, 12.0]
+-- cctx {c: len(c) for c in ['de', 'eur']} @order
+{'de': 2, 'eur': 3}
+-- cctx tuple(i.qty for i in items) @order
+(2, 1, 3)
+-- cctx set(i.qty for i in items) == {1, 2, 3} @order
+True
+-- cctx max(cpu) > 90 @metrics
+True
+-- cctx sum(cpu) / len(cpu) @metrics
+79.1875
+-- cctx round(sum(cpu) / len(cpu), 1) @metrics
+79.2
+-- cctx [c for c in cpu if c > 80] @metrics
+[88.0, 93.25]
+-- cctx len([c for c in cpu if c > 80]) >= 2 @metrics
+True
+-- cctx mem.used_mb / mem.total_mb @metrics
+0.96875
+-- cctx round(100 * mem.used_mb / mem.total_mb, 2) @metrics
+96.88
+-- cctx [m for m in disk if disk[m] > 70] @metrics
+['/', '/var']
+-- cctx sorted(disk.values()) @metrics
+[40, 72, 91]
+-- cctx max(disk.values()) @metrics
+91
+-- cctx {m: p for m, p in disk.items() if p >= 72} @metrics
+{'/': 72, '/var': 91}
+-- cctx load[0] > 3 and role == 'replica' @metrics
+True
+-- cctx errors / requests * 1000 @metrics
+1.4166666666666667
+-- cctx f'{host}: {errors / requests:.3%} errors' @metrics
+'db-2: 0.142% errors'
+-- cctx up and lag_s < 5 @metrics
+True
+-- cctx any(p > 90 for p in disk.values()) @metrics
+True
+-- cctx all(l < 4 for l in load) @metrics
+True
+-- cctx sorted(disk, reverse=True) @metrics
+['/var', '/home', '/']
+-- cctx [f'{m}={disk[m]}%' for m in sorted(disk)] @metrics
+['/=72%', '/home=40%', '/var=91%']
+-- cctx sum(range(errors)) @metrics
+136
+-- cctx list(range(len(load))) @metrics
+[0, 1, 2]
+-- cctx [round(c) for c in cpu] @metrics
+[72, 88, 93, 64]
+== pricing
+A-1001 subtotal 27.75
+A-1001 units 6
+A-1001 tier_discount 0.1
+A-1001 coupon_off 10
+A-1001 bulk False
+A-1001 shipping 0
+A-1001 eu True
+A-1001 vat 0.19
+A-1001 loyal True
+A-1001 first_sku 'TEA-01'
+A-1001 cheapest 2.25
+A-1001 label 'GOLD-3-S'
+A-1002 subtotal 38.0
+A-1002 units 10
+A-1002 tier_discount 0
+A-1002 coupon_off 0
+A-1002 bulk True
+A-1002 shipping 16.42
+A-1002 eu True
+A-1002 vat 0.2
+A-1002 loyal False
+A-1002 first_sku 'TEA-02'
+A-1002 cheapest 3.8
+A-1002 label 'NEW-1-X'
+A-1003 subtotal 87.0
+A-1003 units 5
+A-1003 tier_discount 0.05
+A-1003 coupon_off 15
+A-1003 bulk False
+A-1003 shipping 12.58
+A-1003 eu False
+A-1003 vat 0.2
+A-1003 loyal False
+A-1003 first_sku 'MUG-07'
+A-1003 cheapest 12.0
+A-1003 label 'SILVER-2-S'
+A-1004 subtotal 0
+A-1004 units 0
+A-1004 tier_discount 0.1
+A-1004 coupon_off 10
+A-1004 bulk False
+A-1004 shipping 0
+A-1004 eu True
+A-1004 vat 0.19
+A-1004 loyal True
+A-1004 first_sku ! IndexError: list index out of range
+A-1004 cheapest ! ValueError: min() iterable argument is empty
+A-1004 label 'GOLD-0-S'
+A-1005 subtotal 31.5
+A-1005 units 13
+A-1005 tier_discount 0.05
+A-1005 coupon_off ! KeyError: 'WELCOME'
+A-1005 bulk True
+A-1005 shipping 16.3
+A-1005 eu False
+A-1005 vat ! KeyError: 'US'
+A-1005 loyal False
+A-1005 first_sku 'BIS-03'
+A-1005 cheapest 2.25
+A-1005 label 'SILVER-2-X'
+== alerts
+web-1: 0
+web-2: 6
+  FIRE critical high_cpu True
+  FIRE warning cpu_spike True
+  FIRE warning mem True
+  FIRE critical disk True
+  FIRE critical error_rate True
+  FIRE info full_mounts ['/var']
+db-1: 4
+  FIRE warning mem True
+  error_rate ! ZeroDivisionError: division by zero
+  FIRE info quiet True
+  FIRE info full_mounts ['/data']
+db-2: 5
+  FIRE warning cpu_spike True
+  FIRE warning mem True
+  FIRE critical disk True
+  FIRE warning replica_lag True
+  FIRE info full_mounts ['/data']
+cache-1: 2
+  error_rate ! ZeroDivisionError: division by zero
+  FIRE critical down True
+total: critical=5, info=4, warning=6
+== notify
+To: ada@example.com
+  Hi Ada,
+  You are using 4 of 5 seats (80%).
+  Your pro plan renews in 3 days.
+  Balance: +12.50 EUR
+  ok
+  admin
+  EXAMPLE.COM
+  [lang] ! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+  [broken] ! NameNotDefined: 'nickname' is not defined for expression 'f'{nickname}''
+To: grace@example.com
+  Hi Grace,
+  You are using 1 of 1 seats (100%).
+  Your free plan renews in 30 days.
+  No balance due.
+  Upgrade to pro for more seats.
+  ok
+  (none)
+  EXAMPLE.COM
+  [lang] ! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+  [broken] ! NameNotDefined: 'nickname' is not defined for expression 'f'{nickname}''
+To: hedy@example.at
+  Hi Hedy,
+  You are using 21 of 20 seats (105%).
+  Your team plan lapsed 2 days ago.
+  Balance: -48.00 EUR
+  1 seat(s) over the limit!
+  beta, eu
+  EXAMPLE.AT
+  [lang] ! FeatureNotAvailable: Sorry, Tuple is not available in this evaluator
+  [broken] ! NameNotDefined: 'nickname' is not defined for expression 'f'{nickname}''
+== sheet
+A1 = 1200
+A2 = 1260.0
+A3 = 1323.0
+B1 = 3783.0
+B2 = 1261.0
+C1 = 'growth'
+C2 = '1,261.00'
+D1 = ! NameNotDefined: 'Z9' is not defined for expression 'Z9 + 1'
+D2 = ! NameNotDefined: 'undefined_name' is not defined for expression '1200'
+E1 = ! InvalidExpression: circular reference: E1 -> E2 -> E1
+E2 = ! InvalidExpression: circular reference: E2 -> E1 -> E2
+F1 = 3783.0
+F2 = ! NameNotDefined: 'nope' is not defined for expression '1200'
+G1 = '1261.00'
