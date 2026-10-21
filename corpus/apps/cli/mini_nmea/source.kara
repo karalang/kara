@@ -1,0 +1,3575 @@
+// mini_nmea: pynmea2 1.19.0, the NMEA 0183 library for Python, on the
+// logs of a morning's sail out of the Solent:
+// - NMEASentence.parse: the sentence regex with its optional '$', the
+//   three sentence-type forms (proprietary, query, talker) tried in
+//   order, the data up to the first '*', the checksum (any case), the
+//   trailing white space, and the errors it raises (ParseError,
+//   ChecksumError, SentenceTypeError) with their tuple messages;
+// - the 58 talker sentence classes and the proprietary ones of eleven
+//   manufacturers, each manufacturer with its own __new__ rule for
+//   picking a subclass from the first fields, read from pynmea2's own
+//   class definitions (gen_kara.py);
+// - the field model: __getattr__ by field name, '' for a missing field,
+//   None for an empty one, the converters (timestamp, datestamp through
+//   strptime's %d%m%y regex, int, float, Decimal, str and
+//   utcfromtimestamp) and the raw string when a converter raises;
+// - the mixins: latitude and longitude from DDDMM.MMMM with minutes and
+//   seconds, datetime, the is_valid rules, ZDA's local time zone, route
+//   waypoint lists, XDR transducers, SeaTalk command names;
+// - __repr__, render with each option, __setattr__ into the data list,
+//   and Python's repr of the values (datetime.time, Decimal, ...);
+// - NMEAStreamReader in its three error modes over chunked input and
+//   over a file, and NMEAFile's iteration, read, readline and next;
+// - four programs on top: a voyage report, a GPX track, a multiplexer
+//   that re-talks and re-checksums sentences, and an alarm watch.
+//
+// The inputs are data/jobs.txt and the logs beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through pynmea2 itself (the copy in pynmea2/).
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    for file in data_files() {
+        let (name, body) = file;
+        let p = f"data/{name}";
+        if let Err(e) = fs.write(p.clone(), body) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ text
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn str_of(cs: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn slice_chars(cs: ref Vec[char], from: i64, to: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut a = if from < 0 { 0 } else { from };
+    let b = if to > cs.len() { cs.len() } else { to };
+    while a < b {
+        out.push(cs[a]);
+        a += 1;
+    }
+    out
+}
+
+fn substr(s: ref String, from: i64, to: i64) -> String {
+    str_of(slice_chars(chars_of(s), from, to))
+}
+
+fn char_len(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_str(s: ref String, sep: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(sep) {
+        out.push(p.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut s = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            s.push_str(sep);
+        }
+        s.push_str(p);
+        first = false;
+    }
+    s
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_space(c) {
+            if cur.len() > 0 {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn ascii_upper(c: char) -> char {
+    if c >= 'a' and c <= 'z' {
+        char.try_from((c as u32) - 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        char.try_from((c as u32) + 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn upper_str(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(ascii_upper(c));
+    }
+    out
+}
+
+// str.isspace
+fn is_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or n == 32 or (n >= 0x1c and n <= 0x1f) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029
+        or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// \w on ASCII text
+fn is_word(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn hex_digit(c: char) -> i64 {
+    if is_digit(c) {
+        ((c as u32) - 48) as i64
+    } else if c >= 'a' and c <= 'f' {
+        ((c as u32) - 87) as i64
+    } else {
+        ((c as u32) - 55) as i64
+    }
+}
+
+fn hex2(n: i64) -> String {
+    f"{n:02x}"
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let has_sq = s.contains("'");
+    let has_dq = s.contains("\"");
+    let q = if has_sq and not has_dq { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n as i64)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_list(items: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in items.iter() {
+        parts.push(repr_str(s));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn utf8_len(s: ref String) -> i64 {
+    s.len()
+}
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    a.push(1);
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = Vec.new();
+    den.push(1);
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float() and int()
+
+// What float() and int() do first: the white space at the ends is
+// stripped and underscores between digits removed.
+fn number_text(cs: ref Vec[char]) -> Option[Vec[char]] {
+    let mut a = 0;
+    while a < cs.len() and is_space(cs[a]) {
+        a += 1;
+    }
+    let mut b = cs.len();
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut prev = ' ';
+    for i in a..b {
+        let c = cs[i];
+        if (c as u32) >= 128 {
+            return None;
+        }
+        if c == '_' {
+            if not is_digit(prev) {
+                return None;
+            }
+        } else {
+            if prev == '_' and not is_digit(c) {
+                return None;
+            }
+            out.push(c);
+        }
+        prev = c;
+    }
+    if prev == '_' {
+        return None;
+    }
+    Some(out)
+}
+
+fn lower_word(cs: ref Vec[char], from: i64) -> String {
+    let mut s = String.new();
+    for i in from..cs.len() {
+        s.push(ascii_lower(cs[i]));
+    }
+    s
+}
+
+// float() of a str; None where it raises ValueError.
+fn py_float(cs: ref Vec[char]) -> Option[f64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    let w = lower_word(t, i);
+    if w == "inf" or w == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if w == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut seen = false;
+    let mut exp10: i64 = 0;
+    while i < t.len() and is_digit(t[i]) {
+        seen = true;
+        let d = ((t[i] as u32) - 48) as u8;
+        if digits.len() > 0 or d != 0 {
+            digits.push(d);
+        }
+        i += 1;
+    }
+    if i < t.len() and t[i] == '.' {
+        i += 1;
+        while i < t.len() and is_digit(t[i]) {
+            seen = true;
+            let d = ((t[i] as u32) - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            exp10 -= 1;
+            i += 1;
+        }
+    }
+    if not seen {
+        return None;
+    }
+    if i < t.len() and (t[i] == 'e' or t[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < t.len() and (t[i] == '+' or t[i] == '-') {
+            eneg = t[i] == '-';
+            i += 1;
+        }
+        let st = i;
+        let mut e: i64 = 0;
+        while i < t.len() and is_digit(t[i]) {
+            if e < 100000000 {
+                e = e * 10 + ((t[i] as u32) - 48) as i64;
+            }
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+        exp10 += if eneg { -e } else { e };
+    }
+    if i != t.len() {
+        return None;
+    }
+    Some(decimal_to_f64(digits, exp10, neg))
+}
+
+fn py_float_s(s: ref String) -> Option[f64] {
+    py_float(chars_of(s))
+}
+
+// int() of a str; None where it raises ValueError (and, here, where the
+// value would not fit in an i64).
+fn py_int(cs: ref Vec[char]) -> Option[i64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut sig = 0;
+    while i < t.len() {
+        if not is_digit(t[i]) {
+            return None;
+        }
+        n = n * 10 + ((t[i] as u32) - 48) as i64;
+        if n > 0 {
+            sig += 1;
+        }
+        if sig > 17 {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn py_int_s(s: ref String) -> Option[i64] {
+    py_int(chars_of(s))
+}
+
+// ------------------------------------------------------------ Decimal
+
+// A decimal.Decimal: special is 0 for a finite number, 1 for Infinity,
+// 2 for NaN and 3 for sNaN (whose payload digits are kept).
+#[derive(Clone)]
+struct Dec {
+    neg: bool,
+    coef: i128,
+    exp: i64,
+    special: i64,
+    payload: String,
+}
+
+fn dec_new(neg: bool, coef: i128, exp: i64) -> Dec {
+    Dec { neg: neg, coef: coef, exp: exp, special: 0, payload: String.new() }
+}
+
+// Decimal(str): the white space at the ends is stripped and every
+// underscore dropped before the string is read.
+fn parse_dec(s: ref String) -> Option[Dec] {
+    let cs = chars_of(s);
+    let mut a = 0;
+    while a < cs.len() and is_space(cs[a]) {
+        a += 1;
+    }
+    let mut b = cs.len();
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut t: Vec[char] = Vec.new();
+    for i in a..b {
+        if cs[i] != '_' {
+            if (cs[i] as u32) >= 128 {
+                return None;
+            }
+            t.push(cs[i]);
+        }
+    }
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let w = lower_word(t, i);
+    if w == "inf" or w == "infinity" {
+        return Some(Dec { neg: neg, coef: 0, exp: 0, special: 1, payload: String.new() });
+    }
+    if w.starts_with("nan") or w.starts_with("snan") {
+        let skip: i64 = if w.starts_with("nan") { 3 } else { 4 };
+        let wc = chars_of(w);
+        let mut p = String.new();
+        let mut k = skip;
+        while k < wc.len() {
+            if not is_digit(wc[k]) {
+                return None;
+            }
+            if p.len() > 0 or wc[k] != '0' {
+                p.push(wc[k]);
+            }
+            k += 1;
+        }
+        return Some(Dec { neg: neg, coef: 0, exp: 0, special: if skip == 3 { 2 } else { 3 }, payload: p });
+    }
+    let mut coef: i128 = 0;
+    let mut nd = 0;
+    let mut seen = false;
+    let mut exp: i64 = 0;
+    while i < t.len() and is_digit(t[i]) {
+        seen = true;
+        coef = coef * 10 + (((t[i] as u32) - 48) as i128);
+        if coef > 0 {
+            nd += 1;
+        }
+        i += 1;
+    }
+    if i < t.len() and t[i] == '.' {
+        i += 1;
+        while i < t.len() and is_digit(t[i]) {
+            seen = true;
+            coef = coef * 10 + (((t[i] as u32) - 48) as i128);
+            if coef > 0 {
+                nd += 1;
+            }
+            exp -= 1;
+            i += 1;
+        }
+    }
+    if not seen or nd > 36 {
+        return None;
+    }
+    if i < t.len() and (t[i] == 'e' or t[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < t.len() and (t[i] == '+' or t[i] == '-') {
+            eneg = t[i] == '-';
+            i += 1;
+        }
+        let st = i;
+        let mut e: i64 = 0;
+        while i < t.len() and is_digit(t[i]) {
+            if e < 100000000 {
+                e = e * 10 + ((t[i] as u32) - 48) as i64;
+            }
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+        exp += if eneg { -e } else { e };
+    }
+    if i != t.len() {
+        return None;
+    }
+    Some(dec_new(neg, coef, exp))
+}
+
+fn digits_of(n: i128) -> String {
+    f"{n}"
+}
+
+// Decimal.__str__ (to_sci_string)
+fn dec_str(d: ref Dec) -> String {
+    let sign = if d.neg { "-" } else { "" };
+    if d.special == 1 {
+        return f"{sign}Infinity";
+    }
+    if d.special == 2 {
+        return f"{sign}NaN{d.payload}";
+    }
+    if d.special == 3 {
+        return f"{sign}sNaN{d.payload}";
+    }
+    let ds = digits_of(d.coef);
+    let nd = ds.len();
+    let leftdigits = d.exp + nd;
+    let dotplace = if d.exp <= 0 and leftdigits > -6 { leftdigits } else { 1 };
+    let mut intpart = String.new();
+    let mut fracpart = String.new();
+    if dotplace <= 0 {
+        intpart.push('0');
+        fracpart.push('.');
+        for _ in 0..(-dotplace) {
+            fracpart.push('0');
+        }
+        fracpart.push_str(ds);
+    } else if dotplace >= nd {
+        intpart.push_str(ds);
+        for _ in 0..(dotplace - nd) {
+            intpart.push('0');
+        }
+    } else {
+        intpart = substr(ds, 0, dotplace);
+        fracpart = f".{substr(ds, dotplace, nd)}";
+    }
+    let e = leftdigits - dotplace;
+    let exp = if e == 0 { String.new() } else if e > 0 { f"E+{e}" } else { f"E{e}" };
+    f"{sign}{intpart}{fracpart}{exp}"
+}
+
+fn pow10_i128(n: i64) -> i128 {
+    let mut p: i128 = 1;
+    for _ in 0..n {
+        p = p * 10;
+    }
+    p
+}
+
+// The signed coefficients of two finite decimals over their smaller
+// exponent.
+fn dec_align(a: ref Dec, b: ref Dec) -> (i128, i128, i64) {
+    let e = if a.exp < b.exp { a.exp } else { b.exp };
+    let mut ca = a.coef * pow10_i128(a.exp - e);
+    let mut cb = b.coef * pow10_i128(b.exp - e);
+    if a.neg {
+        ca = -ca;
+    }
+    if b.neg {
+        cb = -cb;
+    }
+    (ca, cb, e)
+}
+
+fn dec_cmp(a: ref Dec, b: ref Dec) -> i64 {
+    let (ca, cb, _) = dec_align(a, b);
+    if ca < cb {
+        -1
+    } else if ca > cb {
+        1
+    } else {
+        0
+    }
+}
+
+fn dec_sub(a: ref Dec, b: ref Dec) -> Dec {
+    let (ca, cb, e) = dec_align(a, b);
+    let r = ca - cb;
+    if r == 0 {
+        return dec_new(a.neg and not b.neg, 0, e);
+    }
+    if r < 0 { dec_new(true, -r, e) } else { dec_new(false, r, e) }
+}
+
+fn dec_of_int(n: i64) -> Dec {
+    if n < 0 { dec_new(true, (-n) as i128, 0) } else { dec_new(false, n as i128, 0) }
+}
+
+fn dec_float(d: ref Dec) -> f64 {
+    py_float_s(dec_str(d)).unwrap_or(0.0)
+}
+
+// ------------------------------------------------------------ dates and times
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// Days since 1970-01-01 of a proleptic Gregorian date.
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// datetime.time; utc says whether tzinfo is datetime.timezone.utc.
+#[derive(Clone)]
+struct Tm {
+    h: i64,
+    m: i64,
+    s: i64,
+    us: i64,
+    utc: bool,
+}
+
+// datetime.datetime; tz is 0 when naive, 1 for timezone.utc and 2 for a
+// fixed offset of off minutes.
+#[derive(Clone)]
+struct Dt {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    tz: i64,
+    off: i64,
+}
+
+fn tm_repr(t: ref Tm) -> String {
+    let mut s = f"datetime.time({t.h}, {t.m}";
+    if t.us != 0 {
+        s.push_str(f", {t.s}, {t.us}");
+    } else if t.s != 0 {
+        s.push_str(f", {t.s}");
+    }
+    if t.utc {
+        s.push_str(", tzinfo=datetime.timezone.utc");
+    }
+    s.push(')');
+    s
+}
+
+fn date_repr(y: i64, m: i64, d: i64) -> String {
+    f"datetime.date({y}, {m}, {d})"
+}
+
+fn dt_repr(t: ref Dt) -> String {
+    let mut s = f"datetime.datetime({t.y}, {t.mo}, {t.d}, {t.h}, {t.mi}";
+    if t.us != 0 {
+        s.push_str(f", {t.s}, {t.us}");
+    } else if t.s != 0 {
+        s.push_str(f", {t.s}");
+    }
+    if t.tz == 1 {
+        s.push_str(", tzinfo=datetime.timezone.utc");
+    }
+    s.push(')');
+    s
+}
+
+fn offset_text(off: i64) -> String {
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = if off < 0 { -off } else { off };
+    f"{sign}{a / 60:02}:{a % 60:02}"
+}
+
+fn dt_iso(t: ref Dt, sep: Str) -> String {
+    let mut s = f"{t.y:04}-{t.mo:02}-{t.d:02}{sep}{t.h:02}:{t.mi:02}:{t.s:02}";
+    if t.us != 0 {
+        s.push_str(f".{t.us:06}");
+    }
+    if t.tz == 1 {
+        s.push_str("+00:00");
+    } else if t.tz == 2 {
+        s.push_str(offset_text(t.off));
+    }
+    s
+}
+
+// The same wall clock moved by a number of minutes.
+fn dt_add_minutes(t: ref Dt, mins: i64) -> Dt {
+    let total = days_from_civil(t.y, t.mo, t.d) * 1440 + t.h * 60 + t.mi + mins;
+    let days = floor_div(total, 1440);
+    let rem = total - days * 1440;
+    let (y, mo, d) = civil_from_days(days);
+    Dt { y: y, mo: mo, d: d, h: rem / 60, mi: rem % 60, s: t.s, us: t.us, tz: t.tz, off: t.off }
+}
+
+fn round_half_even(x: f64) -> f64 {
+    let r = x.round();
+    if (x - r).abs() == 0.5 {
+        2.0 * (x / 2.0).round()
+    } else {
+        r
+    }
+}
+
+// datetime.utcfromtimestamp: the fraction is rounded half to even to
+// microseconds, as _PyTime_ObjectToTimeval does.
+fn utcfromtimestamp(t: f64) -> Option[Dt] {
+    if t != t {
+        return None;
+    }
+    let mut ip = t.trunc();
+    let mut fp = (t - ip) * 1000000.0;
+    fp = round_half_even(fp);
+    if fp >= 1000000.0 {
+        fp -= 1000000.0;
+        ip += 1.0;
+    } else if fp < 0.0 {
+        fp += 1000000.0;
+        ip -= 1.0;
+    }
+    if ip.abs() > 300000000000.0 {
+        return None;
+    }
+    let secs = ip as i64;
+    let days = floor_div(secs, 86400);
+    let rem = secs - days * 86400;
+    let (y, mo, d) = civil_from_days(days);
+    if y < 1 or y > 9999 {
+        return None;
+    }
+    Some(Dt { y: y, mo: mo, d: d, h: rem / 3600, mi: rem / 60 % 60, s: rem % 60, us: fp as i64, tz: 0, off: 0 })
+}
+
+// ------------------------------------------------------------ values
+
+// A Python value as the sentence objects hand them out.
+#[derive(Clone)]
+enum Val {
+    None,
+    Bool(bool),
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Dec(Dec),
+    Time(Tm),
+    Date(i64, i64, i64),
+    Dt(Dt),
+    List(Vec[String]),
+    Trans(Vec[String]),
+    Func(String),
+}
+
+fn repr_val(v: ref Val) -> String {
+    match v {
+        Val.None => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Str(s) => repr_str(s),
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => float_repr(*x),
+        Val.Dec(d) => f"Decimal('{dec_str(d)}')",
+        Val.Time(t) => tm_repr(t),
+        Val.Date(y, m, d) => date_repr(*y, *m, *d),
+        Val.Dt(t) => dt_repr(t),
+        Val.List(xs) => repr_list(xs),
+        Val.Trans(xs) => f"Transducer(type={repr_str(xs[0])}, value={repr_str(xs[1])}, units={repr_str(xs[2])}, id={repr_str(xs[3])})",
+        Val.Func(name) => f"<function {name}>",
+    }
+}
+
+// str() of a value
+fn str_val(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        Val.Dec(d) => dec_str(d),
+        Val.Dt(t) => dt_iso(t, " "),
+        _ => repr_val(v),
+    }
+}
+
+// The type name an error message gives for a value.
+fn type_name(v: ref Val) -> String {
+    let s = match v {
+        Val.None => "None",
+        Val.Bool(_) => "bool",
+        Val.Str(_) => "str",
+        Val.Int(_) => "int",
+        Val.Float(_) => "float",
+        Val.Dec(_) => "decimal.Decimal",
+        Val.Time(_) => "datetime.time",
+        Val.Date(_, _, _) => "datetime.date",
+        Val.Dt(_) => "datetime.datetime",
+        Val.List(_) => "list",
+        Val.Trans(_) => "Transducer",
+        Val.Func(_) => "function",
+    };
+    s.to_string()
+}
+
+fn val_is(v: ref Val, s: Str) -> bool {
+    match v {
+        Val.Str(x) => x == s,
+        _ => false,
+    }
+}
+
+fn val_text(v: ref Val) -> String {
+    match v {
+        Val.Str(x) => x.clone(),
+        _ => String.new(),
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.None => false,
+        Val.Bool(b) => *b,
+        Val.Str(s) => s.len() > 0,
+        Val.Int(n) => *n != 0,
+        Val.Float(x) => *x != 0.0,
+        Val.Dec(d) => d.special != 0 or d.coef != 0,
+        Val.List(xs) => xs.len() > 0,
+        _ => true,
+    }
+}
+
+// ------------------------------------------------------------ errors
+
+// An exception: its class name and str().
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn perr(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn err_text(e: ref PyErr) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+fn is_parse_error(e: ref PyErr) -> bool {
+    e.kind == "ParseError" or e.kind == "ChecksumError" or e.kind == "SentenceTypeError"
+}
+
+// ParseError(message, data) keeps (message, data) as its one argument,
+// so str() shows the tuple.
+fn parse_error_list(kind: Str, msg: ref String, data: ref Vec[String]) -> PyErr {
+    perr(kind, f"({repr_str(msg)}, {repr_list(data)})")
+}
+
+fn parse_error_line(kind: Str, msg: ref String, line: ref String) -> PyErr {
+    perr(kind, f"({repr_str(msg)}, {repr_str(line)})")
+}
+
+fn index_error() -> PyErr {
+    perr("IndexError", "list index out of range".to_string())
+}
+
+fn attr_error(name: ref String) -> PyErr {
+    perr("AttributeError", name.clone())
+}
+
+// ------------------------------------------------------------ classes
+
+struct Field {
+    name: String,
+    conv: String,
+}
+
+struct Cls {
+    name: String,
+    base: String,
+    flags: Vec[String],
+    props: Vec[String],
+    fields: Vec[Field],
+    idx: Map[String, i64],
+}
+
+impl Cls {
+    fn has_flag(self, f: Str) -> bool {
+        for x in self.flags.iter() {
+            if x == f {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn has_prop(self, p: ref String) -> bool {
+        for x in self.props.iter() {
+            if x == p {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn valid_kind(self) -> bool {
+        self.has_flag("vstatus") or self.has_flag("vrmc") or self.has_flag("vgsa") or self.has_flag("vgga")
+            or self.has_flag("vvbw")
+    }
+}
+
+struct Lib {
+    classes: Vec[Cls],
+    query: i64,
+    generic: i64,
+}
+
+fn parse_cls(line: ref String) -> Cls {
+    let parts = split_on(line, '|');
+    let mut flags: Vec[String] = Vec.new();
+    if parts[2].len() > 0 {
+        flags = split_on(parts[2], ',');
+    }
+    let mut props: Vec[String] = Vec.new();
+    if parts[3].len() > 0 {
+        props = split_on(parts[3], ',');
+    }
+    let mut fields: Vec[Field] = Vec.new();
+    let mut idx: Map[String, i64] = Map.new();
+    if parts[4].len() > 0 {
+        for f in split_on(parts[4], ';') {
+            let bits = split_on(f, ':');
+            let mut name = bits[0].clone();
+            let mut conv = if bits.len() > 1 { bits[1].clone() } else { String.new() };
+            if name.ends_with("!") {
+                name = substr(name, 0, char_len(name) - 1);
+                conv = "!".to_string();
+            }
+            // name_to_idx: a later field with the same name wins
+            idx.insert(name.clone(), fields.len());
+            fields.push(Field { name: name, conv: conv });
+        }
+    }
+    Cls { name: parts[0].clone(), base: parts[1].clone(), flags: flags, props: props, fields: fields, idx: idx }
+}
+
+fn load_lib() -> Lib {
+    let mut classes: Vec[Cls] = Vec.new();
+    for l in class_lines() {
+        classes.push(parse_cls(l));
+    }
+    let query = classes.len();
+    classes.push(parse_cls("QuerySentence|Q||||".to_string()));
+    let generic = classes.len();
+    classes.push(parse_cls("ProprietarySentence|G||||".to_string()));
+    Lib { classes: classes, query: query, generic: generic }
+}
+
+impl Lib {
+    fn find(self, base: Str, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.classes.len() {
+            if self.classes[i].base == base and self.classes[i].name == name {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+}
+
+// ------------------------------------------------------------ sentences
+
+// A sentence object: its class, the data list, and the instance
+// attributes __init__ set (talker, manufacturer, ...) or a caller did.
+struct Msg {
+    cls: i64,
+    kind: i64,
+    data: Vec[String],
+    inst: Vec[(String, Val)],
+}
+
+const TALKER: i64 = 0;
+const QUERY: i64 = 1;
+const PROP: i64 = 2;
+
+impl Msg {
+    fn inst_get(self, name: ref String) -> Option[Val] {
+        for (k, v) in self.inst.iter() {
+            if k == name {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn inst_set(mut ref self, name: ref String, v: own Val) {
+        let mut i = 0;
+        while i < self.inst.len() {
+            if self.inst[i].0 == name {
+                self.inst[i] = (name.clone(), v);
+                return;
+            }
+            i += 1;
+        }
+        self.inst.push((name.clone(), v));
+    }
+
+    fn inst_str(self, name: Str) -> String {
+        match self.inst_get(name.to_string()) {
+            Some(v) => str_val(v),
+            None => String.new(),
+        }
+    }
+}
+
+fn new_msg(cls: i64, kind: i64, data: own Vec[String]) -> Msg {
+    Msg { cls: cls, kind: kind, data: data, inst: Vec.new() }
+}
+
+fn talker_msg(cls: i64, talker: ref String, stype: ref String, data: own Vec[String]) -> Msg {
+    let mut m = new_msg(cls, TALKER, data);
+    m.inst_set("talker".to_string(), Val.Str(talker.clone()));
+    m.inst_set("sentence_type".to_string(), Val.Str(stype.clone()));
+    m
+}
+
+fn query_msg(lib: ref Lib, talker: ref String, listener: ref String, stype: ref String) -> Msg {
+    let mut m = new_msg(lib.query, QUERY, Vec.new());
+    m.inst_set("talker".to_string(), Val.Str(talker.clone()));
+    m.inst_set("listener".to_string(), Val.Str(listener.clone()));
+    m.inst_set("sentence_type".to_string(), Val.Str(stype.clone()));
+    m
+}
+
+fn at(data: ref Vec[String], i: i64) -> Result[String, PyErr] {
+    if i < data.len() { Ok(data[i].clone()) } else { Err(index_error()) }
+}
+
+// ASHRATT.match: ^\d{6}\.\d{2,3}$
+fn att_match(s: ref String) -> bool {
+    let mut cs = chars_of(s);
+    if cs.len() > 0 and cs[cs.len() - 1] == '\n' {
+        cs.pop();
+    }
+    if cs.len() != 9 and cs.len() != 10 {
+        return false;
+    }
+    for i in 0..cs.len() {
+        let ok = if i == 6 { cs[i] == '.' } else { is_digit(cs[i]) };
+        if not ok {
+            return false;
+        }
+    }
+    true
+}
+
+// ProprietarySentence.sentence_types.get(manufacturer, ProprietarySentence)
+// and then that class's __new__, which picks a subclass from the data.
+fn make_proprietary(lib: ref Lib, man: ref String, data: own Vec[String]) -> Result[Msg, PyErr] {
+    let g = lib.find("P", man);
+    if g < 0 {
+        let mut m = new_msg(lib.generic, PROP, data);
+        m.inst_set("manufacturer".to_string(), Val.Str(man.clone()));
+        return Ok(m);
+    }
+    let mut sub_name = String.new();
+    let mut stype: Option[String] = None;
+    let mut body = data.clone();
+    let mut att = false;
+    if man == "ASH" {
+        sub_name = f"{man}R{at(data, 1)?}";
+        if lib.find(man, sub_name) < 0 and att_match(data[1]) {
+            att = true;
+        }
+    } else if man == "GRM" or man == "KWD" or man == "MGN" or man == "SRF" {
+        sub_name = f"{man}{data[0]}";
+        stype = Some(sub_name.clone());
+    } else if man == "RDI" {
+        sub_name = f"{man}{data[0]}";
+    } else if man == "SXN" or man == "UBX" {
+        sub_name = f"{man}{at(data, 1)?}";
+    } else if man == "VTX" {
+        sub_name = f"{man}{at(data, 1)?}";
+        stype = Some(f"{man}{data[0]}");
+    } else if man == "TNL" {
+        let st = if data[0].len() > 0 { data[0].clone() } else { at(data, 1)? };
+        sub_name = f"{man}{st}";
+        stype = Some(st);
+    } else if man == "NOR" {
+        sub_name = f"{man}{data[0]}";
+        stype = Some(sub_name.clone());
+        body = data[1..].to_vec();
+    }
+    let mut cls = if att { lib.find(man, "ASHRATT".to_string()) } else { lib.find(man, sub_name) };
+    if cls < 0 {
+        cls = g;
+    }
+    let mut m = new_msg(cls, PROP, body);
+    if lib.classes[cls].name == "ASHRATT" {
+        m.inst_set("subtype".to_string(), Val.Str("ATT".to_string()));
+    }
+    if let Some(st) = stype {
+        m.inst_set("sentence_type".to_string(), Val.Str(st));
+    }
+    m.inst_set("manufacturer".to_string(), Val.Str(man.clone()));
+    Ok(m)
+}
+
+fn xor_checksum(s: ref String) -> i64 {
+    let mut c: i64 = 0;
+    for ch in s.chars() {
+        c = c ^ ((ch as u32) as i64);
+    }
+    c
+}
+
+fn all_space(cs: ref Vec[char], from: i64) -> bool {
+    let mut i = from;
+    while i < cs.len() {
+        if not is_space(cs[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn words(cs: ref Vec[char], from: i64, to: i64) -> bool {
+    if to > cs.len() {
+        return false;
+    }
+    let mut i = from;
+    while i < to {
+        if not is_word(cs[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// NMEASentence.sentence_re.match: the start of the sentence type, its
+// end, the end of the data and the start of the checksum (-1 for none).
+fn match_sentence(cs: ref Vec[char]) -> Option[(i64, i64, i64, i64)] {
+    let n = cs.len();
+    let mut i = 0;
+    while i < n and is_space(cs[i]) {
+        i += 1;
+    }
+    if i < n and cs[i] == '$' {
+        i += 1;
+    }
+    let mut ends: Vec[i64] = Vec.new();
+    if i < n and (cs[i] == 'P' or cs[i] == 'p') and words(cs, i + 1, i + 4) {
+        ends.push(i + 4);
+    }
+    if words(cs, i, i + 4) and i + 9 <= n and (cs[i + 4] == 'Q' or cs[i + 4] == 'q') and cs[i + 5] == ','
+        and words(cs, i + 6, i + 9) {
+        ends.push(i + 9);
+    }
+    if words(cs, i, i + 5) and i + 6 <= n and cs[i + 5] == ',' {
+        ends.push(i + 6);
+    }
+    for e in ends.iter() {
+        let mut d = *e;
+        while d < n and cs[d] != '*' {
+            d += 1;
+        }
+        if d == n {
+            return Some((i, *e, d, -1));
+        }
+        if d + 3 <= n and is_hex(cs[d + 1]) and is_hex(cs[d + 2]) and all_space(cs, d + 3) {
+            return Some((i, *e, d, d + 1));
+        }
+    }
+    None
+}
+
+// NMEASentence.parse
+fn parse_sentence(lib: ref Lib, line: ref String, check: bool) -> Result[Msg, PyErr] {
+    let cs = chars_of(line);
+    let (st, te, de, ck) = match match_sentence(cs) {
+        Some(r) => r,
+        None => return Err(parse_error_line("ParseError", "could not parse data".to_string(), line)),
+    };
+    let nmea_str = str_of(slice_chars(cs, st, de));
+    let data_str = str_of(slice_chars(cs, te, de));
+    let stype = upper_str(str_of(slice_chars(cs, st, te)));
+    let data = split_on(data_str, ',');
+    if ck >= 0 {
+        let cs1 = hex_digit(cs[ck]) * 16 + hex_digit(cs[ck + 1]);
+        let cs2 = xor_checksum(nmea_str);
+        if cs1 != cs2 {
+            return Err(parse_error_list("ChecksumError", f"checksum does not match: {cs1:02X} != {cs2:02X}", data));
+        }
+    } else if check {
+        return Err(parse_error_list("ChecksumError", "strict checking requested but checksum missing".to_string(), data));
+    }
+    let t = chars_of(stype);
+    if t.len() == 6 and words(t, 0, 5) and t[5] == ',' {
+        let talker = str_of(slice_chars(t, 0, 2));
+        let sentence = str_of(slice_chars(t, 2, 5));
+        let cls = lib.find("T", sentence);
+        if cls < 0 {
+            return Err(parse_error_line("SentenceTypeError", f"Unknown sentence type {stype}", line));
+        }
+        return Ok(talker_msg(cls, talker, sentence, data));
+    }
+    if t.len() == 9 and words(t, 0, 4) and t[4] == 'Q' and t[5] == ',' and words(t, 6, 9) and data_str.len() == 0 {
+        return Ok(query_msg(lib, str_of(slice_chars(t, 0, 2)), str_of(slice_chars(t, 2, 4)), str_of(slice_chars(t, 6, 9))));
+    }
+    if t.len() == 4 and t[0] == 'P' and words(t, 1, 4) {
+        return make_proprietary(lib, str_of(slice_chars(t, 1, 4)), data);
+    }
+    Err(parse_error_line("ParseError", f"could not parse sentence type: {repr_str(stype)}", line))
+}
+
+// ------------------------------------------------------------ converters
+
+// nmea_utils.timestamp: hhmmss[.ss] to a time in UTC.
+fn conv_timestamp(s: ref String) -> Option[Val] {
+    let cs = chars_of(s);
+    let ms_s = slice_chars(cs, 6, cs.len());
+    let mut us: i64 = 0;
+    if ms_s.len() > 0 {
+        let x = py_float(ms_s)? * 1000000.0;
+        if x != x or x.abs() > 1000000000000.0 {
+            return None;
+        }
+        us = x.trunc() as i64;
+    }
+    let h = py_int(slice_chars(cs, 0, 2))?;
+    let m = py_int(slice_chars(cs, 2, 4))?;
+    let sec = py_int(slice_chars(cs, 4, 6))?;
+    if h < 0 or h > 23 or m < 0 or m > 59 or sec < 0 or sec > 59 or us < 0 or us > 999999 {
+        return None;
+    }
+    Some(Val.Time(Tm { h: h, m: m, s: sec, us: us, utc: true }))
+}
+
+fn two_digits(cs: ref Vec[char], i: i64) -> bool {
+    i + 2 <= cs.len() and is_digit(cs[i]) and is_digit(cs[i + 1])
+}
+
+fn digit_at(cs: ref Vec[char], i: i64) -> i64 {
+    ((cs[i] as u32) - 48) as i64
+}
+
+// The (end, value) pairs strptime's %d alternatives match at i, in the
+// order the regex tries them: 3[0-1]|[1-2]\d|0[1-9]|[1-9]| [1-9]
+fn day_alts(cs: ref Vec[char], i: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let n = cs.len();
+    if i + 2 <= n and cs[i] == '3' and (cs[i + 1] == '0' or cs[i + 1] == '1') {
+        out.push((i + 2, 30 + digit_at(cs, i + 1)));
+    }
+    if i + 2 <= n and (cs[i] == '1' or cs[i] == '2') and is_digit(cs[i + 1]) {
+        out.push((i + 2, digit_at(cs, i) * 10 + digit_at(cs, i + 1)));
+    }
+    if i + 2 <= n and cs[i] == '0' and cs[i + 1] >= '1' and cs[i + 1] <= '9' {
+        out.push((i + 2, digit_at(cs, i + 1)));
+    }
+    if i + 1 <= n and cs[i] >= '1' and cs[i] <= '9' {
+        out.push((i + 1, digit_at(cs, i)));
+    }
+    if i + 2 <= n and cs[i] == ' ' and cs[i + 1] >= '1' and cs[i + 1] <= '9' {
+        out.push((i + 2, digit_at(cs, i + 1)));
+    }
+    out
+}
+
+// %m: 1[0-2]|0[1-9]|[1-9]
+fn month_alts(cs: ref Vec[char], i: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let n = cs.len();
+    if i + 2 <= n and cs[i] == '1' and cs[i + 1] >= '0' and cs[i + 1] <= '2' {
+        out.push((i + 2, 10 + digit_at(cs, i + 1)));
+    }
+    if i + 2 <= n and cs[i] == '0' and cs[i + 1] >= '1' and cs[i + 1] <= '9' {
+        out.push((i + 2, digit_at(cs, i + 1)));
+    }
+    if i + 1 <= n and cs[i] >= '1' and cs[i] <= '9' {
+        out.push((i + 1, digit_at(cs, i)));
+    }
+    out
+}
+
+// nmea_utils.datestamp: datetime.strptime(s, '%d%m%y').date(). The
+// regex takes its first match, which need not reach the end of the
+// string ("unconverted data remains").
+fn conv_datestamp(s: ref String) -> Option[Val] {
+    let cs = chars_of(s);
+    for (de, day) in day_alts(cs, 0) {
+        for (me, month) in month_alts(cs, de) {
+            if two_digits(cs, me) {
+                if me + 2 != cs.len() {
+                    return None;
+                }
+                let yy = digit_at(cs, me) * 10 + digit_at(cs, me + 1);
+                let year = if yy <= 68 { yy + 2000 } else { yy + 1900 };
+                if day > days_in_month(year, month) {
+                    return None;
+                }
+                return Some(Val.Date(year, month, day));
+            }
+        }
+    }
+    None
+}
+
+fn convert(conv: ref String, v: ref String) -> Option[Val] {
+    if conv == "ts" {
+        conv_timestamp(v)
+    } else if conv == "ds" {
+        conv_datestamp(v)
+    } else if conv == "int" {
+        Some(Val.Int(py_int_s(v)?))
+    } else if conv == "float" {
+        Some(Val.Float(py_float_s(v)?))
+    } else if conv == "dec" {
+        Some(Val.Dec(parse_dec(v)?))
+    } else if conv == "str" {
+        Some(Val.Str(v.clone()))
+    } else {
+        // NOR's lambda x: datetime.utcfromtimestamp(float(x))
+        Some(Val.Dt(utcfromtimestamp(py_float_s(v)?)?))
+    }
+}
+
+// ------------------------------------------------------------ attributes
+
+fn cls_of(lib: ref Lib, m: ref Msg) -> ref Cls {
+    lib.classes[m.cls]
+}
+
+// NMEASentence.__getattr__
+fn field_attr(lib: ref Lib, m: ref Msg, name: ref String) -> Result[Val, PyErr] {
+    let c = cls_of(lib, m);
+    let i = match c.idx.get(name) {
+        Some(i) => i,
+        None => return Err(attr_error(name)),
+    };
+    let conv = c.fields[i].conv.clone();
+    let v = if i < m.data.len() { m.data[i].clone() } else { String.new() };
+    if conv.len() == 0 {
+        return Ok(Val.Str(v));
+    }
+    if conv == "!" {
+        return Ok(Val.Func("NMEASentence.checksum".to_string()));
+    }
+    if v.len() == 0 {
+        return Ok(Val.None);
+    }
+    match convert(conv, v) {
+        Some(x) => Ok(x),
+        None => Ok(Val.Str(v)),
+    }
+}
+
+// getattr(sentence, name): the properties first, then the instance
+// attributes, then __getattr__ (which a property raising AttributeError
+// also falls back to).
+fn getattr(lib: ref Lib, m: ref Msg, name: Str) -> Result[Val, PyErr] {
+    let n = name.to_string();
+    if n == "data" {
+        return Ok(Val.List(m.data.clone()));
+    }
+    if cls_of(lib, m).has_prop(n) {
+        match prop(lib, m, n) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if e.kind != "AttributeError" {
+                    return Err(e);
+                }
+            }
+        }
+    } else if let Some(v) = m.inst_get(n) {
+        return Ok(v);
+    }
+    field_attr(lib, m, n)
+}
+
+fn attr_str(lib: ref Lib, m: ref Msg, name: Str) -> Result[String, PyErr] {
+    Ok(val_text(getattr(lib, m, name)?))
+}
+
+// nmea_utils.dm_to_sd
+fn dm_to_sd(v: ref Val) -> Result[f64, PyErr] {
+    let dm = match v {
+        Val.Str(s) => s.clone(),
+        Val.None => return Ok(0.0),
+        _ => str_val(v),
+    };
+    if dm.len() == 0 or dm == "0" {
+        return Ok(0.0);
+    }
+    // ^(\d+)(\d\d\.\d+)$
+    let mut cs = chars_of(dm);
+    if cs.len() > 0 and cs[cs.len() - 1] == '\n' {
+        cs.pop();
+    }
+    let mut dot = -1;
+    let mut ok = true;
+    for i in 0..cs.len() {
+        if cs[i] == '.' {
+            if dot >= 0 {
+                ok = false;
+            }
+            dot = i;
+        } else if not is_digit(cs[i]) {
+            ok = false;
+        }
+    }
+    if not ok or dot < 3 or dot == cs.len() - 1 {
+        return Err(perr("ValueError", f"Geographic coordinate value '{dm}' is not valid DDDMM.MMM"));
+    }
+    let d = py_float(slice_chars(cs, 0, dot - 2)).unwrap_or(0.0);
+    let mm = py_float(slice_chars(cs, dot - 2, cs.len())).unwrap_or(0.0);
+    Ok(d + mm / 60.0)
+}
+
+fn signed_deg(lib: ref Lib, m: ref Msg, field: Str, dir: Str, pos: Str, neg: Str) -> Result[f64, PyErr] {
+    let sd = dm_to_sd(getattr(lib, m, field)?)?;
+    let d = getattr(lib, m, dir)?;
+    if val_is(d, pos) {
+        Ok(sd)
+    } else if val_is(d, neg) {
+        Ok(-sd)
+    } else {
+        Ok(0.0)
+    }
+}
+
+fn int_arg(v: ref Val) -> Result[i64, PyErr] {
+    match v {
+        Val.Int(n) => Ok(*n),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(perr("TypeError", f"'{py_type_name(v)}' object cannot be interpreted as an integer")),
+    }
+}
+
+fn py_type_name(v: ref Val) -> String {
+    if type_name(v) == "None" { "NoneType".to_string() } else { type_name(v) }
+}
+
+// datetime.date(year=..., month=..., day=...)
+fn make_date(y: ref Val, mo: ref Val, d: ref Val) -> Result[Val, PyErr] {
+    let year = int_arg(y)?;
+    let month = int_arg(mo)?;
+    let day = int_arg(d)?;
+    if year < 1 or year > 9999 {
+        return Err(perr("ValueError", f"year {year} is out of range"));
+    }
+    if month < 1 or month > 12 {
+        return Err(perr("ValueError", "month must be in 1..12".to_string()));
+    }
+    if day < 1 or day > days_in_month(year, month) {
+        return Err(perr("ValueError", "day is out of range for month".to_string()));
+    }
+    Ok(Val.Date(year, month, day))
+}
+
+// datetime.datetime.combine(date, time)
+fn combine(d: ref Val, t: ref Val) -> Result[Dt, PyErr] {
+    let (y, mo, dd) = match d {
+        Val.Date(y, mo, dd) => (*y, *mo, *dd),
+        Val.Dt(x) => (x.y, x.mo, x.d),
+        _ => return Err(perr("TypeError", f"combine() argument 1 must be datetime.date, not {type_name(d)}")),
+    };
+    match t {
+        Val.Time(x) => Ok(Dt { y: y, mo: mo, d: dd, h: x.h, mi: x.m, s: x.s, us: x.us, tz: if x.utc { 1 } else { 0 }, off: 0 }),
+        _ => Err(perr("TypeError", f"combine() argument 2 must be datetime.time, not {type_name(t)}")),
+    }
+}
+
+fn timedelta_repr(mins: i64) -> String {
+    let total = mins * 60;
+    let days = floor_div(total, 86400);
+    let secs = total - days * 86400;
+    let mut parts: Vec[String] = Vec.new();
+    if days != 0 {
+        parts.push(f"days={days}");
+    }
+    if secs != 0 {
+        parts.push(f"seconds={secs}");
+    }
+    if parts.len() == 0 {
+        return "datetime.timedelta(0)".to_string();
+    }
+    f"datetime.timedelta({join(parts, ", ")})"
+}
+
+// ZDA.localdatetime: combine, then astimezone(TZInfo(hh, mm)), whose
+// utcoffset is timedelta(hours=hh, minutes=mm).
+fn zda_local(lib: ref Lib, m: ref Msg) -> Result[Val, PyErr] {
+    let ds = prop(lib, m, "datestamp".to_string())?;
+    let ts = getattr(lib, m, "timestamp")?;
+    let d = combine(ds, ts)?;
+    let hh = getattr(lib, m, "local_zone")?;
+    let mm = getattr(lib, m, "local_zone_minutes")?;
+    let mins = match mm {
+        Val.Int(n) => n,
+        _ => return Err(perr("TypeError", f"unsupported type for timedelta minutes component: {py_type_name(mm)}")),
+    };
+    let hours = match hh {
+        Val.Int(n) => n,
+        _ => return Err(perr("TypeError", f"unsupported type for timedelta hours component: {py_type_name(hh)}")),
+    };
+    let off = hours * 60 + mins;
+    if off <= -1440 or off >= 1440 {
+        return Err(perr("ValueError", f"offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not {timedelta_repr(off)}."));
+    }
+    let mut local = dt_add_minutes(d, off);
+    local.tz = 2;
+    local.off = off;
+    Ok(Val.Dt(local))
+}
+
+fn slice_from(data: ref Vec[String], from: i64) -> Vec[String] {
+    if from >= data.len() {
+        return Vec.new();
+    }
+    data[from..].to_vec()
+}
+
+fn in_chars(v: ref Val, set: Str) -> bool {
+    match v {
+        Val.Str(s) => char_len(s) == 1 and set.contains(s.as_str()),
+        _ => false,
+    }
+}
+
+// The properties the mixins and a few classes add.
+fn prop(lib: ref Lib, m: ref Msg, name: ref String) -> Result[Val, PyErr] {
+    let c = cls_of(lib, m);
+    if name == "latitude" {
+        return Ok(Val.Float(signed_deg(lib, m, "lat", "lat_dir", "N", "S")?));
+    }
+    if name == "longitude" {
+        return Ok(Val.Float(signed_deg(lib, m, "lon", "lon_dir", "E", "W")?));
+    }
+    if name == "latitude_minutes" or name == "longitude_minutes" {
+        let x = if name == "latitude_minutes" { signed_deg(lib, m, "lat", "lat_dir", "N", "S")? } else { signed_deg(lib, m, "lon", "lon_dir", "E", "W")? };
+        return Ok(Val.Float((x * 60.0).abs() % 60.0));
+    }
+    if name == "latitude_seconds" or name == "longitude_seconds" {
+        let x = if name == "latitude_seconds" { signed_deg(lib, m, "lat", "lat_dir", "N", "S")? } else { signed_deg(lib, m, "lon", "lon_dir", "E", "W")? };
+        return Ok(Val.Float((x * 3600.0).abs() % 60.0));
+    }
+    if name == "datetime" {
+        let ds = getattr(lib, m, "datestamp")?;
+        let ts = getattr(lib, m, "timestamp")?;
+        return Ok(Val.Dt(combine(ds, ts)?));
+    }
+    if name == "datestamp" {
+        let y = getattr(lib, m, "year")?;
+        let mo = getattr(lib, m, "month")?;
+        let d = getattr(lib, m, "day")?;
+        return make_date(y, mo, d);
+    }
+    if name == "localdatetime" {
+        return zda_local(lib, m);
+    }
+    if name == "is_valid" {
+        if c.has_flag("vstatus") or c.has_flag("vrmc") {
+            let mut ok = val_is(getattr(lib, m, "status")?, "A");
+            if c.has_flag("vrmc") {
+                if c.idx.get("mode_indicator".to_string()).unwrap_or(99) < m.data.len() {
+                    ok = ok and in_chars(getattr(lib, m, "mode_indicator")?, "ADEFMPRS");
+                }
+                if c.idx.get("nav_status".to_string()).unwrap_or(99) < m.data.len() {
+                    ok = ok and in_chars(getattr(lib, m, "nav_status")?, "SCU");
+                }
+            }
+            return Ok(Val.Bool(ok));
+        }
+        if c.has_flag("vgsa") {
+            let v = getattr(lib, m, "mode_fix_type")?;
+            let s = str_val(v);
+            return match py_int_s(s) {
+                Some(n) => Ok(Val.Bool(n == 2 or n == 3)),
+                None => Err(perr("ValueError", f"invalid literal for int() with base 10: {repr_str(s)}")),
+            };
+        }
+        if c.has_flag("vgga") {
+            return match getattr(lib, m, "gps_qual")? {
+                Val.Int(n) => Ok(Val.Bool(n >= 1 and n < 6)),
+                _ => Ok(Val.Bool(false)),
+            };
+        }
+        let a = getattr(lib, m, "data_validity_water_spd")?;
+        let b = getattr(lib, m, "data_validity_grnd_spd")?;
+        return Ok(Val.Bool(val_text(a) == val_text(b) and val_is(b, "A")));
+    }
+    if name == "waypoint_list" {
+        return Ok(Val.List(slice_from(m.data, if c.has_flag("rte") { 4 } else { 0 })));
+    }
+    if name == "num_transducers" {
+        return Ok(Val.Int(m.data.len() / 4));
+    }
+    if name == "command_name" {
+        return Ok(Val.Str(seatalk_command(attr_str(lib, m, "cmd")?)));
+    }
+    if name == "satellite_list" {
+        return Ok(Val.List(slice_from(m.data, 1)));
+    }
+    if name == "tzinfo" {
+        return Ok(Val.Func("TZInfo".to_string()));
+    }
+    Err(attr_error(name))
+}
+
+fn transducer(m: ref Msg, i: i64) -> Val {
+    Val.Trans(m.data[(i * 4)..(i * 4 + 4)].to_vec())
+}
+
+// NMEASentence.__setattr__: a field name stores str(value) in the data
+// list; anything else goes through normal attribute assignment.
+fn setattr(lib: ref Lib, m: mut ref Msg, name: ref String, v: own Val) -> Result[(), PyErr] {
+    let c = cls_of(lib, m);
+    if let Some(i) = c.idx.get(name) {
+        if i >= m.data.len() {
+            return Err(perr("IndexError", "list assignment index out of range".to_string()));
+        }
+        m.data[i] = str_val(v);
+        return Ok(());
+    }
+    if c.has_prop(name) {
+        if name == "waypoint_list" {
+            let keep = if c.has_flag("rte") { 4 } else { 0 };
+            let mut d: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < keep and i < m.data.len() {
+                d.push(m.data[i].clone());
+                i += 1;
+            }
+            if let Val.List(xs) = v {
+                for x in xs.iter() {
+                    d.push(x.clone());
+                }
+            }
+            m.data = d;
+            return Ok(());
+        }
+        return Err(perr("AttributeError", f"property {repr_str(name)} of {repr_str(c.name)} object has no setter"));
+    }
+    m.inst_set(name, v);
+    Ok(())
+}
+
+// ------------------------------------------------------------ rendering
+
+fn identifier(lib: ref Lib, m: ref Msg) -> String {
+    if m.kind == TALKER {
+        return f"{m.inst_str("talker")}{m.inst_str("sentence_type")},";
+    }
+    if m.kind == QUERY {
+        return f"{m.inst_str("talker")}{m.inst_str("listener")}Q,{m.inst_str("sentence_type")}";
+    }
+    let c = cls_of(lib, m);
+    if c.name == "NOR" or c.base == "NOR" {
+        return f"P{m.inst_str("sentence_type")},";
+    }
+    f"P{m.inst_str("manufacturer")}"
+}
+
+fn render(lib: ref Lib, m: ref Msg, checksum: bool, dollar: bool, newline: ref String) -> String {
+    let mut res = f"{identifier(lib, m)}{join(m.data, ",")}";
+    if checksum {
+        let c = xor_checksum(res);
+        res.push_str(f"*{c:02X}");
+    }
+    if dollar {
+        res = f"${res}";
+    }
+    res.push_str(newline);
+    res
+}
+
+fn render_str(lib: ref Lib, m: ref Msg) -> String {
+    render(lib, m, true, true, String.new())
+}
+
+// NMEASentence.__repr__
+fn repr_msg(lib: ref Lib, m: ref Msg) -> String {
+    let c = cls_of(lib, m);
+    let mut r: Vec[String] = Vec.new();
+    let mut d: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < m.data.len() {
+        if i >= c.fields.len() {
+            d.push(m.data[i].clone());
+        } else {
+            let name = c.fields[i].name.clone();
+            let v = match getattr(lib, m, name) {
+                Ok(v) => repr_val(v),
+                Err(e) => f"<{err_text(e)}>",
+            };
+            r.push(f"{name}={v}");
+        }
+        i += 1;
+    }
+    let extra = if d.len() > 0 { f" data={repr_list(d)}" } else { String.new() };
+    f"<{c.name}({join(r, ", ")}){extra}>"
+}
+
+// ------------------------------------------------------------ files
+
+fn read_text(name: ref String) -> String {
+    fs.read_to_string(f"data/{name}").unwrap_or(String.new())
+}
+
+// The file's lines split on "\n", so a CRLF line keeps its "\r".
+fn lines_of(name: ref String) -> Vec[String] {
+    let mut ls = split_on(read_text(name), '\n');
+    if ls.len() > 0 and ls[ls.len() - 1].len() == 0 {
+        ls.pop();
+    }
+    ls
+}
+
+// A file opened for reading in text mode: universal newlines turn
+// "\r\n" and a lone "\r" into "\n".
+struct TextFile {
+    lines: Vec[String],
+    pos: i64,
+}
+
+fn open_text(name: ref String) -> TextFile {
+    let mut lines: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let cs = chars_of(read_text(name));
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '\r' or c == '\n' {
+            if c == '\r' and i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+            cur.push('\n');
+            lines.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        lines.push(cur);
+    }
+    TextFile { lines: lines, pos: 0 }
+}
+
+impl TextFile {
+    fn readline(mut ref self) -> String {
+        if self.pos >= self.lines.len() {
+            return String.new();
+        }
+        self.pos += 1;
+        self.lines[self.pos - 1].clone()
+    }
+}
+
+// ------------------------------------------------------------ parse jobs
+
+fn show_prop(name: Str, r: own Result[Val, PyErr]) {
+    match r {
+        Ok(v) => println(f"  {name} {repr_val(v)}"),
+        Err(e) => println(f"  {name} ! {err_text(e)}"),
+    }
+}
+
+fn show_props(lib: ref Lib, m: ref Msg) {
+    let c = cls_of(lib, m);
+    println(f"  str {render_str(lib, m)}");
+    println(f"  plain {render(lib, m, false, false, String.new())}");
+    if c.has_flag("latlon") {
+        for n in ["latitude", "longitude", "latitude_minutes", "longitude_minutes", "latitude_seconds", "longitude_seconds"] {
+            show_prop(n, getattr(lib, m, n));
+        }
+    }
+    if c.has_flag("zda") {
+        show_prop("datestamp", getattr(lib, m, "datestamp"));
+        match getattr(lib, m, "localdatetime") {
+            Ok(v) => println(f"  localdatetime {str_val(v)}"),
+            Err(e) => println(f"  localdatetime ! {err_text(e)}"),
+        }
+    }
+    if c.has_flag("dt") {
+        show_prop("datetime", getattr(lib, m, "datetime"));
+    }
+    if c.valid_kind() {
+        show_prop("is_valid", getattr(lib, m, "is_valid"));
+    }
+    if c.has_flag("rte") or c.has_flag("r00") {
+        show_prop("waypoint_list", getattr(lib, m, "waypoint_list"));
+    }
+    if c.has_flag("xdr") {
+        let n = m.data.len() / 4;
+        show_prop("num_transducers", Ok(Val.Int(n)));
+        for i in 0..n {
+            show_prop("transducer", Ok(transducer(m, i)));
+        }
+    }
+    if c.has_flag("seatalk") {
+        show_prop("command_name", getattr(lib, m, "command_name"));
+    }
+    if c.has_flag("ubx03") {
+        show_prop("satellite_list", getattr(lib, m, "satellite_list"));
+    }
+}
+
+fn job_parse(lib: ref Lib, name: ref String, check: bool) {
+    let mut n = 0;
+    for line in lines_of(name) {
+        n += 1;
+        match parse_sentence(lib, line, check) {
+            Ok(m) => {
+                println(f"{n} {repr_msg(lib, m)}");
+                if not check {
+                    show_props(lib, m);
+                }
+            }
+            Err(e) => println(f"{n} ! {err_text(e)}"),
+        }
+    }
+}
+
+fn job_attrs(lib: ref Lib, name: ref String, names: ref Vec[String]) {
+    let mut n = 0;
+    for line in lines_of(name) {
+        n += 1;
+        match parse_sentence(lib, line, false) {
+            Ok(m) => {
+                let mut parts: Vec[String] = Vec.new();
+                for a in names.iter() {
+                    match getattr(lib, m, a) {
+                        Ok(v) => parts.push(f"{a}={repr_val(v)}"),
+                        Err(e) => parts.push(f"{a}!{err_text(e)}"),
+                    }
+                }
+                println(f"{n} {join(parts, " ")}");
+            }
+            Err(e) => println(f"{n} ! {err_text(e)}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ NMEAStreamReader
+
+struct Reader {
+    errors: String,
+    buffer: String,
+}
+
+fn new_reader(errors: ref String) -> Result[Reader, PyErr] {
+    if errors != "raise" and errors != "yield" and errors != "ignore" {
+        return Err(perr("ValueError", f"errors must be one of ('raise', 'yield', 'ignore') (was: {repr_str(errors)})"));
+    }
+    Ok(Reader { errors: errors.clone(), buffer: String.new() })
+}
+
+// NMEAStreamReader.next(data), run to the end: what it yields (a
+// sentence, or a ParseError in 'yield' mode) and what it raises.
+fn reader_next(lib: ref Lib, r: mut ref Reader, data: ref String) -> (Vec[Result[Msg, PyErr]], Option[PyErr]) {
+    let mut lines = split_on(f"{r.buffer}{data}", '\n');
+    r.buffer = lines.pop().unwrap_or(String.new());
+    let mut got: Vec[Result[Msg, PyErr]] = Vec.new();
+    for line in lines {
+        match parse_sentence(lib, line, false) {
+            Ok(m) => got.push(Ok(m)),
+            Err(e) => {
+                if not is_parse_error(e) or r.errors == "raise" {
+                    return (got, Some(e));
+                }
+                if r.errors == "yield" {
+                    got.push(Err(e));
+                }
+            }
+        }
+    }
+    (got, None)
+}
+
+fn show_batch(lib: ref Lib, label: ref String, got: ref Vec[Result[Msg, PyErr]], raised: ref Option[PyErr]) {
+    println(f"{label}: {got.len()}");
+    for x in got.iter() {
+        match x {
+            Ok(m) => println(f"  {repr_msg(lib, m)}"),
+            Err(e) => println(f"  error {err_text(e)}"),
+        }
+    }
+    if let Some(e) = raised {
+        println(f"  raised {err_text(e)}");
+    }
+}
+
+fn job_stream(lib: ref Lib, name: ref String, mode: ref String, size: i64) {
+    let text = chars_of(read_text(name));
+    let mut r = match new_reader(mode) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"! {err_text(e)}");
+            return;
+        }
+    };
+    let mut k = 0;
+    while k < text.len() {
+        let piece = str_of(slice_chars(text, k, k + size));
+        let (got, raised) = reader_next(lib, mut r, piece);
+        show_batch(lib, f"chunk {k / size}", got, raised);
+        k += size;
+    }
+    println(f"buffer {repr_str(r.buffer)}");
+}
+
+fn job_streamfile(lib: ref Lib, name: ref String, mode: ref String, calls: i64) {
+    let mut f = open_text(name);
+    let mut r = match new_reader(mode) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"! {err_text(e)}");
+            return;
+        }
+    };
+    for i in 0..calls {
+        let data = f.readline();
+        let (got, raised) = reader_next(lib, mut r, data);
+        show_batch(lib, f"call {i}", got, raised);
+    }
+}
+
+// ------------------------------------------------------------ NMEAFile
+
+fn job_file(lib: ref Lib, name: ref String) {
+    let f = open_text(name);
+    for line in f.lines.iter() {
+        match parse_sentence(lib, line, false) {
+            Ok(m) => println(repr_msg(lib, m)),
+            Err(e) => {
+                println(f"! {err_text(e)}");
+                return;
+            }
+        }
+    }
+}
+
+fn job_fileread(lib: ref Lib, name: ref String) {
+    let f = open_text(name);
+    let mut ms: Vec[Msg] = Vec.new();
+    for line in f.lines.iter() {
+        match parse_sentence(lib, line, false) {
+            Ok(m) => ms.push(m),
+            Err(e) => {
+                println(f"! {err_text(e)}");
+                return;
+            }
+        }
+    }
+    println(f"{ms.len()} sentences");
+    for m in ms.iter() {
+        println(render_str(lib, m));
+    }
+}
+
+fn job_filelines(lib: ref Lib, name: ref String, n: i64) {
+    let mut f = open_text(name);
+    for i in 0..n {
+        let line = f.readline();
+        match parse_sentence(lib, line, false) {
+            Ok(m) => println(f"{i} {repr_msg(lib, m)}"),
+            Err(e) => println(f"{i} ! {err_text(e)}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ edit and build
+
+fn value_of(text: ref String) -> Result[Val, PyErr] {
+    let body = substr(text, 2, char_len(text));
+    if text.starts_with("i:") {
+        return match py_int_s(body) {
+            Some(n) => Ok(Val.Int(n)),
+            None => Err(perr("ValueError", f"invalid literal for int() with base 10: {repr_str(body)}")),
+        };
+    }
+    if text.starts_with("f:") {
+        return match py_float_s(body) {
+            Some(x) => Ok(Val.Float(x)),
+            None => Err(perr("ValueError", f"could not convert string to float: {repr_str(body)}")),
+        };
+    }
+    if text.starts_with("d:") {
+        return match parse_dec(body) {
+            Some(d) => Ok(Val.Dec(d)),
+            None => Err(perr("InvalidOperation", "[<class 'decimal.ConversionSyntax'>]".to_string())),
+        };
+    }
+    Ok(Val.Str(text.clone()))
+}
+
+fn job_edit(lib: ref Lib, name: ref String, n: i64, assigns: ref Vec[String]) {
+    let line = lines_of(name)[n - 1].clone();
+    let mut m = match parse_sentence(lib, line, false) {
+        Ok(m) => m,
+        Err(e) => {
+            println(f"! {err_text(e)}");
+            return;
+        }
+    };
+    println(f"before {repr_msg(lib, m)}");
+    let mut names: Vec[String] = Vec.new();
+    for a in assigns.iter() {
+        let eq = match a.find("=") {
+            Some(i) => i,
+            None => continue,
+        };
+        let k = a[0..eq].to_string();
+        let v = a[(eq + 1)..].to_string();
+        let val = if k == "waypoint_list" { Val.List(split_on(v, '|')) } else { value_of(v).unwrap_or(Val.Str(v.clone())) };
+        names.push(k.clone());
+        let shown = repr_val(val);
+        match setattr(lib, mut m, k, val) {
+            Ok(()) => println(f"set {k} {shown}"),
+            Err(e) => println(f"set {k} ! {err_text(e)}"),
+        }
+    }
+    println(f"after {repr_msg(lib, m)}");
+    for k in names.iter() {
+        match getattr(lib, m, k) {
+            Ok(v) => println(f"  {k} {repr_val(v)}"),
+            Err(e) => println(f"  {k} ! {err_text(e)}"),
+        }
+    }
+    println(f"  str {render_str(lib, m)}");
+}
+
+fn job_build(lib: ref Lib, kind: ref String, args: ref Vec[String]) {
+    let made: Result[Msg, PyErr] = if kind == "build" {
+        let cls = lib.find("T", args[0]);
+        if cls < 0 {
+            Err(perr("AttributeError", f"module 'pynmea2' has no attribute {repr_str(args[0])}"))
+        } else {
+            Ok(talker_msg(cls, args[1], args[0], split_on(args[2], ',')))
+        }
+    } else if kind == "buildp" {
+        make_proprietary(lib, args[0], split_on(args[1], ','))
+    } else {
+        Ok(query_msg(lib, args[0], args[1], args[2]))
+    };
+    match made {
+        Ok(m) => {
+            println(repr_msg(lib, m));
+            println(f"  str {render_str(lib, m)}");
+        }
+        Err(e) => println(f"! {err_text(e)}"),
+    }
+}
+
+fn job_render(lib: ref Lib, name: ref String, n: i64) {
+    let line = lines_of(name)[n - 1].clone();
+    let m = match parse_sentence(lib, line, false) {
+        Ok(m) => m,
+        Err(e) => {
+            println(f"! {err_text(e)}");
+            return;
+        }
+    };
+    let opts: Vec[(bool, bool, Str)] = [(true, true, ""), (false, true, ""), (true, false, ""), (false, false, ""),
+        (true, true, "\r\n"), (true, true, "\n"), (false, false, ";")];
+    for (cs, dollar, nl) in opts {
+        println(repr_str(render(lib, m, cs, dollar, nl.to_string())));
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+fn parsed(lib: ref Lib, name: ref String) -> (Vec[Msg], i64) {
+    let mut out: Vec[Msg] = Vec.new();
+    let mut errors = 0;
+    for line in lines_of(name) {
+        match parse_sentence(lib, line, false) {
+            Ok(m) => out.push(m),
+            Err(_) => errors += 1,
+        }
+    }
+    (out, errors)
+}
+
+fn cls_name(lib: ref Lib, m: ref Msg) -> String {
+    cls_of(lib, m).name.clone()
+}
+
+fn get_or_none(lib: ref Lib, m: ref Msg, name: Str) -> Val {
+    getattr(lib, m, name).unwrap_or(Val.None)
+}
+
+fn as_f64(v: ref Val) -> f64 {
+    match v {
+        Val.Float(x) => *x,
+        Val.Int(n) => *n as f64,
+        Val.Dec(d) => dec_float(d),
+        _ => 0.0,
+    }
+}
+
+fn radians(x: f64) -> f64 {
+    x * (3.141592653589793 / 180.0)
+}
+
+fn haversine_nm(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let la1 = radians(a.0);
+    let lo1 = radians(a.1);
+    let la2 = radians(b.0);
+    let lo2 = radians(b.1);
+    let s1 = ((la2 - la1) / 2.0).sin();
+    let s2 = ((lo2 - lo1) / 2.0).sin();
+    let h = s1 * s1 + la1.cos() * la2.cos() * s2 * s2;
+    2.0 * 3440.065 * h.sqrt().asin()
+}
+
+#[derive(Clone)]
+struct Fix {
+    when: Dt,
+    lat: f64,
+    lon: f64,
+    sog: f64,
+}
+
+fn rmc_fix(lib: ref Lib, m: ref Msg) -> Result[Fix, PyErr] {
+    let when = match getattr(lib, m, "datetime")? {
+        Val.Dt(t) => t,
+        _ => return Err(perr("TypeError", "datetime".to_string())),
+    };
+    let lat = as_f64(getattr(lib, m, "latitude")?);
+    let lon = as_f64(getattr(lib, m, "longitude")?);
+    let sog = as_f64(getattr(lib, m, "spd_over_grnd")?);
+    Ok(Fix { when: when, lat: lat, lon: lon, sog: sog })
+}
+
+fn is_valid(lib: ref Lib, m: ref Msg) -> bool {
+    truthy(get_or_none(lib, m, "is_valid"))
+}
+
+fn dec_of(v: ref Val) -> Option[Dec] {
+    match v {
+        Val.Dec(d) => Some(d.clone()),
+        _ => None,
+    }
+}
+
+// min() and max() of decimals: the first of equal values is kept.
+fn dec_min_max(xs: ref Vec[Dec]) -> (Dec, Dec) {
+    let mut lo = xs[0].clone();
+    let mut hi = xs[0].clone();
+    for x in xs.iter() {
+        if dec_cmp(x, lo) < 0 {
+            lo = x.clone();
+        }
+        if dec_cmp(x, hi) > 0 {
+            hi = x.clone();
+        }
+    }
+    (lo, hi)
+}
+
+fn route_of(lib: ref Lib, ms: ref Vec[Msg]) -> Vec[String] {
+    let mut route: Vec[String] = Vec.new();
+    for m in ms.iter() {
+        if cls_name(lib, m) == "RTE" {
+            if val_is(get_or_none(lib, m, "sen_num"), "1") {
+                route = Vec.new();
+                route.push(str_val(get_or_none(lib, m, "active_route_id")));
+            }
+            if let Val.List(ws) = get_or_none(lib, m, "waypoint_list") {
+                for w in ws.iter() {
+                    route.push(w.clone());
+                }
+            }
+        }
+    }
+    route
+}
+
+fn wpl_pos(lib: ref Lib, m: ref Msg) -> (f64, f64) {
+    let la = dm_to_sd(get_or_none(lib, m, "lat")).unwrap_or(0.0);
+    let lo = dm_to_sd(get_or_none(lib, m, "lon")).unwrap_or(0.0);
+    let sa = if val_is(get_or_none(lib, m, "lat_dir"), "N") { 1.0 } else { -1.0 };
+    let so = if val_is(get_or_none(lib, m, "lon_dir"), "E") { 1.0 } else { -1.0 };
+    (la * sa, lo * so)
+}
+
+fn job_report(lib: ref Lib, name: ref String) {
+    let (ms, errors) = parsed(lib, name);
+    let mut counts: Map[String, i64] = Map.new();
+    for m in ms.iter() {
+        let k = cls_name(lib, m);
+        let c = counts.get(k).unwrap_or(0);
+        counts.insert(k, c + 1);
+    }
+    println(f"sentences {ms.len()}, errors {errors}");
+    let mut keys: Vec[String] = Vec.new();
+    for (k, _) in counts.iter() {
+        keys.push(k.clone());
+    }
+    keys.sort();
+    let mut parts: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        parts.push(f"{k}:{counts.get(k).unwrap_or(0)}");
+    }
+    println(f"types {join(parts, " ")}");
+    let mut fixes: Vec[Fix] = Vec.new();
+    for m in ms.iter() {
+        if cls_name(lib, m) == "RMC" and is_valid(lib, m) {
+            match rmc_fix(lib, m) {
+                Ok(f) => fixes.push(f),
+                Err(e) => println(f"rmc skipped: {err_text(e)}"),
+            }
+        }
+    }
+    if fixes.len() > 0 {
+        let first = fixes[0].clone();
+        let last = fixes[fixes.len() - 1].clone();
+        println(f"first fix {dt_iso(first.when, "T")}");
+        println(f"last fix {dt_iso(last.when, "T")}");
+        let mut dist = 0.0;
+        let mut i = 1;
+        while i < fixes.len() {
+            dist += haversine_nm((fixes[i - 1].lat, fixes[i - 1].lon), (fixes[i].lat, fixes[i].lon));
+            i += 1;
+        }
+        let mut mx = fixes[0].sog;
+        let mut sum = 0.0;
+        for f in fixes.iter() {
+            if f.sog > mx {
+                mx = f.sog;
+            }
+            sum += f.sog;
+        }
+        let mean = sum / (fixes.len() as f64);
+        println(f"fixes {fixes.len()}, distance {dist:.3} nm, max sog {mx:.2} kn, mean sog {mean:.2} kn");
+        println(f"from {first.lat:.5},{first.lon:.5} to {last.lat:.5},{last.lon:.5}");
+    }
+    let mut quals: Map[String, i64] = Map.new();
+    for m in ms.iter() {
+        if cls_name(lib, m) == "GGA" {
+            let k = repr_val(get_or_none(lib, m, "gps_qual"));
+            let c = quals.get(k).unwrap_or(0);
+            quals.insert(k, c + 1);
+        }
+    }
+    if quals.len() > 0 {
+        let mut qk: Vec[String] = Vec.new();
+        for (k, _) in quals.iter() {
+            qk.push(k.clone());
+        }
+        qk.sort();
+        let mut qs: Vec[String] = Vec.new();
+        for k in qk.iter() {
+            qs.push(f"{k}:{quals.get(k).unwrap_or(0)}");
+        }
+        println(f"gga quality {join(qs, " ")}");
+    }
+    let mut depths: Vec[Dec] = Vec.new();
+    let mut temps: Vec[Dec] = Vec.new();
+    let mut winds: Vec[Dec] = Vec.new();
+    for m in ms.iter() {
+        let c = cls_name(lib, m);
+        if c == "DPT" {
+            if let Some(d) = dec_of(get_or_none(lib, m, "depth")) {
+                depths.push(d);
+            }
+        } else if c == "MTW" {
+            if let Some(d) = dec_of(get_or_none(lib, m, "temperature")) {
+                temps.push(d);
+            }
+        } else if c == "MWV" and val_is(get_or_none(lib, m, "reference"), "T") {
+            if let Some(d) = dec_of(get_or_none(lib, m, "wind_speed")) {
+                winds.push(d);
+            }
+        }
+    }
+    if depths.len() > 0 {
+        let (lo, hi) = dec_min_max(depths);
+        println(f"depth min {dec_str(lo)} max {dec_str(hi)} over {depths.len()}");
+    }
+    if temps.len() > 0 {
+        let (lo, hi) = dec_min_max(temps);
+        println(f"water {dec_str(lo)}..{dec_str(hi)} C");
+    }
+    if winds.len() > 0 {
+        let (_, hi) = dec_min_max(winds);
+        let mut sum = 0.0;
+        for w in winds.iter() {
+            sum += dec_float(w);
+        }
+        let mean = sum / (winds.len() as f64);
+        println(f"true wind max {dec_str(hi)} kn, mean {mean:.1} kn");
+    }
+    for m in ms.iter() {
+        let c = cls_name(lib, m);
+        if c == "ZDA" {
+            match getattr(lib, m, "localdatetime") {
+                Ok(v) => println(f"zda {str_val(v)}"),
+                Err(e) => println(f"zda ! {err_text(e)}"),
+            }
+        } else if c == "TXT" {
+            println(f"text {str_val(get_or_none(lib, m, "text"))}");
+        } else if c == "XDR" {
+            for i in 0..(m.data.len() / 4) {
+                let t = m.data[(i * 4)..(i * 4 + 4)].to_vec();
+                println(f"sensor {t[3]} {t[1]} {t[2]}");
+            }
+        }
+    }
+    let route = route_of(lib, ms);
+    if route.len() > 0 {
+        println(f"route {route[0]}: {join(route[1..].to_vec(), " ")}");
+    }
+    for m in ms.iter() {
+        if cls_name(lib, m) == "WPL" {
+            let (la, lo) = wpl_pos(lib, m);
+            println(f"waypoint {str_val(get_or_none(lib, m, "waypoint_id"))} {la:.5} {lo:.5}");
+        }
+    }
+}
+
+fn job_gpx(lib: ref Lib, name: ref String, out: ref String) {
+    let (ms, _) = parsed(lib, name);
+    let mut wnames: Vec[String] = Vec.new();
+    let mut wpos: Vec[(f64, f64)] = Vec.new();
+    let mut lines: Vec[String] = Vec.new();
+    lines.push("<?xml version=\"1.0\" encoding=\"UTF-8\"?>".to_string());
+    lines.push("<gpx version=\"1.1\" creator=\"mini_nmea\">".to_string());
+    for m in ms.iter() {
+        if cls_name(lib, m) == "WPL" {
+            let (la, lo) = wpl_pos(lib, m);
+            let id = str_val(get_or_none(lib, m, "waypoint_id"));
+            let mut found = false;
+            for i in 0..wnames.len() {
+                if wnames[i] == id {
+                    wpos[i] = (la, lo);
+                    found = true;
+                }
+            }
+            if not found {
+                wnames.push(id.clone());
+                wpos.push((la, lo));
+            }
+            lines.push(f"  <wpt lat=\"{la:.6}\" lon=\"{lo:.6}\"><name>{id}</name></wpt>");
+        }
+    }
+    let route = route_of(lib, ms);
+    if route.len() > 0 {
+        lines.push(f"  <rte><name>{route[0]}</name>");
+        for w in route[1..].iter() {
+            let mut at = -1;
+            for i in 0..wnames.len() {
+                if wnames[i] == w {
+                    at = i;
+                }
+            }
+            if at >= 0 {
+                lines.push(f"    <rtept lat=\"{wpos[at].0:.6}\" lon=\"{wpos[at].1:.6}\"><name>{w}</name></rtept>");
+            } else {
+                lines.push(f"    <!-- {w}: no position -->");
+            }
+        }
+        lines.push("  </rte>".to_string());
+    }
+    lines.push(f"  <trk><name>{name}</name><trkseg>");
+    let mut alt: Map[String, Val] = Map.new();
+    for m in ms.iter() {
+        if cls_name(lib, m) == "GGA" and truthy(get_or_none(lib, m, "gps_qual")) {
+            alt.insert(repr_val(get_or_none(lib, m, "timestamp")), get_or_none(lib, m, "altitude"));
+        }
+    }
+    for m in ms.iter() {
+        if cls_name(lib, m) == "RMC" and is_valid(lib, m) {
+            let fix = match rmc_fix(lib, m) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let t = dt_iso(fix.when, "T").replace("+00:00", "Z");
+            let ele_s = match alt.get(repr_val(get_or_none(lib, m, "timestamp"))) {
+                Some(v) => match v {
+                    Val.None => String.new(),
+                    _ => f"<ele>{repr_val(v)}</ele>",
+                },
+                None => String.new(),
+            };
+            let course = repr_val(get_or_none(lib, m, "true_course"));
+            let speed = fix.sog * 0.514444;
+            lines.push(f"    <trkpt lat=\"{fix.lat:.6}\" lon=\"{fix.lon:.6}\">{ele_s}<time>{t}</time><course>{course}</course><speed>{speed:.3}</speed></trkpt>");
+        }
+    }
+    lines.push("  </trkseg></trk>".to_string());
+    lines.push("</gpx>".to_string());
+    let text = f"{join(lines, "\n")}\n";
+    if let Err(e) = fs.write(f"data/out/{out}", text.clone()) {
+        println(f"cannot write {out}: {e}");
+        return;
+    }
+    println(f"wrote {out}, {utf8_len(text)} bytes");
+    print(text);
+}
+
+fn job_mux(lib: ref Lib, out: ref String, talker: ref String, types: ref String, names: ref Vec[String]) {
+    let keep = split_on(types, ',');
+    let mut rendered = String.new();
+    let mut kept = 0;
+    let mut dropped = 0;
+    let mut errors = 0;
+    for name in names.iter() {
+        for line in lines_of(name) {
+            let mut m = match parse_sentence(lib, line, false) {
+                Ok(m) => m,
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
+            };
+            let st = m.inst_str("sentence_type");
+            let mut wanted = false;
+            for k in keep.iter() {
+                if *k == st {
+                    wanted = true;
+                }
+            }
+            if m.kind == TALKER and wanted {
+                m.inst_set("talker".to_string(), Val.Str(talker.clone()));
+                rendered.push_str(render(lib, m, true, true, "\r\n".to_string()));
+                kept += 1;
+            } else {
+                dropped += 1;
+            }
+        }
+    }
+    let p = f"data/out/{out}";
+    if let Err(e) = fs.write(p.clone(), rendered.clone()) {
+        println(f"cannot write {p}: {e}");
+        return;
+    }
+    println(f"kept {kept}, dropped {dropped}, errors {errors}, {utf8_len(rendered)} bytes");
+    let back = split_str(fs.read_to_string(p).unwrap_or(String.new()), "\r\n");
+    let mut i = 0;
+    while i + 1 < back.len() {
+        match parse_sentence(lib, back[i], true) {
+            Ok(m) => {
+                if i % 9 == 0 or i == back.len() - 2 {
+                    println(f"{i} {back[i]} {repr_val(get_or_none(lib, m, "timestamp"))}");
+                }
+            }
+            Err(e) => println(f"{i} ! {err_text(e)}"),
+        }
+        i += 1;
+    }
+}
+
+fn job_alarms(lib: ref Lib, names: ref Vec[String]) {
+    let mut clock = "--:--:--".to_string();
+    let mut no_fix = false;
+    for name in names.iter() {
+        let mut n = 0;
+        for line in lines_of(name) {
+            n += 1;
+            let m = match parse_sentence(lib, line, false) {
+                Ok(m) => m,
+                Err(e) => {
+                    println(f"{clock} {name}:{n} unreadable ({e.kind})");
+                    continue;
+                }
+            };
+            let c = cls_name(lib, m);
+            if c == "RMC" {
+                if let Val.Time(t) = get_or_none(lib, m, "timestamp") {
+                    clock = f"{t.h:02}:{t.m:02}:{t.s:02}";
+                }
+            }
+            if c == "GGA" {
+                let q = get_or_none(lib, m, "gps_qual");
+                let zero = match q {
+                    Val.Int(x) => x == 0,
+                    _ => false,
+                };
+                if zero and not no_fix {
+                    no_fix = true;
+                    println(f"{clock} gps fix lost ({str_val(get_or_none(lib, m, "num_sats"))} sats)");
+                } else if truthy(q) and no_fix {
+                    no_fix = false;
+                    println(f"{clock} gps fix back, quality {repr_val(q)}");
+                }
+            } else if c == "GSA" {
+                match getattr(lib, m, "is_valid") {
+                    Ok(v) => {
+                        if not truthy(v) {
+                            println(f"{clock} gsa says no 3d fix (mode {repr_val(get_or_none(lib, m, "mode_fix_type"))})");
+                        }
+                    }
+                    Err(e) => println(f"{clock} gsa mode unreadable: {e.msg}"),
+                }
+            } else if c == "DPT" {
+                if let Some(d) = dec_of(get_or_none(lib, m, "depth")) {
+                    if dec_cmp(d, parse_dec("6.0".to_string()).unwrap()) < 0 {
+                        let off = dec_of(get_or_none(lib, m, "offset")).unwrap_or(dec_of_int(0));
+                        println(f"{clock} shallow water: {dec_str(dec_sub(d, off))} m under the keel");
+                    }
+                }
+            } else if c == "MWV" {
+                if val_is(get_or_none(lib, m, "reference"), "T") {
+                    if let Some(w) = dec_of(get_or_none(lib, m, "wind_speed")) {
+                        if dec_cmp(w, dec_of_int(18)) > 0 {
+                            println(f"{clock} true wind {dec_str(w)} kn");
+                        }
+                    }
+                }
+            } else if c == "XTE" {
+                let d = py_float_s(str_val(get_or_none(lib, m, "cross_track_err_dist"))).unwrap_or(0.0);
+                if d > 0.04 {
+                    println(f"{clock} off track {d:.2} nm, steer {str_val(get_or_none(lib, m, "correction_dir"))}");
+                }
+            } else if c == "AAM" {
+                if val_is(get_or_none(lib, m, "arrival_circ_entered"), "A") {
+                    println(f"{clock} arrived at {str_val(get_or_none(lib, m, "waypoint_id"))}");
+                }
+            } else if c == "ALK" {
+                println(f"{clock} seatalk {str_val(get_or_none(lib, m, "cmd"))}: {str_val(get_or_none(lib, m, "command_name"))}");
+            } else if c == "RPM" {
+                if not is_valid(lib, m) {
+                    println(f"{clock} rpm sensor {str_val(get_or_none(lib, m, "source"))}{repr_val(get_or_none(lib, m, "engine_no"))} not valid");
+                }
+            } else if c == "TTM" {
+                if let Some(d) = dec_of(get_or_none(lib, m, "dist_cpa")) {
+                    if dec_cmp(d, dec_of_int(2)) < 0 {
+                        println(f"{clock} target {str_val(get_or_none(lib, m, "name"))} {repr_val(get_or_none(lib, m, "target_number"))} CPA {dec_str(d)} nm in {str_val(get_or_none(lib, m, "time_cpa"))} min");
+                    }
+                }
+            } else if c == "GRME" {
+                if let Some(h) = dec_of(get_or_none(lib, m, "hpe")) {
+                    if dec_cmp(h, dec_of_int(10)) > 0 {
+                        println(f"{clock} garmin hpe {dec_str(h)} {str_val(get_or_none(lib, m, "hpe_unit"))}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn num_arg(s: ref String) -> i64 {
+    py_int_s(s).unwrap_or(0)
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let lib = load_lib();
+    for raw in split_on(read_text("jobs.txt".to_string()), '\n') {
+        let j = split_ws(raw);
+        if j.len() == 0 {
+            continue;
+        }
+        println(f"== {join(j, " ")}");
+        let k = j[0].clone();
+        if k == "parse" {
+            job_parse(lib, j[1], false);
+        } else if k == "strict" {
+            job_parse(lib, j[1], true);
+        } else if k == "attrs" {
+            job_attrs(lib, j[1], split_on(j[2], ','));
+        } else if k == "stream" {
+            job_stream(lib, j[1], j[2], num_arg(j[3]));
+        } else if k == "streamfile" {
+            job_streamfile(lib, j[1], j[2], num_arg(j[3]));
+        } else if k == "file" {
+            job_file(lib, j[1]);
+        } else if k == "fileread" {
+            job_fileread(lib, j[1]);
+        } else if k == "filelines" or k == "filenext" {
+            job_filelines(lib, j[1], num_arg(j[2]));
+        } else if k == "edit" {
+            job_edit(lib, j[1], num_arg(j[2]), j[3..].to_vec());
+        } else if k == "build" or k == "buildp" or k == "query" {
+            job_build(lib, k, j[1..].to_vec());
+        } else if k == "render" {
+            job_render(lib, j[1], num_arg(j[2]));
+        } else if k == "report" {
+            job_report(lib, j[1]);
+        } else if k == "gpx" {
+            job_gpx(lib, j[1], j[2]);
+        } else if k == "mux" {
+            job_mux(lib, j[1], j[2], j[3], j[4..].to_vec());
+        } else if k == "alarms" {
+            job_alarms(lib, j[1..].to_vec());
+        }
+    }
+}
+// ------------------------------------------------------------ classes
+
+// pynmea2's sentence classes, one per line: name | base (T for
+// TalkerSentence, P for a manufacturer class under ProprietarySentence,
+// else the manufacturer class it is registered with) | mixins | the
+// properties the class has | fields as name[:converter], in order.
+fn class_lines() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("AAM|T|||arrival_circ_entered;perp_passed;circle_rad;circle_rad_unit;waypoint_id".to_string());
+    v.push("ALK|T|seatalk|command_name|cmd;data_byte1;data_byte2;data_byte3;data_byte4;data_byte5;data_byte6;data_byte7;data_byte8;data_byte9".to_string());
+    v.push("ALM|T|||total_num_msgs;msg_num;sat_prn_num;gps_week_num;sv_health;eccentricity;alamanac_ref_time;inc_angle;rate_right_asc;root_semi_major_axis;arg_perigee;lat_asc_node;mean_anom;f0_clock_param;f1_clock_param".to_string());
+    v.push("APA|T|||status_gen;status_cycle_lock;cross_track_err_mag;dir_steer;cross_track_unit;arr_circle_entered;perp_passed;bearing_to_dest;bearing_type;dest_waypoint_id".to_string());
+    v.push("APB|T|||status_gen;status_cycle_lock;cross_track_err_mag;dir_steer;cross_track_unit;arr_circle_entered;perp_passed;bearing_to_dest;bearing_type;dest_waypoint_id;bearing_pres_dest;bearing_pres_dest_type;heading_to_dest;heading_to_dest_type".to_string());
+    v.push("BEC|T|||timestamp:ts;waypoint_lat;waypoint_lat_dir;waypoint_lon;waypoint_lon_dir;bearing_true;bearing_true_sym;bearing_mag;bearing_mag_sym;nautical_miles;nautical_miles_sym;waypoint_id;faa_mode".to_string());
+    v.push("BOD|T|||bearing_t:dec;bearing_t_type;bearing_mag:dec;bearing_mag_type;dest;start".to_string());
+    v.push("BWC|T|||timestamp:ts;lat_next;lat_next_direction;lon_next;lon_next_direction;true_track;true_track_sym;mag_track;mag_sym;range_next;range_unit;waypoint_name".to_string());
+    v.push("BWR|T|||timestamp:ts;lat_next;lat_next_direction;lon_next;lon_next_direction;true_track;true_track_sym;mag_track;mag_sym;range_next;range_unit;waypoint_name".to_string());
+    v.push("BWW|T|||bearing_deg_true;bearing_deg_true_sym;bearing_deg_mag;bearing_deg_mag_sym;waypoint_id_dest;waypoint_id_orig".to_string());
+    v.push("DBS|T|||depth_feet:dec;feets;depth_meter:dec;meters;depth_ fathoms:dec;fathoms".to_string());
+    v.push("DBT|T|||depth_feet:dec;unit_feet;depth_meters:dec;unit_meters;depth_fathoms:dec;unit_fathoms".to_string());
+    v.push("DPT|T|||depth:dec;offset:dec;range:dec".to_string());
+    v.push("DTM|T|||datum;subd_datum;lat;lat_dir;lon;lon_dir;altitude;datum_code".to_string());
+    v.push("GBS|T|||timestamp:ts;lat_err;lon_err;alt_err;sat_prn_num_f;pro_miss:dec;est_bias;est_bias_dev".to_string());
+    v.push("GGA|T|latlon,vgga|is_valid,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|timestamp:ts;lat;lat_dir;lon;lon_dir;gps_qual:int;num_sats;horizontal_dil;altitude:float;altitude_units;geo_sep;geo_sep_units;age_gps_data;ref_station_id".to_string());
+    v.push("GLL|T|latlon,vstatus|is_valid,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|lat;lat_dir;lon;lon_dir;timestamp:ts;status;faa_mode".to_string());
+    v.push("GNS|T|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|timestamp:ts;lat;lat_dir;lon;lon_dir;mode_indicator;num_sats;hdop;altitude;geo_sep;age_gps_data;diferential".to_string());
+    v.push("GRS|T|||timestamp:ts;residuals_mode:int;sv_res_01:float;sv_res_02:float;sv_res_03:float;sv_res_04:float;sv_res_05:float;sv_res_06:float;sv_res_07:float;sv_res_08:float;sv_res_09:float;sv_res_10:float;sv_res_11:float;sv_res_12:float".to_string());
+    v.push("GSA|T|vgsa|is_valid|mode;mode_fix_type;sv_id01;sv_id02;sv_id03;sv_id04;sv_id05;sv_id06;sv_id07;sv_id08;sv_id09;sv_id10;sv_id11;sv_id12;pdop;hdop;vdop".to_string());
+    v.push("GST|T|||timestamp:ts;rms:float;std_dev_major:float;std_dev_minor:float;orientation:float;std_dev_latitude:float;std_dev_longitude:float;std_dev_altitude:float".to_string());
+    v.push("GSV|T|||num_messages;msg_num;num_sv_in_view;sv_prn_num_1;elevation_deg_1;azimuth_1;snr_1;sv_prn_num_2;elevation_deg_2;azimuth_2;snr_2;sv_prn_num_3;elevation_deg_3;azimuth_3;snr_3;sv_prn_num_4;elevation_deg_4;azimuth_4;snr_4".to_string());
+    v.push("HDG|T|||heading:dec;deviation:dec;dev_dir;variation:dec;var_dir".to_string());
+    v.push("HDM|T|||heading:dec;magnetic".to_string());
+    v.push("HDT|T|||heading:dec;hdg_true".to_string());
+    v.push("HSC|T|||heading_true:dec;true;heading_magnetic:dec;magnetic".to_string());
+    v.push("MDA|T|||b_pressure_inch:dec;inches;b_pressure_bar:dec;bars;air_temp:dec;a_celsius;water_temp:dec;w_celsius;rel_humidity:dec;abs_humidity:dec;dew_point:dec;d_celsius;direction_true:dec;true;direction_magnetic:dec;magnetic;wind_speed_knots:dec;knots;wind_speed_meters:dec;meters".to_string());
+    v.push("MTW|T|||temperature:dec;units".to_string());
+    v.push("MWD|T|||direction_true:dec;true;direction_magnetic:dec;magnetic;wind_speed_knots:dec;knots;wind_speed_meters:dec;meters".to_string());
+    v.push("MWV|T|vstatus|is_valid|wind_angle:dec;reference;wind_speed:dec;wind_speed_units;status".to_string());
+    v.push("OSD|T|vstatus|is_valid|heading:dec;status;course:dec;course_true;speed:dec;speed_ref;set:dec;drift:dec;speed_unit".to_string());
+    v.push("R00|T|r00|waypoint_list|".to_string());
+    v.push("RMA|T|||data_status;lat;lat_dir;lon;lon_dir;not_used_1;not_used_2;spd_over_grnd;crse_over_grnd;variation;var_dir".to_string());
+    v.push("RMB|T|vstatus|is_valid|status;cross_track_error;cte_correction_dir;origin_waypoint_id;dest_waypoint_id;dest_lat;dest_lat_dir;dest_lon;dest_lon_dir;dest_range;dest_true_bearing;dest_velocity;arrival_alarm".to_string());
+    v.push("RMC|T|latlon,dt,vrmc|datetime,is_valid,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|timestamp:ts;status;lat;lat_dir;lon;lon_dir;spd_over_grnd:float;true_course:float;datestamp:ds;mag_variation;mag_var_dir;mode_indicator;nav_status".to_string());
+    v.push("ROT|T|vstatus|is_valid|rate_of_turn;status".to_string());
+    v.push("RPM|T|vstatus|is_valid|source;engine_no:int;speed:float;pitch;status".to_string());
+    v.push("RSA|T|||rsa_starboard:dec;rsa_starboard_status;rsa_port:dec;rsa_port_status".to_string());
+    v.push("RTE|T|rte|waypoint_list|num_in_seq;sen_num;start_type;active_route_id".to_string());
+    v.push("STN|T|||talker_id_num".to_string());
+    v.push("TLL|T|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|target_number:int;lat;lat_dir;lon;lon_dir;target_name;timestamp:ts;target_status;reference".to_string());
+    v.push("TRF|T|||timestamp:ts;date;lat;lat_dir;lon;lon_dir;ele_angle;num_iterations;num_doppler_intervals;update_dist;sat_id".to_string());
+    v.push("TTM|T|||target_number:int;distance:dec;bearing:dec;brg_ref;speed:dec;cog:dec;cog_unit;dist_cpa:dec;time_cpa:dec;dist_unit;name;status;reference;timestamp:ts;acquisition".to_string());
+    v.push("TXT|T|||num_msg;msg_num;msg_type;text".to_string());
+    v.push("VBW|T|vvbw|is_valid|lon_water_spd:dec;trans_water_spd:dec;data_validity_water_spd;lon_grnd_spd:dec;trans_grnd_spd:dec;data_validity_grnd_spd".to_string());
+    v.push("VDR|T|||deg_t:float;true;deg_m:float;magnetic;current:float;unit_kn".to_string());
+    v.push("VHW|T|||heading_true:dec;true;heading_magnetic:dec;magnetic;water_speed_knots:dec;knots;water_speed_km:dec;kilometers".to_string());
+    v.push("VLW|T|||trip_distance:dec;trip_distance_miles;trip_distance_reset:dec;trip_distance_reset_miles".to_string());
+    v.push("VPW|T|||speed_kn:float;unit_knots;speed_ms:float;unit_ms".to_string());
+    v.push("VTG|T|||true_track:float;true_track_sym;mag_track:dec;mag_track_sym;spd_over_grnd_kts:dec;spd_over_grnd_kts_sym;spd_over_grnd_kmph:float;spd_over_grnd_kmph_sym;faa_mode".to_string());
+    v.push("VWR|T|||deg_r:float;l_r;wind_speed_kn:float;unit_knots;wind_speed_ms:float;unit_ms;wind_speed_km:float;unit_km".to_string());
+    v.push("VWT|T|||wind_angle_vessel:dec;direction;wind_speed_knots:dec;knots;wind_speed_meters:dec;meters;wind_speed_km:dec;km".to_string());
+    v.push("WCV|T|||velocity;vel_units;waypoint_id".to_string());
+    v.push("WNC|T|||dist_nautical_miles;dist_naut_unit;dist_km;dist_km_unit;waypoint_origin_id;waypoint_dest_id".to_string());
+    v.push("WPL|T|||lat;lat_dir;lon;lon_dir;waypoint_id".to_string());
+    v.push("XDR|T|xdr|num_transducers|type;value;units;id".to_string());
+    v.push("XTE|T|||warning_flag;lock_flag;cross_track_err_dist;correction_dir;dist_units".to_string());
+    v.push("ZDA|T|dt,zda|datestamp,datetime,localdatetime,tzinfo|timestamp:ts;day:int;month:int;year:int;local_zone:int;local_zone_minutes:int".to_string());
+    v.push("ASH|P|||".to_string());
+    v.push("ASHRATT|ASH|||_r;timestamp:ts;true_heading:float;is_true_heading;roll:float;pitch:float;heave:float;roll_accuracy:float;pitch_accuracy:float;heading_accuracy:float;aiding_status:dec;imu_status:dec".to_string());
+    v.push("ASHRHPR|ASH|||_r;subtype;timestamp:ts;heading:dec;pitch:dec;roll:dec;carrier_rms:dec;baseline_rms:dec;integer_ambiguity;mode;status;pdop:float".to_string());
+    v.push("ASHRLTN|ASH|||_r;subtype;latency:int".to_string());
+    v.push("ASHRPOS|ASH|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|_r;subtype;mode:int;sat_count:int;timestamp:ts;lat;lat_dir;lon;lon_dir;altitude;__;course:float;spd_over_grnd:float;vertical_velocity:dec;pdop:float;hdop:float;vdop:float;tdop:float;station_id:int".to_string());
+    v.push("ASHRVEL|ASH|||_r;subtype;enu:int;timestamp:ts;easting:dec;northing:dec;vertical:dec;easting_rms:dec;northing_rms:dec;vertical_rms:dec;smoothing:dec".to_string());
+    v.push("GRM|P|||".to_string());
+    v.push("GRME|GRM|||subtype;hpe:dec;hpe_unit;vpe:dec;vpe_unit;osepe:dec;osepe_unit".to_string());
+    v.push("GRMM|GRM|||subtype;datum".to_string());
+    v.push("GRMW|GRM|||subtype;wname;altitude:dec;symbol;comment".to_string());
+    v.push("GRMZ|GRM|||subtype;altitude:dec;altitude_unit;pos_fix_dim".to_string());
+    v.push("KWD|P|||".to_string());
+    v.push("KWDWPL|KWD|latlon,dt,vstatus|datetime,is_valid,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|subtype;timestamp:ts;status;lat;lat_dir;lon;lon_dir;sog:float;cog:float;datestamp:ds;altitude:dec;wname;ts".to_string());
+    v.push("MGN|P|||".to_string());
+    v.push("MGNWPL|MGN|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|subtype;lat;lat_dir;lon;lon_dir;altitude:dec;altitude_unit;wname;comment;icon;type".to_string());
+    v.push("NOR|P|||".to_string());
+    v.push("NORBT0|NOR|dt|datetime|beam:int;datestamp:ds;timestamp:ts;dt1:float;dt2:float;bv:float;fom:float;dist:float;stat".to_string());
+    v.push("NORBT4|NOR|dt|datetime|dt1:float;dt2:float;sound_speed:float;dir:float;fom:float;dist:float".to_string());
+    v.push("NORBT7|NOR|||timestamp:utc;dt1:float;dt2:float;vx:float;vy:float;vz:float;fom:float;d1:float;d2:float;d3:float;d4:float".to_string());
+    v.push("NORBT9|NOR|||timestamp:utc;dt1:float;dt2:float;vx:float;vy:float;vz:float;fom:float;d1:float;d2:float;d3:float;d4:float;battery_voltage:float;sound_speed:float;pressure:float;temp:float;stat".to_string());
+    v.push("NORC1|NOR|dt|datetime|datestamp:ds;timestamp:ts;cn:int;cp:float;vx:float;vy:float;vz:float;vz2:float;amp1:float;amp2:float;amp3:float;amp4:float;r1:int;r2:int;r3:int;r4:int;r5:int".to_string());
+    v.push("NORC4|NOR|dt|datetime|cp:float;sp:float;dir:float;r:int;amp:int".to_string());
+    v.push("NORH4|NOR|dt|datetime|datestamp:ds;timestamp:ts;ec:int;sc".to_string());
+    v.push("NORI1|NOR|||it:int;sn:int;nb:int;nc:int;bd:float;cs:float;cy:str".to_string());
+    v.push("NORS1|NOR|dt|datetime|datestamp:ds;timestamp:ts;ec:int;sc;battery_voltage:float;sound_speed:float;heading:float;heading_std:float;pitch:float;pitch_std:float;roll:float;roll_std:float;pressure:float;pressure_std:float;temp:float".to_string());
+    v.push("NORS4|NOR|dt|datetime|battery_voltage:float;sound_speed:float;heading:float;pitch:float;roll:float;pressure:float;temp:float".to_string());
+    v.push("NORWT4|NOR|||dt1:float;dt2:float;sound_speed:float;dir:float;fom:float;dist:float".to_string());
+    v.push("NORWT7|NOR|||timestamp:utc;dt1:float;dt2:float;vx:float;vy:float;vz:float;fom:float;d1:float;d2:float;d3:float;d4:float".to_string());
+    v.push("NORWT9|NOR|||timestamp:utc;dt1:float;dt2:float;vx:float;vy:float;vz:float;fom:float;d1:float;d2:float;d3:float;d4:float;battery_voltage:float;sound_speed:float;pressure:float;temp:float;stat".to_string());
+    v.push("RDI|P|||".to_string());
+    v.push("RDID|RDI|||subtype;pitch:float;roll:float;heading:float".to_string());
+    v.push("SRF|P|||".to_string());
+    v.push("SRF100|SRF|||subtype;protocol;baud;databits;stopbits;parity".to_string());
+    v.push("SRF103|SRF|||subtype;sentence;command;rate;checksum!".to_string());
+    v.push("SXN|P|||".to_string());
+    v.push("SXN20|SXN|||_blank;message_type:int;horiz_qual:int;hgt_qual:int;head_qual:int;rp_qual:int".to_string());
+    v.push("SXN21|SXN|||_blank;message_type:int;event:int".to_string());
+    v.push("SXN22|SXN|||_blank;message_type:int;gyro_calib:float;gyro_ffs:float".to_string());
+    v.push("SXN23|SXN|||_blank;message_type:int;roll:float;pitch:float;head:float;heave:float".to_string());
+    v.push("SXN24|SXN|||_blank;message_type:int;roll_rate:float;pitch_rate:float;yaw_rate:float;vertical_vel:float".to_string());
+    v.push("TNL|P|||".to_string());
+    v.push("TNLAVR|TNL|||_;type;timestamp:ts;yaw_angle;yaw;tilt_angle;tilt;roll_angle;roll;baseline;gps_quality;pdop;num_sats".to_string());
+    v.push("TNLBPQ|TNL|latlon,dt|datetime,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|_;type;timestamp:ts;datestamp:ds;lat;lat_dir;lon;lon_dir;height;meters;mode_fix_type;num_sats".to_string());
+    v.push("TNLGGK|TNL|latlon,dt|datetime,latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|_;type;timestamp:ts;datestamp:ds;lat;lat_dir;lon;lon_dir;quality;num_sats;dop;height;meters;mode_fix_type".to_string());
+    v.push("TNLPJT|TNL|||_;type;coord_name;project_name".to_string());
+    v.push("TNLVHD|TNL|dt|datetime|_;type;timestamp:ts;datestamp:ds;azimuth;azdt;vertical;vertdt;range;rdt;gps_quality;num_sats;pdop".to_string());
+    v.push("UBX|P|||".to_string());
+    v.push("UBX00|UBX|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|_blank;ubx_type;timestamp:ts;lat;lat_dir;lon;lon_dir;alt_ref;nav_stat;h_acc;v_acc;sog;cog;v_vel;diff_age;hdop;vdop;tdop;num_svs;reserved".to_string());
+    v.push("UBX03|UBX|ubx03|satellite_list|_blank;ubx_type;num_sv:int".to_string());
+    v.push("UBX04|UBX|||_blank;ubx_type;time:ts;date:ds;utc_tow;utc_wk;leap_sec;clk_bias:int;clk_drift:dec;tp_gran:int".to_string());
+    v.push("VTX|P|||".to_string());
+    v.push("VTX0000|VTX|||mplaceholder;subtype;dist:float;dist_unit;direction:float;roll:float;va:float;angle_units".to_string());
+    v.push("VTX0002|VTX|||mplaceholder;subtype;measurement_id:int;dist:float;dist_unit;direction:float;direction_unit;va:float;decl:float;decl_ref".to_string());
+    v.push("VTX0012|VTX|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|mplaceholder;subtype;measurement_id:int;lat;lat_dir;lon;lon_dir;altitude:float;altitude_units;gain:float;gain_units".to_string());
+    v.push("VTX0020|VTX|latlon|latitude,latitude_minutes,latitude_seconds,longitude,longitude_minutes,longitude_seconds|mplaceholder;subtype;measurement_id:int;lat;lat_dir;lon;lon_dir;altitude:float;altitude_units".to_string());
+    v
+}
+
+// SeaTalk.byte_to_command
+fn seatalk_command(cmd: ref String) -> String {
+    let s = match cmd.as_str() {
+        "00" => "Depth below transducer",
+        "01" => "Equipment ID",
+        "05" => "Engine RPM and PITCH",
+        "10" => "Apparent Wind Angle",
+        "11" => "Apparent Wind Speed",
+        "20" => "Speed through water",
+        "50" => "LAT position",
+        "51" => "LON position",
+        "52" => "Speed over Ground",
+        "53" => "Course over Ground",
+        "82" => "Target waypoint name",
+        "84" => "Compass heading  Autopilot course and Rudder position",
+        "9C" => "Compass heading and Rudder position",
+        _ => "Unknown Command",
+    };
+    s.to_string()
+}
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(data_0());
+    v.push(data_1());
+    v.push(data_2());
+    v.push(data_3());
+    v.push(data_4());
+    v.push(data_5());
+    v.push(data_6());
+    v
+}
+
+fn data_0() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$GPHDT,274.07,T*03\u{d}$GPHDM,272.4,M*36\u{d}\u{d}\n");
+    t.push_str("$GPHDG,98.3,,,,\n");
+    ("cr.nmea".to_string(), t)
+}
+
+fn data_1() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$PGRME,15.0,M,45.0,M,25.0,M*1C\n");
+    t.push_str("$PGRMM,WGS 84*06\n");
+    t.push_str("$PGRMZ,246,f,3*1B\n");
+    t.push_str("$PGRMW,Home,32,1B,My house*72\n");
+    t.push_str("$PGRMT,GPS 18x-5Hz,P,P,R,R,P,,23,R*4C\n");
+    t.push_str("$PKWDWPL,150803,V,4237.14,N,07120.83,W,,,190316,,test,5,/'*30\n");
+    t.push_str("$PKWDWPL,204714,V,4237.1400,N,07120.8300,W,,,200316,,test|5,/'*61\n");
+    t.push_str("$PKWDWPL,204714,A,4237.1400,N,07120.8300,W,12.5,270.0,200316,35,KD2ABC,/>*78\n");
+    t.push_str("$PMGNWPL,4228.7520,N,07040.4680,W,0000000,M,Plymouth,Plymouth Rock,a*56\n");
+    t.push_str("$PMGNWPL,4228.7520,N,07040.4680,W,12_5,M,Gurnet,\"Light\",b,xx*54\n");
+    t.push_str("$PRDID,-1.31,7.81,47.31*68\n");
+    t.push_str("$PRDID,-1.31,seven,47.31,extra*45\n");
+    t.push_str("$PSRF100,1,9600,8,1,0*0D\n");
+    t.push_str("$PSXN,20,0,0,0,0*3B\n");
+    t.push_str("$PSXN,21,1*27\n");
+    t.push_str("$PSXN,22,0.12,0.05*3F\n");
+    t.push_str("$PSXN,23,0.30,-0.97,298.57,0.13*1B\n");
+    t.push_str("$PSXN,24,0.01,-0.02,0.10,0.00*10\n");
+    t.push_str("$PSXN,26,0,44.5000,0.7800,-0.9000,NRP*6D\n");
+    t.push_str("$PTNL,AVR,212405.20,+52.1531,Yaw,-0.0806,Tilt,,,12.575,3,1.4,16*39\n");
+    t.push_str("$PTNL,BPQ,224445.06,021207,3723.09383914,N,12200.32620132,W,EHT-5.923,M,5*60\n");
+    t.push_str("$PTNL,GGK,172814.00,071296,3723.46587704,N,12202.26957864,W,3,06,1.7,EHT-6.777,M*4B\n");
+    t.push_str("$PTNL,VHD,030556.00,300998,187.718,-22.138,-76.929,-5.015,0.033,0.006,3,07,2.4*43\n");
+    t.push_str("$PTNL,PJT,NAD83(Conus),CaliforniaZone 4 0404*51\n");
+    t.push_str("$PTNL,,QTA,1,2*41\n");
+    t.push_str("$PUBX,00,081350.00,4717.113210,N,00833.915187,E,546.589,G3,2.1,2.0,0.007,77.52,0.007,,0.92,1.19,0.77,9,0,0*5F\n");
+    t.push_str("$PUBX,03,11,23,-,,,45,010,29,-,,,46,013,07,-,,,42,015,08,U,067,31,42,025*51\n");
+    t.push_str("$PUBX,04,073731.00,091202,113851.00,1196,15D,1930035,-2660.664,43*71\n");
+    t.push_str("$PUBX,41,1,0007,0003,19200,0*25\n");
+    t.push_str("$PVTX,0002,000123,135.5,M,120.4,D,-1.2,2.3,E*42\n");
+    t.push_str("$PVTX,0000,135.5,M,2.1016,0.0123,-0.0209,R*29\n");
+    t.push_str("$PVTX,0020,000124,4717.1132,N,00833.9152,E,546.6,M*55\n");
+    t.push_str("$PVTX,0012,000125,4717.4501,N,00834.1102,E,551.2,M,4.6,M*3D\n");
+    t.push_str("$PASHR,130533.620,0.311,T,-80.467,-1.395,,0.066,0.067,0.215,2,3*0B\n");
+    t.push_str("$PASHR,130533.62,0.311,T,-80.467,-1.395,0.25,0.066,0.067,0.215,2,3*22\n");
+    t.push_str("$PASHR,HPR,085335.00,224.19,-01.26,+00.83,0.000,0.000,0,1,0,2.5*1A\n");
+    t.push_str("$PASHR,LTN,3*3D\n");
+    t.push_str("$PASHR,POS,0,09,224645.00,3722.62223,N,12159.97347,W,00010.384,,000.0,000.0,+000.0,02.0,01.0,01.7,01.2,0000*09\n");
+    t.push_str("$PASHR,VEL,0,100115.50,+0.012,-0.034,+0.002,0.050,0.050,0.090,1000*3B\n");
+    t.push_str("$PASHR,XYZ,1,2*2C\n");
+    t.push_str("$PASHR,att,1,2*16\n");
+    t.push_str("$PNORBT0,1,040721,131335.3341,23.961,-48.122,-32.76800,10.00000,0.00,0x00000000*48\n");
+    t.push_str("$PNORBT4,1.234,-1.234,1.234,23.4,12.34567,12.3*3D\n");
+    t.push_str("$PNORBT7,1452244916.7508,1.234,-1.234,0.1234,0.1234,0.1234,12.34,23.45,23.45,23.45,23.45*39\n");
+    t.push_str("$PNORBT9,1452244916.7508,1.234,-1.234,0.1234,0.1234,0.1234,12.34,23.45,23.45,23.45,23.45,23.4,1567.8,1.2,12.3,0x000FFFFF*1E\n");
+    t.push_str("$PNORWT4,1.2345,-1.2345,1.234,23.4,12.34,12.3*1C\n");
+    t.push_str("$PNORWT7,1452244916.0000005,1.234,-1.234,0.1234,0.1234,0.1234,12.34,23.45,23.45,23.45,23.45*13\n");
+    t.push_str("$PNORWT9,-86400.25,1.234,-1.234,0.1234,0.1234,0.1234,12.34,23.45,23.45,23.45,23.45,23.4,1567.8,1.2,12.3,0x000FFFFF*1F\n");
+    t.push_str("$PNORI1,4,123456,3,30,1.00,5.00,BEAM*5B\n");
+    t.push_str("$PNORS1,161109,132455,0,34000034,23.9,1500.0,123.4,0.02,45.6,0.02,23.4,0.02,123.456,0.02,24.56*51\n");
+    t.push_str("$PNORS4,23.6,1530.2,0.0,0.0,0.0,0.000,23.30*66\n");
+    t.push_str("$PNORC1,083013,132455,3,11.0,0.332,0.332,0.332,78.9,78.9,78.9,78,78,78*46\n");
+    t.push_str("$PNORC4,1.5,1.395,227.1,32,32*7A\n");
+    t.push_str("$PNORH4,161109,143459,0,204C0002*38\n");
+    t.push_str("$PNORXX,1,2*00\n");
+    t.push_str("$PXYZ,1,2,3*17\n");
+    t.push_str("$PFEC,GPatt,123.4,-1.2,0.5*67\n");
+    t.push_str("$PASHR*58\n");
+    t.push_str("$PSXN*15\n");
+    ("devices.nmea".to_string(), t)
+}
+
+fn data_2() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6D\u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6E\u{d}\n");
+    t.push_str("$gpgga,184353.07,1929.045,s,02410.506,e,1,04,2.6,100.00,m,-33.9,m,,0000*6d\u{d}\n");
+    t.push_str("$gpgga,184353.07,1929.045,s,02410.506,e,1,04,2.6,100.00,m,-33.9,m,,0000*4d\u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6d\u{d}\n");
+    t.push_str("  $GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6D \t \u{d}\n");
+    t.push_str("GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6D\u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000\u{d}\n");
+    t.push_str("GPGLL,4916.45,N,12311.12,W,225444,A  \u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6Dx\u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6\u{d}\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6DD\u{d}\n");
+    t.push_str("$$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6D\u{d}\n");
+    t.push_str("\u{d}\n");
+    t.push_str("   \u{d}\n");
+    t.push_str("garbage\u{d}\n");
+    t.push_str("$GPXYZ,1,2,3*50\u{d}\n");
+    t.push_str("$GPGGAX,1*13\u{d}\n");
+    t.push_str("$CCGPQ,GGA*2B\u{d}\n");
+    t.push_str("$ccgpq,rmc*36\u{d}\n");
+    t.push_str("$CCGPQ,GGA,1*36\u{d}\n");
+    t.push_str("$G_GGA,1,2*5A\u{d}\n");
+    t.push_str("$12RMC,1,2*5C\u{d}\n");
+    t.push_str("$PGPGGA,1,2*05\u{d}\n");
+    t.push_str("$pgrme,15.0,M,45.0,M,25.0,M*3C\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,a*2C*b\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,a*b*00\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,tab\there*29\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,it's \"quoted\"*3A\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,back\\slash*7F\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,caf\u{e9} \u{7f}\u{1}*9E\u{d}\n");
+    t.push_str("$GPMWV,214.8,R,0.1,K,A*21\u{0}\u{d}\n");
+    t.push_str("$GPHDT,274.07,T,extra,fields,here*5E\u{d}\n");
+    t.push_str("$GPHDT*4F\u{d}\n");
+    t.push_str("$GPHDT,*63\u{d}\n");
+    t.push_str("$GPHDT,,*4F\u{d}\n");
+    t.push_str("$GPHDT,274.07,T*03\u{d}\n");
+    t.push_str("$GPRMC,225446,A,4916.45,N,12311.12,W,000.5,054.7,191194,020.3,E*68\u{d}\n");
+    ("edge.nmea".to_string(), t)
+}
+
+fn data_3() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$GPGNS,014035.00,4332.69262,S,17235.48549,E,RR,13,0.9,25.63,11.24,,*6E\n");
+    t.push_str("$GNGNS,014035.00,,,,,NNN,00,99.99,,,,*1E\n");
+    t.push_str("$GPGRS,024603.00,1,-1.1,-0.5,0.2,0.4,1.7,-0.7,,,,,,*62\n");
+    t.push_str("$GPGST,172814.0,0.006,0.023,0.020,273.6,0.023,0.020,0.031*6A\n");
+    t.push_str("$GPGBS,235458.00,1.4,1.3,3.1,03,,-21.4,3.8,1,0*5A\n");
+    t.push_str("$GPDTM,W84,,0.0,N,0.0,E,0.0,W84*6F\n");
+    t.push_str("$GPDTM,999,CH95,0.08,N,0.07,E,-47.7,W84*1C\n");
+    t.push_str("$GPALM,1,1,15,1159,00,441d,4e,16be,fd5e,a10c9f,4a2da4,686e81,58cbe1,0a4,001*77\n");
+    t.push_str("$GPAPA,A,A,0.10,R,N,V,V,011,M,DEST*3F\n");
+    t.push_str("$GPBEC,220516,5130.02,N,04607.80,W,213.8,T,218.0,M,0004.6,N,EGLM,A*56\n");
+    t.push_str("$GPBWR,220516,5130.02,N,00046.34,W,213.8,T,218.0,M,0004.6,N,EGLM*30\n");
+    t.push_str("$GPBWW,213.8,T,218.0,M,TOWER,EGLM*17\n");
+    t.push_str("$GPSTN,10*73\n");
+    t.push_str("$GPTRF,183220,030994,4917.24,N,12309.57,W,59.3,3,6,1.8,32*6B\n");
+    t.push_str("$GPWCV,2.3,N,NEEDLES*48\n");
+    t.push_str("$GPWNC,200.00,N,370.40,K,START,END*45\n");
+    t.push_str("$GPR00,EGLL,EGLM,EGTB,EGUB,EGTK,MBOT,EGTB,,,,,,,*58\n");
+    t.push_str("$GPRMA,A,4917.24,N,12309.57,W,,,12.5,054.7,5.2,E*57\n");
+    t.push_str("$APHSC,40.12,T,39.11,M*5D\n");
+    t.push_str("$AGRSA,-2.4,A,,V*54\n");
+    t.push_str("$RAOSD,35.1,A,36.0,M,5.8,M,,,N*49\n");
+    t.push_str("$RATLL,01,5042.12,N,00121.50,W,TANKER,082003.50,T,*35\n");
+    t.push_str("$RATTM,02,1.43,170.5,T,0.16,264.4,T,1.42,36.9,N,FERRY,T,,082004.00,A*5C\n");
+    t.push_str("$VWVDR,10.1,T,12.3,M,1.2,N*3B\n");
+    t.push_str("$VWVPW,4.5,N,6.7,M*53\n");
+    t.push_str("$WIVWR,75,R,1.0,N,0.51,M,1.85,K*72\n");
+    t.push_str("$WIVWT,30.0,L,12.5,N,6.4,M,23.2,K*7B\n");
+    t.push_str("$SDDBS,24.6,f,7.5,M,4.1,F*36\n");
+    t.push_str("$HCHDM,238.5,M*25\n");
+    t.push_str("$VWVLW,1234.5,N,12.3,N*4D\n");
+    t.push_str("$TIROT,-1.3,A*14\n");
+    t.push_str("$ERRPM,E,1,2418.2,10.5,A*48\n");
+    t.push_str("$ERRPM,S,2,,-5.0,V*45\n");
+    t.push_str("$GPVBW,4.5,0.2,A,4.6,0.1,A*54\n");
+    t.push_str("$GPVBW,4.5,0.2,A,,,V*40\n");
+    t.push_str("$STALK,84,B6,10,00,00,00,00,00,00*14\n");
+    t.push_str("$STALK,9C,01,25,00*3D\n");
+    t.push_str("$STALK,30,00,0C*1D\n");
+    t.push_str("$WIXDR,C,19.52,C,TempAir,P,1.02481,B,Barometer,A,-0.5,D,Pitch,A,1.3,D,Roll,G,,,Spare*23\n");
+    t.push_str("$GPZDA,201530.00,04,07,2002,00,00*60\n");
+    t.push_str("$GPZDA,201530.00,31,02,2002,00,00*63\n");
+    t.push_str("$GPZDA,201530.00,04,07,,00,00*60\n");
+    t.push_str("$GPZDA,201530.00,04,07,2002,,*60\n");
+    t.push_str("$GPZDA,201530.00,04,07,2002,+03,*48\n");
+    t.push_str("$GPZDA,,04,07,2002,00,00*4B\n");
+    t.push_str("$GPRMC,225446,A,4916.45,N,12311.12,W,000.5,054.7,191194,020.3,E*68\n");
+    t.push_str("$GPRMC,225446,A,4916.45,N,12311.12,W,000.5,054.7,191194,020.3,E,A*05\n");
+    t.push_str("$GPRMC,225446,A,4916.45,N,12311.12,W,000.5,054.7,191194,020.3,E,N,U*73\n");
+    t.push_str("$GPRMC,225446.333,A,4916.45,N,12311.12,W,000.5,054.7,311294,020.3,E,A,S*6E\n");
+    t.push_str("$GPRMC,225446,A,4916.45,N,12311.12,W,000.5,054.7,310294,020.3,E*60\n");
+    t.push_str("$GPRMC,2254,A,4916.45,N,12311.12,W,000.5,054.7,11294,020.3,E*50\n");
+    t.push_str("$GPRMC,245446,A,4916.45,N,12311.12,W,000.5,054.7,1 1294,020.3,E*74\n");
+    t.push_str("$GPRMC,225460,A,16.45,N,12311.12,X,inf,nan,191169,,*05\n");
+    t.push_str("$GPRMC,225446.9999999,A,0,N,0.0,E,1_000.5,_5,010100,,*08\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000*6D\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,7,04,2.6,1e3,M,-33.9,M,,0000*13\n");
+    t.push_str("$GPGGA,184353.07,1929.045,S,02410.506,E,x,04,2.6, 12 ,M,-33.9,M,,0000*38\n");
+    t.push_str("$GPGSA,A,,,,,,,,,,,,,,,,*2F\n");
+    t.push_str("$GPGSA,A, 2 ,04,05,,,,,,,,,,,2.5,1.3,2.1*34\n");
+    t.push_str("$GPGSA,A,3.0,04,05,,,,,,,,,,,2.5,1.3,2.1*2B\n");
+    t.push_str("$GPHDG,98.3,0.0,E,12.6,W*4B\n");
+    t.push_str("$GPHDG,98.30,-0,E,1_2.6,W*17\n");
+    t.push_str("$GPHDG,1E2,.5,E,5.,W*24\n");
+    t.push_str("$GPHDG,0.0000001,100E-2,E,-.0,W*15\n");
+    t.push_str("$GPHDG,NaN,Infinity,E,-Inf,W*4D\n");
+    t.push_str("$GPHDG,12.3.4,abc,E,,W*06\n");
+    ("instruments.nmea".to_string(), t)
+}
+
+fn data_4() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("parse trip.nmea\n");
+    t.push_str("parse instruments.nmea\n");
+    t.push_str("parse devices.nmea\n");
+    t.push_str("parse edge.nmea\n");
+    t.push_str("strict edge.nmea\n");
+    t.push_str("strict devices.nmea\n");
+    t.push_str("attrs devices.nmea talker,manufacturer,sentence_type,listener,subtype,data\n");
+    t.push_str("attrs edge.nmea talker,sentence_type,listener,manufacturer,timestamp,heading,nope\n");
+    t.push_str("stream edge.nmea yield 23\n");
+    t.push_str("stream edge.nmea ignore 50\n");
+    t.push_str("stream edge.nmea raise 40\n");
+    t.push_str("stream devices.nmea yield 400\n");
+    t.push_str("stream instruments.nmea raise 1000\n");
+    t.push_str("stream trip.nmea skip 10\n");
+    t.push_str("streamfile trip.nmea yield 6\n");
+    t.push_str("streamfile tail.nmea raise 4\n");
+    t.push_str("file trip.nmea\n");
+    t.push_str("file edge.nmea\n");
+    t.push_str("fileread instruments.nmea\n");
+    t.push_str("fileread devices.nmea\n");
+    t.push_str("filelines tail.nmea 4\n");
+    t.push_str("filenext tail.nmea 3\n");
+    t.push_str("filenext cr.nmea 4\n");
+    t.push_str("edit trip.nmea 8 lat=5046.0000 lat_dir=S spd_over_grnd=f:7.25 true_course=d:212.50 talker=GN\n");
+    t.push_str("edit trip.nmea 9 gps_qual=i:4 num_sats=i:12 altitude=f:3.5 age_gps_data= ref_station_id=0042\n");
+    t.push_str("edit trip.nmea 3 waypoint_list=SOLENT|NEEDLES active_route_id=WEST num_in_seq=i:1\n");
+    t.push_str("edit instruments.nmea 17 waypoint_list=A|B|C\n");
+    t.push_str("edit trip.nmea 8 nav_status=S latitude=f:1.0\n");
+    t.push_str("edit trip.nmea 8 nav_status=S\n");
+    t.push_str("edit instruments.nmea 46 true_course=f:1e-07 mode_indicator=A spd_over_grnd=i:3\n");
+    t.push_str("edit devices.nmea 1 hpe=d:0.0000001 osepe_unit=F\n");
+    t.push_str("edit devices.nmea 42 dt1=f:-0.0 stat=0x1 \n");
+    t.push_str("edit edge.nmea 19 sentence_type=RMC talker=II\n");
+    t.push_str("edit instruments.nmea 13 talker_id_num=i:99 color=red\n");
+    t.push_str("build GGA GP 184353.07,1929.045,S,02410.506,E,1,04,2.6,100.00,M,-33.9,M,,0000\n");
+    t.push_str("build RMC GN 081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,011.3,E\n");
+    t.push_str("build XDR WI C,19.5,C,TempAir\n");
+    t.push_str("build R00 GP EGLL,EGLM\n");
+    t.push_str("build ZZZ GP 1,2\n");
+    t.push_str("buildp GRM E,15.0,M,45.0,M,25.0,M\n");
+    t.push_str("buildp GRM Q,1\n");
+    t.push_str("buildp NOR BT4,1.0,2.0,3.0,4.0,5.0,6.0\n");
+    t.push_str("buildp SXN ,23,0.30,-0.97,298.57,0.13\n");
+    t.push_str("buildp TNL ,PJT,NAD83,Zone\n");
+    t.push_str("buildp ASH R,130533.620,0.311,T\n");
+    t.push_str("buildp XYZ A,B\n");
+    t.push_str("query CC GP GGA\n");
+    t.push_str("query II AP rmb\n");
+    t.push_str("render trip.nmea 8\n");
+    t.push_str("render devices.nmea 42\n");
+    t.push_str("render edge.nmea 19\n");
+    t.push_str("report trip.nmea\n");
+    t.push_str("report instruments.nmea\n");
+    t.push_str("gpx trip.nmea track.gpx\n");
+    t.push_str("mux mux.nmea GN RMC,GGA,ZDA trip.nmea instruments.nmea edge.nmea\n");
+    t.push_str("alarms trip.nmea instruments.nmea devices.nmea\n");
+    ("jobs.txt".to_string(), t)
+}
+
+fn data_5() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$GPHDT,274.07,T*03\u{d}\n");
+    t.push_str("$GPHDM,272.4,M*36");
+    ("tail.nmea".to_string(), t)
+}
+
+fn data_6() -> (String, String) {
+    let mut t = String.new();
+    t.push_str("$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50\u{d}\n");
+    t.push_str("$GPTXT,01,01,02,ANTSTATUS=OK*3B\u{d}\n");
+    t.push_str("$GPRTE,2,1,c,SOLENT,HAMBLE,CALSHOT,NEEDLES,YARMOUTH*2B\u{d}\n");
+    t.push_str("$GPRTE,2,2,c,SOLENT,LYMINGTON,HURST*3D\u{d}\n");
+    t.push_str("$GPWPL,5050.6200,N,00119.0800,W,HAMBLE*53\u{d}\n");
+    t.push_str("$GPWPL,5049.0300,N,00118.1100,W,CALSHOT*14\u{d}\n");
+    t.push_str("$GPWPL,5039.6500,N,00135.0500,W,NEEDLES*07\u{d}\n");
+    t.push_str("$GPRMC,080000.50,A,5046.5120,N,00117.2040,W,4.20,212.0,150624,0.9,W,D,S*78\u{d}\n");
+    t.push_str("$GPGGA,080000.50,5046.5120,N,00117.2040,W,2,08,0.90,2.1,M,47.3,M,3.0,0120*6C\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,4.20,N,7.78,K,D*21\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5046.5120,N,00117.2040,W,080000.50,A,D*73\u{d}\n");
+    t.push_str("$SDDBT,27.6,f,8.4,M,4.6,F*3B\u{d}\n");
+    t.push_str("$SDDPT,8.4,0.5,100*43\u{d}\n");
+    t.push_str("$SDMTW,16.0,C*03\u{d}\n");
+    t.push_str("$GPRMC,080020.00,A,5046.4603,N,00117.2674,W,4.55,213.5,150624,0.9,W,A,S*7A\u{d}\n");
+    t.push_str("$GPGGA,080020.00,5046.4603,N,00117.2674,W,1,09,0.91,2.5,M,47.3,M,,*44\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,4.55,N,8.43,K,A*2E\u{d}\n");
+    t.push_str("$WIMWV,43.0,R,12.4,N,A*23\u{d}\n");
+    t.push_str("$WIMWV,61.0,T,10.2,N,A*21\u{d}\n");
+    t.push_str("$WIMWD,273.5,T,272.6,M,10.2,N,5.2,M*6C\u{d}\n");
+    t.push_str("$HCHDG,210.5,,,0.9,W*34\u{d}\n");
+    t.push_str("$HCHDT,209.6,T*24\u{d}\n");
+    t.push_str("$VWVHW,209.6,T,210.5,M,4.15,N,7.69,K*57\u{d}\n");
+    t.push_str("$GPRMC,080040.00,A,5046.4044,N,00117.3361,W,4.90,215.0,150624,0.9,W,A,S*73\u{d}\n");
+    t.push_str("$GPGGA,080040.00,5046.4044,N,00117.3361,W,1,10,0.92,2.9,M,47.3,M,,*40\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,4.90,N,9.07,K,A*29\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080100.50,A,5046.3441,N,00117.4101,W,5.25,216.5,150624,0.9,W,A,C*6F\u{d}\n");
+    t.push_str("$GPGGA,080100.50,5046.3441,N,00117.4101,W,1,11,0.93,2.1,M,47.3,M,,*4D\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,5.25,N,9.72,K,A*2D\u{d}\n");
+    t.push_str("$SDDBT,40.4,f,12.3,M,6.7,F*07\u{d}\n");
+    t.push_str("$SDDPT,12.3,0.5,100*7F\u{d}\n");
+    t.push_str("$SDMTW,16.3,C*00\u{d}\n");
+    t.push_str("$GPRMC,080120.00,A,5046.2795,N,00117.4894,W,5.60,218.0,150624,0.9,W,D,U*7F\u{d}\n");
+    t.push_str("$GPGGA,080120.00,5046.2795,N,00117.4894,W,2,08,0.94,2.5,M,47.3,M,3.0,0120*62\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,5.60,N,10.37,K,D*19\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPZDA,080120.00,15,06,2024,01,00*6A\u{d}\n");
+    t.push_str("$WIXDR,C,19.5,C,TempAir,P,1.0132,B,Barometer,H,71.2,P,Humidity*56\u{d}\n");
+    t.push_str("$WIMDA,29.9213,I,1.0132,B,19.5,C,16.2,C,71.2,,13.9,C,278.0,T,277.1,M,9.3,N,4.8,M*38\u{d}\n");
+    t.push_str("$APXTE,A,A,0.04,R,N*72\u{d}\n");
+    t.push_str("$APAPB,A,A,0.04,R,N,V,V,236.4,T,NEEDLES,235.1,T,233.9,M*7A\u{d}\n");
+    t.push_str("$GPRMB,A,0.04,R,CALSHOT,NEEDLES,5039.6500,N,00135.0500,W,9.8,236.4,4.9,V*21\u{d}\n");
+    t.push_str("$GPBOD,236.4,T,235.5,M,NEEDLES,CALSHOT*5B\u{d}\n");
+    t.push_str("$GPBWC,080120.00,5039.6500,N,00135.0500,W,236.4,T,235.5,M,9.8,N,NEEDLES,A*04\u{d}\n");
+    t.push_str("$GPRMC,080140.00,A,5046.2107,N,00117.5739,W,5.95,212.0,150624,0.9,W,A,S*7E\u{d}\n");
+    t.push_str("$GPGGA,080140.00,5046.2107,N,00117.5739,W,1,09,0.95,2.9,M,47.3,M,,*41\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,5.95,N,11.02,K,A*11\u{d}\n");
+    t.push_str("$WIMWV,47.0,R,16.0,N,A*27\u{d}\n");
+    t.push_str("$WIMWV,65.0,T,13.8,N,A*2C\u{d}\n");
+    t.push_str("$WIMWD,272.0,T,271.1,M,13.8,N,7.1,M*64\u{d}\n");
+    t.push_str("$HCHDG,209.0,,,0.9,W*39\u{d}\n");
+    t.push_str("$HCHDT,208.1,T*22\u{d}\n");
+    t.push_str("$VWVHW,208.1,T,209.0,M,5.55,N,10.28,K*6A\u{d}\n");
+    t.push_str("$GPRMC,080200.50,A,5046.1375,N,00117.6638,W,6.30,213.5,150624,0.9,W,A,S*73\u{d}\n");
+    t.push_str("$GPGGA,080200.50,5046.1375,N,00117.6638,W,1,10,0.96,2.1,M,47.3,M,,*47\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,6.30,N,11.67,K,A*11\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5046.1375,N,00117.6638,W,080200.50,A,A*7F\u{d}\n");
+    t.push_str("$SDDBT,53.1,f,16.2,M,8.9,F*05\u{d}\n");
+    t.push_str("$SDDPT,16.2,0.5,100*7A\u{d}\n");
+    t.push_str("$SDMTW,16.6,C*05\u{d}\n");
+    t.push_str("$GPRMC,080220.00,A,5046.0600,N,00117.7589,W,4.20,215.0,150624,0.9,W,A,S*7A\u{d}\n");
+    t.push_str("$GPGGA,080220.00,5046.0600,N,00117.7589,W,1,11,0.97,2.5,M,47.3,M,,*4A\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,4.20,N,7.78,K,A*24\u{d}\n");
+    t.push_str("$GPRMC,080240.00,A,5046.0083,N,00117.8223,W,4.55,216.5,150624,0.9,W,D,C*68\u{d}\n");
+    t.push_str("$GPGGA,080240.00,5046.0083,N,00117.8223,W,2,08,0.98,2.9,M,47.3,M,3.0,0120*6F\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,4.55,N,8.43,K,D*2D\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080300.50,A,5045.9524,N,00117.8910,W,4.90,218.0,150624,0.9,W,A,U*70\u{d}\n");
+    t.push_str("$GPGGA,080300.50,5045.9524,N,00117.8910,W,1,09,0.99,2.1,M,47.3,M,,*43\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,4.90,N,9.07,K,A*29\u{d}\n");
+    t.push_str("$SDDBT,27.6,f,8.4,M,4.6,F*3B\u{d}\n");
+    t.push_str("$SDDPT,8.4,0.5,100*43\u{d}\n");
+    t.push_str("$SDMTW,16.9,C*0A\u{d}\n");
+    t.push_str("$WIMWV,51.0,R,12.4,N,A*20\u{d}\n");
+    t.push_str("$WIMWV,69.0,T,10.2,N,A*29\u{d}\n");
+    t.push_str("$WIMWD,278.0,T,277.1,M,10.2,N,5.2,M*60\u{d}\n");
+    t.push_str("$HCHDG,215.0,,,0.9,W*34\u{d}\n");
+    t.push_str("$HCHDT,214.1,T*2F\u{d}\n");
+    t.push_str("$VWVHW,214.1,T,215.0,M,4.50,N,8.33,K*5D\u{d}\n");
+    t.push_str("$GPRMC,080320.00,A,5045.8921,N,00117.9650,W,5.25,212.0,150624,0.9,W,A,S*76\u{d}\n");
+    t.push_str("$GPGGA,080320.00,5045.8921,N,00117.9650,W,1,10,0.90,2.5,M,47.3,M,,*43\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,5.25,N,9.72,K,A*24\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080340.00,A,5045.8275,N,00118.0443,W,5.60,213.5,150624,0.9,W,A,S*79\u{d}\n");
+    t.push_str("$GPGGA,080340.00,5045.8275,N,00118.0443,W,1,11,0.91,2.9,M,47.3,M,,*45\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,5.60,N,10.37,K,A*13\u{d}\n");
+    t.push_str("$GPRMC,080400.50,A,5045.7586,N,00118.1289,W,5.95,215.0,150624,0.9,W,D,S*76\u{d}\n");
+    t.push_str("$GPGGA,080400.50,5045.7586,N,00118.1289,W,2,08,0.92,2.1,M,47.3,M,3.0,0120*68\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,5.95,N,11.02,K,D*14\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5045.7586,N,00118.1289,W,080400.50,A,D*75\u{d}\n");
+    t.push_str("$SDDBT,40.4,f,12.3,M,6.7,F*07\u{d}\n");
+    t.push_str("$SDDPT,12.3,0.5,100*7F\u{d}\n");
+    t.push_str("$SDMTW,16.2,C*01\u{d}\n");
+    t.push_str("$GPRMC,080420.00,A,5045.6854,N,00118.2187,W,6.30,216.5,150624,0.9,W,A,C*63\u{d}\n");
+    t.push_str("$GPGGA,080420.00,5045.6854,N,00118.2187,W,1,09,0.93,2.5,M,47.3,M,,*4B\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,6.30,N,11.67,K,A*17\u{d}\n");
+    t.push_str("$WIMWV,44.0,R,16.0,N,A*24\u{d}\n");
+    t.push_str("$WIMWV,62.0,T,13.8,N,A*2B\u{d}\n");
+    t.push_str("$WIMWD,276.5,T,275.6,M,13.8,N,7.1,M*66\u{d}\n");
+    t.push_str("$HCHDG,213.5,,,0.9,W*37\u{d}\n");
+    t.push_str("$HCHDT,212.6,T*2E\u{d}\n");
+    t.push_str("$VWVHW,212.6,T,213.5,M,5.90,N,10.93,K*61\u{d}\n");
+    t.push_str("$GPZDA,080420.00,15,06,2024,01,00*6F\u{d}\n");
+    t.push_str("$WIXDR,C,19.5,C,TempAir,P,1.0132,B,Barometer,H,71.2,P,Humidity*56\u{d}\n");
+    t.push_str("$WIMDA,29.9213,I,1.0132,B,19.5,C,16.2,C,71.2,,13.9,C,276.5,T,275.6,M,9.3,N,4.8,M*36\u{d}\n");
+    t.push_str("$APXTE,A,A,0.06,L,N*6E\u{d}\n");
+    t.push_str("$APAPB,A,A,0.06,L,N,V,V,236.4,T,NEEDLES,235.1,T,233.9,M*66\u{d}\n");
+    t.push_str("$GPRMB,A,0.06,L,CALSHOT,NEEDLES,5039.6500,N,00135.0500,W,9.8,236.4,4.9,V*3D\u{d}\n");
+    t.push_str("$GPBOD,236.4,T,235.5,M,NEEDLES,CALSHOT*5B\u{d}\n");
+    t.push_str("$GPBWC,080420.00,5039.6500,N,00135.0500,W,236.4,T,235.5,M,9.8,N,NEEDLES,A*01\u{d}\n");
+    t.push_str("$GPRMC,080440.00,V,,,,,,,150624,,,N*71\u{d}\n");
+    t.push_str("$GPGGA,080440.00,,,,,0,00,99.99,,,,,,*6E\u{d}\n");
+    t.push_str("$GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30\u{d}\n");
+    t.push_str("$GPVTG,,,,,,,,,N*30\u{d}\n");
+    t.push_str("$GPRMC,080500.50,V,,,,,,,150624,,,N*71\u{d}\n");
+    t.push_str("$GPGGA,080500.50,,,,,0,00,99.99,,,,,,*6E\u{d}\n");
+    t.push_str("$GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30\u{d}\n");
+    t.push_str("$GPVTG,,,,,,,,,N*30\u{d}\n");
+    t.push_str("$SDDBT,53.1,f,16.2,M,8.9,F*05\u{d}\n");
+    t.push_str("$SDDPT,16.2,0.5,100*7A\u{d}\n");
+    t.push_str("$SDMTW,16.5,C*06\u{d}\n");
+    t.push_str("$GPRMC,080520.00,V,,,,,,,150624,,,N*76\u{d}\n");
+    t.push_str("$GPGGA,080520.00,,,,,0,00,99.99,,,,,,*69\u{d}\n");
+    t.push_str("$GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30\u{d}\n");
+    t.push_str("$GPVTG,,,,,,,,,N*30\u{d}\n");
+    t.push_str("$GPRMC,080540.00,A,5045.4401,N,00118.5200,W,5.25,215.0,150624,0.9,W,A,S*70\u{d}\n");
+    t.push_str("$GPGGA,080540.00,5045.4401,N,00118.5200,W,1,09,0.97,2.9,M,47.3,M,,*41\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,5.25,N,9.72,K,A*24\u{d}\n");
+    t.push_str("$WIMWV,48.0,R,12.4,N,A*28\u{d}\n");
+    t.push_str("$WIMWV,66.0,T,10.2,N,A*26\u{d}\n");
+    t.push_str("$WIMWD,275.0,T,274.1,M,10.2,N,5.2,M*6E\u{d}\n");
+    t.push_str("$HCHDG,212.0,,,0.9,W*33\u{d}\n");
+    t.push_str("$HCHDT,211.1,T*2A\u{d}\n");
+    t.push_str("$VWVHW,211.1,T,212.0,M,4.85,N,8.98,K*56\u{d}\n");
+    t.push_str("$GPRMC,080600.50,A,5045.3755,N,00118.5992,W,5.60,216.5,150624,0.9,W,A,C*60\u{d}\n");
+    t.push_str("$GPGGA,080600.50,5045.3755,N,00118.5992,W,1,10,0.98,2.1,M,47.3,M,,*49\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,5.60,N,10.37,K,A*15\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5045.3755,N,00118.5992,W,080600.50,A,A*7F\u{d}\n");
+    t.push_str("$SDDBT,27.6,f,8.4,M,4.6,F*3B\u{d}\n");
+    t.push_str("$SDDPT,8.4,0.5,100*43\u{d}\n");
+    t.push_str("$SDMTW,16.8,C*0B\u{d}\n");
+    t.push_str("$GPRMC,080620.00,A,5045.3066,N,00118.6838,W,5.95,218.0,150624,0.9,W,A,U*75\u{d}\n");
+    t.push_str("$GPGGA,080620.00,5045.3066,N,00118.6838,W,1,11,0.99,2.5,M,47.3,M,,*4F\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,5.95,N,11.02,K,A*11\u{d}\n");
+    t.push_str("$GPRMC,080640.00,A,5045.2334,N,00118.7736,W,6.30,212.0,150624,0.9,W,D,V*76\u{d}\n");
+    t.push_str("$GPGGA,080640.00,5045.2334,N,00118.7736,W,2,08,0.90,2.9,M,47.3,M,3.0,0120*6C\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,6.30,N,11.67,K,D*1B\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080700.50,A,5045.1559,N,00118.8688,W,4.20,213.5,150624,0.9,W,A,S*74\u{d}\n");
+    t.push_str("$GPGGA,080700.50,5045.1559,N,00118.8688,W,1,09,0.91,2.1,M,47.3,M,,*4C\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,4.20,N,7.78,K,A*2B\u{d}\n");
+    t.push_str("$SDDBT,40.4,f,12.3,M,6.7,F*07\u{d}\n");
+    t.push_str("$SDDPT,12.3,0.5,100*7F\u{d}\n");
+    t.push_str("$SDMTW,16.1,C*02\u{d}\n");
+    t.push_str("$WIMWV,52.0,R,16.0,N,A*23\u{d}\n");
+    t.push_str("$WIMWV,70.0,T,13.8,N,A*28\u{d}\n");
+    t.push_str("$WIMWD,273.5,T,272.6,M,13.8,N,7.1,M*64\u{d}\n");
+    t.push_str("$HCHDG,210.5,,,0.9,W*34\u{d}\n");
+    t.push_str("$HCHDT,209.6,T*24\u{d}\n");
+    t.push_str("$VWVHW,209.6,T,210.5,M,3.80,N,7.04,K*57\u{d}\n");
+    t.push_str("$GPRMC,080720.00,A,5045.1043,N,00118.9322,W,4.55,215.0,150624,0.9,W,A,S*78\u{d}\n");
+    t.push_str("$GPGGA,080720.00,5045.1043,N,00118.9322,W,1,10,0.92,2.5,M,47.3,M,,*4E\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,4.55,N,8.43,K,A*21\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPZDA,080720.00,15,06,2024,01,00*6C\u{d}\n");
+    t.push_str("$WIXDR,C,19.5,C,TempAir,P,1.0132,B,Barometer,H,71.2,P,Humidity*56\u{d}\n");
+    t.push_str("$WIMDA,29.9213,I,1.0132,B,19.5,C,16.2,C,71.2,,13.9,C,275.0,T,274.1,M,9.3,N,4.8,M*36\u{d}\n");
+    t.push_str("$APXTE,A,A,0.01,R,N*77\u{d}\n");
+    t.push_str("$APAPB,A,A,0.01,R,N,V,V,236.4,T,NEEDLES,235.1,T,233.9,M*7F\u{d}\n");
+    t.push_str("$GPRMB,A,0.01,R,CALSHOT,NEEDLES,5039.6500,N,00135.0500,W,9.8,236.4,4.9,V*24\u{d}\n");
+    t.push_str("$GPBOD,236.4,T,235.5,M,NEEDLES,CALSHOT*5B\u{d}\n");
+    t.push_str("$GPBWC,080720.00,5039.6500,N,00135.0500,W,236.4,T,235.5,M,9.8,N,NEEDLES,A*02\u{d}\n");
+    t.push_str("$GPRMC,080740.00,A,5045.0483,N,00119.0009,W,4.90,216.5,150624,0.9,W,A,C*6A\u{d}\n");
+    t.push_str("$GPGGA,080740.00,5045.0483,N,00119.0009,W,1,11,0.93,2.9,M,47.3,M,,*4F\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,4.90,N,9.07,K,A*20\u{d}\n");
+    t.push_str("$GPRMC,080800.50,A,5044.9880,N,00119.0749,W,5.25,218.0,150624,0.9,W,D,U*77\u{d}\n");
+    t.push_str("$GPGGA,080800.50,5044.9880,N,00119.0749,W,2,08,0.94,2.1,M,47.3,M,3.0,0120*6F\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,5.25,N,9.72,K,D*21\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5044.9880,N,00119.0749,W,080800.50,A,D*74\u{d}\n");
+    t.push_str("$SDDBT,44.9,f,13.7,M,7.5,F*08\u{d}\n");
+    t.push_str("$SDDPT,13.7,0.5,100*7A\u{d}\n");
+    t.push_str("$SDMTW,16.4,C*07\u{d}\n");
+    t.push_str("$GPRMC,080820.00,A,5044.9235,N,00119.1542,W,5.60,212.0,150624,0.9,W,A,S*74\u{d}\n");
+    t.push_str("$GPGGA,080820.00,5044.9235,N,00119.1542,W,1,09,0.95,2.5,M,47.3,M,,*4D\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,5.60,N,10.37,K,A*1C\u{d}\n");
+    t.push_str("$WIMWV,45.0,R,12.4,N,A*25\u{d}\n");
+    t.push_str("$WIMWV,63.0,T,10.2,N,A*23\u{d}\n");
+    t.push_str("$WIMWD,272.0,T,271.1,M,10.2,N,5.2,M*6C\u{d}\n");
+    t.push_str("$HCHDG,209.0,,,0.9,W*39\u{d}\n");
+    t.push_str("$HCHDT,208.1,T*22\u{d}\n");
+    t.push_str("$VWVHW,208.1,T,209.0,M,5.20,N,9.63,K*5F\u{d}\n");
+    t.push_str("$GPRMC,080840.00,A,5044.8546,N,00119.2387,W,5.95,213.5,150624,0.9,W,A,S*72\u{d}\n");
+    t.push_str("$GPGGA,080840.00,5044.8546,N,00119.2387,W,1,10,0.96,2.9,M,47.3,M,,*42\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,5.95,N,11.02,K,A*1E\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080900.50,A,5044.7814,N,00119.3286,W,6.30,215.0,150624,0.9,W,A,S*79\u{d}\n");
+    t.push_str("$GPGGA,080900.50,5044.7814,N,00119.3286,W,1,11,0.97,2.1,M,47.3,M,,*4E\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,6.30,N,11.67,K,A*1E\u{d}\n");
+    t.push_str("$SDDBT,19.4,f,5.9,M,3.2,F*37\u{d}\n");
+    t.push_str("$SDDPT,5.9,0.5,100*43\u{d}\n");
+    t.push_str("$SDMTW,16.7,C*04\u{d}\n");
+    t.push_str("$GPRMC,080920.00,A,5044.7039,N,00119.4237,W,4.20,216.5,150624,0.9,W,D,C*64\u{d}\n");
+    t.push_str("$GPGGA,080920.00,5044.7039,N,00119.4237,W,2,08,0.98,2.5,M,47.3,M,3.0,0120*6D\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,4.20,N,7.78,K,D*28\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,080940.00,A,5044.6522,N,00119.4871,W,4.55,218.0,150624,0.9,W,A,U*7E\u{d}\n");
+    t.push_str("$GPGGA,080940.00,5044.6522,N,00119.4871,W,1,09,0.99,2.9,M,47.3,M,,*4C\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,4.55,N,8.43,K,A*21\u{d}\n");
+    t.push_str("$WIMWV,49.0,R,25.0,N,A*29\u{d}\n");
+    t.push_str("$WIMWV,67.0,T,22.8,N,A*2C\u{d}\n");
+    t.push_str("$WIMWD,278.0,T,277.1,M,22.8,N,11.7,M*5B\u{d}\n");
+    t.push_str("$HCHDG,215.0,,,0.9,W*34\u{d}\n");
+    t.push_str("$HCHDT,214.1,T*2F\u{d}\n");
+    t.push_str("$VWVHW,214.1,T,215.0,M,4.15,N,7.69,K*5C\u{d}\n");
+    t.push_str("$GPRMC,081000.50,A,5044.5963,N,00119.5558,W,4.90,212.0,150624,0.9,W,A,S*7F\u{d}\n");
+    t.push_str("$GPGGA,081000.50,5044.5963,N,00119.5558,W,1,10,0.90,2.1,M,47.3,M,,*41\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,4.90,N,9.07,K,A*29\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPGSV,3,1,11,02,47,123,40,05,23,061,36,12,71,268,45,15,18,302,33*7C\u{d}\n");
+    t.push_str("$GPGSV,3,2,11,18,09,330,28,24,55,190,44,25,34,084,41,29,62,145,46*78\u{d}\n");
+    t.push_str("$GPGSV,3,3,11,31,05,025,,32,12,248,22,36,30,160,38*4F\u{d}\n");
+    t.push_str("$GPGLL,5044.5963,N,00119.5558,W,081000.50,A,A*7F\u{d}\n");
+    t.push_str("$SDDBT,40.4,f,12.3,M,6.7,F*07\u{d}\n");
+    t.push_str("$SDDPT,12.3,0.5,100*7F\u{d}\n");
+    t.push_str("$SDMTW,16.0,C*03\u{d}\n");
+    t.push_str("$GPRMC,081020.00,A,5044.5360,N,00119.6298,W,5.25,213.5,150624,0.9,W,A,S*72\u{d}\n");
+    t.push_str("$GPGGA,081020.00,5044.5360,N,00119.6298,W,1,11,0.91,2.5,M,47.3,M,,*43\u{d}\n");
+    t.push_str("$GPVTG,213.5,T,214.4,M,5.25,N,9.72,K,A*2B\u{d}\n");
+    t.push_str("$GPZDA,081020.00,15,06,2024,01,00*6A\u{d}\n");
+    t.push_str("$WIXDR,C,19.5,C,TempAir,P,1.0132,B,Barometer,H,71.2,P,Humidity*56\u{d}\n");
+    t.push_str("$WIMDA,29.9213,I,1.0132,B,19.5,C,16.2,C,71.2,,13.9,C,273.5,T,272.6,M,9.3,N,4.8,M*34\u{d}\n");
+    t.push_str("$APXTE,A,A,0.03,L,N*6B\u{d}\n");
+    t.push_str("$APAPB,A,A,0.03,L,N,V,V,236.4,T,NEEDLES,235.1,T,233.9,M*63\u{d}\n");
+    t.push_str("$GPRMB,A,0.03,L,CALSHOT,NEEDLES,5039.6500,N,00135.0500,W,9.8,236.4,4.9,V*38\u{d}\n");
+    t.push_str("$GPBOD,236.4,T,235.5,M,NEEDLES,CALSHOT*5B\u{d}\n");
+    t.push_str("$GPBWC,081020.00,5039.6500,N,00135.0500,W,236.4,T,235.5,M,9.8,N,NEEDLES,A*04\u{d}\n");
+    t.push_str("$GPRMC,081040.00,A,5044.4714,N,00119.7091,W,5.60,215.0,150624,0.9,W,D,S*7F\u{d}\n");
+    t.push_str("$GPGGA,081040.00,5044.4714,N,00119.7091,W,2,08,0.92,2.9,M,47.3,M,3.0,0120*63\u{d}\n");
+    t.push_str("$GPVTG,215.0,T,215.9,M,5.60,N,10.37,K,D*19\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,081100.50,A,5044.4026,N,00119.7936,W,5.95,216.5,150624,0.9,W,A,C*64\u{d}\n");
+    t.push_str("$GPGGA,081100.50,5044.4026,N,00119.7936,W,1,09,0.93,2.1,M,47.3,M,,*44\u{d}\n");
+    t.push_str("$GPVTG,216.5,T,217.4,M,5.95,N,11.02,K,A*18\u{d}\n");
+    t.push_str("$SDDBT,53.1,f,16.2,M,8.9,F*05\u{d}\n");
+    t.push_str("$SDDPT,16.2,0.5,100*7A\u{d}\n");
+    t.push_str("$SDMTW,16.3,C*00\u{d}\n");
+    t.push_str("$WIMWV,42.0,R,12.4,N,A*22\u{d}\n");
+    t.push_str("$WIMWV,60.0,T,10.2,N,A*20\u{d}\n");
+    t.push_str("$WIMWD,276.5,T,275.6,M,10.2,N,5.2,M*6E\u{d}\n");
+    t.push_str("$HCHDG,213.5,,,0.9,W*37\u{d}\n");
+    t.push_str("$HCHDT,212.6,T*2E\u{d}\n");
+    t.push_str("$VWVHW,212.6,T,213.5,M,5.55,N,10.28,K*68\u{d}\n");
+    t.push_str("$GPRMC,081120.00,A,5044.3294,N,00119.8835,W,6.30,218.0,150624,0.9,W,A,U*73\u{d}\n");
+    t.push_str("$GPGGA,081120.00,5044.3294,N,00119.8835,W,1,10,0.94,2.5,M,47.3,M,,*49\u{d}\n");
+    t.push_str("$GPVTG,218.0,T,218.9,M,6.30,N,11.67,K,A*1E\u{d}\n");
+    t.push_str("$GPGSA,A,3,02,05,12,15,18,24,25,29,,,,,1.6,0.9,1.3*3D\u{d}\n");
+    t.push_str("$GPRMC,081140.00,A,5044.2519,N,00119.9786,W,4.20,212.0,150624,0.9,W,A,S*7F\u{d}\n");
+    t.push_str("$GPGGA,081140.00,5044.2519,N,00119.9786,W,1,11,0.95,2.9,M,47.3,M,,*46\u{d}\n");
+    t.push_str("$GPVTG,212.0,T,212.9,M,4.20,N,7.78,K,A*24\u{d}\n");
+    t.push_str("$GPZDA,082000.00,15,06,2024,-05,-30*6C\u{d}\n");
+    t.push_str("$GPZDA,082000.00,15,06,2024,-05,30*41\u{d}\n");
+    t.push_str("$GPAAM,A,A,0.10,N,NEEDLES*77\u{d}\n");
+    ("trip.nmea".to_string(), t)
+}
