@@ -1,0 +1,874 @@
+== tree adt.hl7
+parse_hl7
+  Message len=6
+   [[['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021083000'], [''], [[['ADT'], ['A01'], ['ADT_A01']]], ['MSG00001'], ['P'], ['2.5.1']], [['EVN'], ['A01'], ['20261021083000']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']], [['9434765919'], [''], [''], ['NHS'], ['NH']]], [''], [[['Okafor'], ['Adaeze'], ['Ngozi'], [''], ['Ms']]], [''], ['19840312'], ['F'], [''], [''], [[['14 Mill Lane'], ['Flat 2', 'Rear'], ['Exeter'], [''], ['EX1 1AA'], ['GBR']]], [''], [['01632 960142'], ['07700 900461']], [''], [''], ['M']], [['PV1'], ['1'], ['I'], [[['WARD7'], ['B12'], ['1'], ['RIVERSIDE']]], [''], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], [''], [''], ['MED'], [''], [''], [''], ['7'], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], ['IN'], ['V9001'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261021082500']], [['NK1'], ['1'], [[['Okafor'], ['Chidi']]], [[['SPO'], ['Spouse']]], [[['14 Mill Lane'], [''], ['Exeter'], [''], ['EX1 1AA']]], ['01632 960143']], [['AL1'], ['1'], ['DA'], [[['PEN'], ['Penicillin \\T\\ derivatives'], ['L']]], ['SV'], [['Rash \\F\\ swelling'], ['Wheeze']]]]
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+same True
+parse
+  Message len=6
+   [[['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021083000'], [''], [[['ADT'], ['A01'], ['ADT_A01']]], ['MSG00001'], ['P'], ['2.5.1']], [['EVN'], ['A01'], ['20261021083000']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']], [['9434765919'], [''], [''], ['NHS'], ['NH']]], [''], [[['Okafor'], ['Adaeze'], ['Ngozi'], [''], ['Ms']]], [''], ['19840312'], ['F'], [''], [''], [[['14 Mill Lane'], ['Flat 2', 'Rear'], ['Exeter'], [''], ['EX1 1AA'], ['GBR']]], [''], [['01632 960142'], ['07700 900461']], [''], [''], ['M']], [['PV1'], ['1'], ['I'], [[['WARD7'], ['B12'], ['1'], ['RIVERSIDE']]], [''], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], [''], [''], ['MED'], [''], [''], [''], ['7'], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], ['IN'], ['V9001'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261021082500']], [['NK1'], ['1'], [[['Okafor'], ['Chidi']]], [[['SPO'], ['Spouse']]], [[['14 Mill Lane'], [''], ['Exeter'], [''], ['EX1 1AA']]], ['01632 960143']], [['AL1'], ['1'], ['DA'], [[['PEN'], ['Penicillin \\T\\ derivatives'], ['L']]], ['SV'], [['Rash \\F\\ swelling'], ['Wheeze']]]]
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+same True
+== tree lab.hl7
+parse_hl7
+  Message len=14
+   [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021101500+0100'], [''], [[['ORU'], ['R01'], ['ORU_R01']]], ['LAB7781'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['ORC'], ['RE'], ['ORD5512'], ['LAB7781']], [['OBR'], ['1'], ['ORD5512'], ['LAB7781'], [[['CBC'], ['Full blood count'], ['L']]], [''], [''], ['20261021091000']], [['OBX'], ['1'], ['NM'], [[['718-7'], ['Haemoglobin'], ['LN']]], [''], ['118'], ['g/L'], ['120-150'], ['L'], [''], [''], ['F']], [['OBX'], ['2'], ['NM'], [[['6690-2'], ['WBC'], ['LN']]], [''], ['13.2'], ['10*9/L'], ['4.0-11.0'], ['H'], [''], [''], ['F']], [['OBX'], ['3'], ['NM'], [[['777-3'], ['Platelets'], ['LN']]], [''], ['250'], ['10*9/L'], ['150-400'], ['N'], [''], [''], ['F']], [['NTE'], ['1'], [''], ['Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\']], [['OBR'], ['2'], ['ORD5513'], ['LAB7782'], [[['UE'], ['Urea and electrolytes'], ['L']]], [''], [''], ['20261021091000']], [['OBX'], ['4'], ['NM'], [[['2951-2'], ['Sodium'], ['LN']]], [''], ['139'], ['mmol/L'], ['133-146'], [''], [''], [''], ['F']], [['OBX'], ['5'], ['NM'], [[['2823-3'], ['Potassium'], ['LN']]], [''], ['5.9'], ['mmol/L'], ['3.5-5.3'], ['HH'], [''], [''], ['F']], [['OBX'], ['6'], ['ST'], [[['COMM'], ['Comment'], ['L']]], [''], [['Haemolysed sample \\E\\ retest'], ['Second sample requested']], [''], [''], [''], [''], [''], ['F']], [['OBX'], ['7'], ['TX'], [[['COMM'], ['Comment'], ['L']]], [''], ['See note:\\.in2\\indented \\X20AC\\5 fee'], [''], [''], [''], [''], [''], ['P']], [['NTE'], ['2'], [''], ['Called to ward 7 at 10:12\\.sk3\\(read back)']]]
+str 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)\r'
+same True
+parse
+  Message len=14
+   [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021101500+0100'], [''], [[['ORU'], ['R01'], ['ORU_R01']]], ['LAB7781'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['ORC'], ['RE'], ['ORD5512'], ['LAB7781']], [['OBR'], ['1'], ['ORD5512'], ['LAB7781'], [[['CBC'], ['Full blood count'], ['L']]], [''], [''], ['20261021091000']], [['OBX'], ['1'], ['NM'], [[['718-7'], ['Haemoglobin'], ['LN']]], [''], ['118'], ['g/L'], ['120-150'], ['L'], [''], [''], ['F']], [['OBX'], ['2'], ['NM'], [[['6690-2'], ['WBC'], ['LN']]], [''], ['13.2'], ['10*9/L'], ['4.0-11.0'], ['H'], [''], [''], ['F']], [['OBX'], ['3'], ['NM'], [[['777-3'], ['Platelets'], ['LN']]], [''], ['250'], ['10*9/L'], ['150-400'], ['N'], [''], [''], ['F']], [['NTE'], ['1'], [''], ['Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\']], [['OBR'], ['2'], ['ORD5513'], ['LAB7782'], [[['UE'], ['Urea and electrolytes'], ['L']]], [''], [''], ['20261021091000']], [['OBX'], ['4'], ['NM'], [[['2951-2'], ['Sodium'], ['LN']]], [''], ['139'], ['mmol/L'], ['133-146'], [''], [''], [''], ['F']], [['OBX'], ['5'], ['NM'], [[['2823-3'], ['Potassium'], ['LN']]], [''], ['5.9'], ['mmol/L'], ['3.5-5.3'], ['HH'], [''], [''], ['F']], [['OBX'], ['6'], ['ST'], [[['COMM'], ['Comment'], ['L']]], [''], [['Haemolysed sample \\E\\ retest'], ['Second sample requested']], [''], [''], [''], [''], [''], ['F']], [['OBX'], ['7'], ['TX'], [[['COMM'], ['Comment'], ['L']]], [''], ['See note:\\.in2\\indented \\X20AC\\5 fee'], [''], [''], [''], [''], [''], ['P']], [['NTE'], ['2'], [''], ['Called to ward 7 at 10:12\\.sk3\\(read back)']]]
+str 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)\r'
+same True
+== tree discharge.hl7
+parse_hl7
+  Message len=3
+   [[['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021113000'], [''], [[['ADT'], ['A03'], ['ADT_A03']]], ['MSG00002'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]], [''], ['19510627'], ['F']], [['PV1'], ['1'], ['I'], [[['WARD3'], ['A04'], ['2'], ['RIVERSIDE']]], [''], [''], [''], [[['C2211'], ['Osei'], ['Kwame'], [''], [''], ['Dr']]], [''], [''], ['SUR'], [''], [''], [''], [''], [''], [''], [''], ['IN'], ['V8812'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261019140000'], ['20261021112000']]]
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000\r'
+same True
+parse
+  Message len=3
+   [[['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021113000'], [''], [[['ADT'], ['A03'], ['ADT_A03']]], ['MSG00002'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]], [''], ['19510627'], ['F']], [['PV1'], ['1'], ['I'], [[['WARD3'], ['A04'], ['2'], ['RIVERSIDE']]], [''], [''], [''], [[['C2211'], ['Osei'], ['Kwame'], [''], [''], ['Dr']]], [''], [''], ['SUR'], [''], [''], [''], [''], [''], [''], [''], ['IN'], ['V8812'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261019140000'], ['20261021112000']]]
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000\r'
+same True
+== tree custom.hl7
+parse_hl7
+  Message len=3
+   [[['MSH'], ['*'], [':@!$'], ['PAS'], ['ANNEX'], ['IE'], ['RIVERSIDE'], ['20261021090000-0330'], [''], [[['ADT'], ['A08']]], ['CUS0001'], ['P'], ['2.4']], [['PID'], ['1'], [''], [[['AX5521'], [''], [''], ['ANNEX'], ['MR']], [['NH778'], [''], [''], ['NHS']]], [''], [[['Ng'], ['Wei Ling']]], [''], ['19770804'], ['F'], [''], [''], [[['Unit 4', 'Block C'], ['Dock Rd'], ['Cardiff']]]], [['OBX'], ['1'], ['ST'], ['NOTE'], [''], ['Pay 5!F!10 !T! 20!S!x!R!y!E!z']]]
+str 'MSH*:@!$*PAS*ANNEX*IE*RIVERSIDE*20261021090000-0330**ADT:A08*CUS0001*P*2.4\rPID*1**AX5521:::ANNEX:MR@NH778:::NHS**Ng:Wei Ling**19770804*F***Unit 4$Block C:Dock Rd:Cardiff\rOBX*1*ST*NOTE**Pay 5!F!10 !T! 20!S!x!R!y!E!z\r'
+same True
+parse
+  Message len=3
+   [[['MSH'], ['*'], [':@!$'], ['PAS'], ['ANNEX'], ['IE'], ['RIVERSIDE'], ['20261021090000-0330'], [''], [[['ADT'], ['A08']]], ['CUS0001'], ['P'], ['2.4']], [['PID'], ['1'], [''], [[['AX5521'], [''], [''], ['ANNEX'], ['MR']], [['NH778'], [''], [''], ['NHS']]], [''], [[['Ng'], ['Wei Ling']]], [''], ['19770804'], ['F'], [''], [''], [[['Unit 4', 'Block C'], ['Dock Rd'], ['Cardiff']]]], [['OBX'], ['1'], ['ST'], ['NOTE'], [''], ['Pay 5!F!10 !T! 20!S!x!R!y!E!z']]]
+str 'MSH*:@!$*PAS*ANNEX*IE*RIVERSIDE*20261021090000-0330**ADT:A08*CUS0001*P*2.4\rPID*1**AX5521:::ANNEX:MR@NH778:::NHS**Ng:Wei Ling**19770804*F***Unit 4$Block C:Dock Rd:Cardiff\rOBX*1*ST*NOTE**Pay 5!F!10 !T! 20!S!x!R!y!E!z\r'
+same True
+== tree short.hl7
+parse_hl7
+  Message len=2
+   [[['MSH'], ['|'], ['^~'], ['LEGACY'], ['ANNEX'], ['IE'], ['RIVERSIDE'], ['2026102109'], [''], [[['ADT'], ['A04']]], ['LEG001'], ['P'], ['2.1']], [['PID'], ['1'], [''], [[['L77'], [''], [''], ['ANNEX']]], [''], [[['Price'], ['Owen', 'Jr']], [['Price'], ['O']]]]]
+str 'MSH|^~|LEGACY|ANNEX|IE|RIVERSIDE|2026102109||ADT^A04|LEG001|P|2.1\rPID|1||L77^^^ANNEX||Price^Owen&Jr~Price^O\r'
+same True
+parse
+  Message len=2
+   [[['MSH'], ['|'], ['^~'], ['LEGACY'], ['ANNEX'], ['IE'], ['RIVERSIDE'], ['2026102109'], [''], [[['ADT'], ['A04']]], ['LEG001'], ['P'], ['2.1']], [['PID'], ['1'], [''], [[['L77'], [''], [''], ['ANNEX']]], [''], [[['Price'], ['Owen', 'Jr']], [['Price'], ['O']]]]]
+str 'MSH|^~|LEGACY|ANNEX|IE|RIVERSIDE|2026102109||ADT^A04|LEG001|P|2.1\rPID|1||L77^^^ANNEX||Price^Owen&Jr~Price^O\r'
+same True
+== tree dupe.hl7
+parse_hl7 ! AssertionError: ''
+parse ! AssertionError: ''
+== tree e_pid_first.hl7
+parse_hl7 ! ValueError: 'line is not HL7'
+parse ! ParseException: 'First segment is PID, must be one of MHS, FHS or BHS'
+== tree e_bare.hl7
+parse_hl7 ! ValueError: 'line is not HL7'
+parse ! IndexError: 'string index out of range'
+== tree e_one_sep.hl7
+parse_hl7 ! IndexError: 'list index out of range'
+parse ! IndexError: 'list index out of range'
+== tree e_no_end.hl7
+parse_hl7
+  Message len=1
+   [[['MSH'], ['|'], ['^~\\'], ['MSH'], [[[''], ['']], [['\\', '']]]]]
+str 'MSH|^~\\|MSH|^~\\&\r'
+same False
+parse
+  Message len=1
+   [[['MSH'], ['|'], ['^~\\'], ['MSH'], [[[''], ['']], [['\\', '']]]]]
+str 'MSH|^~\\|MSH|^~\\&\r'
+same False
+== tree e_empty_seg.hl7
+parse_hl7
+  Message len=3
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B']], [''], [['PID'], ['1'], ['X2']]]
+str 'MSH|^~\\&|A|B\r\rPID|1|X2\r'
+same True
+parse
+  Message len=3
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B']], [''], [['PID'], ['1'], ['X2']]]
+str 'MSH|^~\\&|A|B\r\rPID|1|X2\r'
+same True
+== tree e_ws.hl7
+parse_hl7
+  Message len=2
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B']], [['PID'], ['1'], [[['X3'], ['Y']]]]]
+str 'MSH|^~\\&|A|B\rPID|1|X3^Y\r'
+same False
+parse
+  Message len=2
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B']], [['PID'], ['1'], [[['X3'], ['Y']]]]]
+str 'MSH|^~\\&|A|B\rPID|1|X3^Y\r'
+same False
+== tree e_empty.hl7
+parse_hl7 ! ValueError: 'line is not HL7'
+parse ! ParseException: 'First segment is , must be one of MHS, FHS or BHS'
+== tree e_lower.hl7
+parse_hl7 ! ValueError: 'line is not HL7'
+parse ! ParseException: 'First segment is msh, must be one of MHS, FHS or BHS'
+== tree e_negative.hl7
+parse_hl7
+  Message len=2
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B'], ['C'], ['D'], ['2026'], [''], [[['ADT'], ['A01']]], ['N1'], ['P'], ['2.5']], [['PID'], ['1'], [''], [['N1'], [['N2'], ['x', 'y']]], ['z']]]
+str 'MSH|^~\\&|A|B|C|D|2026||ADT^A01|N1|P|2.5\rPID|1||N1~N2^x&y|z\r'
+same True
+parse
+  Message len=2
+   [[['MSH'], ['|'], ['^~\\&'], ['A'], ['B'], ['C'], ['D'], ['2026'], [''], [[['ADT'], ['A01']]], ['N1'], ['P'], ['2.5']], [['PID'], ['1'], [''], [['N1'], [['N2'], ['x', 'y']]], ['z']]]
+str 'MSH|^~\\&|A|B|C|D|2026||ADT^A01|N1|P|2.5\rPID|1||N1~N2^x&y|z\r'
+same True
+== tree batch.hl7
+parse_hl7
+  Batch len=2
+   header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']]
+   trailer [['BTS'], ['2']]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS|2\r'
+same False
+parse
+  Message len=8
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']], [['BTS'], ['2']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS|2\r'
+same True
+== tree batch_crlf.hl7
+parse_hl7
+  Batch len=2
+   header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']]
+   trailer [['BTS'], ['2']]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS|2\r'
+same False
+parse
+  Message len=8
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['\nMSH'], [[[''], ['']], [['\\', '']]], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['\nPID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['\nOBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['\nMSH'], [[[''], ['']], [['\\', '']]], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['\nPID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['\nOBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']], [['\nBTS'], ['2']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\r\nMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\r\nPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\r\nOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\nMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\r\nPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\r\nOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r\nBTS|2\r'
+same False
+== tree batch_lf.hl7
+parse_hl7
+  Batch len=2
+   header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01BTS'], ['2']]
+   trailer [['BTS']]
+    Message len=1
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['SiobhanOBX']]], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=1
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['ZoeOBX']]], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01BTS|2\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1PID|1||RG100871^^^RIVERSIDE^MR||Brennan^SiobhanOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1PID|1||RG101502^^^RIVERSIDE^MR||Lefevre^ZoeOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS\r'
+same False
+parse
+  Message len=1
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01\nMSH'], [[[''], ['']], [['\\', '']]], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1\nPID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan\nOBX']]], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F\nMSH'], [[[''], ['']], [['\\', '']]], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1\nPID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe\nOBX']]], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F\nBTS'], ['2']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\nMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\nPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\nOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\nMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\nPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\nOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\nBTS|2\r'
+same False
+== tree batch_nobhs.hl7
+parse_hl7
+  Batch len=2
+   header None
+   trailer None
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+same False
+parse
+  Message len=6
+   [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+same True
+== tree batch_nobts.hl7
+parse_hl7
+  Batch len=2
+   header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']]
+   trailer [['BTS']]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS\r'
+same False
+parse
+  Message len=7
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+same True
+== tree batch_twobhs.hl7
+parse_hl7 ! ParseException: 'Batch cannot have more than one BHS segment'
+parse
+  Message len=8
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+same True
+== tree batch_orphan.hl7
+parse_hl7 ! ParseException: 'Segment received before message header PID|1||X9\r'
+parse
+  Message len=6
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['PID'], ['1'], [''], ['X9']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['BTS'], ['1']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rPID|1||X9\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBTS|1\r'
+same True
+== tree batch_btsbts.hl7
+parse_hl7
+  Batch len=1
+   header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']]
+   trailer [['BTS'], ['1']]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBTS|1\r'
+same False
+parse
+  Message len=6
+   [[['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['BTS'], ['1']], [['BTS'], ['9']]]
+str 'BHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBTS|1\rBTS|9\r'
+same True
+== tree file.hl7
+parse_hl7
+  File len=3
+   header [['FHS'], ['|'], ['^~\\&'], ['IE'], ['RIVERSIDE'], ['ARCHIVE'], ['RIVERSIDE'], ['20261021130000'], [''], [''], [''], ['FILE01']]
+   trailer [['FTS'], ['2']]
+    Batch len=2
+     header [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']]
+     trailer [['BTS'], ['2']]
+      Message len=3
+       [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+      Message len=3
+       [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+    Batch len=1
+     header [['BHS'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123500'], [''], [''], [''], ['BATCH02']]
+     trailer [['BTS'], ['1']]
+      Message len=3
+       [[['MSH'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123000'], [''], [[['ORU'], ['R01']]], ['RAD0301'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['OBX'], ['1'], ['TX'], [[['CXR'], ['Chest X-ray'], ['L']]], [''], ['No consolidation.\\.br\\Heart size normal.'], [''], [''], [''], [''], [''], ['F']]]
+    Batch len=1
+     header None
+     trailer None
+      Message len=6
+       [[['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021083000'], [''], [[['ADT'], ['A01'], ['ADT_A01']]], ['MSG00001'], ['P'], ['2.5.1']], [['EVN'], ['A01'], ['20261021083000']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']], [['9434765919'], [''], [''], ['NHS'], ['NH']]], [''], [[['Okafor'], ['Adaeze'], ['Ngozi'], [''], ['Ms']]], [''], ['19840312'], ['F'], [''], [''], [[['14 Mill Lane'], ['Flat 2', 'Rear'], ['Exeter'], [''], ['EX1 1AA'], ['GBR']]], [''], [['01632 960142'], ['07700 900461']], [''], [''], ['M']], [['PV1'], ['1'], ['I'], [[['WARD7'], ['B12'], ['1'], ['RIVERSIDE']]], [''], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], [''], [''], ['MED'], [''], [''], [''], ['7'], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], ['IN'], ['V9001'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261021082500']], [['NK1'], ['1'], [[['Okafor'], ['Chidi']]], [[['SPO'], ['Spouse']]], [[['14 Mill Lane'], [''], ['Exeter'], [''], ['EX1 1AA']]], ['01632 960143']], [['AL1'], ['1'], ['DA'], [[['PEN'], ['Penicillin \\T\\ derivatives'], ['L']]], ['SV'], [['Rash \\F\\ swelling'], ['Wheeze']]]]
+str 'FHS|^~\\&|IE|RIVERSIDE|ARCHIVE|RIVERSIDE|20261021130000||||FILE01\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS|2\r\rBHS|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123500||||BATCH02\rMSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F\rBTS|1\r\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\rFTS|2\r'
+same False
+parse
+  Message len=21
+   [[['FHS'], ['|'], ['^~\\&'], ['IE'], ['RIVERSIDE'], ['ARCHIVE'], ['RIVERSIDE'], ['20261021130000'], [''], [''], [''], ['FILE01']], [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']], [['BTS'], ['2']], [['BHS'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123500'], [''], [''], [''], ['BATCH02']], [['MSH'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123000'], [''], [[['ORU'], ['R01']]], ['RAD0301'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['OBX'], ['1'], ['TX'], [[['CXR'], ['Chest X-ray'], ['L']]], [''], ['No consolidation.\\.br\\Heart size normal.'], [''], [''], [''], [''], [''], ['F']], [['BTS'], ['1']], [['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021083000'], [''], [[['ADT'], ['A01'], ['ADT_A01']]], ['MSG00001'], ['P'], ['2.5.1']], [['EVN'], ['A01'], ['20261021083000']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']], [['9434765919'], [''], [''], ['NHS'], ['NH']]], [''], [[['Okafor'], ['Adaeze'], ['Ngozi'], [''], ['Ms']]], [''], ['19840312'], ['F'], [''], [''], [[['14 Mill Lane'], ['Flat 2', 'Rear'], ['Exeter'], [''], ['EX1 1AA'], ['GBR']]], [''], [['01632 960142'], ['07700 900461']], [''], [''], ['M']], [['PV1'], ['1'], ['I'], [[['WARD7'], ['B12'], ['1'], ['RIVERSIDE']]], [''], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], [''], [''], ['MED'], [''], [''], [''], ['7'], [''], [''], [[['C3456'], ['Hale'], ['Morgan'], [''], [''], ['Dr']]], ['IN'], ['V9001'], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], [''], ['20261021082500']], [['NK1'], ['1'], [[['Okafor'], ['Chidi']]], [[['SPO'], ['Spouse']]], [[['14 Mill Lane'], [''], ['Exeter'], [''], ['EX1 1AA']]], ['01632 960143']], [['AL1'], ['1'], ['DA'], [[['PEN'], ['Penicillin \\T\\ derivatives'], ['L']]], ['SV'], [['Rash \\F\\ swelling'], ['Wheeze']]], [['FTS'], ['2']]]
+str 'FHS|^~\\&|IE|RIVERSIDE|ARCHIVE|RIVERSIDE|20261021130000||||FILE01\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rBTS|2\rBHS|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123500||||BATCH02\rMSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F\rBTS|1\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\rFTS|2\r'
+same True
+== tree file_nofts.hl7
+parse_hl7
+  File len=1
+   header [['FHS'], ['|'], ['^~\\&'], ['IE'], ['RIVERSIDE']]
+   trailer [['FTS']]
+    Batch len=2
+     header None
+     trailer None
+      Message len=3
+       [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+      Message len=3
+       [[['MSH'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123000'], [''], [[['ORU'], ['R01']]], ['RAD0301'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['OBX'], ['1'], ['TX'], [[['CXR'], ['Chest X-ray'], ['L']]], [''], ['No consolidation.\\.br\\Heart size normal.'], [''], [''], [''], [''], [''], ['F']]]
+str 'FHS|^~\\&|IE|RIVERSIDE\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F\rFTS\r'
+same False
+parse
+  Message len=7
+   [[['FHS'], ['|'], ['^~\\&'], ['IE'], ['RIVERSIDE']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['MSH'], ['|'], ['^~\\&'], ['RAD'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021123000'], [''], [[['ORU'], ['R01']]], ['RAD0301'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Okafor'], ['Adaeze']]]], [['OBX'], ['1'], ['TX'], [[['CXR'], ['Chest X-ray'], ['L']]], [''], ['No consolidation.\\.br\\Heart size normal.'], [''], [''], [''], [''], [''], ['F']]]
+str 'FHS|^~\\&|IE|RIVERSIDE\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rMSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F\r'
+same True
+== tree file_twofhs.hl7
+parse_hl7 ! ParseException: 'File cannot have more than one FHS segment'
+parse
+  Message len=5
+   [[['FHS'], ['|'], ['^~\\&'], ['IE']], [['FHS'], ['|'], ['^~\\&'], ['IE']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+str 'FHS|^~\\&|IE\rFHS|^~\\&|IE\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r'
+same True
+== tree file_bhs_open.hl7
+parse_hl7 ! ParseException: 'Batch cannot have more than one BHS segment'
+parse
+  Message len=9
+   [[['FHS'], ['|'], ['^~\\&'], ['IE']], [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'FHS|^~\\&|IE\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+same True
+== tree file_orphan.hl7
+parse_hl7 ! ParseException: 'Segment received before message header OBX|1|X\r'
+parse
+  Message len=7
+   [[['FHS'], ['|'], ['^~\\&'], ['IE']], [['BHS'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021120000'], [''], [''], [''], ['BATCH01']], [['OBX'], ['1'], ['X']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']], [['BTS'], ['1']]]
+str 'FHS|^~\\&|IE\rBHS|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021120000||||BATCH01\rOBX|1|X\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\rBTS|1\r'
+same True
+== tree file_free_orphan.hl7
+parse_hl7 ! ParseException: 'Segment received before message header OBX|1|X\r'
+parse
+  Message len=5
+   [[['FHS'], ['|'], ['^~\\&'], ['IE']], [['OBX'], ['1'], ['X']], [['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+str 'FHS|^~\\&|IE\rOBX|1|X\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r'
+same True
+== batchof adt.hl7
+batch len=2
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+header [['BHS'], ['|'], ['^~\\&']]
+str ! MalformedBatchException: 'Either both header and trailer must be present or neither'
+str 'BHS|^~\\&|\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\rBTS|2\r'
+set header ! MalformedSegmentException: 'header must begin with "BHS"'
+set trailer ! MalformedSegmentException: 'trailer must begin with "BTS"'
+str ! MalformedBatchException: 'Either both header and trailer must be present or neither'
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r\rMSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+== fileof batch_nobhs.hl7
+File len=1
+ header None
+ trailer None
+  Batch len=2
+   header None
+   trailer None
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115900'], [''], [[['ORU'], ['R01']]], ['LAB7790'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG100871'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Brennan'], ['Siobhan']]]], [['OBX'], ['1'], ['NM'], [[['2160-0'], ['Creatinine'], ['LN']]], [''], ['88'], ['umol/L'], ['45-84'], ['H'], [''], [''], ['F']]]
+    Message len=3
+     [[['MSH'], ['|'], ['^~\\&'], ['LIMS'], ['RIVERSIDE-LAB'], ['IE'], ['RIVERSIDE'], ['20261021115930'], [''], [[['ORU'], ['R01']]], ['LAB7791'], ['P'], ['2.5.1']], [['PID'], ['1'], [''], [[['RG101502'], [''], [''], ['RIVERSIDE'], ['MR']]], [''], [[['Lefevre'], ['Zoe']]]], [['OBX'], ['1'], ['NM'], [[['2345-7'], ['Glucose'], ['LN']]], [''], ['6.1'], ['mmol/L'], ['3.0-7.8'], ['N'], [''], [''], ['F']]]
+str 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r'
+str ! MalformedFileException: 'Either both header and trailer must be present or neither'
+str 'FHS|^~\\&|\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r\rMSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\rFTS\r'
+set trailer ! MalformedSegmentException: 'trailer must begin with "FTS"'
+message create_file []
+message create_message 'PID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\r'
+== get adt.hl7 PID PID.3 PID.F3.R2 PID.3.2 PID.3.2.1 PID.3.2.4 PID.3.1.5 PID.5 PID.5.1.2 PID.F11.R1.C2.S2 PID.11.1.2.1 PID.11.1.2.3 PID.11.1.9 PID.11.1.9.2 PID.13.2 PID.13.3 PID.99 PID.99.1.1 PID.99.2 PID.3.1.2.2 PID.5.1.1.2 PID.5.3 MSH.1 MSH.2 MSH.9.1.2 MSH.9 MSH.F1.R1.C2 AL1.3.1.2 AL1.5 AL1.5.2 PV1.3.1.2 ZZZ ZZZ.1 PID2.3 PID0.3 PID.0 PID.-1 PID.-1.1 PI PID..2 PID.Fx PIDX.3 PID.F3.R0.C0
+PID = [[['PID'], ['1'], [''], [[['RG100234'], [''], [''], ['RIVERSIDE'], ['MR']], [['9434765919'], [''], [''], ['NHS'], ['NH']]], [''], [[['Okafor'], ['Adaeze'], ['Ngozi'], [''], ['Ms']]], [''], ['19840312'], ['F'], [''], [''], [[['14 Mill Lane'], ['Flat 2', 'Rear'], ['Exeter'], [''], ['EX1 1AA'], ['GBR']]], [''], [['01632 960142'], ['07700 900461']], [''], [''], ['M']]]
+PID.3 = 'RG100234'
+PID.F3.R2 = '9434765919'
+PID.3.2 = '9434765919'
+PID.3.2.1 = '9434765919'
+PID.3.2.4 = 'NHS'
+PID.3.1.5 = 'MR'
+PID.5 = 'Okafor'
+PID.5.1.2 = 'Adaeze'
+PID.F11.R1.C2.S2 = 'Rear'
+PID.11.1.2.1 = 'Flat 2'
+PID.11.1.2.3 = ''
+PID.11.1.9 = ''
+PID.11.1.9.2 ! IndexError: 'Component not present: PID.11.1.9.2'
+PID.13.2 = '07700 900461'
+PID.13.3 ! IndexError: 'list index out of range'
+PID.99 = ''
+PID.99.1.1 = ''
+PID.99.2 ! IndexError: 'Field not present: PID.99.2'
+PID.3.1.2.2 = ''
+PID.5.1.1.2 = ''
+PID.5.3 ! IndexError: 'list index out of range'
+MSH.1 = '|'
+MSH.2 = '^~\\&'
+MSH.9.1.2 = 'A01'
+MSH.9 = 'ADT'
+MSH.F1.R1.C2 ! IndexError: 'Field reaches leaf node before completing path: MSH.1.1.2'
+AL1.3.1.2 = 'Penicillin & derivatives'
+AL1.5 = 'Rash | swelling'
+AL1.5.2 = 'Wheeze'
+PV1.3.1.2 = 'B12'
+ZZZ ! KeyError: "'No ZZZ segments'"
+ZZZ.1 ! KeyError: "'No ZZZ segments'"
+PID2.3 ! IndexError: 'list index out of range'
+PID0.3 = 'RG100234'
+PID.0 = '1'
+PID.-1 = 'M'
+PID.-1.1 = 'M'
+PI ! KeyError: "'No PI segments'"
+PID..2 ! IndexError: 'string index out of range'
+PID.Fx ! ValueError: "invalid literal for int() with base 10: 'x'"
+PIDX.3 ! ValueError: "invalid literal for int() with base 10: 'X'"
+PID.F3.R0.C0 = 'RG100234'
+== get lab.hl7 OBX OBX2.5 OBX5.8 OBX6.5 OBX6.5.2 OBX7.5 NTE.3 NTE2.3 OBR2.4.1.2 OBX8.5 OBX-1.5 OBX0.3.1.2 NTE NTE.3.1.1 NTE.3.1.2
+OBX = [[['OBX'], ['1'], ['NM'], [[['718-7'], ['Haemoglobin'], ['LN']]], [''], ['118'], ['g/L'], ['120-150'], ['L'], [''], [''], ['F']], [['OBX'], ['2'], ['NM'], [[['6690-2'], ['WBC'], ['LN']]], [''], ['13.2'], ['10*9/L'], ['4.0-11.0'], ['H'], [''], [''], ['F']], [['OBX'], ['3'], ['NM'], [[['777-3'], ['Platelets'], ['LN']]], [''], ['250'], ['10*9/L'], ['150-400'], ['N'], [''], [''], ['F']], [['OBX'], ['4'], ['NM'], [[['2951-2'], ['Sodium'], ['LN']]], [''], ['139'], ['mmol/L'], ['133-146'], [''], [''], [''], ['F']], [['OBX'], ['5'], ['NM'], [[['2823-3'], ['Potassium'], ['LN']]], [''], ['5.9'], ['mmol/L'], ['3.5-5.3'], ['HH'], [''], [''], ['F']], [['OBX'], ['6'], ['ST'], [[['COMM'], ['Comment'], ['L']]], [''], [['Haemolysed sample \\E\\ retest'], ['Second sample requested']], [''], [''], [''], [''], [''], ['F']], [['OBX'], ['7'], ['TX'], [[['COMM'], ['Comment'], ['L']]], [''], ['See note:\\.in2\\indented \\X20AC\\5 fee'], [''], [''], [''], [''], [''], ['P']]]
+OBX2.5 = '13.2'
+OBX5.8 = 'HH'
+OBX6.5 = 'Haemolysed sample \\ retest'
+OBX6.5.2 = 'Second sample requested'
+OBX7.5 = 'See note:        indented  ¬5 fee'
+NTE.3 = 'Mild anaemia.\rRepeat in _2 weeks_.\r\rReviewed by Dr Hale'
+NTE2.3 = 'Called to ward 7 at 10:12   (read back)'
+OBR2.4.1.2 = 'Urea and electrolytes'
+OBX8.5 ! IndexError: 'list index out of range'
+OBX-1.5 = 'See note:        indented  ¬5 fee'
+OBX0.3.1.2 = 'Haemoglobin'
+NTE = [[['NTE'], ['1'], [''], ['Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\']], [['NTE'], ['2'], [''], ['Called to ward 7 at 10:12\\.sk3\\(read back)']]]
+NTE.3.1.1 = 'Mild anaemia.\rRepeat in _2 weeks_.\r\rReviewed by Dr Hale'
+NTE.3.1.2 ! IndexError: 'Field reaches leaf node before completing path: NTE.3.1.2'
+== get custom.hl7 MSH.1 MSH.2 PID.3.2 PID.3.2.1 PID.5.1.2 PID.11.1.1.2 OBX.5 MSH.9.1.2
+MSH.1 = '*'
+MSH.2 = ':@!$'
+PID.3.2 = 'NH778'
+PID.3.2.1 = 'NH778'
+PID.5.1.2 = 'Wei Ling'
+PID.11.1.1.2 = 'Block C'
+OBX.5 = 'Pay 5*10 $ 20:x@y!z'
+MSH.9.1.2 = 'A08'
+== get short.hl7 PID.3 PID.5.1.2 PID.5.1.2.2 PID.5.2
+PID.3 = 'L77'
+PID.5.1.2 = 'Owen'
+PID.5.1.2.2 = 'Jr'
+PID.5.2 = 'Price'
+== get e_empty_seg.hl7 MSH.3 PID
+MSH.3 ! IndexError: 'string index out of range'
+PID ! IndexError: 'string index out of range'
+== get e_negative.hl7 PID.-1 PID.3.-1 PID.3.2.-1 PID.3.2.2.-1 PID.-2.1 PID.-9
+PID.-1 = 'z'
+PID.3.-1 = 'N2'
+PID.3.2.-1 = 'x'
+PID.3.2.2.-1 = 'y'
+PID.-2.1 = 'N1'
+PID.-9 ! IndexError: 'list index out of range'
+== accessor PID PID.3 PID.F3.R2.C1.S1 OBX2.5.1 MSH.1.1 PID.r1 PID.3.c2 X ZZ9.1 PID.F3.R2.C1.S1.Q7 PID.3.R
+PID -> Accessor(segment='PID', segment_num=1, field_num=None, repeat_num=None, component_num=None, subcomponent_num=None) key='PID' str=PID
+PID.3 -> Accessor(segment='PID', segment_num=1, field_num=3, repeat_num=None, component_num=None, subcomponent_num=None) key='PID.3' str=PID.3
+PID.F3.R2.C1.S1 -> Accessor(segment='PID', segment_num=1, field_num=3, repeat_num=2, component_num=1, subcomponent_num=1) key='PID.3.2.1.1' str=PID.3.2.1.1
+OBX2.5.1 -> Accessor(segment='OBX', segment_num=2, field_num=5, repeat_num=1, component_num=None, subcomponent_num=None) key='OBX2.5.1' str=OBX2.5.1
+MSH.1.1 -> Accessor(segment='MSH', segment_num=1, field_num=1, repeat_num=1, component_num=None, subcomponent_num=None) key='MSH.1.1' str=MSH.1.1
+PID.r1 ! ValueError: "invalid literal for int() with base 10: 'r1'"
+PID.3.c2 ! ValueError: "invalid literal for int() with base 10: 'c2'"
+X -> Accessor(segment='X', segment_num=1, field_num=None, repeat_num=None, component_num=None, subcomponent_num=None) key='X' str=X
+ZZ9.1 -> Accessor(segment='ZZ9', segment_num=1, field_num=1, repeat_num=None, component_num=None, subcomponent_num=None) key='ZZ9.1' str=ZZ9.1
+PID.F3.R2.C1.S1.Q7 -> Accessor(segment='PID', segment_num=1, field_num=3, repeat_num=2, component_num=1, subcomponent_num=1) key='PID.3.2.1.1' str=PID.3.2.1.1
+PID.3.R ! ValueError: "invalid literal for int() with base 10: ''"
+== set adt.hl7 PID.5.1.2=Ada PID.F13.R3=01632 960199 PID.30=Y PID.3.2.4=NHS-E PV1.3.1.2=B14 PID.11.1.2.3=Side PID.11.1.2.1=Flat 3
+set PID.5.1.2 ok
+set PID.F13.R3 ok
+set PID.30 ok
+set PID.3.2.4 ok
+set PV1.3.1.2 ok
+set PID.11.1.2.3 ok
+set PID.11.1.2.1 ok
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS-E^NH||Okafor^Ada^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 3&Rear&Side^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461~01632 960199|||M||||||||||||||Y\rPV1|1|I|WARD7^B14^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+  PID.5.1.2 = 'Ada'
+  PID.F13.R3 = '01632 960199'
+  PID.30 = 'Y'
+  PID.3.2.4 = 'NHS-E'
+  PV1.3.1.2 = 'B14'
+  PID.11.1.2.3 = 'Side'
+  PID.11.1.2.1 = 'Flat 3'
+== set adt.hl7 ZZZ.1=x PID=nope PID.5.1=Okafor-Smith PID.5.1.1.1=Okafor PID.3.1.9.2=deep MSH.3=PAS2 PID.0=QQQ EVN.1.1.1.1=a
+set ZZZ.1 ! KeyError: "'No ZZZ segments'"
+set PID ! TypeError: 'list indices must be integers or slices, not str'
+set PID.5.1 ok
+set PID.5.1.1.1 ! TypeError: "'str' object is not callable"
+set PID.3.1.9.2 ok
+set MSH.3 ok
+set PID.0 ok
+set EVN.1.1.1.1 ! TypeError: "'str' object is not callable"
+str 'MSH|^~\\&|PAS2|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rQQQ|1||RG100234^^^RIVERSIDE^MR^^^^&deep~9434765919^^^NHS^NH||Okafor-Smith||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+  ZZZ.1 ! KeyError: "'No ZZZ segments'"
+  PID ! KeyError: "'No PID segments'"
+  PID.5.1 ! KeyError: "'No PID segments'"
+  PID.5.1.1.1 ! KeyError: "'No PID segments'"
+  PID.3.1.9.2 ! KeyError: "'No PID segments'"
+  MSH.3 = 'PAS2'
+  PID.0 ! KeyError: "'No PID segments'"
+  EVN.1.1.1.1 = 'A01'
+== set adt.hl7 PID.8.1.1=M PID.8.1.2=X PID.8.1.1.2=Y PID.13.1.1.3=Z AL1.5.2.1.4=W
+set PID.8.1.1 ! TypeError: "'str' object is not callable"
+set PID.8.1.2 ! AttributeError: "'str' object has no attribute 'append'"
+set PID.8.1.1.2 ! TypeError: "'str' object is not callable"
+set PID.13.1.1.3 ! TypeError: "'str' object is not callable"
+set AL1.5.2.1.4 ! TypeError: "'str' object is not callable"
+str 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+  PID.8.1.1 = 'F'
+  PID.8.1.2 ! IndexError: 'Field reaches leaf node before completing path: PID.8.1.2'
+  PID.8.1.1.2 ! IndexError: 'Field reaches leaf node before completing path: PID.8.1.1.2'
+  PID.13.1.1.3 ! IndexError: 'Field reaches leaf node before completing path: PID.13.1.1.3'
+  AL1.5.2.1.4 ! IndexError: 'Field reaches leaf node before completing path: AL1.5.2.1.4'
+== set short.hl7 PID.5.1.2.3=III PID.5.2.1=Pryce PID.3.1.4.1=ANNEX2
+set PID.5.1.2.3 ok
+set PID.5.2.1 ok
+set PID.3.1.4.1 ok
+str 'MSH|^~|LEGACY|ANNEX|IE|RIVERSIDE|2026102109||ADT^A04|LEG001|P|2.1\rPID|1||L77^^^ANNEX2||Price^Owen&Jr&III~Pryce^O\r'
+  PID.5.1.2.3 = 'III'
+  PID.5.2.1 = 'Pryce'
+  PID.3.1.4.1 = 'ANNEX2'
+== set e_negative.hl7 PID.-1=last PID.-1.1.1=w PID.-9=bad PID.3.-1.1=n PID.3.1.-1=c
+set PID.-1 ok
+set PID.-1.1.1 ! TypeError: "'str' object is not callable"
+set PID.-9 ! IndexError: 'list index out of range'
+set PID.3.-1.1 ok
+set PID.3.1.-1 ! TypeError: "'str' object does not support item assignment"
+str 'MSH|^~\\&|A|B|C|D|2026||ADT^A01|N1|P|2.5\rPID|1||N1~n^x&y|last\r'
+  PID.-1 = 'last'
+  PID.-1.1.1 = 'last'
+  PID.-9 ! IndexError: 'list index out of range'
+  PID.3.-1.1 = 'n'
+  PID.3.1.-1 = 'N1'
+== assign adt.hl7 PID 1 13 - - - home
+assign ok
+  'PID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||home|||M'
+== assign adt.hl7 PID 1 13 2 - - mobile
+assign ok
+  'PID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~mobile|||M'
+== assign adt.hl7 PID 1 7 1 1 1 19840313
+assign ! TypeError: "'str' object is not callable"
+  'PID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M'
+== assign adt.hl7 PV1 1 3 1 2 1 B15
+assign ok
+  'PV1|1|I|WARD7^B15^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500'
+== assign adt.hl7 PID 2 3 - - - x
+assign ! IndexError: 'list index out of range'
+  ! IndexError: 'list index out of range'
+== assign adt.hl7 NK1 1 - - - - x
+assign ! TypeError: "'<=' not supported between instances of 'int' and 'NoneType'"
+  'NK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143'
+== assign adt.hl7 PID 1 40 1 2 3 deep
+assign ok
+  'PID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M||||||||||||||||||||||||^&&deep'
+== idx adt.hl7 0 1 -1 2:4 9 -9
+0 -> [['MSH'], ['|'], ['^~\\&'], ['PAS'], ['RIVERSIDE'], ['IE'], ['RIVERSIDE'], ['20261021083000'], [''], [[['ADT'], ['A01'], ['ADT_A01']]], ['MSG00001'], ['P'], ['2.5.1']]
+1 -> [['EVN'], ['A01'], ['20261021083000']]
+-1 -> [['AL1'], ['1'], ['DA'], [[['PEN'], ['Penicillin \\T\\ derivatives'], ['L']]], ['SV'], [['Rash \\F\\ swelling'], ['Wheeze']]]
+2:4 -> Message 'PID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\r'
+9 ! IndexError: 'list index out of range'
+-9 ! IndexError: 'list index out of range'
+== escape adt.hl7 -
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a|b^c~d&e'
+'line1\rline2' -> 'line1\rline2'
+'tab\there' -> 'tab\there'
+'café' -> 'café'
+'price €5' -> 'price €5'
+'new\nline' -> 'new\nline'
+'' -> ''
+'\\F\\\\S\\' -> '|^'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\ry\r\r\rz    w'
+'\\H\\bold\\N\\ text' -> '_bold_ text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex ABCD \t A «\x0c'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '   '
+'\\.spX\\' ! ValueError: "invalid literal for int() with base 10: 'X'"
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\r         '
+'no end \\F' -> 'no end '
+== escape adt.hl7 H=<b>,N=</b>,Zcustom=[c],.sp=_,F=(bar),Cxx=?
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a|b^c~d&e'
+'line1\rline2' -> 'line1\rline2'
+'tab\there' -> 'tab\there'
+'café' -> 'café'
+'price €5' -> 'price €5'
+'new\nline' -> 'new\nline'
+'' -> ''
+'\\F\\\\S\\' -> '(bar)^'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\ry___z    w'
+'\\H\\bold\\N\\ text' -> '<b>bold</b> text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex ABCD \t A «\x0c'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '[c] ?  '
+'\\.spX\\' ! ValueError: "invalid literal for int() with base 10: 'X'"
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\r         '
+'no end \\F' -> 'no end '
+== escape custom.hl7 -
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a|b^c~d&e\\f'
+'line1\rline2' -> 'line1\rline2'
+'tab\there' -> 'tab\there'
+'café' -> 'café'
+'price €5' -> 'price €5'
+'new\nline' -> 'new\nline'
+'' -> ''
+'\\F\\\\S\\' -> '\\F\\\\S\\'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\\.br\\y\\.sp3\\z\\.in1\\w'
+'\\H\\bold\\N\\ text' -> '\\H\\bold\\N\\ text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\'
+'\\.spX\\' -> '\\.spX\\'
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\'
+'no end \\F' -> 'no end \\F'
+== escape dupe.hl7 -
+! AssertionError: ''
+== escapeout adt.hl7 -
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a\\F\\b\\S\\c\\R\\d\\T\\e\\E\\f'
+'line1\rline2' -> 'line1\\.br\\line2'
+'tab\there' -> 'tab\\X 9\\here'
+'café' -> 'caf\\Xe9\\'
+'price €5' -> 'price \\X20ac\\5'
+'new\nline' -> 'new\\X a\\line'
+'' -> ''
+'\\F\\\\S\\' -> '\\E\\F\\E\\\\E\\S\\E\\'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\\E\\.br\\E\\y\\E\\.sp3\\E\\z\\E\\.in1\\E\\w'
+'\\H\\bold\\N\\ text' -> '\\E\\H\\E\\bold\\E\\N\\E\\ text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex \\E\\X41424344\\E\\ \\E\\X 9\\E\\ \\E\\X41G\\E\\ \\E\\XABC\\E\\'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '\\E\\Zcustom\\E\\ \\E\\Cxx\\E\\ \\E\\Myyy\\E\\ \\E\\\\E\\'
+'\\.spX\\' -> '\\E\\.spX\\E\\'
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\\E\\.ce\\E\\\\E\\.fi\\E\\\\E\\.nf\\E\\\\E\\.ti2\\E\\\\E\\.sk\\E\\'
+'no end \\F' -> 'no end \\E\\F'
+== escapeout adt.hl7 |=PIPE,é=e,<CR>=BR
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a\\PIPE\\b\\S\\c\\R\\d\\T\\e\\E\\f'
+'line1\rline2' -> 'line1\\BR\\line2'
+'tab\there' -> 'tab\\X 9\\here'
+'café' -> 'caf\\e\\'
+'price €5' -> 'price \\X20ac\\5'
+'new\nline' -> 'new\\X a\\line'
+'' -> ''
+'\\F\\\\S\\' -> '\\E\\F\\E\\\\E\\S\\E\\'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\\E\\.br\\E\\y\\E\\.sp3\\E\\z\\E\\.in1\\E\\w'
+'\\H\\bold\\N\\ text' -> '\\E\\H\\E\\bold\\E\\N\\E\\ text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex \\E\\X41424344\\E\\ \\E\\X 9\\E\\ \\E\\X41G\\E\\ \\E\\XABC\\E\\'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '\\E\\Zcustom\\E\\ \\E\\Cxx\\E\\ \\E\\Myyy\\E\\ \\E\\\\E\\'
+'\\.spX\\' -> '\\E\\.spX\\E\\'
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\\E\\.ce\\E\\\\E\\.fi\\E\\\\E\\.nf\\E\\\\E\\.ti2\\E\\\\E\\.sk\\E\\'
+'no end \\F' -> 'no end \\E\\F'
+== escapeout custom.hl7 -
+'plain text' -> 'plain text'
+'a|b^c~d&e\\f' -> 'a|b^c~d&e\\f'
+'line1\rline2' -> 'line1!.br!line2'
+'tab\there' -> 'tab!X 9!here'
+'café' -> 'caf!Xe9!'
+'price €5' -> 'price !X20ac!5'
+'new\nline' -> 'new!X a!line'
+'' -> ''
+'\\F\\\\S\\' -> '\\F\\\\S\\'
+'x\\.br\\y\\.sp3\\z\\.in1\\w' -> 'x\\.br\\y\\.sp3\\z\\.in1\\w'
+'\\H\\bold\\N\\ text' -> '\\H\\bold\\N\\ text'
+'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\' -> 'hex \\X41424344\\ \\X 9\\ \\X41G\\ \\XABC\\'
+'\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\' -> '\\Zcustom\\ \\Cxx\\ \\Myyy\\ \\\\'
+'\\.spX\\' -> '\\.spX\\'
+'\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\' -> '\\.ce\\\\.fi\\\\.nf\\\\.ti2\\\\.sk\\'
+'no end \\F' -> 'no end \\F'
+== escapeout dupe.hl7 -
+! AssertionError: ''
+== dtm
+'2026' -> 2026-01-01 00:00:00 tz=None
+'202610' -> 2026-10-01 00:00:00 tz=None
+'20261021' -> 2026-10-21 00:00:00 tz=None
+'2026102108' -> 2026-10-21 08:00:00 tz=None
+'202610210830' -> 2026-10-21 08:30:00 tz=None
+'20261021083000' -> 2026-10-21 08:30:00 tz=None
+'20261021083005.1234' -> 2026-10-21 08:30:05.123400 tz=None
+'20261021083005.0000005' -> 2026-10-21 08:30:05 tz=None
+'20261021083000+0100' -> 2026-10-21 08:30:00+01:00 tz='+1.00.0'
+'20261021083000-0330' -> 2026-10-21 08:30:00-03:30 tz='-3.030.0'
+'20261021083000-0030' -> 2026-10-21 08:30:00+00:30 tz='+0.030.0'
+'20261021083000+0000' -> 2026-10-21 08:30:00+00:00 tz='+0.00.0'
+'20261021+0530' -> 2026-10-21 00:00:00+05:30 tz='+5.030.0'
+'2026102108+05' -> 2026-10-21 08:00:00 tz=None
+'20261021083059.9999999' ! ValueError: 'second must be in 0..59'
+'202' ! ValueError: 'Malformed HL7 datetime 202'
+'' -> None
+'abc' ! ValueError: 'Malformed HL7 datetime abc'
+'2026023012' ! ValueError: 'day is out of range for month'
+'20261321' ! ValueError: 'month must be in 1..12'
+'00001021' ! ValueError: 'year 0 is out of range'
+'2026102124' ! ValueError: 'hour must be in 0..23'
+'202610210860' ! ValueError: 'minute must be in 0..59'
+'20261021083060' ! ValueError: 'second must be in 0..59'
+'2026102114.5' ! ValueError: "invalid literal for int() with base 10: '.5'"
+'202610211430.5' -> 2026-10-21 14:30:00.500000 tz=None
+'202.5' ! ValueError: "invalid literal for int() with base 10: '202.'"
+'20261021083000+2500' -> ! ValueError: 'offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24).' tz='+25.00.0'
+'19840312' -> 1984-03-12 00:00:00 tz=None
+'20261021083000.5+0100' -> 2026-10-21 08:30:00.500000+01:00 tz='+1.00.0'
+'2026-10-21' -> 2026-01-01 00:00:00 tz=None
+== ack adt.hl7 AA ACK00001 - -
+ack 'MSH|^~\\&|IE|RIVERSIDE|PAS|RIVERSIDE|20261021080000||ACK^A01^ACK|ACK00001|P|2.5.1\rMSA|AA|MSG00001\r'
+  [[['MSH'], ['|'], ['^~\\&'], ['IE'], ['RIVERSIDE'], ['PAS'], ['RIVERSIDE'], ['20261021080000'], [], [[['ACK'], ['A01'], ['ACK']]], ['ACK00001'], ['P'], ['2.5.1']], [['MSA'], ['AA'], ['MSG00001']]]
+== ack lab.hl7 AE - IE-ACK RIVERSIDE-IE
+ack 'MSH|^~\\&|IE-ACK|RIVERSIDE-IE|LIMS|RIVERSIDE-LAB|20261021080001||ACK^R01^ACK|6294080002000000ALW7|P|2.5.1\rMSA|AE|LAB7781\r'
+  [[['MSH'], ['|'], ['^~\\&'], ['IE-ACK'], ['RIVERSIDE-IE'], ['LIMS'], ['RIVERSIDE-LAB'], ['20261021080001'], [], [[['ACK'], ['R01'], ['ACK']]], ['6294080002000000ALW7'], ['P'], ['2.5.1']], [['MSA'], ['AE'], ['LAB7781']]]
+== ack custom.hl7 CA C1 - -
+ack 'MSH*:@!$*IE*RIVERSIDE*PAS*ANNEX*20261021080003**ACK:A08:ACK*C1*P*2.4\rMSA*CA*CUS0001\r'
+  [[['MSH'], ['*'], [':@!$'], ['IE'], ['RIVERSIDE'], ['PAS'], ['ANNEX'], ['20261021080003'], [], [[['ACK'], ['A08'], ['ACK']]], ['C1'], ['P'], ['2.4']], [['MSA'], ['CA'], ['CUS0001']]]
+== ack short.hl7 AR - - -
+ack 'MSH|^~|IE|RIVERSIDE|LEGACY|ANNEX|20261021080004||ACK^A04^ACK|6294080005000000FQ1C|P|2.1\rMSA|AR|LEG001\r'
+  [[['MSH'], ['|'], ['^~'], ['IE'], ['RIVERSIDE'], ['LEGACY'], ['ANNEX'], ['20261021080004'], [], [[['ACK'], ['A04'], ['ACK']]], ['6294080005000000FQ1C'], ['P'], ['2.1']], [['MSA'], ['AR'], ['LEG001']]]
+== ack e_pid_first.hl7 AA - - -
+! ParseException: 'First segment is PID, must be one of MHS, FHS or BHS'
+== ack e_negative.hl7 AA x - -
+ack 'MSH|^~\\&|C|D|A|B|20261021080006||ACK^A01^ACK|x|P|2.5\rMSA|AA|N1\r'
+  [[['MSH'], ['|'], ['^~\\&'], ['C'], ['D'], ['A'], ['B'], ['20261021080006'], [], [[['ACK'], ['A01'], ['ACK']]], ['x'], ['P'], ['2.5']], [['MSA'], ['AA'], ['N1']]]
+== ack e_empty_seg.hl7 AA x - -
+ack ! IndexError: 'string index out of range'
+== mcid 3
+mcid 6294080007000000KV6H
+mcid 6294080008000000P0BM
+mcid 6294080009000000U5GR
+== split file.hl7
+['MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F\r', 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F\r', 'MSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F\r', 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r']
+== split batch_lf.hl7
+[]
+== split e_pid_first.hl7
+['MSH|^~\\&|A\r']
+== split e_empty.hl7
+[]
+== is adt.hl7 lab.hl7 batch.hl7 batch_nobhs.hl7 file.hl7 e_ws.hl7 e_empty.hl7 e_lower.hl7 file_nofts.hl7 custom.hl7
+adt.hl7 ishl7=True isbatch=False isfile=False
+lab.hl7 ishl7=True isbatch=False isfile=False
+batch.hl7 ishl7=False isbatch=True isfile=True
+batch_nobhs.hl7 ishl7=False isbatch=True isfile=True
+file.hl7 ishl7=False isbatch=False isfile=True
+e_ws.hl7 ishl7=True isbatch=False isfile=False
+e_empty.hl7 ishl7=False isbatch='' isfile=''
+e_lower.hl7 ishl7=False isbatch=False isfile=False
+file_nofts.hl7 ishl7=False isbatch=False isfile=True
+custom.hl7 ishl7=True isbatch=False isfile=False
+== stream inbound.mllp 4096
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze'
+message b'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+message b'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3'
+message b'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lef\xc3\xa8vre^Zo\xc3\xab||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500'
+== stream inbound.mllp 64
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze'
+message b'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+message b'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3'
+message b'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lef\xc3\xa8vre^Zo\xc3\xab||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500'
+== stream ff.mllp 4096
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+== stream ff.mllp 100
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+== stream broken.mllp 4096
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+! MLLPException: "buffer not terminated: b'\\r\\x0bMSH|^~\\\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^'"
+== stream badblock.mllp 4096
+message b'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+message b'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001'
+! MLLPException: "buffer not terminated: b'\\r\\x0bMSH|^~\\\\&|X\\xff'"
+== loose loose.txt
+message b'MSH|^~\\&|# export from LIMS, 21 Oct'
+message b'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115900||ORU^R01|LAB7790|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan\rOBX|1|NM|2160-0^Creatinine^LN||88|umol/L|45-84|H|||F'
+message b'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021115930||ORU^R01|LAB7791|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefevre^Zoe\rOBX|1|NM|2345-7^Glucose^LN||6.1|mmol/L|3.0-7.8|N|||F'
+message b'MSH|^~\\&|RAD|RIVERSIDE|IE|RIVERSIDE|20261021123000||ORU^R01|RAD0301|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rOBX|1|TX|CXR^Chest X-ray^L||No consolidation.\\.br\\Heart size normal.||||||F'
+== loose loose_clean.txt
+message b'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE'
+message b'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001'
+== loose inbound.mllp
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze'
+message b'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE'
+message b'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3'
+message b'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001'
+message b'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lef\xc3\xa8vre^Zo\xc3\xab||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500'
+== blocks inbound.mllp 65536 -
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+message 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE\r'
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3\r'
+message 'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001\r'
+! UnicodeDecodeError: "'ascii' codec can't decode byte 0xc3 in position 120: ordinal not in range(128)"
+end ! IncompleteReadError: '0 bytes read on a total of undefined expected bytes'
+== blocks inbound.mllp 65536 utf-8
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021083000||ADT^A01^ADT_A01|MSG00001|P|2.5.1\rEVN|A01|20261021083000\rPID|1||RG100234^^^RIVERSIDE^MR~9434765919^^^NHS^NH||Okafor^Adaeze^Ngozi^^Ms||19840312|F|||14 Mill Lane^Flat 2&Rear^Exeter^^EX1 1AA^GBR||01632 960142~07700 900461|||M\rPV1|1|I|WARD7^B12^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||7|||C3456^Hale^Morgan^^^Dr|IN|V9001|||||||||||||||||||||||||20261021082500\rNK1|1|Okafor^Chidi|SPO^Spouse|14 Mill Lane^^Exeter^^EX1 1AA|01632 960143\rAL1|1|DA|PEN^Penicillin \\T\\ derivatives^L|SV|Rash \\F\\ swelling~Wheeze\r'
+message 'MSH|^~\\&|LIMS|RIVERSIDE-LAB|IE|RIVERSIDE|20261021101500+0100||ORU^R01^ORU_R01|LAB7781|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze\rORC|RE|ORD5512|LAB7781\rOBR|1|ORD5512|LAB7781|CBC^Full blood count^L|||20261021091000\rOBX|1|NM|718-7^Haemoglobin^LN||118|g/L|120-150|L|||F\rOBX|2|NM|6690-2^WBC^LN||13.2|10*9/L|4.0-11.0|H|||F\rOBX|3|NM|777-3^Platelets^LN||250|10*9/L|150-400|N|||F\rNTE|1||Mild anaemia.\\.br\\Repeat in \\H\\2 weeks\\N\\.\\.sp2\\Reviewed by \\X44\\r Hale\\Zpg\\\rOBR|2|ORD5513|LAB7782|UE^Urea and electrolytes^L|||20261021091000\rOBX|4|NM|2951-2^Sodium^LN||139|mmol/L|133-146||||F\rOBX|5|NM|2823-3^Potassium^LN||5.9|mmol/L|3.5-5.3|HH|||F\rOBX|6|ST|COMM^Comment^L||Haemolysed sample \\E\\ retest~Second sample requested||||||F\rOBX|7|TX|COMM^Comment^L||See note:\\.in2\\indented \\X20AC\\5 fee||||||P\rNTE|2||Called to ward 7 at 10:12\\.sk3\\(read back)\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE\r'
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3\r'
+message 'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefèvre^Zoë||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500\r'
+end ! IncompleteReadError: '0 bytes read on a total of undefined expected bytes'
+== blocks inbound.mllp 300 utf-8
+! ValueError: 'Separator is found, but chunk is longer than limit'
+! ValueError: 'Separator is found, but chunk is longer than limit'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021113000||ADT^A03^ADT_A03|MSG00002|P|2.5.1\rPID|1||RG100871^^^RIVERSIDE^MR||Brennan^Siobhan||19510627|F\rPV1|1|I|WARD3^A04^2^RIVERSIDE||||C2211^Osei^Kwame^^^Dr|||SUR||||||||IN|V8812|||||||||||||||||||||||||20261019140000|20261021112000\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021114500||ADT^A08^ADT_A01|MSG00003|P|2.5.1\rPID|1||RG100234^^^RIVERSIDE^MR||Okafor^Adaeze^Ngozi^^Dr||19840312|F\rPV1|1|I|WARD7^B14^1^RIVERSIDE\r'
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021115500||ADT^A01^ADT_A01|MSG00004|P|2.5.1\rEVN|A01|20261021115500\rPV1|1|E|ED^R3\r'
+message 'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefèvre^Zoë||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500\r'
+end ! IncompleteReadError: '0 bytes read on a total of undefined expected bytes'
+== blocks badblock.mllp 65536 -
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+! InvalidBlockError: 'Block does not begin with Start Block character <VT>'
+message 'MSH|^~\\&|OLDSYS|ANNEX|IE|RIVERSIDE|20261021120000||QRY|Q0001|P|2.3\rQRD|20261021120000|R|I|Q0001\r'
+end ! IncompleteReadError: '12 bytes read on a total of undefined expected bytes'
+== blocks mixed.mllp 65536 -
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+! UnicodeDecodeError: "'ascii' codec can't decode byte 0xc3 in position 20: ordinal not in range(128)"
+! UnicodeDecodeError: "'ascii' codec can't decode byte 0xc3 in position 120: ordinal not in range(128)"
+! UnicodeDecodeError: "'ascii' codec can't decode byte 0xff in position 20: ordinal not in range(128)"
+! ParseException: 'First segment is NOT, must be one of MHS, FHS or BHS'
+end ! IncompleteReadError: '8 bytes read on a total of undefined expected bytes'
+== blocks mixed.mllp 65536 utf-8
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+! UnicodeDecodeError: "'utf-8' codec can't decode byte 0xc3 in position 20: invalid continuation byte"
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefèvre^Zoë||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500\r'
+! UnicodeDecodeError: "'utf-8' codec can't decode byte 0xff in position 20: invalid start byte"
+! ParseException: 'First segment is NOT, must be one of MHS, FHS or BHS'
+end ! IncompleteReadError: '8 bytes read on a total of undefined expected bytes'
+== blocks mixed.mllp 65536 utf-8,replace
+message 'MSH|^~\\&|THEATRE|RIVERSIDE|IE|RIVERSIDE|20261021115000||SIU^S12^SIU_S12|THR0042|P|2.5.1\rSCH|1|THR0042||||ROUTINE\r'
+message 'MSH|^~\\&|A|B\rPID|1||�A\r'
+message 'MSH|^~\\&|PAS|RIVERSIDE|IE|RIVERSIDE|20261021121000||ADT^A01^ADT_A01|MSG00005|P|2.5.1\rPID|1||RG101502^^^RIVERSIDE^MR||Lefèvre^Zoë||19990101|F\rPV1|1|I|WARD7^B03^1^RIVERSIDE||||C3456^Hale^Morgan^^^Dr|||MED||||||||IN|V9015|||||||||||||||||||||||||20261021120500\r'
+message 'MSH|^~\\&|A|B\rPID|1||�\r'
+! ParseException: 'First segment is NOT, must be one of MHS, FHS or BHS'
+end ! IncompleteReadError: '8 bytes read on a total of undefined expected bytes'
+== blocks ff.mllp 65536 -
+end ! IncompleteReadError: '1022 bytes read on a total of undefined expected bytes'
+== blocks broken.mllp 40 -
+! ValueError: 'Separator is found, but chunk is longer than limit'
+! ValueError: 'Separator is not found, and chunk exceed the limit'
+end ! IncompleteReadError: '0 bytes read on a total of undefined expected bytes'
+== route inbound.mllp
+in 1 MSG00001 ADT^A01 from PAS
+  census RG100234 admitted WARD7/B12
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|PAS|RIVERSIDE|20261021080010||ACK^A01^ACK|ACKMSG00001|P|2.5.1\rMSA|AA|MSG00001\r'
+in 2 LAB7781 ORU^R01 from LIMS
+  results RG100234 2 groups
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|LIMS|RIVERSIDE-LAB|20261021080011||ACK^R01^ACK|ACKLAB7781|P|2.5.1\rMSA|AA|LAB7781\r'
+in 3 MSG00002 ADT^A03 from PAS
+  census RG100871 discharged WARD3/A04
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|PAS|RIVERSIDE|20261021080012||ACK^A03^ACK|ACKMSG00002|P|2.5.1\rMSA|AA|MSG00002\r'
+in 4 MSG00003 ADT^A08 from PAS
+  census RG100234 admitted WARD7/B14
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|PAS|RIVERSIDE|20261021080013||ACK^A08^ACK|ACKMSG00003|P|2.5.1\rMSA|AA|MSG00003\r'
+in 5 THR0042 SIU^S12 from THEATRE
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|THEATRE|RIVERSIDE|20261021080014||ACK^S12^ACK|ACKTHR0042|P|2.5.1\rMSA|AR|THR0042|unsupported message type SIU^S12\r'
+in 6 MSG00004 ADT^A01 from PAS
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|PAS|RIVERSIDE|20261021080015||ACK^A01^ACK|ACKMSG00004|P|2.5.1\rMSA|AE|MSG00004|PID segment missing\r'
+in 7 Q0001 QRY^ from OLDSYS
+  no ack ! TypeError: "'str' object is not callable"
+in 8 MSG00005 ADT^A01 from PAS
+  census RG101502 admitted WARD7/B03
+  ack 'MSH|^~\\&|RIVERSIDE-IE|RIVERSIDE|PAS|RIVERSIDE|20261021080017||ACK^A01^ACK|ACKMSG00005|P|2.5.1\rMSA|AA|MSG00005\r'
+end ! IncompleteReadError: '0 bytes read on a total of undefined expected bytes'
+acks written 7
+census
+  RG100234 Okafor, Adaeze Ngozi (Dr)    admitted   WARD7/B14 Dr Morgan Hale admitted 2026-10-21 08:25:00 discharged -
+  RG100871 Brennan, Siobhan             discharged WARD3/A04 Dr Kwame Osei admitted 2026-10-19 14:00:00 discharged 2026-10-21 11:20:00
+  RG101502 Lefèvre, Zoë                 admitted   WARD7/B03 Dr Morgan Hale admitted 2026-10-21 12:05:00 discharged -
+results
+RG100234 Full blood count
+  Haemoglobin  118                                      g/L      120-150    low
+  WBC          13.2                                     10*9/L   4.0-11.0   high
+  Platelets    250                                      10*9/L   150-400    
+  note 'Mild anaemia.\rRepeat in *2 weeks*.\r\rReviewed by Dr Hale'
+RG100234 Urea and electrolytes
+  Sodium       139                                      mmol/L   133-146    
+  Potassium    5.9                                      mmol/L   3.5-5.3    CRITICAL
+  Comment      Haemolysed sample \ retest / Second sample requested                     
+  Comment      See note:        indented  ¬5 fee                            
+  note 'Called to ward 7 at 10:12   (read back)'
+critical 1
+== reencode adt.hl7 *:@!$
+out 'MSH*:@!$*PAS*RIVERSIDE*IE*RIVERSIDE*20261021083000**ADT:A01:ADT_A01*MSG00001*P*2.5.1\rEVN*A01*20261021083000\rPID*1**RG100234:::RIVERSIDE:MR@9434765919:::NHS:NH**Okafor:Adaeze:Ngozi::Ms**19840312*F***14 Mill Lane:Flat 2$Rear:Exeter::EX1 1AA:GBR**01632 960142@07700 900461***M\rPV1*1*I*WARD7:B12:1:RIVERSIDE****C3456:Hale:Morgan:::Dr***MED****7***C3456:Hale:Morgan:::Dr*IN*V9001*************************20261021082500\rNK1*1*Okafor:Chidi*SPO:Spouse*14 Mill Lane::Exeter::EX1 1AA*01632 960143\rAL1*1*DA*PEN:Penicillin & derivatives:L*SV*Rash | swelling@Wheeze\r'
+roundtrip True
+leaves 131 same True
+== reencode custom.hl7 |^~\&
+out 'MSH|^~\\&|PAS|ANNEX|IE|RIVERSIDE|20261021090000-0330||ADT^A08|CUS0001|P|2.4\rPID|1||AX5521^^^ANNEX^MR~NH778^^^NHS||Ng^Wei Ling||19770804|F|||Unit 4&Block C^Dock Rd^Cardiff\rOBX|1|ST|NOTE||Pay 5*10 $ 20:x@y!z\r'
+roundtrip True
+leaves 41 same True
+== reencode lab.hl7 #^~\&
+out 'MSH#^~\\&#LIMS#RIVERSIDE-LAB#IE#RIVERSIDE#20261021101500+0100##ORU^R01^ORU_R01#LAB7781#P#2.5.1\rPID#1##RG100234^^^RIVERSIDE^MR##Okafor^Adaeze\rORC#RE#ORD5512#LAB7781\rOBR#1#ORD5512#LAB7781#CBC^Full blood count^L###20261021091000\rOBX#1#NM#718-7^Haemoglobin^LN##118#g/L#120-150#L###F\rOBX#2#NM#6690-2^WBC^LN##13.2#10*9/L#4.0-11.0#H###F\rOBX#3#NM#777-3^Platelets^LN##250#10*9/L#150-400#N###F\rNTE#1##Mild anaemia.\\.br\\Repeat in _2 weeks_.\\.br\\\\.br\\Reviewed by Dr Hale\rOBR#2#ORD5513#LAB7782#UE^Urea and electrolytes^L###20261021091000\rOBX#4#NM#2951-2^Sodium^LN##139#mmol/L#133-146####F\rOBX#5#NM#2823-3^Potassium^LN##5.9#mmol/L#3.5-5.3#HH###F\rOBX#6#ST#COMM^Comment^L##Haemolysed sample \\E\\ retest~Second sample requested######F\rOBX#7#TX#COMM^Comment^L##See note:        indented  \\Xac\\5 fee######P\rNTE#2##Called to ward 7 at 10:12   (read back)\r'
+roundtrip True
+leaves 154 same True
+== audit file.hl7
+file FILE01 batches=3 declared=2
+  batch BATCH01 messages=2 declared=2 ok
+    LAB7790 ORU^R01 MSH:1 OBX:1 PID:1
+    LAB7791 ORU^R01 MSH:1 OBX:1 PID:1
+  batch BATCH02 messages=1 declared=1 ok
+    RAD0301 ORU^R01 MSH:1 OBX:1 PID:1
+  batch (default) messages=1 declared=- ok
+    MSG00001 ADT^A01 AL1:1 EVN:1 MSH:1 NK1:1 PID:1 PV1:1
+  total messages 4 ok=False

@@ -1,0 +1,3450 @@
+// mini_hl7: python-hl7 0.4.5, the HL7 version 2 library for Python, as
+// the interface engine of a hospital for one morning:
+// - the parser: the parse plan read from MSH.1 and MSH.2 (with the
+//   defaults for short encoding characters, and the assertion a
+//   duplicated separator trips), the five-level split with MSH/BHS/FHS's
+//   awkward first fields, parse_batch and parse_file over splitlines and
+//   their ParseExceptions, parse_hl7's dispatch, ishl7/isbatch/isfile and
+//   split_file;
+// - the containers as Python lists: their repr, str with each level's
+//   separator, header and trailer segments with their checks, slicing,
+//   1-based calls, and the Malformed*Exceptions;
+// - accessor keys (Accessor.parse_key and .key), extract_field's
+//   compatibility rules with every IndexError, and assign_field down to
+//   subcomponents, with the TypeError and AttributeError Python raises
+//   when the tree holds a str where a list was expected;
+// - escape and unescape with application maps (%2x hex, the formatting
+//   escapes with counts, hex pairs, ignored sequences);
+// - parse_datetime with its regex, precision rules, float-minute time
+//   zones and datetime's own checks;
+// - create_ack and generate_message_control_id (on a ticking clock and
+//   a counter-driven sample, as oracle.py gives the library);
+// - MLLP: client.read_stream with its EB/FF rule, read_loose, and the
+//   asyncio HL7StreamReader's readblock/readmessage with limits, invalid
+//   blocks, decoding errors and the incomplete-read end;
+// - three programs: a routing engine that ACKs and NAKs a feed and keeps
+//   a ward census and lab results, a separator re-encoder, and a batch
+//   file audit.
+//
+// The inputs are data/jobs.txt and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through python-hl7 itself (the copy in hl7/).
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else {
+        c - b'a' + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    for file in data_files() {
+        let (name, body) = file;
+        let p = f"data/{name}";
+        if let Err(e) = fs.write_bytes(p.clone(), unhex(body)) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_bytes(name: ref String) -> Vec[u8] {
+    fs.read_bytes(f"data/{name}").unwrap_or(Vec.new())
+}
+
+// open(name, newline='').read(): the file's UTF-8 text with its line
+// ends untouched.
+fn read_text(name: ref String) -> String {
+    match decode(read_bytes(name), "utf-8", "strict") {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+// ------------------------------------------------------------ text
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn str_of(cs: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(*c);
+    }
+    s
+}
+
+fn slice_chars(cs: ref Vec[char], from: i64, to: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut a = if from < 0 { 0 } else { from };
+    let b = if to > cs.len() { cs.len() } else { to };
+    while a < b {
+        out.push(cs[a]);
+        a += 1;
+    }
+    out
+}
+
+fn substr(s: ref String, from: i64, to: i64) -> String {
+    str_of(slice_chars(chars_of(s), from, to))
+}
+
+fn char_len(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_str(s: ref String, sep: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(sep) {
+        out.push(p.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut s = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            s.push_str(sep);
+        }
+        s.push_str(p);
+        first = false;
+    }
+    s
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_space(c) {
+            if cur.len() > 0 {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn ascii_upper(c: char) -> char {
+    if c >= 'a' and c <= 'z' {
+        char.try_from((c as u32) - 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        char.try_from((c as u32) + 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn upper_str(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(ascii_upper(c));
+    }
+    out
+}
+
+// str.isspace
+fn is_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or n == 32 or (n >= 0x1c and n <= 0x1f) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029
+        or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// \w on ASCII text
+fn is_word(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn hex_digit(c: char) -> i64 {
+    if is_digit(c) {
+        ((c as u32) - 48) as i64
+    } else if c >= 'a' and c <= 'f' {
+        ((c as u32) - 87) as i64
+    } else {
+        ((c as u32) - 55) as i64
+    }
+}
+
+fn hex2(n: i64) -> String {
+    f"{n:02x}"
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let has_sq = s.contains("'");
+    let has_dq = s.contains("\"");
+    let q = if has_sq and not has_dq { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n as i64)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_list(items: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in items.iter() {
+        parts.push(repr_str(s));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn utf8_len(s: ref String) -> i64 {
+    s.len()
+}
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    a.push(1);
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = Vec.new();
+    den.push(1);
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float() and int()
+
+// What float() and int() do first: the white space at the ends is
+// stripped and underscores between digits removed.
+fn number_text(cs: ref Vec[char]) -> Option[Vec[char]] {
+    let mut a = 0;
+    while a < cs.len() and is_space(cs[a]) {
+        a += 1;
+    }
+    let mut b = cs.len();
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut prev = ' ';
+    for i in a..b {
+        let c = cs[i];
+        if (c as u32) >= 128 {
+            return None;
+        }
+        if c == '_' {
+            if not is_digit(prev) {
+                return None;
+            }
+        } else {
+            if prev == '_' and not is_digit(c) {
+                return None;
+            }
+            out.push(c);
+        }
+        prev = c;
+    }
+    if prev == '_' {
+        return None;
+    }
+    Some(out)
+}
+
+fn lower_word(cs: ref Vec[char], from: i64) -> String {
+    let mut s = String.new();
+    for i in from..cs.len() {
+        s.push(ascii_lower(cs[i]));
+    }
+    s
+}
+
+// float() of a str; None where it raises ValueError.
+fn py_float(cs: ref Vec[char]) -> Option[f64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    let w = lower_word(t, i);
+    if w == "inf" or w == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if w == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut seen = false;
+    let mut exp10: i64 = 0;
+    while i < t.len() and is_digit(t[i]) {
+        seen = true;
+        let d = ((t[i] as u32) - 48) as u8;
+        if digits.len() > 0 or d != 0 {
+            digits.push(d);
+        }
+        i += 1;
+    }
+    if i < t.len() and t[i] == '.' {
+        i += 1;
+        while i < t.len() and is_digit(t[i]) {
+            seen = true;
+            let d = ((t[i] as u32) - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            exp10 -= 1;
+            i += 1;
+        }
+    }
+    if not seen {
+        return None;
+    }
+    if i < t.len() and (t[i] == 'e' or t[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < t.len() and (t[i] == '+' or t[i] == '-') {
+            eneg = t[i] == '-';
+            i += 1;
+        }
+        let st = i;
+        let mut e: i64 = 0;
+        while i < t.len() and is_digit(t[i]) {
+            if e < 100000000 {
+                e = e * 10 + ((t[i] as u32) - 48) as i64;
+            }
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+        exp10 += if eneg { -e } else { e };
+    }
+    if i != t.len() {
+        return None;
+    }
+    Some(decimal_to_f64(digits, exp10, neg))
+}
+
+fn py_float_s(s: ref String) -> Option[f64] {
+    py_float(chars_of(s))
+}
+
+// int() of a str; None where it raises ValueError (and, here, where the
+// value would not fit in an i64).
+fn py_int(cs: ref Vec[char]) -> Option[i64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut sig = 0;
+    while i < t.len() {
+        if not is_digit(t[i]) {
+            return None;
+        }
+        n = n * 10 + ((t[i] as u32) - 48) as i64;
+        if n > 0 {
+            sig += 1;
+        }
+        if sig > 17 {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn py_int_s(s: ref String) -> Option[i64] {
+    py_int(chars_of(s))
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class name and str(e).
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn perr(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn err_text(e: ref PyErr) -> String {
+    f"! {e.kind}: {repr_str(e.msg)}"
+}
+
+fn index_err() -> PyErr {
+    perr("IndexError", "list index out of range".to_string())
+}
+
+fn str_index_err() -> PyErr {
+    perr("IndexError", "string index out of range".to_string())
+}
+
+fn not_callable() -> PyErr {
+    perr("TypeError", "'str' object is not callable".to_string())
+}
+
+// KeyError's str() is the repr of its argument.
+fn key_err(msg: own String) -> PyErr {
+    perr("KeyError", repr_str(msg))
+}
+
+// ------------------------------------------------------------ Python indexing
+
+fn py_index(n: i64, i: i64) -> Option[i64] {
+    let j = if i < 0 { i + n } else { i };
+    if j < 0 or j >= n {
+        None
+    } else {
+        Some(j)
+    }
+}
+
+// Sequence.__call__: 1-based for positive indices.
+fn seq_index(n: i64, i: i64) -> Option[i64] {
+    py_index(n, if i >= 1 { i - 1 } else { i })
+}
+
+// The bounds of a[a:b] for a list of n.
+fn slice_bounds(n: i64, a0: i64, b0: i64) -> (i64, i64) {
+    let mut a = if a0 < 0 { a0 + n } else { a0 };
+    let mut b = if b0 < 0 { b0 + n } else { b0 };
+    if a < 0 {
+        a = 0;
+    }
+    if b < 0 {
+        b = 0;
+    }
+    if a > n {
+        a = n;
+    }
+    if b > n {
+        b = n;
+    }
+    if b < a {
+        b = a;
+    }
+    (a, b)
+}
+
+fn py_slice(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let (x, y) = slice_bounds(cs.len(), a, b);
+    str_of(slice_chars(cs, x, y))
+}
+
+fn find_from(cs: ref Vec[char], c: char, from: i64) -> i64 {
+    let mut i = if from < 0 { 0 } else { from };
+    while i < cs.len() {
+        if cs[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find_char(cs: ref Vec[char], c: char) -> i64 {
+    find_from(cs, c, 0)
+}
+
+// str.strip()
+fn py_strip(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_space(cs[b - 1]) {
+        b -= 1;
+    }
+    str_of(slice_chars(cs, a, b))
+}
+
+fn is_hl7_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\u{b}' or c == '\u{c}'
+}
+
+// str.strip(_HL7_WHITESPACE): string.whitespace without '\r'.
+fn hl7_strip(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_hl7_ws(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_hl7_ws(cs[b - 1]) {
+        b -= 1;
+    }
+    str_of(slice_chars(cs, a, b))
+}
+
+fn prefix3(s: ref String) -> String {
+    substr(s, 0, 3)
+}
+
+// str.count(sub), non-overlapping.
+fn count_sub(s: ref String, sub: ref String) -> i64 {
+    let a = chars_of(s);
+    let b = chars_of(sub);
+    if b.len() == 0 {
+        return a.len() + 1;
+    }
+    let mut n = 0;
+    let mut i = 0;
+    while i + b.len() <= a.len() {
+        let mut ok = true;
+        let mut k = 0;
+        while k < b.len() {
+            if a[i + k] != b[k] {
+                ok = false;
+                break;
+            }
+            k += 1;
+        }
+        if ok {
+            n += 1;
+            i += b.len();
+        } else {
+            i += 1;
+        }
+    }
+    n
+}
+
+fn is_line_break(c: char) -> bool {
+    let n = c as u32;
+    n == 10 or n == 13 or n == 11 or n == 12 or n == 0x1c or n == 0x1d or n == 0x1e or n == 0x85
+        or n == 0x2028 or n == 0x2029
+}
+
+// str.splitlines(keepends=True)
+fn splitlines_keep(s: ref String) -> Vec[String] {
+    let cs = chars_of(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        cur.push(c);
+        if is_line_break(c) {
+            if c == '\r' and i + 1 < cs.len() and cs[i + 1] == '\n' {
+                cur.push('\n');
+                i += 1;
+            }
+            out.push(cur);
+            cur = String.new();
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ containers
+
+const K_FILE: i64 = 0;
+const K_BATCH: i64 = 1;
+const K_MSG: i64 = 2;
+const K_SEG: i64 = 3;
+const K_FIELD: i64 = 4;
+const K_REP: i64 = 5;
+const K_COMP: i64 = 6;
+
+// A python-hl7 container (a list subclass) or one of its str items.
+#[derive(Clone)]
+enum Node {
+    Text(String),
+    Box(Cont),
+}
+
+// File, Batch, Message, Segment, Field, Repetition or Component: the
+// list items, the separators string ("\r|~^&" by default), the escape
+// character, and a File's or Batch's header and trailer segments (none
+// or one each).
+#[derive(Clone)]
+struct Cont {
+    kind: i64,
+    items: Vec[Node],
+    seps: Vec[char],
+    esc: char,
+    header: Vec[Cont],
+    trailer: Vec[Cont],
+}
+
+fn default_seps() -> Vec[char] {
+    ['\r', '|', '~', '^', '&']
+}
+
+fn mk(kind: i64, items: own Vec[Node], seps: ref Vec[char], esc: char) -> Cont {
+    Cont { kind: kind, items: items, seps: seps.clone(), esc: esc, header: Vec.new(), trailer: Vec.new() }
+}
+
+// Container.create_*: a new container that shares this one's separators.
+fn create(c: ref Cont, kind: i64, items: own Vec[Node]) -> Cont {
+    mk(kind, items, c.seps, c.esc)
+}
+
+fn text_field(c: ref Cont, s: ref String) -> Node {
+    Node.Box(create(c, K_FIELD, [Node.Text(s.clone())]))
+}
+
+fn kind_name(k: i64) -> String {
+    match k {
+        0 => "File".to_string(),
+        1 => "Batch".to_string(),
+        2 => "Message".to_string(),
+        3 => "Segment".to_string(),
+        4 => "Field".to_string(),
+        5 => "Repetition".to_string(),
+        _ => "Component".to_string(),
+    }
+}
+
+fn sep_of(c: ref Cont) -> char {
+    if c.kind <= K_MSG {
+        c.seps[0]
+    } else {
+        c.seps[c.kind - K_MSG]
+    }
+}
+
+fn node_len(n: ref Node) -> i64 {
+    match n {
+        Node.Text(s) => char_len(s),
+        Node.Box(c) => c.items.len(),
+    }
+}
+
+fn node_repr(n: ref Node) -> String {
+    match n {
+        Node.Text(s) => repr_str(s),
+        Node.Box(c) => cont_repr(c),
+    }
+}
+
+fn cont_repr(c: ref Cont) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in c.items.iter() {
+        parts.push(node_repr(x));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn node_str(n: ref Node) -> Result[String, PyErr] {
+    match n {
+        Node.Text(s) => Ok(s.clone()),
+        Node.Box(c) => cont_str(c),
+    }
+}
+
+fn join_nodes(items: ref Vec[Node], from: i64, sep: char) -> Result[String, PyErr] {
+    let mut out = String.new();
+    let mut i = from;
+    while i < items.len() {
+        if i > from {
+            out.push(sep);
+        }
+        out.push_str(node_str(items[i])?);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn cont_str(c: ref Cont) -> Result[String, PyErr] {
+    let sep = sep_of(c);
+    if c.kind == K_FILE or c.kind == K_BATCH {
+        if c.header.len() != c.trailer.len() {
+            let cls = if c.kind == K_FILE { "MalformedFileException" } else { "MalformedBatchException" };
+            return Err(perr(cls, "Either both header and trailer must be present or neither".to_string()));
+        }
+        let body = join_nodes(c.items, 0, sep)?;
+        if c.header.len() == 0 {
+            return Ok(body);
+        }
+        return Ok(f"{cont_str(c.header[0])?}{sep}{body}{cont_str(c.trailer[0])?}{sep}");
+    }
+    if c.kind == K_MSG {
+        let body = join_nodes(c.items, 0, sep)?;
+        return Ok(f"{body}{sep}");
+    }
+    if c.kind == K_SEG {
+        if c.items.len() == 0 {
+            return Err(index_err());
+        }
+        let first = node_str(c.items[0])?;
+        if first == "MSH" or first == "FHS" or first == "BHS" {
+            if c.items.len() < 3 {
+                return Err(index_err());
+            }
+            let f1 = node_str(c.items[1])?;
+            let f2 = node_str(c.items[2])?;
+            return Ok(f"{first}{f1}{f2}{f1}{join_nodes(c.items, 3, sep)?}");
+        }
+    }
+    join_nodes(c.items, 0, sep)
+}
+
+// x[0]
+fn node_first(n: ref Node) -> Result[Node, PyErr] {
+    match n {
+        Node.Text(s) => {
+            let cs = chars_of(s);
+            if cs.len() == 0 {
+                Err(str_index_err())
+            } else {
+                Ok(Node.Text(str_of(slice_chars(cs, 0, 1))))
+            }
+        }
+        Node.Box(c) => {
+            if c.items.len() == 0 {
+                Err(index_err())
+            } else {
+                Ok(c.items[0].clone())
+            }
+        }
+    }
+}
+
+// segment[0][0] == segment_id
+fn seg_is(seg: ref Node, id: ref String) -> Result[bool, PyErr] {
+    let f = node_first(node_first(seg)?)?;
+    match f {
+        Node.Text(s) => Ok(s == *id),
+        Node.Box(_) => Ok(false),
+    }
+}
+
+fn seg_name(seg: ref Node) -> Result[String, PyErr] {
+    let f = node_first(node_first(seg)?)?;
+    match f {
+        Node.Text(s) => Ok(s),
+        Node.Box(c) => Ok(cont_repr(c)),
+    }
+}
+
+// x(i): Sequence.__call__, which a Segment does not shift.
+fn call_pos(c: ref Cont, i: i64) -> Option[i64] {
+    if c.kind == K_SEG {
+        py_index(c.items.len(), i)
+    } else {
+        seq_index(c.items.len(), i)
+    }
+}
+
+fn node_call(n: ref Node, i: i64) -> Result[Node, PyErr] {
+    match n {
+        Node.Text(_) => Err(not_callable()),
+        Node.Box(c) => match call_pos(c, i) {
+            Some(j) => Ok(c.items[j].clone()),
+            None => Err(index_err()),
+        },
+    }
+}
+
+fn cont_call(c: ref Cont, i: i64) -> Result[Node, PyErr] {
+    match call_pos(c, i) {
+        Some(j) => Ok(c.items[j].clone()),
+        None => Err(index_err()),
+    }
+}
+
+fn is_kind(n: ref Node, k: i64) -> bool {
+    match n {
+        Node.Box(c) => c.kind == k,
+        Node.Text(_) => false,
+    }
+}
+
+fn text_of(n: ref Node) -> String {
+    match n {
+        Node.Text(s) => s.clone(),
+        Node.Box(c) => cont_repr(c),
+    }
+}
+
+// ------------------------------------------------------------ the parse plan
+
+#[derive(Clone)]
+struct Plan {
+    sep: char,
+    k: i64,
+}
+
+fn plan_make(sep: char, k: i64, all: ref Vec[char]) -> Result[Plan, PyErr] {
+    let f = find_char(all, sep);
+    let tail = if f < 0 { 1 } else { all.len() - f };
+    if k != tail {
+        return Err(perr("AssertionError", String.new()));
+    }
+    Ok(Plan { sep: sep, k: k })
+}
+
+fn plan_next(p: ref Plan, all: ref Vec[char]) -> Result[Option[Plan], PyErr] {
+    if p.k > 1 {
+        let f = find_char(all, p.sep);
+        return Ok(Some(plan_make(all[f + 1], p.k - 1, all)?));
+    }
+    Ok(None)
+}
+
+fn plan_applies(p: ref Plan, all: ref Vec[char], text: ref Vec[char]) -> bool {
+    let f = find_char(all, p.sep);
+    let mut i = if f < 0 { all.len() - 1 } else { f };
+    while i < all.len() {
+        if find_char(text, all[i]) >= 0 {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// create_parse_plan: the separators and escape character a message's
+// first segment declares.
+fn create_parse_plan(strmsg: ref String) -> Result[(Vec[char], char), PyErr] {
+    let cs = chars_of(strmsg);
+    let first = prefix3(strmsg);
+    if first != "MSH" and first != "FHS" and first != "BHS" {
+        return Err(perr("ParseException", f"First segment is {first}, must be one of MHS, FHS or BHS"));
+    }
+    if cs.len() < 4 {
+        return Err(str_index_err());
+    }
+    let sep0 = cs[3];
+    let seps = chars_of(py_slice(cs, 3, find_from(cs, sep0, 4)));
+    if seps.len() == 0 {
+        return Err(index_err());
+    }
+    let rep = if seps.len() > 2 { seps[2] } else { '~' };
+    let comp = if seps.len() > 1 { seps[1] } else { '^' };
+    let sub = if seps.len() > 4 { seps[4] } else { '&' };
+    let esc = if seps.len() > 3 { seps[3] } else { '\\' };
+    Ok(([ '\r', seps[0], rep, comp, sub ], esc))
+}
+
+// _split
+fn split_text(text: ref String, plan: ref Option[Plan], all: ref Vec[char], esc: char) -> Result[Node, PyErr] {
+    let p = match plan {
+        None => return Ok(Node.Text(text.clone())),
+        Some(p) => p.clone(),
+    };
+    let kind = 7 - p.k;
+    let cs = chars_of(text);
+    if not plan_applies(p, all, cs) {
+        return Ok(Node.Box(mk(kind, [Node.Text(text.clone())], all, esc)));
+    }
+    let mut data: Vec[Node] = Vec.new();
+    let mut rest = text.clone();
+    let first = prefix3(text);
+    if kind == K_SEG and (first == "MSH" or first == "BHS" or first == "FHS") {
+        if cs.len() < 4 {
+            return Err(str_index_err());
+        }
+        let sep0 = cs[3];
+        let off = find_from(cs, sep0, 4);
+        let seps = py_slice(cs, 4, off);
+        rest = py_slice(cs, off + 1, cs.len());
+        data.push(Node.Box(mk(K_FIELD, [Node.Text(first.clone())], all, esc)));
+        data.push(Node.Box(mk(K_FIELD, [Node.Text(sep0.to_string())], all, esc)));
+        data.push(Node.Box(mk(K_FIELD, [Node.Text(seps)], all, esc)));
+    }
+    if rest.len() > 0 {
+        let nx = plan_next(p, all)?;
+        for x in split_on(rest, p.sep) {
+            data.push(split_text(x, nx, all, esc)?);
+        }
+    }
+    Ok(Node.Box(mk(kind, data, all, esc)))
+}
+
+// hl7.parse
+fn parse(lines: ref String) -> Result[Cont, PyErr] {
+    let strmsg = py_strip(lines);
+    let (all, esc) = create_parse_plan(strmsg)?;
+    let plan: Option[Plan] = Some(Plan { sep: '\r', k: 5 });
+    match split_text(strmsg, plan, all, esc)? {
+        Node.Box(c) => Ok(c),
+        Node.Text(s) => Ok(mk(K_MSG, [Node.Text(s)], all, esc)),
+    }
+}
+
+// Message.segments: the indices of the segments named id.
+fn segments(m: ref Cont, id: ref String) -> Result[Vec[i64], PyErr] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < m.items.len() {
+        if seg_is(m.items[i], id)? {
+            out.push(i);
+        }
+        i += 1;
+    }
+    if out.len() == 0 {
+        return Err(key_err(f"No {id} segments"));
+    }
+    Ok(out)
+}
+
+fn as_cont(n: ref Node) -> Cont {
+    match n {
+        Node.Box(c) => c.clone(),
+        Node.Text(s) => mk(K_FIELD, [Node.Text(s.clone())], default_seps(), '\\'),
+    }
+}
+
+// Message.segment
+fn segment(m: ref Cont, id: ref String) -> Result[Cont, PyErr] {
+    let idx = segments(m, id)?;
+    Ok(as_cont(m.items[idx[0]]))
+}
+
+// The File and Batch header/trailer setters.
+fn check_hdr(seg: ref Cont, id: Str, what: Str) -> Result[(), PyErr] {
+    if seg.items.len() > 0 and not seg_is(Node.Box(seg.clone()), id.to_string())? {
+        return Err(perr("MalformedSegmentException", f"{what} must begin with \"{id}\""));
+    }
+    Ok(())
+}
+
+fn set_header(c: mut ref Cont, seg: Option[Cont]) -> Result[(), PyErr] {
+    let id = if c.kind == K_FILE { "FHS" } else { "BHS" };
+    match seg {
+        None => c.header = Vec.new(),
+        Some(s) => {
+            check_hdr(s, id, "header")?;
+            c.header = [s.clone()];
+        }
+    }
+    Ok(())
+}
+
+fn set_trailer(c: mut ref Cont, seg: Option[Cont]) -> Result[(), PyErr] {
+    let id = if c.kind == K_FILE { "FTS" } else { "BTS" };
+    match seg {
+        None => c.trailer = Vec.new(),
+        Some(s) => {
+            check_hdr(s, id, "trailer")?;
+            c.trailer = [s.clone()];
+        }
+    }
+    Ok(())
+}
+
+// _create_batch and _create_file: kind is K_BATCH or K_FILE, head the
+// BHS/FHS text, if any.
+fn wrap(kind: i64, head: ref Option[String], items: own Vec[Node]) -> Result[Cont, PyErr] {
+    match head {
+        None => Ok(mk(kind, items, default_seps(), '\\')),
+        Some(text) => {
+            let hm = parse(text)?;
+            let mut c = mk(kind, items, hm.seps, hm.esc);
+            let hid = if kind == K_FILE { "FHS" } else { "BHS" };
+            let tid = if kind == K_FILE { "FTS" } else { "BTS" };
+            set_header(mut c, Some(segment(hm, hid.to_string())?))?;
+            let t = match segment(hm, tid.to_string()) {
+                Ok(s) => s,
+                Err(e) => {
+                    if e.kind != "KeyError" {
+                        return Err(e);
+                    }
+                    create(c, K_SEG, [text_field(c, tid.to_string())])
+                }
+            };
+            set_trailer(mut c, Some(t))?;
+            Ok(c)
+        }
+    }
+}
+
+fn create_batch(head: ref Option[String], messages: ref Vec[String]) -> Result[Cont, PyErr] {
+    let mut seq: Vec[Node] = Vec.new();
+    for m in messages.iter() {
+        seq.push(Node.Box(parse(m)?));
+    }
+    wrap(K_BATCH, head, seq)
+}
+
+fn before_header(line: ref String) -> PyErr {
+    perr("ParseException", f"Segment received before message header {line}")
+}
+
+// hl7.parse_batch
+fn parse_batch(lines: ref String) -> Result[Cont, PyErr] {
+    let mut batch: Option[String] = None;
+    let mut messages: Vec[String] = Vec.new();
+    for raw in splitlines_keep(hl7_strip(lines)) {
+        let line = hl7_strip(raw);
+        let p = prefix3(line);
+        if p == "BHS" {
+            if batch.is_some() {
+                return Err(perr("ParseException", "Batch cannot have more than one BHS segment".to_string()));
+            }
+            batch = Some(line);
+        } else if p == "BTS" {
+            let b = match batch.clone() {
+                None => continue,
+                Some(b) => b.clone(),
+            };
+            if b.contains("\rBTS") {
+                continue;
+            }
+            batch = Some(f"{b}{line}");
+        } else if p == "MSH" {
+            messages.push(line);
+        } else {
+            if messages.len() == 0 {
+                return Err(before_header(line));
+            }
+            let k = messages.len() - 1;
+            messages[k] = f"{messages[k]}{line}";
+        }
+    }
+    create_batch(batch, messages)
+}
+
+// hl7.parse_file
+fn parse_file(lines: ref String) -> Result[Cont, PyErr] {
+    let mut file: Option[String] = None;
+    let mut heads: Vec[String] = Vec.new();
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let mut messages: Vec[String] = Vec.new();
+    let mut in_batch = false;
+    for raw in splitlines_keep(hl7_strip(lines)) {
+        let line = hl7_strip(raw);
+        let p = prefix3(line);
+        if p == "FHS" {
+            if file.is_some() {
+                return Err(perr("ParseException", "File cannot have more than one FHS segment".to_string()));
+            }
+            file = Some(line);
+        } else if p == "FTS" {
+            let f = match file.clone() {
+                None => continue,
+                Some(f) => f.clone(),
+            };
+            if f.contains("\rFTS") {
+                continue;
+            }
+            file = Some(f"{f}{line}");
+        } else if p == "BHS" {
+            if in_batch {
+                return Err(perr("ParseException", "Batch cannot have more than one BHS segment".to_string()));
+            }
+            heads.push(line);
+            groups.push(Vec.new());
+            in_batch = true;
+        } else if p == "BTS" {
+            if not in_batch {
+                continue;
+            }
+            let k = heads.len() - 1;
+            heads[k] = f"{heads[k]}{line}";
+            in_batch = false;
+        } else if p == "MSH" {
+            if in_batch {
+                let k = groups.len() - 1;
+                groups[k].push(line);
+            } else {
+                messages.push(line);
+            }
+        } else if in_batch {
+            let k = groups.len() - 1;
+            if groups[k].len() == 0 {
+                return Err(before_header(line));
+            }
+            let j = groups[k].len() - 1;
+            groups[k][j] = f"{groups[k][j]}{line}";
+        } else {
+            if messages.len() == 0 {
+                return Err(before_header(line));
+            }
+            let k = messages.len() - 1;
+            messages[k] = f"{messages[k]}{line}";
+        }
+    }
+    let mut seq: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < heads.len() {
+        let h: Option[String] = Some(heads[i].clone());
+        seq.push(Node.Box(create_batch(h, groups[i])?));
+        i += 1;
+    }
+    if messages.len() > 0 {
+        let none: Option[String] = None;
+        seq.push(Node.Box(create_batch(none, messages)?));
+    }
+    wrap(K_FILE, file, seq)
+}
+
+// util.ishl7 / isbatch / isfile; isbatch and isfile return the line
+// itself (repr '') when it is empty.
+fn ishl7(line: ref String) -> bool {
+    if line.len() == 0 {
+        return false;
+    }
+    let msh = chars_of(substr(py_strip(line), 0, 4));
+    if msh.len() != 4 {
+        return false;
+    }
+    str_of(slice_chars(msh, 0, 3)) == "MSH" and count_sub(line, f"\rMSH{msh[3]}") == 0
+}
+
+fn isbatch(line: ref String) -> bool {
+    let p = prefix3(py_strip(line));
+    line.len() > 0 and (p == "BHS" or (count_sub(line, "MSH".to_string()) > 1 and p != "FHS"))
+}
+
+fn isfile(line: ref String) -> bool {
+    line.len() > 0 and (prefix3(py_strip(line)) == "FHS" or isbatch(line))
+}
+
+fn py_bool_or_empty(line: ref String, b: bool) -> String {
+    if line.len() == 0 {
+        "''".to_string()
+    } else if b {
+        "True".to_string()
+    } else {
+        "False".to_string()
+    }
+}
+
+// hl7.parse_hl7
+fn parse_hl7(line: ref String) -> Result[Cont, PyErr] {
+    if ishl7(line) {
+        return parse(line);
+    }
+    if isbatch(line) {
+        return parse_batch(line);
+    }
+    if isfile(line) {
+        return parse_file(line);
+    }
+    Err(perr("ValueError", "line is not HL7".to_string()))
+}
+
+// util.split_file
+fn split_file(text: ref String) -> Vec[String] {
+    let mut rv: Vec[Vec[String]] = Vec.new();
+    for raw in split_on(text, '\r') {
+        let line = py_strip(raw);
+        let p = prefix3(line);
+        if p == "FHS" or p == "BHS" or p == "FTS" or p == "BTS" {
+            continue;
+        }
+        if p == "MSH" {
+            rv.push([line]);
+        } else if rv.len() > 0 {
+            let k = rv.len() - 1;
+            rv[k].push(line);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for m in rv.iter() {
+        let s = join(m, "\r");
+        out.push(if s.ends_with("\r") { s } else { f"{s}\r" });
+    }
+    out
+}
+
+// ------------------------------------------------------------ Accessor
+
+#[derive(Clone)]
+struct Accessor {
+    segment: String,
+    segment_num: i64,
+    field: Option[i64],
+    rep: Option[i64],
+    comp: Option[i64],
+    sub: Option[i64],
+}
+
+fn int_err(s: ref String) -> PyErr {
+    perr("ValueError", f"invalid literal for int() with base 10: {repr_str(s)}")
+}
+
+fn py_int_or_err(s: ref String) -> Result[i64, PyErr] {
+    match py_int_s(s) {
+        Some(n) => Ok(n),
+        None => Err(int_err(s)),
+    }
+}
+
+fn parse_part(parts: ref Vec[String], index: i64, prefix: char) -> Result[Option[i64], PyErr] {
+    if parts.len() <= index {
+        return Ok(None);
+    }
+    let mut num = parts[index].clone();
+    let cs = chars_of(num);
+    if cs.len() == 0 {
+        return Err(str_index_err());
+    }
+    if ascii_upper(cs[0]) == prefix {
+        num = str_of(slice_chars(cs, 1, cs.len()));
+    }
+    Ok(Some(py_int_or_err(num)?))
+}
+
+// Accessor.parse_key
+fn parse_key(key: ref String) -> Result[Accessor, PyErr] {
+    let parts = split_on(key, '.');
+    let p0 = chars_of(parts[0]);
+    let segment = str_of(slice_chars(p0, 0, 3));
+    let segment_num = if p0.len() > 3 { py_int_or_err(str_of(slice_chars(p0, 3, p0.len())))? } else { 1 };
+    Ok(Accessor {
+        segment: segment,
+        segment_num: segment_num,
+        field: parse_part(parts, 1, 'F')?,
+        rep: parse_part(parts, 2, 'R')?,
+        comp: parse_part(parts, 3, 'C')?,
+        sub: parse_part(parts, 4, 'S')?,
+    })
+}
+
+fn opt_repr(v: ref Option[i64]) -> String {
+    match v {
+        Some(n) => f"{n}",
+        None => "None".to_string(),
+    }
+}
+
+fn acc_repr(a: ref Accessor) -> String {
+    f"Accessor(segment={repr_str(a.segment)}, segment_num={a.segment_num}, field_num={opt_repr(a.field)}, repeat_num={opt_repr(a.rep)}, component_num={opt_repr(a.comp)}, subcomponent_num={opt_repr(a.sub)})"
+}
+
+// Accessor.key
+fn acc_key(a: ref Accessor) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(if a.segment_num == 1 { a.segment.clone() } else { f"{a.segment}{a.segment_num}" });
+    for v in [a.field, a.rep, a.comp, a.sub] {
+        if let Some(n) = v {
+            parts.push(f"{n}");
+        }
+    }
+    join(parts, ".")
+}
+
+fn or1(v: ref Option[i64]) -> i64 {
+    match v {
+        Some(n) => if *n == 0 { 1 } else { *n },
+        None => 1,
+    }
+}
+
+// ------------------------------------------------------------ escapes
+
+#[derive(Clone)]
+struct AppMap {
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+fn map_get(m: ref Option[AppMap], k: ref String) -> Option[String] {
+    match m {
+        None => None,
+        Some(am) => {
+            let mut i = 0;
+            while i < am.keys.len() {
+                if am.keys[i] == *k {
+                    return Some(am.vals[i].clone());
+                }
+                i += 1;
+            }
+            None
+        }
+    }
+}
+
+fn default_unescape(c: ref Cont, v: ref String) -> Option[String] {
+    let s = match v.as_str() {
+        "H" => "_".to_string(),
+        "N" => "_".to_string(),
+        "F" => c.seps[1].to_string(),
+        "R" => c.seps[2].to_string(),
+        "S" => c.seps[3].to_string(),
+        "T" => c.seps[4].to_string(),
+        "E" => c.esc.to_string(),
+        ".br" => "\r".to_string(),
+        ".sp" => "\r".to_string(),
+        ".fi" => String.new(),
+        ".nf" => String.new(),
+        ".in" => "    ".to_string(),
+        ".ti" => "    ".to_string(),
+        ".sk" => " ".to_string(),
+        ".ce" => "\r".to_string(),
+        _ => return None,
+    };
+    Some(s)
+}
+
+// int(x, 16) of a slice of at most two characters; None where it raises.
+fn hex_pair(s: ref String) -> Option[i64] {
+    let t = chars_of(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut n = 0;
+    while i < t.len() {
+        if not is_hex(t[i]) {
+            return None;
+        }
+        n = n * 16 + hex_digit(t[i]);
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn repeat_str(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        out.push_str(s);
+        i += 1;
+    }
+    out
+}
+
+// util.unescape
+fn unescape(c: ref Cont, field: ref String, app: ref Option[AppMap]) -> Result[String, PyErr] {
+    let cs = chars_of(field);
+    if cs.len() == 0 or find_char(cs, c.esc) < 0 {
+        return Ok(field.clone());
+    }
+    let mut rv = String.new();
+    let mut collecting = String.new();
+    let mut in_seq = false;
+    for ch in cs.iter() {
+        if in_seq {
+            if *ch == c.esc {
+                in_seq = false;
+                let value = collecting.clone();
+                collecting = String.new();
+                if value.len() == 0 {
+                    continue;
+                }
+                let v3 = substr(value, 0, 3);
+                if let Some(x) = map_get(app, value) {
+                    rv.push_str(x);
+                } else if let Some(x) = default_unescape(c, value) {
+                    rv.push_str(x);
+                } else if value.starts_with(".") and (map_get(app, v3).is_some() or default_unescape(c, v3).is_some()) {
+                    let unit = match map_get(app, v3) {
+                        Some(x) => x,
+                        None => default_unescape(c, v3).unwrap_or(String.new()),
+                    };
+                    let count = py_int_or_err(substr(value, 3, char_len(value)))?;
+                    rv.push_str(repeat_str(unit, count));
+                } else if value.starts_with("X") {
+                    let hex = chars_of(substr(value, 1, char_len(value)));
+                    let mut off = 0;
+                    while off < hex.len() {
+                        match hex_pair(str_of(slice_chars(hex, off, off + 2))) {
+                            Some(n) => match char.try_from(n as u32) {
+                                Ok(x) => {
+                                    if n < 0 {
+                                        break;
+                                    }
+                                    rv.push(x);
+                                }
+                                Err(_) => break,
+                            },
+                            None => break,
+                        }
+                        off += 2;
+                    }
+                }
+            } else {
+                collecting.push(*ch);
+            }
+        } else if *ch == c.esc {
+            in_seq = true;
+        } else {
+            rv.push(*ch);
+        }
+    }
+    Ok(rv)
+}
+
+// %2x
+fn hex_pad2(n: i64) -> String {
+    let h = f"{n:x}";
+    if h.len() < 2 { f" {h}" } else { h }
+}
+
+// util.escape; DEFAULT_MAP is a dict literal, so a separator that
+// appears twice maps to its later code.
+fn escape(c: ref Cont, field: ref String, app: ref Option[AppMap]) -> String {
+    if field.len() == 0 {
+        return field.clone();
+    }
+    let keys = [c.seps[1], c.seps[2], c.seps[3], c.seps[4], c.esc, '\r'];
+    let codes = ["F", "R", "S", "T", "E", ".br"];
+    let esc = c.esc.to_string();
+    let mut rv = String.new();
+    for ch in field.chars() {
+        if let Some(x) = map_get(app, ch.to_string()) {
+            rv.push_str(f"{esc}{x}{esc}");
+            continue;
+        }
+        let mut code = String.new();
+        let mut i = 5;
+        while i >= 0 {
+            if keys[i] == ch {
+                code = codes[i].to_string();
+                break;
+            }
+            i -= 1;
+        }
+        let n = (ch as u32) as i64;
+        if code.len() > 0 {
+            rv.push_str(f"{esc}{code}{esc}");
+        } else if n >= 0x20 and n <= 0x7e {
+            rv.push(ch);
+        } else {
+            rv.push_str(f"{esc}X{hex_pad2(n)}{esc}");
+        }
+    }
+    rv
+}
+
+// ------------------------------------------------------------ extract_field
+
+fn leaf_err(key: ref String) -> PyErr {
+    perr("IndexError", f"Field reaches leaf node before completing path: {key}")
+}
+
+// Segment.extract_field, with the accessor's own (possibly None) numbers.
+fn seg_extract(seg: ref Cont, a: ref Accessor) -> Result[String, PyErr] {
+    let name = seg_name(Node.Box(seg.clone()))?;
+    let acc = Accessor { segment: name.clone(), segment_num: a.segment_num, field: a.field, rep: a.rep, comp: a.comp, sub: a.sub };
+    let key = acc_key(acc);
+    let f = or1(a.field);
+    let r = or1(a.rep);
+    let cn = or1(a.comp);
+    let sn = or1(a.sub);
+    let none: Option[AppMap] = None;
+    if f >= seg.items.len() {
+        if r == 1 and cn == 1 and sn == 1 {
+            return Ok(String.new());
+        }
+        return Err(perr("IndexError", f"Field not present: {key}"));
+    }
+    let field = cont_call(seg, f)?;
+    let rep = node_call(field, r)?;
+    if not is_kind(rep, K_REP) {
+        if cn == 1 and sn == 1 {
+            let raw = text_of(rep);
+            let msh12 = match a.field {
+                Some(n) => *n == 1 or *n == 2,
+                None => false,
+            };
+            if name == "MSH" and msh12 {
+                return Ok(raw);
+            }
+            return unescape(seg, raw, none);
+        }
+        return Err(leaf_err(key));
+    }
+    if cn > node_len(rep) {
+        if sn == 1 {
+            return Ok(String.new());
+        }
+        return Err(perr("IndexError", f"Component not present: {key}"));
+    }
+    let component = node_call(rep, cn)?;
+    if not is_kind(component, K_COMP) {
+        if sn == 1 {
+            return unescape(seg, text_of(component), none);
+        }
+        return Err(leaf_err(key));
+    }
+    if sn <= node_len(component) {
+        let s = node_call(component, sn)?;
+        return unescape(seg, text_of(s), none);
+    }
+    Ok(String.new())
+}
+
+// The segment a Message's accessor names: segments(seg)(segment_num).
+fn seg_at(m: ref Cont, id: ref String, num: i64) -> Result[i64, PyErr] {
+    let idx = segments(m, id)?;
+    match seq_index(idx.len(), num) {
+        Some(j) => Ok(idx[j]),
+        None => Err(index_err()),
+    }
+}
+
+fn extract(m: ref Cont, key: ref String) -> Result[String, PyErr] {
+    let a = parse_key(key)?;
+    let i = seg_at(m, a.segment, a.segment_num)?;
+    seg_extract(as_cont(m.items[i]), a)
+}
+
+// Message.__getitem__ with a str key, as its repr.
+fn getitem_repr(m: ref Cont, key: ref String) -> Result[String, PyErr] {
+    if char_len(key) == 3 {
+        let idx = segments(m, key)?;
+        let mut parts: Vec[String] = Vec.new();
+        for i in idx.iter() {
+            parts.push(node_repr(m.items[*i]));
+        }
+        return Ok(f"[{join(parts, ", ")}]");
+    }
+    Ok(repr_str(extract(m, key)?))
+}
+
+// ------------------------------------------------------------ assign_field
+
+fn item_assign_err() -> PyErr {
+    perr("TypeError", "'str' object does not support item assignment".to_string())
+}
+
+fn no_append() -> PyErr {
+    perr("AttributeError", "'str' object has no attribute 'append'".to_string())
+}
+
+// One level of Segment.assign_field below the field: x is the field
+// (depth 0), repetition (1) or component (2); nums[depth] is the index
+// into it, None to replace its contents with [value].
+fn assign_level(x: own Node, value: ref String, nums: ref Vec[Option[i64]], depth: i64, seps: ref Vec[char], esc: char) -> (Node, Option[PyErr]) {
+    let n = match nums[depth] {
+        None => {
+            return match x {
+                Node.Text(s) => (Node.Text(s), Some(item_assign_err())),
+                Node.Box(c) => {
+                    let mut c2 = c;
+                    c2.items = [Node.Text(value.clone())];
+                    (Node.Box(c2), None)
+                }
+            };
+        }
+        Some(n) => n,
+    };
+    let mut c = match x {
+        Node.Text(s) => {
+            if char_len(s) < n {
+                return (Node.Text(s), Some(no_append()));
+            }
+            return (Node.Text(s), Some(not_callable()));
+        }
+        Node.Box(c) => c,
+    };
+    while c.items.len() < n {
+        if depth == 2 {
+            c.items.push(Node.Text(String.new()));
+        } else {
+            c.items.push(Node.Box(mk(K_REP + depth, Vec.new(), seps, esc)));
+        }
+    }
+    let j = match seq_index(c.items.len(), n) {
+        Some(j) => j,
+        None => {
+            let e = if depth == 2 { perr("IndexError", "list assignment index out of range".to_string()) } else { index_err() };
+            return (Node.Box(c), Some(e));
+        }
+    };
+    if depth == 2 {
+        c.items[j] = Node.Text(value.clone());
+        return (Node.Box(c), None);
+    }
+    let child = c.items[j].clone();
+    let (child2, e) = assign_level(child, value, nums, depth + 1, seps, esc);
+    c.items[j] = child2;
+    (Node.Box(c), e)
+}
+
+// Segment.assign_field
+fn seg_assign(seg: mut ref Cont, value: ref String, f: Option[i64], r: Option[i64], cn: Option[i64], sn: Option[i64]) -> Result[(), PyErr] {
+    let fnum = match f {
+        None => return Err(perr("TypeError", "'<=' not supported between instances of 'int' and 'NoneType'".to_string())),
+        Some(n) => n,
+    };
+    while seg.items.len() <= fnum {
+        seg.items.push(Node.Box(create(seg, K_FIELD, Vec.new())));
+    }
+    let j = match py_index(seg.items.len(), fnum) {
+        Some(j) => j,
+        None => return Err(index_err()),
+    };
+    let field = seg.items[j].clone();
+    let nums: Vec[Option[i64]] = [r, cn, sn];
+    let (field2, e) = assign_level(field, value, nums, 0, seg.seps, seg.esc);
+    seg.items[j] = field2;
+    match e {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+// Message.assign_field
+fn msg_assign(m: mut ref Cont, value: ref String, id: ref String, num: i64, f: Option[i64], r: Option[i64], cn: Option[i64], sn: Option[i64]) -> Result[(), PyErr] {
+    let i = seg_at(m, id, num)?;
+    let mut seg = as_cont(m.items[i]);
+    let res = seg_assign(mut seg, value, f, r, cn, sn);
+    m.items[i] = Node.Box(seg);
+    res
+}
+
+// Message.__setitem__ with a str key and value.
+fn setitem(m: mut ref Cont, key: ref String, value: ref String) -> Result[(), PyErr] {
+    if char_len(key) <= 3 {
+        return Err(perr("TypeError", "list indices must be integers or slices, not str".to_string()));
+    }
+    let a = parse_key(key)?;
+    msg_assign(mut m, value, a.segment, a.segment_num, a.field, a.rep, a.comp, a.sub)
+}
+
+// ------------------------------------------------------------ parse_datetime
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn day_of_year(y: i64, m: i64, d: i64) -> i64 {
+    let mut n = d;
+    let mut k = 1;
+    while k < m {
+        n += days_in_month(y, k);
+        k += 1;
+    }
+    n
+}
+
+// A datetime.datetime; tz says whether it has a _UTCOffset, whose
+// minutes are a float in the library (always a whole number here).
+#[derive(Clone)]
+struct Dtm {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    tz: bool,
+    off: i64,
+}
+
+fn round_half_even(x: f64) -> i64 {
+    let f = x.floor();
+    let diff = x - f;
+    let fi = f as i64;
+    if diff > 0.5 {
+        fi + 1
+    } else if diff < 0.5 {
+        fi
+    } else if fi % 2 == 0 {
+        fi
+    } else {
+        fi + 1
+    }
+}
+
+fn malformed(value: ref String) -> PyErr {
+    perr("ValueError", f"Malformed HL7 datetime {value}")
+}
+
+fn dtm_part(dtm: ref Vec[char], a: i64, b: i64) -> Result[i64, PyErr] {
+    py_int_or_err(py_slice(dtm, a, b))
+}
+
+// datatypes.parse_datetime; None for an empty value.
+fn parse_datetime(value: ref String) -> Result[Option[Dtm], PyErr] {
+    if value.len() == 0 {
+        return Ok(None);
+    }
+    let cs = chars_of(value);
+    let mut i = 0;
+    while i < cs.len() and is_digit(cs[i]) {
+        i += 1;
+    }
+    if i == 0 {
+        return Err(malformed(value));
+    }
+    if i + 1 < cs.len() and cs[i] == '.' and is_digit(cs[i + 1]) {
+        i += 1;
+        while i < cs.len() and is_digit(cs[i]) {
+            i += 1;
+        }
+    }
+    let dtm = slice_chars(cs, 0, i);
+    let mut tz = false;
+    let mut off = 0;
+    if i + 5 <= cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        let mut ok = true;
+        let mut k = 1;
+        while k <= 4 {
+            if not is_digit(cs[i + k]) {
+                ok = false;
+            }
+            k += 1;
+        }
+        if ok {
+            let tzh = py_int_or_err(str_of(slice_chars(cs, i, i + 3)))?;
+            let tzm = py_int_or_err(str_of(slice_chars(cs, i + 3, i + 5)))?;
+            let m = tzh * 60;
+            off = if m < 0 { m - tzm } else { m + tzm };
+            tz = true;
+        }
+    }
+    let p = dtm.len();
+    if p < 4 {
+        return Err(malformed(value));
+    }
+    let year = dtm_part(dtm, 0, 4)?;
+    let month = if p >= 6 { dtm_part(dtm, 4, 6)? } else { 1 };
+    let day = if p >= 8 { dtm_part(dtm, 6, 8)? } else { 1 };
+    let hour = if p >= 10 { dtm_part(dtm, 8, 10)? } else { 0 };
+    let minute = if p >= 12 { dtm_part(dtm, 10, 12)? } else { 0 };
+    let mut second = 0;
+    let mut us = 0;
+    if p >= 14 {
+        let text = py_slice(dtm, 12, p);
+        let x = match py_float_s(text) {
+            Some(x) => x,
+            None => return Err(perr("ValueError", f"could not convert string to float: {repr_str(text)}")),
+        };
+        let whole = x.trunc();
+        let mut secs = whole as i64;
+        let mut micro = round_half_even((x - whole) * 1000000.0);
+        if micro >= 1000000 {
+            secs += 1;
+            micro -= 1000000;
+        }
+        second = secs % 86400;
+        us = micro;
+    }
+    if year < 1 or year > 9999 {
+        return Err(perr("ValueError", f"year {year} is out of range"));
+    }
+    if month < 1 or month > 12 {
+        return Err(perr("ValueError", "month must be in 1..12".to_string()));
+    }
+    if day < 1 or day > days_in_month(year, month) {
+        return Err(perr("ValueError", "day is out of range for month".to_string()));
+    }
+    if hour > 23 {
+        return Err(perr("ValueError", "hour must be in 0..23".to_string()));
+    }
+    if minute > 59 {
+        return Err(perr("ValueError", "minute must be in 0..59".to_string()));
+    }
+    if second > 59 {
+        return Err(perr("ValueError", "second must be in 0..59".to_string()));
+    }
+    Ok(Some(Dtm { y: year, mo: month, d: day, h: hour, mi: minute, s: second, us: us, tz: tz, off: off }))
+}
+
+fn pad2(n: i64) -> String {
+    f"{n:02}"
+}
+
+// str(datetime)
+fn dtm_str(t: ref Dtm) -> Result[String, PyErr] {
+    let mut s = f"{t.y:04}-{pad2(t.mo)}-{pad2(t.d)} {pad2(t.h)}:{pad2(t.mi)}:{pad2(t.s)}";
+    if t.us != 0 {
+        s.push_str(f".{t.us:06}");
+    }
+    if t.tz {
+        if t.off <= -1440 or t.off >= 1440 {
+            return Err(perr("ValueError", "offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24).".to_string()));
+        }
+        let sign = if t.off < 0 { "-" } else { "+" };
+        let a = if t.off < 0 { -t.off } else { t.off };
+        s.push_str(f"{sign}{pad2(a / 60)}:{pad2(a % 60)}");
+    }
+    Ok(s)
+}
+
+// _UTCOffset.tzname, which formats float minutes with '{:02}'.
+fn dtm_tzname(t: ref Dtm) -> String {
+    let sign = if t.off < 0 { "-" } else { "+" };
+    let a = if t.off < 0 { -t.off } else { t.off };
+    f"{sign}{a / 60}.0{a % 60}.0"
+}
+
+// ------------------------------------------------------------ the clock
+
+// The clock and sample oracle.py gives the library: ticks of one
+// second from 2026-10-21 08:00:00 UTC, and sample's call count.
+struct Clock {
+    ticks: i64,
+    calls: i64,
+}
+
+fn utcnow(env: mut ref Clock) -> (i64, i64, i64) {
+    let t = 8 * 3600 + env.ticks;
+    env.ticks += 1;
+    (t / 3600, (t / 60) % 60, t % 60)
+}
+
+fn stamp(env: mut ref Clock) -> String {
+    let (h, m, s) = utcnow(mut env);
+    f"20261021{pad2(h)}{pad2(m)}{pad2(s)}"
+}
+
+// util.generate_message_control_id
+fn control_id(env: mut ref Clock) -> String {
+    let (h, m, s) = utcnow(mut env);
+    let ts = f"26{day_of_year(2026, 10, 21):03}{pad2(h)}{pad2(m)}{pad2(s)}000000";
+    let alnum = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string());
+    let mut out = substr(ts, 1, char_len(ts));
+    let mut i = 0;
+    while i < 4 {
+        out.push(alnum[(env.calls * 5 + i * 11) % 36]);
+        i += 1;
+    }
+    env.calls += 1;
+    out
+}
+
+fn str_call(n: ref Node, i: i64) -> Result[String, PyErr] {
+    node_str(node_call(n, i)?)
+}
+
+// Message.create_ack
+fn create_ack(m: ref Cont, code: ref String, mid: ref Option[String], app: ref Option[String], fac: ref Option[String], env: mut ref Clock) -> Result[Cont, PyErr] {
+    let src = Node.Box(segment(m, "MSH".to_string())?);
+    let mut msh = create(m, K_SEG, [text_field(m, "MSH".to_string())]);
+    let none: Option[i64] = None;
+    seg_assign(mut msh, str_call(src, 1)?, Some(1), none, none, none)?;
+    seg_assign(mut msh, str_call(src, 2)?, Some(2), none, none, none)?;
+    let a = match app {
+        Some(x) => x.clone(),
+        None => str_call(src, 5)?,
+    };
+    seg_assign(mut msh, a, Some(3), none, none, none)?;
+    let f = match fac {
+        Some(x) => x.clone(),
+        None => str_call(src, 6)?,
+    };
+    seg_assign(mut msh, f, Some(4), none, none, none)?;
+    seg_assign(mut msh, str_call(src, 3)?, Some(5), none, none, none)?;
+    seg_assign(mut msh, str_call(src, 4)?, Some(6), none, none, none)?;
+    seg_assign(mut msh, stamp(mut env), Some(7), none, none, none)?;
+    seg_assign(mut msh, "ACK".to_string(), Some(9), Some(1), Some(1), none)?;
+    let trigger = node_str(node_call(node_call(node_call(src, 9)?, 1)?, 2)?)?;
+    seg_assign(mut msh, trigger, Some(9), Some(1), Some(2), none)?;
+    seg_assign(mut msh, "ACK".to_string(), Some(9), Some(1), Some(3), none)?;
+    let id = match mid {
+        Some(x) => x.clone(),
+        None => control_id(mut env),
+    };
+    seg_assign(mut msh, id, Some(10), none, none, none)?;
+    seg_assign(mut msh, str_call(src, 11)?, Some(11), none, none, none)?;
+    seg_assign(mut msh, str_call(src, 12)?, Some(12), none, none, none)?;
+    let mut msa = create(m, K_SEG, [text_field(m, "MSA".to_string())]);
+    seg_assign(mut msa, code, Some(1), none, none, none)?;
+    seg_assign(mut msa, str_call(src, 10)?, Some(2), none, none, none)?;
+    Ok(create(m, K_MSG, [Node.Box(msh), Node.Box(msa)]))
+}
+
+// ------------------------------------------------------------ bytes
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for x in b.iter() {
+        if *x == b'\'' {
+            has_sq = true;
+        }
+        if *x == b'"' {
+            has_dq = true;
+        }
+    }
+    let q = if has_sq and not has_dq { b'"' } else { b'\'' };
+    let mut out = "b".to_string();
+    out.push(q as char);
+    for x in b.iter() {
+        let c = *x;
+        if c == q or c == b'\\' {
+            out.push('\\');
+            out.push(c as char);
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c < 0x20 or c >= 0x7f {
+            out.push_str(f"\\x{hex2(c as i64)}");
+        } else {
+            out.push(c as char);
+        }
+    }
+    out.push(q as char);
+    out
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn find_bytes(h: ref Vec[u8], n: ref Vec[u8], from: i64) -> i64 {
+    let mut i = from;
+    while i + n.len() <= h.len() {
+        let mut k = 0;
+        while k < n.len() and h[i + k] == n[k] {
+            k += 1;
+        }
+        if k == n.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn sub_bytes(b: ref Vec[u8], a: i64, e: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = if a < 0 { 0 } else { a };
+    let end = if e > b.len() { b.len() } else { e };
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn split_bytes(b: ref Vec[u8], sep: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut start = 0;
+    loop {
+        let i = find_bytes(b, sep, start);
+        if i < 0 {
+            break;
+        }
+        out.push(sub_bytes(b, start, i));
+        start = i + sep.len();
+    }
+    out.push(sub_bytes(b, start, b.len()));
+    out
+}
+
+fn has_byte(set: ref Vec[u8], c: u8) -> bool {
+    for x in set.iter() {
+        if *x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn strip_bytes(b: ref Vec[u8], set: ref Vec[u8]) -> Vec[u8] {
+    let mut a = 0;
+    let mut e = b.len();
+    while a < e and has_byte(set, b[a]) {
+        a += 1;
+    }
+    while e > a and has_byte(set, b[e - 1]) {
+        e -= 1;
+    }
+    sub_bytes(b, a, e)
+}
+
+fn concat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for x in b.iter() {
+        out.push(*x);
+    }
+    out
+}
+
+// bytes.decode(encoding, errors) for ascii and utf-8, with strict and
+// replace errors.
+fn decode(b: ref Vec[u8], enc: Str, errors: Str) -> Result[String, PyErr] {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        if enc == "ascii" {
+            if errors == "replace" {
+                out.push('\u{fffd}');
+                i += 1;
+                continue;
+            }
+            return Err(perr("UnicodeDecodeError", f"'ascii' codec can't decode byte 0x{hex2(c as i64)} in position {i}: ordinal not in range(128)"));
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xbf;
+        let mut cp: u32 = 0;
+        if c >= 0xc2 and c <= 0xdf {
+            need = 1;
+            cp = (c & 0x1f) as u32;
+        } else if c >= 0xe0 and c <= 0xef {
+            need = 2;
+            cp = (c & 0x0f) as u32;
+            if c == 0xe0 {
+                lo = 0xa0;
+            }
+            if c == 0xed {
+                hi = 0x9f;
+            }
+        } else if c >= 0xf0 and c <= 0xf4 {
+            need = 3;
+            cp = (c & 0x07) as u32;
+            if c == 0xf0 {
+                lo = 0x90;
+            }
+            if c == 0xf4 {
+                hi = 0x8f;
+            }
+        }
+        let mut reason = String.new();
+        let mut got = 0;
+        if need == 0 {
+            reason = "invalid start byte".to_string();
+            got = 1;
+        } else {
+            let mut k = 1;
+            while k <= need {
+                if i + k >= b.len() {
+                    reason = "unexpected end of data".to_string();
+                    break;
+                }
+                let x = b[i + k];
+                let (l, h) = if k == 1 { (lo, hi) } else { (0x80 as u8, 0xbf as u8) };
+                if x < l or x > h {
+                    reason = "invalid continuation byte".to_string();
+                    break;
+                }
+                cp = (cp << 6) | ((x & 0x3f) as u32);
+                k += 1;
+            }
+            got = k;
+        }
+        if reason.len() == 0 {
+            out.push(char.try_from(cp).unwrap_or('\u{fffd}'));
+            i += need + 1;
+            continue;
+        }
+        if errors == "replace" {
+            out.push('\u{fffd}');
+            i += got;
+            continue;
+        }
+        let pos = if got == 1 { f"byte 0x{hex2(c as i64)} in position {i}" } else { f"bytes in position {i}-{i + got - 1}" };
+        return Err(perr("UnicodeDecodeError", f"'utf-8' codec can't decode {pos}: {reason}"));
+    }
+    Ok(out)
+}
+
+fn encode(s: ref String) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+// ------------------------------------------------------------ MLLP
+
+// client.read_stream over a stream read size bytes at a time: the
+// messages it yields, then the MLLPException it raises, if any.
+fn read_stream(data: ref Vec[u8], size: i64) -> (Vec[Vec[u8]], Option[PyErr]) {
+    let eb = [0x1c as u8];
+    let ff = [0x0c as u8];
+    let sbcr = [0x0b as u8, 0x0d as u8];
+    let ws = [0x20 as u8, 0x09 as u8, 0x0a as u8, 0x0d as u8, 0x0b as u8, 0x0c as u8];
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut buffer: Vec[u8] = Vec.new();
+    let mut pos = 0;
+    while pos < data.len() {
+        let chunk = sub_bytes(data, pos, pos + size);
+        pos += size;
+        let sep = if has_byte(chunk, 0x0c) { ff.clone() } else { eb.clone() };
+        let mut parts = split_bytes(concat(buffer, chunk), sep);
+        buffer = parts.pop().unwrap_or(Vec.new());
+        for m in parts.iter() {
+            out.push(strip_bytes(m, sbcr));
+        }
+    }
+    if strip_bytes(buffer, ws).len() > 0 {
+        return (out, Some(perr("MLLPException", f"buffer not terminated: {bytes_repr(buffer)}")));
+    }
+    (out, None)
+}
+
+// client.read_loose
+fn read_loose(data: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut d: Vec[u8] = Vec.new();
+    for x in data.iter() {
+        if *x != 0x1c and *x != 0x0c and *x != 0x0b {
+            d.push(*x);
+        }
+    }
+    let mut e: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < d.len() {
+        if d[i] == b'\r' and i + 1 < d.len() and d[i + 1] == b'\n' {
+            e.push(b'\r');
+            i += 2;
+            continue;
+        }
+        e.push(if d[i] == b'\n' { b'\r' } else { d[i] });
+        i += 1;
+    }
+    let start = bytes_of("MSH|^~\\&|");
+    let strip = [b'\r', b'\n', b' '];
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    for m in split_bytes(e, start) {
+        if m.len() == 0 {
+            continue;
+        }
+        out.push(concat(start, strip_bytes(m, strip)));
+    }
+    out
+}
+
+// An HL7StreamReader fed the whole of data and then EOF.
+struct Reader {
+    buf: Vec[u8],
+    limit: i64,
+    enc: String,
+    errors: String,
+}
+
+// The outcome of one readmessage(): a message, an error, or the
+// IncompleteReadError that ends the stream.
+enum Read {
+    Msg(Cont),
+    Fail(PyErr),
+    End(PyErr),
+}
+
+impl Reader {
+    fn readmessage(mut ref self) -> Read {
+        let sep = [0x1c as u8, 0x0d as u8];
+        let n = self.buf.len();
+        let mut found = -1;
+        if n >= 2 {
+            found = find_bytes(self.buf, sep, 0);
+            if found < 0 {
+                let offset = n - 1;
+                if offset > self.limit {
+                    self.buf = Vec.new();
+                    return Read.Fail(perr("ValueError", "Separator is not found, and chunk exceed the limit".to_string()));
+                }
+            }
+        }
+        if found < 0 {
+            let len = self.buf.len();
+            self.buf = Vec.new();
+            return Read.End(perr("IncompleteReadError", f"{len} bytes read on a total of undefined expected bytes"));
+        }
+        if found > self.limit {
+            self.buf = sub_bytes(self.buf, found + 2, n);
+            return Read.Fail(perr("ValueError", "Separator is found, but chunk is longer than limit".to_string()));
+        }
+        let block = sub_bytes(self.buf, 0, found + 2);
+        self.buf = sub_bytes(self.buf, found + 2, n);
+        if block.len() == 0 or block[0] != 0x0b {
+            return Read.Fail(perr("InvalidBlockError", "Block does not begin with Start Block character <VT>".to_string()));
+        }
+        let body = sub_bytes(block, 1, block.len() - 2);
+        let text = match decode(body, if self.enc == "ascii" { "ascii" } else { "utf-8" }, if self.errors == "replace" { "replace" } else { "strict" }) {
+            Ok(t) => t,
+            Err(e) => return Read.Fail(e),
+        };
+        match parse(text) {
+            Ok(m) => Read.Msg(m),
+            Err(e) => Read.Fail(e),
+        }
+    }
+}
+
+fn new_reader(data: ref Vec[u8], limit: i64, encoding: ref String) -> Reader {
+    if encoding == "-" {
+        return Reader { buf: data.clone(), limit: limit, enc: "ascii".to_string(), errors: "strict".to_string() };
+    }
+    let parts = split_on(encoding, ',');
+    let errors = if parts.len() > 1 { parts[1].clone() } else { "strict".to_string() };
+    Reader { buf: data.clone(), limit: limit, enc: parts[0].clone(), errors: errors }
+}
+
+// ------------------------------------------------------------ job helpers
+
+fn decode_line(v: ref String) -> String {
+    let a = split_str(v, "<CR>");
+    let b = split_str(join(a, "\r"), "<LF>");
+    let c = split_str(join(b, "\n"), "<TAB>");
+    join(c, "\t")
+}
+
+fn app_map(text: ref String) -> Option[AppMap] {
+    if text == "-" {
+        return None;
+    }
+    let mut m = AppMap { keys: Vec.new(), vals: Vec.new() };
+    for part in split_on(text, ',') {
+        let eq = match part.find("=") {
+            Some(i) => i,
+            None => continue,
+        };
+        m.keys.push(decode_line(part[0..eq].to_string()));
+        m.vals.push(part[(eq + 1)..].to_string());
+    }
+    Some(m)
+}
+
+fn none_arg(v: ref String) -> Option[String] {
+    if v == "-" { None } else { Some(v.clone()) }
+}
+
+fn int_arg(v: ref String) -> Option[i64] {
+    if v == "-" { None } else { py_int_s(v) }
+}
+
+fn num(v: ref String) -> i64 {
+    py_int_s(v).unwrap_or(0)
+}
+
+fn opt_seg_repr(v: ref Vec[Cont]) -> String {
+    if v.len() == 0 {
+        "None".to_string()
+    } else {
+        cont_repr(v[0])
+    }
+}
+
+fn show(c: ref Cont, ind: ref String) {
+    println(f"{ind}{kind_name(c.kind)} len={c.items.len()}");
+    if c.kind == K_FILE or c.kind == K_BATCH {
+        println(f"{ind} header {opt_seg_repr(c.header)}");
+        println(f"{ind} trailer {opt_seg_repr(c.trailer)}");
+        for x in c.items.iter() {
+            show(as_cont(x), f"{ind}  ");
+        }
+    } else {
+        println(f"{ind} {cont_repr(c)}");
+    }
+}
+
+fn show_str(c: ref Cont) {
+    match cont_str(c) {
+        Ok(s) => println(f"str {repr_str(s)}"),
+        Err(e) => println(f"str {err_text(e)}"),
+    }
+}
+
+// ------------------------------------------------------------ structure
+
+fn job_tree(name: ref String) {
+    let text = read_text(name);
+    for label in ["parse_hl7", "parse"] {
+        let r = if label == "parse" { parse(text) } else { parse_hl7(text) };
+        let obj = match r {
+            Ok(o) => o,
+            Err(e) => {
+                println(f"{label} {err_text(e)}");
+                continue;
+            }
+        };
+        println(label);
+        show(obj, "  ".to_string());
+        show_str(obj);
+        match cont_str(obj) {
+            Ok(s) => println(f"same {if s == text { "True" } else { "False" }}"),
+            Err(e) => println(f"same {err_text(e)}"),
+        }
+    }
+}
+
+fn job_batchof(name: ref String) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    let mut b = create(h, K_BATCH, [Node.Box(h.clone()), Node.Box(h.clone())]);
+    println(f"batch len={b.items.len()}");
+    show_str(b);
+    let hdr = create(b, K_SEG, [text_field(b, "BHS".to_string()), text_field(b, b.seps[1].to_string()), text_field(b, f"{b.seps[3]}{b.seps[2]}{b.esc}{b.seps[4]}")]);
+    set_header(mut b, Some(hdr))?;
+    println(f"header {opt_seg_repr(b.header)}");
+    show_str(b);
+    let mut trl = create(b, K_SEG, [text_field(b, "BTS".to_string())]);
+    let none: Option[i64] = None;
+    seg_assign(mut trl, "2".to_string(), Some(1), none, none, none)?;
+    set_trailer(mut b, Some(trl))?;
+    show_str(b);
+    let pid = segment(h, "PID".to_string())?;
+    match set_header(mut b, Some(pid)) {
+        Ok(()) => println("set header ok"),
+        Err(e) => println(f"set header {err_text(e)}"),
+    }
+    let msh = segment(h, "MSH".to_string())?;
+    match set_trailer(mut b, Some(msh)) {
+        Ok(()) => println("set trailer ok"),
+        Err(e) => println(f"set trailer {err_text(e)}"),
+    }
+    set_header(mut b, None)?;
+    show_str(b);
+    set_trailer(mut b, None)?;
+    show_str(b);
+    Ok(())
+}
+
+fn job_fileof(name: ref String) -> Result[(), PyErr] {
+    let b = parse_batch(read_text(name))?;
+    let mut f = create(b, K_FILE, [Node.Box(b.clone())]);
+    show(f, String.new());
+    show_str(f);
+    let hdr = create(f, K_SEG, [text_field(f, "FHS".to_string()), text_field(f, f.seps[1].to_string()), text_field(f, f"{f.seps[3]}{f.seps[2]}{f.esc}{f.seps[4]}")]);
+    set_header(mut f, Some(hdr))?;
+    show_str(f);
+    let trl = create(f, K_SEG, [text_field(f, "FTS".to_string())]);
+    set_trailer(mut f, Some(trl))?;
+    show_str(f);
+    let m = as_cont(b.items[0]);
+    let pid = segment(m, "PID".to_string())?;
+    if let Err(e) = set_trailer(mut f, Some(pid.clone())) {
+        println(f"set trailer {err_text(e)}");
+    }
+    println(f"message create_file {cont_repr(create(m, K_FILE, Vec.new()))}");
+    println(f"message create_message {repr_str(cont_str(create(m, K_MSG, [Node.Box(pid)]))?)}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ access
+
+fn job_get(name: ref String, keys: ref Vec[String]) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    for k in keys.iter() {
+        match getitem_repr(h, k) {
+            Ok(v) => println(f"{k} = {v}"),
+            Err(e) => println(f"{k} {err_text(e)}"),
+        }
+    }
+    Ok(())
+}
+
+fn job_accessor(keys: ref Vec[String]) {
+    for k in keys.iter() {
+        match parse_key(k) {
+            Ok(a) => {
+                let key = acc_key(a);
+                println(f"{k} -> {acc_repr(a)} key={repr_str(key)} str={key}");
+            }
+            Err(e) => println(f"{k} {err_text(e)}"),
+        }
+    }
+}
+
+// "PID.F13.R3=01632 960199" holds a space: a word with no '=' joins the
+// assignment before it.
+fn split_assigns(words: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        if w.contains("=") or out.len() == 0 {
+            out.push(w.clone());
+        } else {
+            let k = out.len() - 1;
+            out[k] = f"{out[k]} {w}";
+        }
+    }
+    out
+}
+
+fn job_set(name: ref String, assigns: ref Vec[String]) -> Result[(), PyErr] {
+    let mut h = parse(read_text(name))?;
+    let mut keys: Vec[String] = Vec.new();
+    for a in assigns.iter() {
+        let eq = match a.find("=") {
+            Some(i) => i,
+            None => continue,
+        };
+        let k = a[0..eq].to_string();
+        let v = a[(eq + 1)..].to_string();
+        keys.push(k.clone());
+        match setitem(mut h, k, v) {
+            Ok(()) => println(f"set {k} ok"),
+            Err(e) => println(f"set {k} {err_text(e)}"),
+        }
+    }
+    println(f"str {repr_str(cont_str(h)?)}");
+    for k in keys.iter() {
+        match getitem_repr(h, k) {
+            Ok(v) => println(f"  {k} = {v}"),
+            Err(e) => println(f"  {k} {err_text(e)}"),
+        }
+    }
+    Ok(())
+}
+
+fn job_assign(name: ref String, args: ref Vec[String]) -> Result[(), PyErr] {
+    let mut h = parse(read_text(name))?;
+    let seg = args[0].clone();
+    let segnum = num(args[1]);
+    match msg_assign(mut h, args[6], seg, segnum, int_arg(args[2]), int_arg(args[3]), int_arg(args[4]), int_arg(args[5])) {
+        Ok(()) => println("assign ok"),
+        Err(e) => println(f"assign {err_text(e)}"),
+    }
+    match seg_at(h, seg, segnum) {
+        Ok(i) => println(f"  {repr_str(node_str(h.items[i])?)}"),
+        Err(e) => println(f"  {err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn job_idx(name: ref String, args: ref Vec[String]) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    for a in args.iter() {
+        if let Some(c) = a.find(":") {
+            let (x, y) = slice_bounds(h.items.len(), num(a[0..c].to_string()), num(a[(c + 1)..].to_string()));
+            let mut items: Vec[Node] = Vec.new();
+            let mut k = x;
+            while k < y {
+                items.push(h.items[k].clone());
+                k += 1;
+            }
+            let part = create(h, K_MSG, items);
+            println(f"{a} -> {kind_name(part.kind)} {repr_str(cont_str(part)?)}");
+        } else {
+            match py_index(h.items.len(), num(a)) {
+                Some(j) => println(f"{a} -> {node_repr(h.items[j])}"),
+                None => println(f"{a} {err_text(index_err())}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ escapes, datetimes
+
+fn escape_values() -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut lines = split_on(read_text("escapes.txt".to_string()), '\n');
+    lines.pop();
+    for v in lines.iter() {
+        out.push(decode_line(v));
+    }
+    out
+}
+
+fn job_escape(name: ref String, mapping: ref String, out: bool) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    let amap = app_map(mapping);
+    for v in escape_values().iter() {
+        if out {
+            println(f"{repr_str(v)} -> {repr_str(escape(h, v, amap))}");
+        } else {
+            match unescape(h, v, amap) {
+                Ok(r) => println(f"{repr_str(v)} -> {repr_str(r)}"),
+                Err(e) => println(f"{repr_str(v)} {err_text(e)}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn job_dtm() {
+    let mut values = split_on(read_text("dtm.txt".to_string()), '\n');
+    values.pop();
+    for v in values.iter() {
+        match parse_datetime(v) {
+            Err(e) => println(f"{repr_str(v)} {err_text(e)}"),
+            Ok(None) => println(f"{repr_str(v)} -> None"),
+            Ok(Some(dt)) => {
+                let s = match dtm_str(dt) {
+                    Ok(s) => s,
+                    Err(e) => err_text(e),
+                };
+                let tz = if dt.tz { repr_str(dtm_tzname(dt)) } else { "None".to_string() };
+                println(f"{repr_str(v)} -> {s} tz={tz}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ acks, files
+
+fn job_ack(name: ref String, args: ref Vec[String], env: mut ref Clock) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    match create_ack(h, args[0], none_arg(args[1]), none_arg(args[2]), none_arg(args[3]), mut env) {
+        Ok(ack) => {
+            println(f"ack {repr_str(cont_str(ack)?)}");
+            println(f"  {cont_repr(ack)}");
+        }
+        Err(e) => println(f"ack {err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn job_split(name: ref String) {
+    println(repr_list(split_file(read_text(name))));
+}
+
+fn job_is(names: ref Vec[String]) {
+    for n in names.iter() {
+        let t = read_text(n);
+        let h = if ishl7(t) { "True" } else { "False" };
+        println(f"{n} ishl7={h} isbatch={py_bool_or_empty(t, isbatch(t))} isfile={py_bool_or_empty(t, isfile(t))}");
+    }
+}
+
+// ------------------------------------------------------------ MLLP
+
+fn job_stream(name: ref String, size: i64) {
+    let (msgs, e) = read_stream(read_bytes(name), size);
+    for m in msgs.iter() {
+        println(f"message {bytes_repr(m)}");
+    }
+    if let Some(err) = e {
+        println(err_text(err));
+    }
+}
+
+fn job_loose(name: ref String) {
+    for m in read_loose(read_bytes(name)).iter() {
+        println(f"message {bytes_repr(m)}");
+    }
+}
+
+fn job_blocks(name: ref String, limit: i64, encoding: ref String) -> Result[(), PyErr] {
+    let mut r = new_reader(read_bytes(name), limit, encoding);
+    loop {
+        match r.readmessage() {
+            Read.Msg(m) => println(f"message {repr_str(cont_str(m)?)}"),
+            Read.Fail(e) => println(err_text(e)),
+            Read.End(e) => {
+                println(f"end {err_text(e)}");
+                return Ok(());
+            }
+        }
+    }
+}
+// ------------------------------------------------------------ the interface engine
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let mut k = char_len(s);
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out
+}
+
+fn get(m: ref Cont, key: Str) -> Result[String, PyErr] {
+    extract(m, key.to_string())
+}
+
+fn patient_name(m: ref Cont) -> Result[String, PyErr] {
+    let fam = get(m, "PID.5.1.1")?;
+    let given = get(m, "PID.5.1.2")?;
+    let middle = get(m, "PID.5.1.3")?;
+    let prefix = get(m, "PID.5.1.5")?;
+    let mut name = f"{fam}, {given}";
+    if middle.len() > 0 {
+        name = f"{name} {middle}";
+    }
+    if prefix.len() > 0 {
+        name = f"{name} ({prefix})";
+    }
+    Ok(name)
+}
+
+fn when(v: ref String) -> Result[String, PyErr] {
+    match parse_datetime(v)? {
+        None => Ok("-".to_string()),
+        Some(dt) => dtm_str(dt),
+    }
+}
+
+fn leaves(n: ref Node, out: mut ref Vec[String]) {
+    match n {
+        Node.Text(s) => out.push(s.clone()),
+        Node.Box(c) => {
+            for x in c.items.iter() {
+                leaves(x, mut out);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Patient {
+    mrn: String,
+    name: String,
+    status: String,
+    admitted: String,
+    discharged: String,
+    bed: String,
+    doctor: String,
+}
+
+#[derive(Clone)]
+struct Row {
+    test: String,
+    value: String,
+    units: String,
+    range: String,
+    flag: String,
+}
+
+#[derive(Clone)]
+struct Group {
+    mrn: String,
+    test: String,
+    rows: Vec[Row],
+    notes: Vec[String],
+}
+
+struct Engine {
+    census: Vec[Patient],
+    results: Vec[Group],
+    acks: Vec[String],
+    count: i64,
+}
+
+fn has_segment(m: ref Cont, id: Str) -> Result[bool, PyErr] {
+    match segments(m, id.to_string()) {
+        Ok(_) => Ok(true),
+        Err(e) => if e.kind == "KeyError" { Ok(false) } else { Err(e) },
+    }
+}
+
+fn admit(m: ref Cont, event: ref String, rec: mut ref Patient) -> Result[(), PyErr] {
+    let pv1 = match segment(m, "PV1".to_string()) {
+        Ok(s) => s,
+        Err(e) => return if e.kind == "KeyError" { Ok(()) } else { Err(e) },
+    };
+    rec.bed = f"{get(m, "PV1.3.1.1")?}/{get(m, "PV1.3.1.2")?}";
+    if pv1.items.len() > 7 {
+        rec.doctor = f"{get(m, "PV1.7.1.6")?} {get(m, "PV1.7.1.3")?} {get(m, "PV1.7.1.2")?}";
+    }
+    if event == "A01" {
+        rec.status = "admitted".to_string();
+        rec.admitted = when(get(m, "PV1.44")?)?;
+    } else if event == "A03" {
+        rec.status = "discharged".to_string();
+        rec.admitted = when(get(m, "PV1.44")?)?;
+        rec.discharged = when(get(m, "PV1.45")?)?;
+    }
+    Ok(())
+}
+
+fn nurse_note_map() -> Option[AppMap] {
+    Some(AppMap { keys: ["H".to_string(), "N".to_string()], vals: ["*".to_string(), "*".to_string()] })
+}
+
+fn lab_results(m: ref Cont, eng: mut ref Engine) -> Result[(), PyErr] {
+    let mrn = get(m, "PID.3.1.1")?;
+    let none: Option[AppMap] = None;
+    let mut current = false;
+    for seg in m.items.iter() {
+        let sid = seg_name(seg)?;
+        if sid == "OBR" {
+            let test = unescape(m, str_call(node_call(node_call(seg, 4)?, 1)?, 2)?, none)?;
+            eng.results.push(Group { mrn: mrn.clone(), test: test, rows: Vec.new(), notes: Vec.new() });
+            current = true;
+        } else if sid == "OBX" and current {
+            let mut values: Vec[String] = Vec.new();
+            match node_call(seg, 5)? {
+                Node.Text(s) => {
+                    for c in chars_of(s).iter() {
+                        values.push(unescape(m, c.to_string(), none)?);
+                    }
+                }
+                Node.Box(f) => {
+                    for r in f.items.iter() {
+                        values.push(unescape(m, node_str(r)?, none)?);
+                    }
+                }
+            }
+            let flag = if node_len(seg) > 8 { str_call(seg, 8)? } else { String.new() };
+            let row = Row {
+                test: str_call(node_call(node_call(seg, 3)?, 1)?, 2)?,
+                value: join(values, " / "),
+                units: str_call(seg, 6)?,
+                range: str_call(seg, 7)?,
+                flag: flag,
+            };
+            let k = eng.results.len() - 1;
+            eng.results[k].rows.push(row);
+        } else if sid == "NTE" and current {
+            let note = unescape(m, str_call(seg, 3)?, nurse_note_map())?;
+            let k = eng.results.len() - 1;
+            eng.results[k].notes.push(note);
+        }
+    }
+    let mut groups = 0;
+    for g in eng.results.iter() {
+        if g.mrn == mrn {
+            groups += 1;
+        }
+    }
+    println(f"  results {mrn} {groups} groups");
+    Ok(())
+}
+
+fn handle(m: ref Cont, eng: mut ref Engine, env: mut ref Clock) -> Result[(), PyErr] {
+    eng.count += 1;
+    let ctrl = get(m, "MSH.10")?;
+    let mtype = get(m, "MSH.9.1.1")?;
+    // MSH.9 with no components ("QRY"): the event is missing
+    let event = match get(m, "MSH.9.1.2") {
+        Ok(e) => e,
+        Err(e) => if e.kind == "IndexError" { String.new() } else { return Err(e) },
+    };
+    println(f"in {eng.count} {ctrl} {mtype}^{event} from {get(m, "MSH.3")?}");
+    let mut code = "AA".to_string();
+    let mut text = String.new();
+    let has_pid = has_segment(m, "PID")?;
+    if mtype == "ADT" and (event == "A01" or event == "A03" or event == "A08") {
+        if not has_pid {
+            code = "AE".to_string();
+            text = "PID segment missing".to_string();
+        } else {
+            let mrn = get(m, "PID.3.1.1")?;
+            let mut at = -1;
+            let mut i = 0;
+            while i < eng.census.len() {
+                if eng.census[i].mrn == mrn {
+                    at = i;
+                }
+                i += 1;
+            }
+            let mut rec = if at >= 0 {
+                eng.census[at].clone()
+            } else {
+                Patient { mrn: mrn.clone(), name: String.new(), status: "-".to_string(), admitted: "-".to_string(), discharged: "-".to_string(), bed: "-".to_string(), doctor: "-".to_string() }
+            };
+            rec.name = patient_name(m)?;
+            admit(m, event, mut rec)?;
+            println(f"  census {mrn} {rec.status} {rec.bed}");
+            if at >= 0 {
+                eng.census[at] = rec;
+            } else {
+                eng.census.push(rec);
+            }
+        }
+    } else if mtype == "ORU" and event == "R01" {
+        lab_results(m, mut eng)?;
+    } else {
+        code = "AR".to_string();
+        text = f"unsupported message type {mtype}^{event}";
+    }
+    let mut ack = match create_ack(m, code, Some(f"ACK{ctrl}"), Some("RIVERSIDE-IE".to_string()), Some("RIVERSIDE".to_string()), mut env) {
+        Ok(a) => a,
+        Err(e) => {
+            println(f"  no ack {err_text(e)}");
+            return Ok(());
+        }
+    };
+    if text.len() > 0 {
+        setitem(mut ack, "MSA.3".to_string(), text)?;
+    }
+    let s = cont_str(ack)?;
+    println(f"  ack {repr_str(s)}");
+    eng.acks.push(s);
+    Ok(())
+}
+
+fn flag_mark(flag: ref String) -> String {
+    if flag == "H" {
+        "high".to_string()
+    } else if flag == "L" {
+        "low".to_string()
+    } else if flag == "HH" or flag == "LL" {
+        "CRITICAL".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn job_route(name: ref String, env: mut ref Clock) -> Result[(), PyErr] {
+    let mut eng = Engine { census: Vec.new(), results: Vec.new(), acks: Vec.new(), count: 0 };
+    let mut r = new_reader(read_bytes(name), 65536, "utf-8".to_string());
+    loop {
+        match r.readmessage() {
+            Read.Msg(m) => handle(m, mut eng, mut env)?,
+            Read.Fail(e) => println(err_text(e)),
+            Read.End(e) => {
+                println(f"end {err_text(e)}");
+                break;
+            }
+        }
+    }
+    let mut framed: Vec[u8] = Vec.new();
+    for a in eng.acks.iter() {
+        framed.push(0x0b);
+        for b in encode(a).iter() {
+            framed.push(*b);
+        }
+        framed.push(0x1c);
+        framed.push(0x0d);
+    }
+    if let Err(e) = fs.write_bytes("data/out/acks.mllp".to_string(), framed) {
+        return Err(perr("OSError", f"{e}"));
+    }
+    println(f"acks written {eng.acks.len()}");
+    println("census");
+    let mut order: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < eng.census.len() {
+        let mut j = order.len();
+        while j > 0 and eng.census[order[j - 1]].mrn > eng.census[i].mrn {
+            j -= 1;
+        }
+        order.insert(j, i);
+        i += 1;
+    }
+    for k in order.iter() {
+        let p = eng.census[*k].clone();
+        println(f"  {p.mrn} {pad_right(p.name, 28)} {pad_right(p.status, 10)} {pad_right(p.bed, 9)} {p.doctor} admitted {p.admitted} discharged {p.discharged}");
+    }
+    let mut lines: Vec[String] = Vec.new();
+    let mut critical = 0;
+    for g in eng.results.iter() {
+        lines.push(f"{g.mrn} {g.test}");
+        for row in g.rows.iter() {
+            lines.push(f"  {pad_right(row.test, 12)} {pad_right(row.value, 40)} {pad_right(row.units, 8)} {pad_right(row.range, 10)} {flag_mark(row.flag)}");
+            if row.flag == "HH" or row.flag == "LL" {
+                critical += 1;
+            }
+        }
+        for n in g.notes.iter() {
+            lines.push(f"  note {repr_str(n)}");
+        }
+    }
+    let mut body = String.new();
+    for x in lines.iter() {
+        body.push_str(x);
+        body.push('\n');
+    }
+    if let Err(e) = fs.write_bytes("data/out/results.txt".to_string(), encode(body)) {
+        return Err(perr("OSError", f"{e}"));
+    }
+    println("results");
+    for x in lines.iter() {
+        println(x);
+    }
+    println(f"critical {critical}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ the re-encoder
+
+fn convert(node: ref Node, old: ref Cont, new: ref Cont, level: i64) -> Result[Node, PyErr] {
+    let none: Option[AppMap] = None;
+    match node {
+        Node.Text(s) => Ok(Node.Text(escape(new, unescape(old, s, none)?, none))),
+        Node.Box(c) => {
+            if level > 4 {
+                return Err(key_err(f"{level}"));
+            }
+            let mut items: Vec[Node] = Vec.new();
+            for x in c.items.iter() {
+                items.push(convert(x, old, new, level + 1)?);
+            }
+            Ok(Node.Box(create(new, level + 2, items)))
+        }
+    }
+}
+
+fn leaf_texts(m: ref Cont) -> Result[Vec[String], PyErr] {
+    let none: Option[AppMap] = None;
+    let mut raw: Vec[String] = Vec.new();
+    for s in m.items.iter() {
+        let from = if seg_name(s)? == "MSH" { 3 } else { 0 };
+        match s {
+            Node.Text(t) => raw.push(t.clone()),
+            Node.Box(c) => {
+                let mut k = from;
+                while k < c.items.len() {
+                    leaves(c.items[k], mut raw);
+                    k += 1;
+                }
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for x in raw.iter() {
+        out.push(unescape(m, x, none)?);
+    }
+    Ok(out)
+}
+
+fn job_reencode(name: ref String, seps: ref String) -> Result[(), PyErr] {
+    let h = parse(read_text(name))?;
+    let cs = chars_of(seps);
+    let (fsep, comp, rep, esc, sub) = (cs[0], cs[1], cs[2], cs[3], cs[4]);
+    let mut new = mk(K_MSG, Vec.new(), ['\r', fsep, rep, comp, sub], esc);
+    for seg in h.items.iter() {
+        let nseg = if seg_name(seg)? == "MSH" {
+            let mut items = [text_field(new, "MSH".to_string()), text_field(new, fsep.to_string()), text_field(new, f"{comp}{rep}{esc}{sub}")];
+            let c = as_cont(seg);
+            let mut k = 3;
+            while k < c.items.len() {
+                items.push(convert(c.items[k], h, new, 2)?);
+                k += 1;
+            }
+            Node.Box(create(new, K_SEG, items))
+        } else {
+            convert(seg, h, new, 1)?
+        };
+        new.items.push(nseg);
+    }
+    let text = cont_str(new)?;
+    println(f"out {repr_str(text)}");
+    let back = parse(text)?;
+    println(f"roundtrip {if cont_str(back)? == text { "True" } else { "False" }}");
+    let a = leaf_texts(h)?;
+    let b = leaf_texts(back)?;
+    let mut same = a.len() == b.len();
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    println(f"leaves {a.len()} same {if same { "True" } else { "False" }}");
+    i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            println(f"  {repr_str(a[i])} != {repr_str(b[i])}");
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the batch audit
+
+fn hdr_call(v: ref Vec[Cont], i: i64) -> Result[String, PyErr] {
+    if v.len() == 0 {
+        return Err(perr("TypeError", "'NoneType' object is not callable".to_string()));
+    }
+    node_str(cont_call(v[0], i)?)
+}
+
+fn job_audit(name: ref String) -> Result[(), PyErr] {
+    let f = parse_hl7(read_text(name))?;
+    let declared_all = hdr_call(f.trailer, 1)?;
+    println(f"file {hdr_call(f.header, 11)?} batches={f.items.len()} declared={declared_all}");
+    let mut seen_ctrl: Vec[String] = Vec.new();
+    let mut seen_label: Vec[String] = Vec.new();
+    let mut total = 0;
+    for bn in f.items.iter() {
+        let b = as_cont(bn);
+        let label = if b.header.len() > 0 { hdr_call(b.header, 11)? } else { "(default)".to_string() };
+        let declared = if b.trailer.len() > 0 { hdr_call(b.trailer, 1)? } else { "-".to_string() };
+        let ok = if declared == "-" or declared == f"{b.items.len()}" { "ok" } else { "MISMATCH" };
+        println(f"  batch {label} messages={b.items.len()} declared={declared} {ok}");
+        total += b.items.len();
+        for mn in b.items.iter() {
+            let m = as_cont(mn);
+            let ctrl = get(m, "MSH.10")?;
+            let mut names: Vec[String] = Vec.new();
+            let mut counts: Vec[i64] = Vec.new();
+            for seg in m.items.iter() {
+                let sid = seg_name(seg)?;
+                let mut at = -1;
+                let mut i = 0;
+                while i < names.len() {
+                    if names[i] == sid {
+                        at = i;
+                    }
+                    i += 1;
+                }
+                if at >= 0 {
+                    counts[at] += 1;
+                } else {
+                    let mut j = names.len();
+                    while j > 0 and names[j - 1] > sid {
+                        j -= 1;
+                    }
+                    names.insert(j, sid);
+                    counts.insert(j, 1);
+                }
+            }
+            let mut shape: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < names.len() {
+                shape.push(f"{names[i]}:{counts[i]}");
+                i += 1;
+            }
+            let mut dup = String.new();
+            let mut first = -1;
+            i = 0;
+            while i < seen_ctrl.len() {
+                if seen_ctrl[i] == ctrl and first < 0 {
+                    first = i;
+                }
+                i += 1;
+            }
+            if first >= 0 {
+                dup = f" DUPLICATE of {seen_label[first]}";
+            } else {
+                seen_ctrl.push(ctrl.clone());
+                seen_label.push(label.clone());
+            }
+            println(f"    {ctrl} {get(m, "MSH.9.1.1")?}^{get(m, "MSH.9.1.2")?} {join(shape, " ")}{dup}");
+        }
+    }
+    let ok = if f"{f.items.len()}" == declared_all { "True" } else { "False" };
+    println(f"  total messages {total} ok={ok}");
+    Ok(())
+}
+
+fn job_mcid(n: i64, env: mut ref Clock) {
+    let mut i = 0;
+    while i < n {
+        println(f"mcid {control_id(mut env)}");
+        i += 1;
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn words_from(w: ref Vec[String], k: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = k;
+    while i < w.len() {
+        out.push(w[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn run_job(w: ref Vec[String], env: mut ref Clock) -> Result[(), PyErr] {
+    let k = w[0].clone();
+    if k == "tree" {
+        job_tree(w[1]);
+    } else if k == "batchof" {
+        job_batchof(w[1])?;
+    } else if k == "fileof" {
+        job_fileof(w[1])?;
+    } else if k == "get" {
+        job_get(w[1], words_from(w, 2))?;
+    } else if k == "accessor" {
+        job_accessor(words_from(w, 1));
+    } else if k == "set" {
+        job_set(w[1], split_assigns(words_from(w, 2)))?;
+    } else if k == "assign" {
+        job_assign(w[1], words_from(w, 2))?;
+    } else if k == "idx" {
+        job_idx(w[1], words_from(w, 2))?;
+    } else if k == "escape" {
+        job_escape(w[1], w[2], false)?;
+    } else if k == "escapeout" {
+        job_escape(w[1], w[2], true)?;
+    } else if k == "dtm" {
+        job_dtm();
+    } else if k == "ack" {
+        job_ack(w[1], words_from(w, 2), mut env)?;
+    } else if k == "mcid" {
+        job_mcid(num(w[1]), mut env);
+    } else if k == "split" {
+        job_split(w[1]);
+    } else if k == "is" {
+        job_is(words_from(w, 1));
+    } else if k == "stream" {
+        job_stream(w[1], num(w[2]));
+    } else if k == "loose" {
+        job_loose(w[1]);
+    } else if k == "blocks" {
+        job_blocks(w[1], num(w[2]), w[3])?;
+    } else if k == "route" {
+        job_route(w[1], mut env)?;
+    } else if k == "reencode" {
+        job_reencode(w[1], w[2])?;
+    } else if k == "audit" {
+        job_audit(w[1])?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut env = Clock { ticks: 0, calls: 0 };
+    let mut lines = split_on(read_text("jobs.txt".to_string()), '\n');
+    lines.pop();
+    for line in lines.iter() {
+        println(f"== {line}");
+        if let Err(e) = run_job(split_on(line, ' '), mut env) {
+            println(err_text(e));
+        }
+    }
+}
+// ------------------------------------------------------------ data (gen_kara.py)
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("adt.hl7".to_string(), "4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313038333030307c7c4144545e4130315e4144545f4130317c4d534730303030317c507c322e352e310d45564e7c4130317c32303236313032313038333030300d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527e393433343736353931395e5e5e4e48535e4e487c7c4f6b61666f725e416461657a655e4e676f7a695e5e4d737c7c31393834303331327c467c7c7c3134204d696c6c204c616e655e466c6174203226526561725e4578657465725e5e455831203141415e4742527c7c3031363332203936303134327e3037373030203930303436317c7c7c4d0d5056317c317c497c57415244375e4231325e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c377c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c494e7c56393030317c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313038323530300d4e4b317c317c4f6b61666f725e43686964697c53504f5e53706f7573657c3134204d696c6c204c616e655e5e4578657465725e5e455831203141417c3031363332203936303134330d414c317c317c44417c50454e5e50656e6963696c6c696e205c545c2064657269766174697665735e4c7c53567c52617368205c465c207377656c6c696e677e576865657a650d".to_string()));
+    v.push(("badblock.mllp".to_string(), "0b4d53487c5e7e5c267c544845415452457c5249564552534944457c49457c5249564552534944457c32303236313032313131353030307c7c5349555e5331325e5349555f5331327c544852303034327c507c322e352e310d5343487c317c544852303034327c7c7c7c524f5554494e450d1c0d4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131343530307c7c4144545e4130385e4144545f4130317c4d534730303030337c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a655e4e676f7a695e5e44727c7c31393834303331327c460d5056317c317c497c57415244375e4231345e315e5249564552534944450d1c0d0b4d53487c5e7e5c267c4f4c445359537c414e4e45587c49457c5249564552534944457c32303236313032313132303030307c7c5152597c51303030317c507c322e330d5152447c32303236313032313132303030307c527c497c51303030310d1c0d0b4d53487c5e7e5c267c58ff".to_string()));
+    v.push(("batch.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d4254537c320d".to_string()));
+    v.push(("batch_btsbts.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4254537c310d4254537c390d".to_string()));
+    v.push(("batch_crlf.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d0a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d0a5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d0a4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d0a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d0a5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d0a4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d0a4254537c320d0a".to_string()));
+    v.push(("batch_lf.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310a5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0a4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310a5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650a4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460a4254537c320a".to_string()));
+    v.push(("batch_nobhs.hl7".to_string(), "4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d".to_string()));
+    v.push(("batch_nobts.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d".to_string()));
+    v.push(("batch_orphan.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d5049447c317c7c58390d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4254537c310d".to_string()));
+    v.push(("batch_twobhs.hl7".to_string(), "4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d".to_string()));
+    v.push(("broken.mllp".to_string(), "0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131333030307c7c4144545e4130335e4144545f4130337c4d534730303030327c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e7c7c31393531303632377c460d5056317c317c497c57415244335e4130345e325e5249564552534944457c7c7c7c43323231315e4f7365695e4b77616d655e5e5e44727c7c7c5355527c7c7c7c7c7c7c7c494e7c56383831327c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313031393134303030307c32303236313032313131323030300d1c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131343530307c7c4144545e4130385e".to_string()));
+    v.push(("custom.hl7".to_string(), "4d53482a3a4021242a5041532a414e4e45582a49452a5249564552534944452a32303236313032313039303030302d303333302a2a4144543a4130382a435553303030312a502a322e340d5049442a312a2a4158353532313a3a3a414e4e45583a4d52404e483737383a3a3a4e48532a2a4e673a576569204c696e672a2a31393737303830342a462a2a2a556e6974203424426c6f636b20433a446f636b2052643a436172646966660d4f42582a312a53542a4e4f54452a2a506179203521462131302021542120323021532178215221792145217a0d".to_string()));
+    v.push(("discharge.hl7".to_string(), "4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131333030307c7c4144545e4130335e4144545f4130337c4d534730303030327c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e7c7c31393531303632377c460d5056317c317c497c57415244335e4130345e325e5249564552534944457c7c7c7c43323231315e4f7365695e4b77616d655e5e5e44727c7c7c5355527c7c7c7c7c7c7c7c494e7c56383831327c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313031393134303030307c32303236313032313131323030300d".to_string()));
+    v.push(("dtm.txt".to_string(), "323032360a3230323631300a32303236313032310a323032363130323130380a3230323631303231303833300a32303236313032313038333030300a32303236313032313038333030352e313233340a32303236313032313038333030352e303030303030350a32303236313032313038333030302b303130300a32303236313032313038333030302d303333300a32303236313032313038333030302d303033300a32303236313032313038333030302b303030300a32303236313032312b303533300a323032363130323130382b30350a32303236313032313038333035392e393939393939390a3230320a0a6162630a323032363032333031320a32303236313332310a30303030313032310a323032363130323132340a3230323631303231303836300a32303236313032313038333036300a323032363130323131342e350a3230323631303231313433302e350a3230322e350a32303236313032313038333030302b323530300a31393834303331320a32303236313032313038333030302e352b303130300a323032362d31302d32310a".to_string()));
+    v.push(("dupe.hl7".to_string(), "4d53487c5e5e5c267c445550457c414e4e45587c49457c5249564552534944457c32303236313032317c7c4144545e4130347c44555030317c507c322e330d5049447c317c7c44310d".to_string()));
+    v.push(("e_bare.hl7".to_string(), "4d5348".to_string()));
+    v.push(("e_empty.hl7".to_string(), "".to_string()));
+    v.push(("e_empty_seg.hl7".to_string(), "4d53487c5e7e5c267c417c420d0d5049447c317c58320d".to_string()));
+    v.push(("e_lower.hl7".to_string(), "6d73687c5e7e5c267c417c420d".to_string()));
+    v.push(("e_negative.hl7".to_string(), "4d53487c5e7e5c267c417c427c437c447c323032367c7c4144545e4130317c4e317c507c322e350d5049447c317c7c4e317e4e325e7826797c7a0d".to_string()));
+    v.push(("e_no_end.hl7".to_string(), "4d53487c5e7e5c26".to_string()));
+    v.push(("e_one_sep.hl7".to_string(), "4d53487c".to_string()));
+    v.push(("e_pid_first.hl7".to_string(), "5049447c317c7c58310d4d53487c5e7e5c267c41".to_string()));
+    v.push(("e_ws.hl7".to_string(), "0a20204d53487c5e7e5c267c417c420d5049447c317c58335e590d0a0a".to_string()));
+    v.push(("escapes.txt".to_string(), "706c61696e20746578740a617c625e637e6426655c660a6c696e65313c43523e6c696e65320a7461623c5441423e686572650a636166c3a90a707269636520e282ac350a6e65773c4c463e6c696e650a0a5c465c5c535c0a785c2e62725c795c2e7370335c7a5c2e696e315c770a5c485c626f6c645c4e5c20746578740a686578205c5834313432343334345c205c5820395c205c583431475c205c584142435c0a5c5a637573746f6d5c205c4378785c205c4d7979795c205c5c0a5c2e7370585c0a5c2e63655c5c2e66695c5c2e6e665c5c2e7469325c5c2e736b5c0a6e6f20656e64205c460a".to_string()));
+    v.push(("ff.mllp".to_string(), "0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313038333030307c7c4144545e4130315e4144545f4130317c4d534730303030317c507c322e352e310d45564e7c4130317c32303236313032313038333030300d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527e393433343736353931395e5e5e4e48535e4e487c7c4f6b61666f725e416461657a655e4e676f7a695e5e4d737c7c31393834303331327c467c7c7c3134204d696c6c204c616e655e466c6174203226526561725e4578657465725e5e455831203141415e4742527c7c3031363332203936303134327e3037373030203930303436317c7c7c4d0d5056317c317c497c57415244375e4231325e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c377c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c494e7c56393030317c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313038323530300d4e4b317c317c4f6b61666f725e43686964697c53504f5e53706f7573657c3134204d696c6c204c616e655e5e4578657465725e5e455831203141417c3031363332203936303134330d414c317c317c44417c50454e5e50656e6963696c6c696e205c545c2064657269766174697665735e4c7c53567c52617368205c465c207377656c6c696e677e576865657a650d0c0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131333030307c7c4144545e4130335e4144545f4130337c4d534730303030327c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e7c7c31393531303632377c460d5056317c317c497c57415244335e4130345e325e5249564552534944457c7c7c7c43323231315e4f7365695e4b77616d655e5e5e44727c7c7c5355527c7c7c7c7c7c7c7c494e7c56383831327c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313031393134303030307c32303236313032313131323030300d0c0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131343530307c7c4144545e4130385e4144545f4130317c4d534730303030337c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a655e4e676f7a695e5e44727c7c31393834303331327c460d5056317c317c497c57415244375e4231345e315e5249564552534944450d0c".to_string()));
+    v.push(("file.hl7".to_string(), "4648537c5e7e5c267c49457c5249564552534944457c415243484956457c5249564552534944457c32303236313032313133303030307c7c7c7c46494c4530310d4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d4254537c320d4248537c5e7e5c267c5241447c5249564552534944457c49457c5249564552534944457c32303236313032313132333530307c7c7c7c424154434830320d4d53487c5e7e5c267c5241447c5249564552534944457c49457c5249564552534944457c32303236313032313132333030307c7c4f52555e5230317c524144303330317c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a650d4f42587c317c54587c4358525e436865737420582d7261795e4c7c7c4e6f20636f6e736f6c69646174696f6e2e5c2e62725c48656172742073697a65206e6f726d616c2e7c7c7c7c7c7c460d4254537c310d4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313038333030307c7c4144545e4130315e4144545f4130317c4d534730303030317c507c322e352e310d45564e7c4130317c32303236313032313038333030300d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527e393433343736353931395e5e5e4e48535e4e487c7c4f6b61666f725e416461657a655e4e676f7a695e5e4d737c7c31393834303331327c467c7c7c3134204d696c6c204c616e655e466c6174203226526561725e4578657465725e5e455831203141415e4742527c7c3031363332203936303134327e3037373030203930303436317c7c7c4d0d5056317c317c497c57415244375e4231325e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c377c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c494e7c56393030317c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313038323530300d4e4b317c317c4f6b61666f725e43686964697c53504f5e53706f7573657c3134204d696c6c204c616e655e5e4578657465725e5e455831203141417c3031363332203936303134330d414c317c317c44417c50454e5e50656e6963696c6c696e205c545c2064657269766174697665735e4c7c53567c52617368205c465c207377656c6c696e677e576865657a650d4654537c320d".to_string()));
+    v.push(("file_bhs_open.hl7".to_string(), "4648537c5e7e5c267c49450d4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650d4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460d".to_string()));
+    v.push(("file_free_orphan.hl7".to_string(), "4648537c5e7e5c267c49450d4f42587c317c580d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d".to_string()));
+    v.push(("file_nofts.hl7".to_string(), "4648537c5e7e5c267c49457c5249564552534944450d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4d53487c5e7e5c267c5241447c5249564552534944457c49457c5249564552534944457c32303236313032313132333030307c7c4f52555e5230317c524144303330317c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a650d4f42587c317c54587c4358525e436865737420582d7261795e4c7c7c4e6f20636f6e736f6c69646174696f6e2e5c2e62725c48656172742073697a65206e6f726d616c2e7c7c7c7c7c7c460d".to_string()));
+    v.push(("file_orphan.hl7".to_string(), "4648537c5e7e5c267c49450d4248537c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313132303030307c7c7c7c424154434830310d4f42587c317c580d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d4254537c310d".to_string()));
+    v.push(("file_twofhs.hl7".to_string(), "4648537c5e7e5c267c49450d4648537c5e7e5c267c49450d4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d".to_string()));
+    v.push(("inbound.mllp".to_string(), "0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313038333030307c7c4144545e4130315e4144545f4130317c4d534730303030317c507c322e352e310d45564e7c4130317c32303236313032313038333030300d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527e393433343736353931395e5e5e4e48535e4e487c7c4f6b61666f725e416461657a655e4e676f7a695e5e4d737c7c31393834303331327c467c7c7c3134204d696c6c204c616e655e466c6174203226526561725e4578657465725e5e455831203141415e4742527c7c3031363332203936303134327e3037373030203930303436317c7c7c4d0d5056317c317c497c57415244375e4231325e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c377c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c494e7c56393030317c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313038323530300d4e4b317c317c4f6b61666f725e43686964697c53504f5e53706f7573657c3134204d696c6c204c616e655e5e4578657465725e5e455831203141417c3031363332203936303134330d414c317c317c44417c50454e5e50656e6963696c6c696e205c545c2064657269766174697665735e4c7c53567c52617368205c465c207377656c6c696e677e576865657a650d1c0d0b4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313130313530302b303130307c7c4f52555e5230315e4f52555f5230317c4c4142373738317c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a650d4f52437c52457c4f5244353531327c4c4142373738310d4f42527c317c4f5244353531327c4c4142373738317c4342435e46756c6c20626c6f6f6420636f756e745e4c7c7c7c32303236313032313039313030300d4f42587c317c4e4d7c3731382d375e4861656d6f676c6f62696e5e4c4e7c7c3131387c672f4c7c3132302d3135307c4c7c7c7c460d4f42587c327c4e4d7c363639302d325e5742435e4c4e7c7c31332e327c31302a392f4c7c342e302d31312e307c487c7c7c460d4f42587c337c4e4d7c3737372d335e506c6174656c6574735e4c4e7c7c3235307c31302a392f4c7c3135302d3430307c4e7c7c7c460d4e54457c317c7c4d696c6420616e61656d69612e5c2e62725c52657065617420696e205c485c32207765656b735c4e5c2e5c2e7370325c5265766965776564206279205c5834345c722048616c655c5a70675c0d4f42527c327c4f5244353531337c4c4142373738327c55455e5572656120616e6420656c656374726f6c797465735e4c7c7c7c32303236313032313039313030300d4f42587c347c4e4d7c323935312d325e536f6469756d5e4c4e7c7c3133397c6d6d6f6c2f4c7c3133332d3134367c7c7c7c460d4f42587c357c4e4d7c323832332d335e506f7461737369756d5e4c4e7c7c352e397c6d6d6f6c2f4c7c332e352d352e337c48487c7c7c460d4f42587c367c53547c434f4d4d5e436f6d6d656e745e4c7c7c4861656d6f6c797365642073616d706c65205c455c207265746573747e5365636f6e642073616d706c65207265717565737465647c7c7c7c7c7c460d4f42587c377c54587c434f4d4d5e436f6d6d656e745e4c7c7c536565206e6f74653a5c2e696e325c696e64656e746564205c58323041435c35206665657c7c7c7c7c7c500d4e54457c327c7c43616c6c656420746f207761726420372061742031303a31325c2e736b335c2872656164206261636b290d1c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131333030307c7c4144545e4130335e4144545f4130337c4d534730303030327c507c322e352e310d5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e7c7c31393531303632377c460d5056317c317c497c57415244335e4130345e325e5249564552534944457c7c7c7c43323231315e4f7365695e4b77616d655e5e5e44727c7c7c5355527c7c7c7c7c7c7c7c494e7c56383831327c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313031393134303030307c32303236313032313131323030300d1c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131343530307c7c4144545e4130385e4144545f4130317c4d534730303030337c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a655e4e676f7a695e5e44727c7c31393834303331327c460d5056317c317c497c57415244375e4231345e315e5249564552534944450d1c0d0b4d53487c5e7e5c267c544845415452457c5249564552534944457c49457c5249564552534944457c32303236313032313131353030307c7c5349555e5331325e5349555f5331327c544852303034327c507c322e352e310d5343487c317c544852303034327c7c7c7c524f5554494e450d1c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313131353530307c7c4144545e4130315e4144545f4130317c4d534730303030347c507c322e352e310d45564e7c4130317c32303236313032313131353530300d5056317c317c457c45445e52330d1c0d0b4d53487c5e7e5c267c4f4c445359537c414e4e45587c49457c5249564552534944457c32303236313032313132303030307c7c5152597c51303030317c507c322e330d5152447c32303236313032313132303030307c527c497c51303030310d1c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313132313030307c7c4144545e4130315e4144545f4130317c4d534730303030357c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566c3a87672655e5a6fc3ab7c7c31393939303130317c460d5056317c317c497c57415244375e4230335e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c7c7c7c7c494e7c56393031357c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313132303530300d1c0d".to_string()));
+    v.push(("jobs.txt".to_string(), "74726565206164742e686c370a74726565206c61622e686c370a74726565206469736368617267652e686c370a7472656520637573746f6d2e686c370a747265652073686f72742e686c370a7472656520647570652e686c370a7472656520655f7069645f66697273742e686c370a7472656520655f626172652e686c370a7472656520655f6f6e655f7365702e686c370a7472656520655f6e6f5f656e642e686c370a7472656520655f656d7074795f7365672e686c370a7472656520655f77732e686c370a7472656520655f656d7074792e686c370a7472656520655f6c6f7765722e686c370a7472656520655f6e656761746976652e686c370a747265652062617463682e686c370a747265652062617463685f63726c662e686c370a747265652062617463685f6c662e686c370a747265652062617463685f6e6f6268732e686c370a747265652062617463685f6e6f6274732e686c370a747265652062617463685f74776f6268732e686c370a747265652062617463685f6f727068616e2e686c370a747265652062617463685f6274736274732e686c370a747265652066696c652e686c370a747265652066696c655f6e6f6674732e686c370a747265652066696c655f74776f6668732e686c370a747265652066696c655f6268735f6f70656e2e686c370a747265652066696c655f6f727068616e2e686c370a747265652066696c655f667265655f6f727068616e2e686c370a62617463686f66206164742e686c370a66696c656f662062617463685f6e6f6268732e686c370a676574206164742e686c3720504944205049442e33205049442e46332e5232205049442e332e32205049442e332e322e31205049442e332e322e34205049442e332e312e35205049442e35205049442e352e312e32205049442e4631312e52312e43322e5332205049442e31312e312e322e31205049442e31312e312e322e33205049442e31312e312e39205049442e31312e312e392e32205049442e31332e32205049442e31332e33205049442e3939205049442e39392e312e31205049442e39392e32205049442e332e312e322e32205049442e352e312e312e32205049442e352e33204d53482e31204d53482e32204d53482e392e312e32204d53482e39204d53482e46312e52312e433220414c312e332e312e3220414c312e3520414c312e352e32205056312e332e312e32205a5a5a205a5a5a2e3120504944322e3320504944302e33205049442e30205049442e2d31205049442e2d312e31205049205049442e2e32205049442e467820504944582e33205049442e46332e52302e43300a676574206c61622e686c37204f4258204f4258322e35204f4258352e38204f4258362e35204f4258362e352e32204f4258372e35204e54452e33204e5445322e33204f4252322e342e312e32204f4258382e35204f42582d312e35204f4258302e332e312e32204e5445204e54452e332e312e31204e54452e332e312e320a67657420637573746f6d2e686c37204d53482e31204d53482e32205049442e332e32205049442e332e322e31205049442e352e312e32205049442e31312e312e312e32204f42582e35204d53482e392e312e320a6765742073686f72742e686c37205049442e33205049442e352e312e32205049442e352e312e322e32205049442e352e320a67657420655f656d7074795f7365672e686c37204d53482e33205049440a67657420655f6e656761746976652e686c37205049442e2d31205049442e332e2d31205049442e332e322e2d31205049442e332e322e322e2d31205049442e2d322e31205049442e2d390a6163636573736f7220504944205049442e33205049442e46332e52322e43312e5331204f4258322e352e31204d53482e312e31205049442e7231205049442e332e63322058205a5a392e31205049442e46332e52322e43312e53312e5137205049442e332e520a736574206164742e686c37205049442e352e312e323d416461205049442e4631332e52333d303136333220393630313939205049442e33303d59205049442e332e322e343d4e48532d45205056312e332e312e323d423134205049442e31312e312e322e333d53696465205049442e31312e312e322e313d466c617420330a736574206164742e686c37205a5a5a2e313d78205049443d6e6f7065205049442e352e313d4f6b61666f722d536d697468205049442e352e312e312e313d4f6b61666f72205049442e332e312e392e323d64656570204d53482e333d50415332205049442e303d5151512045564e2e312e312e312e313d610a736574206164742e686c37205049442e382e312e313d4d205049442e382e312e323d58205049442e382e312e312e323d59205049442e31332e312e312e333d5a20414c312e352e322e312e343d570a7365742073686f72742e686c37205049442e352e312e322e333d494949205049442e352e322e313d5072796365205049442e332e312e342e313d414e4e4558320a73657420655f6e656761746976652e686c37205049442e2d313d6c617374205049442e2d312e312e313d77205049442e2d393d626164205049442e332e2d312e313d6e205049442e332e312e2d313d630a61737369676e206164742e686c37205049442031203133202d202d202d20686f6d650a61737369676e206164742e686c372050494420312031332032202d202d206d6f62696c650a61737369676e206164742e686c3720504944203120372031203120312031393834303331330a61737369676e206164742e686c372050563120312033203120322031204231350a61737369676e206164742e686c372050494420322033202d202d202d20780a61737369676e206164742e686c37204e4b312031202d202d202d202d20780a61737369676e206164742e686c3720504944203120343020312032203320646565700a696478206164742e686c3720302031202d3120323a342039202d390a657363617065206164742e686c37202d0a657363617065206164742e686c3720483d3c623e2c4e3d3c2f623e2c5a637573746f6d3d5b635d2c2e73703d5f2c463d28626172292c4378783d3f0a65736361706520637573746f6d2e686c37202d0a65736361706520647570652e686c37202d0a6573636170656f7574206164742e686c37202d0a6573636170656f7574206164742e686c37207c3d504950452cc3a93d652c3c43523e3d42520a6573636170656f757420637573746f6d2e686c37202d0a6573636170656f757420647570652e686c37202d0a64746d0a61636b206164742e686c372041412041434b3030303031202d202d0a61636b206c61622e686c37204145202d2049452d41434b205249564552534944452d49450a61636b20637573746f6d2e686c37204341204331202d202d0a61636b2073686f72742e686c37204152202d202d202d0a61636b20655f7069645f66697273742e686c37204141202d202d202d0a61636b20655f6e656761746976652e686c372041412078202d202d0a61636b20655f656d7074795f7365672e686c372041412078202d202d0a6d63696420330a73706c69742066696c652e686c370a73706c69742062617463685f6c662e686c370a73706c697420655f7069645f66697273742e686c370a73706c697420655f656d7074792e686c370a6973206164742e686c37206c61622e686c372062617463682e686c372062617463685f6e6f6268732e686c372066696c652e686c3720655f77732e686c3720655f656d7074792e686c3720655f6c6f7765722e686c372066696c655f6e6f6674732e686c3720637573746f6d2e686c370a73747265616d20696e626f756e642e6d6c6c7020343039360a73747265616d20696e626f756e642e6d6c6c702036340a73747265616d2066662e6d6c6c7020343039360a73747265616d2066662e6d6c6c70203130300a73747265616d2062726f6b656e2e6d6c6c7020343039360a73747265616d20626164626c6f636b2e6d6c6c7020343039360a6c6f6f7365206c6f6f73652e7478740a6c6f6f7365206c6f6f73655f636c65616e2e7478740a6c6f6f736520696e626f756e642e6d6c6c700a626c6f636b7320696e626f756e642e6d6c6c70203635353336202d0a626c6f636b7320696e626f756e642e6d6c6c70203635353336207574662d380a626c6f636b7320696e626f756e642e6d6c6c7020333030207574662d380a626c6f636b7320626164626c6f636b2e6d6c6c70203635353336202d0a626c6f636b73206d697865642e6d6c6c70203635353336202d0a626c6f636b73206d697865642e6d6c6c70203635353336207574662d380a626c6f636b73206d697865642e6d6c6c70203635353336207574662d382c7265706c6163650a626c6f636b732066662e6d6c6c70203635353336202d0a626c6f636b732062726f6b656e2e6d6c6c70203430202d0a726f75746520696e626f756e642e6d6c6c700a7265656e636f6465206164742e686c37202a3a4021240a7265656e636f646520637573746f6d2e686c37207c5e7e5c260a7265656e636f6465206c61622e686c3720235e7e5c260a61756469742066696c652e686c370a".to_string()));
+    v.push(("lab.hl7".to_string(), "4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313130313530302b303130307c7c4f52555e5230315e4f52555f5230317c4c4142373738317c507c322e352e310d5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a650d4f52437c52457c4f5244353531327c4c4142373738310d4f42527c317c4f5244353531327c4c4142373738317c4342435e46756c6c20626c6f6f6420636f756e745e4c7c7c7c32303236313032313039313030300d4f42587c317c4e4d7c3731382d375e4861656d6f676c6f62696e5e4c4e7c7c3131387c672f4c7c3132302d3135307c4c7c7c7c460d4f42587c327c4e4d7c363639302d325e5742435e4c4e7c7c31332e327c31302a392f4c7c342e302d31312e307c487c7c7c460d4f42587c337c4e4d7c3737372d335e506c6174656c6574735e4c4e7c7c3235307c31302a392f4c7c3135302d3430307c4e7c7c7c460d4e54457c317c7c4d696c6420616e61656d69612e5c2e62725c52657065617420696e205c485c32207765656b735c4e5c2e5c2e7370325c5265766965776564206279205c5834345c722048616c655c5a70675c0d4f42527c327c4f5244353531337c4c4142373738327c55455e5572656120616e6420656c656374726f6c797465735e4c7c7c7c32303236313032313039313030300d4f42587c347c4e4d7c323935312d325e536f6469756d5e4c4e7c7c3133397c6d6d6f6c2f4c7c3133332d3134367c7c7c7c460d4f42587c357c4e4d7c323832332d335e506f7461737369756d5e4c4e7c7c352e397c6d6d6f6c2f4c7c332e352d352e337c48487c7c7c460d4f42587c367c53547c434f4d4d5e436f6d6d656e745e4c7c7c4861656d6f6c797365642073616d706c65205c455c207265746573747e5365636f6e642073616d706c65207265717565737465647c7c7c7c7c7c460d4f42587c377c54587c434f4d4d5e436f6d6d656e745e4c7c7c536565206e6f74653a5c2e696e325c696e64656e746564205c58323041435c35206665657c7c7c7c7c7c500d4e54457c327c7c43616c6c656420746f207761726420372061742031303a31325c2e736b335c2872656164206261636b290d".to_string()));
+    v.push(("loose.txt".to_string(), "23206578706f72742066726f6d204c494d532c203231204f63740d0a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353930307c7c4f52555e5230317c4c4142373739307c507c322e352e310d0a5049447c317c7c52473130303837315e5e5e5249564552534944455e4d527c7c4272656e6e616e5e53696f6268616e0d0a4f42587c317c4e4d7c323136302d305e4372656174696e696e655e4c4e7c7c38387c756d6f6c2f4c7c34352d38347c487c7c7c460d0a0d0a4d53487c5e7e5c267c4c494d537c5249564552534944452d4c41427c49457c5249564552534944457c32303236313032313131353933307c7c4f52555e5230317c4c4142373739317c507c322e352e310a5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566657672655e5a6f650a4f42587c317c4e4d7c323334352d375e476c75636f73655e4c4e7c7c362e317c6d6d6f6c2f4c7c332e302d372e387c4e7c7c7c460a20201c0d0a4d53487c5e7e5c267c5241447c5249564552534944457c49457c5249564552534944457c32303236313032313132333030307c7c4f52555e5230317c524144303330317c507c322e352e310d0a5049447c317c7c52473130303233345e5e5e5249564552534944455e4d527c7c4f6b61666f725e416461657a650d0a4f42587c317c54587c4358525e436865737420582d7261795e4c7c7c4e6f20636f6e736f6c69646174696f6e2e5c2e62725c48656172742073697a65206e6f726d616c2e7c7c7c7c7c7c460d0a".to_string()));
+    v.push(("loose_clean.txt".to_string(), "4d53487c5e7e5c267c544845415452457c5249564552534944457c49457c5249564552534944457c32303236313032313131353030307c7c5349555e5331325e5349555f5331327c544852303034327c507c322e352e310a5343487c317c544852303034327c7c7c7c524f5554494e450a4d53487c5e7e5c267c4f4c445359537c414e4e45587c49457c5249564552534944457c32303236313032313132303030307c7c5152597c51303030317c507c322e330a5152447c32303236313032313132303030307c527c497c51303030310a".to_string()));
+    v.push(("mixed.mllp".to_string(), "0b4d53487c5e7e5c267c544845415452457c5249564552534944457c49457c5249564552534944457c32303236313032313131353030307c7c5349555e5331325e5349555f5331327c544852303034327c507c322e352e310d5343487c317c544852303034327c7c7c7c524f5554494e450d1c0d0b4d53487c5e7e5c267c417c420d5049447c317c7cc3411c0d0b4d53487c5e7e5c267c5041537c5249564552534944457c49457c5249564552534944457c32303236313032313132313030307c7c4144545e4130315e4144545f4130317c4d534730303030357c507c322e352e310d5049447c317c7c52473130313530325e5e5e5249564552534944455e4d527c7c4c6566c3a87672655e5a6fc3ab7c7c31393939303130317c460d5056317c317c497c57415244375e4230335e315e5249564552534944457c7c7c7c43333435365e48616c655e4d6f7267616e5e5e5e44727c7c7c4d45447c7c7c7c7c7c7c7c494e7c56393031357c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c32303236313032313132303530300d1c0d0b4d53487c5e7e5c267c417c420d5049447c317c7cff1c0d0b4e4f5420484c371c0d747261696c696e67".to_string()));
+    v.push(("short.hl7".to_string(), "4d53487c5e7e7c4c45474143597c414e4e45587c49457c5249564552534944457c323032363130323130397c7c4144545e4130347c4c45473030317c507c322e310d5049447c317c7c4c37375e5e5e414e4e45587c7c50726963655e4f77656e264a727e50726963655e4f0d".to_string()));
+    v
+}
