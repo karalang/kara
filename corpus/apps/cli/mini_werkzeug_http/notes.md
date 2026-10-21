@@ -40,5 +40,5 @@ prints the data section of `mini_werkzeug_http.kara`.
 
 One gap was found: an if-expression whose arm is a bare `None` of
 `Option[String]`, passed straight as a call argument, reaches the callee
-uninitialized on both MIR backends (B-2026-10-20-31). The app binds it
-with `let` first.
+uninitialized on both MIR backends (B-2026-10-20-31, fixed in kara
+8dd3fa3bd1; the app passes it inline again).

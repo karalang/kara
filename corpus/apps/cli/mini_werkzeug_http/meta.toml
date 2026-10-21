@@ -7,4 +7,4 @@ expected_from = "oracle"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
-extracted_src = "025ccc99"
+extracted_src = "df8c0dcc"

@@ -3747,9 +3747,7 @@ fn show_header(kind: Str, value: Str, extra: Str) {
             println(f"  {py_repr(p)}: contains={py_bool(e.contains(p))} weak={py_bool(e.contains_weak(p))} raw={py_bool(e.contains_raw(p))} is_weak={py_bool(e.is_weak(p))}");
         }
     } else if kind == "date" {
-        // B-2026-10-20-31: bound first; passed inline the None arm arrives uninitialized.
-        let arg: Option[String] = if value == "NONE" { None } else { opt(value) };
-        let d = parse_date(arg);
+        let d = parse_date(if value == "NONE" { None } else { opt(value) });
         let h = match ref d {
             Some(x) => py_repr(http_date(x)),
             None => "None".to_string(),
