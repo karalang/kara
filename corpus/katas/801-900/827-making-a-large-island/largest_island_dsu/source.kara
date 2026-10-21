@@ -1,0 +1,135 @@
+// LeetCode #827: Making A Large Island -- union-find over the cells.
+//
+// Every land cell is joined to the land to its right and below, so each
+// island becomes one set whose root holds its size. A 0 then adds the
+// sizes of the distinct roots around it. O(n^2 α(n^2)).
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let up = parent[at];
+        parent[at] = root;
+        at = up;
+    }
+    root
+}
+
+fn union(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let ra = find(mut parent, a);
+    let rb = find(mut parent, b);
+    if ra == rb {
+        return;
+    }
+    if size[ra] < size[rb] {
+        parent[ra] = rb;
+        size[rb] += size[ra];
+    } else {
+        parent[rb] = ra;
+        size[ra] += size[rb];
+    }
+}
+
+fn largest_island(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut parent: Vec[i64] = (0..n * n).collect();
+    let mut size: Vec[i64] = Vec.filled(n * n, 1);
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                if c + 1 < n and grid[r][c + 1] == 1 {
+                    union(mut parent, mut size, r * n + c, r * n + c + 1);
+                }
+                if r + 1 < n and grid[r + 1][c] == 1 {
+                    union(mut parent, mut size, r * n + c, (r + 1) * n + c);
+                }
+            }
+        }
+    }
+    let mut best = 0;
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                let root = find(mut parent, r * n + c);
+                best = best.max(size[root]);
+            }
+        }
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                let mut roots: Vec[i64] = Vec.new();
+                let mut made = 1;
+                for k in 0..4 {
+                    let nr = r + dr[k];
+                    let nc = c + dc[k];
+                    if nr >= 0 and nr < n and nc >= 0 and nc < n and grid[nr][nc] == 1 {
+                        let root = find(mut parent, nr * n + nc);
+                        if not roots.contains(root) {
+                            roots.push(root);
+                            made += size[root];
+                        }
+                    }
+                }
+                best = best.max(made);
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{grid} -> {largest_island(grid.clone())}");
+}
+
+fn random_grid(seed: mut ref i64, n: i64, land: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < land { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[1, 0], [0, 1]]);
+    show([[1, 1], [1, 0]]);
+    show([[1, 1], [1, 1]]);
+    show([[0]]);
+    show([[1]]);
+    show([[0, 0], [0, 0]]);
+    show([[1, 1, 1], [1, 0, 1], [1, 1, 1]]);
+    show([[1, 0, 1], [0, 0, 0], [1, 0, 1]]);
+    show([[1, 1, 0, 1, 1], [1, 1, 0, 1, 1], [0, 0, 0, 0, 0], [1, 1, 0, 1, 1], [1, 1, 0, 1, 1]]);
+    // LeetCode's largest, 500 by 500: random land at 50% and 60%, and a
+    // grid that is all water.
+    let mut seed = 827;
+    println(f"500 by 500, half land -> {largest_island(random_grid(mut seed, 500, 50))}");
+    println(f"500 by 500, 60% land -> {largest_island(random_grid(mut seed, 500, 60))}");
+    println(f"500 by 500, all water -> {largest_island(random_grid(mut seed, 500, 0))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 8;
+        let land = 20 + next_random(mut seed) % 60;
+        let r = largest_island(random_grid(mut seed, n, land));
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"300 random grids: total {total}, checksum {check}");
+}

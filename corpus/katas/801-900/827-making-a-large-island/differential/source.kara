@@ -1,0 +1,406 @@
+// LeetCode #827: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random grids,
+// against the statement with every change tried.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn largest_island_star(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    // label[r][c]: 0 for water, k + 1 for the k-th island
+    let mut label: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        label.push(Vec.filled(n, 0));
+    }
+    let mut size: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 and label[r][c] == 0 {
+                let id = size.len() + 1;
+                label[r][c] = id;
+                queue.push_back((r, c));
+                let mut count = 0;
+                while let Some((cr, cc)) = queue.pop_front() {
+                    count += 1;
+                    for k in 0..4 {
+                        let nr = cr + dr[k];
+                        let nc = cc + dc[k];
+                        if nr >= 0 and nr < n and nc >= 0 and nc < n and grid[nr][nc] == 1 and label[nr][nc] == 0 {
+                            label[nr][nc] = id;
+                            queue.push_back((nr, nc));
+                        }
+                    }
+                }
+                size.push(count);
+            }
+        }
+    }
+    let mut best = 0;
+    for s in size.iter() {
+        best = best.max(s);
+    }
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                let mut seen: Vec[i64] = Vec.new();
+                let mut made = 1;
+                for k in 0..4 {
+                    let nr = r + dr[k];
+                    let nc = c + dc[k];
+                    if nr >= 0 and nr < n and nc >= 0 and nc < n {
+                        let id = label[nr][nc];
+                        if id > 0 and not seen.contains(id) {
+                            seen.push(id);
+                            made += size[id - 1];
+                        }
+                    }
+                }
+                best = best.max(made);
+            }
+        }
+    }
+    best
+}
+
+// ---- union-find arm -------------------------------------------------
+
+fn find_dsu(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let up = parent[at];
+        parent[at] = root;
+        at = up;
+    }
+    root
+}
+
+fn union_dsu(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let ra = find_dsu(mut parent, a);
+    let rb = find_dsu(mut parent, b);
+    if ra == rb {
+        return;
+    }
+    if size[ra] < size[rb] {
+        parent[ra] = rb;
+        size[rb] += size[ra];
+    } else {
+        parent[rb] = ra;
+        size[ra] += size[rb];
+    }
+}
+
+fn largest_island_dsu(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut parent: Vec[i64] = (0..n * n).collect();
+    let mut size: Vec[i64] = Vec.filled(n * n, 1);
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                if c + 1 < n and grid[r][c + 1] == 1 {
+                    union_dsu(mut parent, mut size, r * n + c, r * n + c + 1);
+                }
+                if r + 1 < n and grid[r + 1][c] == 1 {
+                    union_dsu(mut parent, mut size, r * n + c, (r + 1) * n + c);
+                }
+            }
+        }
+    }
+    let mut best = 0;
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 {
+                let root = find_dsu(mut parent, r * n + c);
+                best = best.max(size[root]);
+            }
+        }
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                let mut roots: Vec[i64] = Vec.new();
+                let mut made = 1;
+                for k in 0..4 {
+                    let nr = r + dr[k];
+                    let nc = c + dc[k];
+                    if nr >= 0 and nr < n and nc >= 0 and nc < n and grid[nr][nc] == 1 {
+                        let root = find_dsu(mut parent, nr * n + nc);
+                        if not roots.contains(root) {
+                            roots.push(root);
+                            made += size[root];
+                        }
+                    }
+                }
+                best = best.max(made);
+            }
+        }
+    }
+    best
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn largest_island_stack(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut g = grid.clone();
+    let mut sizes: Map[i64, i64] = Map.new();
+    let mut next = 2;
+    for r in 0..n {
+        for c in 0..n {
+            if g[r][c] == 1 {
+                let mut stack: Vec[(i64, i64)] = [(r, c)];
+                g[r][c] = next;
+                let mut count = 0;
+                while let Some((cr, cc)) = stack.pop() {
+                    count += 1;
+                    if cr > 0 and g[cr - 1][cc] == 1 {
+                        g[cr - 1][cc] = next;
+                        stack.push((cr - 1, cc));
+                    }
+                    if cr + 1 < n and g[cr + 1][cc] == 1 {
+                        g[cr + 1][cc] = next;
+                        stack.push((cr + 1, cc));
+                    }
+                    if cc > 0 and g[cr][cc - 1] == 1 {
+                        g[cr][cc - 1] = next;
+                        stack.push((cr, cc - 1));
+                    }
+                    if cc + 1 < n and g[cr][cc + 1] == 1 {
+                        g[cr][cc + 1] = next;
+                        stack.push((cr, cc + 1));
+                    }
+                }
+                sizes.insert(next, count);
+                next += 1;
+            }
+        }
+    }
+    let mut best = 0;
+    for (_, s) in sizes.iter() {
+        best = best.max(s);
+    }
+    for r in 0..n {
+        for c in 0..n {
+            if g[r][c] == 0 {
+                let mut around: Set[i64] = Set.new();
+                if r > 0 {
+                    around.insert(g[r - 1][c]);
+                }
+                if r + 1 < n {
+                    around.insert(g[r + 1][c]);
+                }
+                if c > 0 {
+                    around.insert(g[r][c - 1]);
+                }
+                if c + 1 < n {
+                    around.insert(g[r][c + 1]);
+                }
+                let mut made = 1;
+                for l in around.iter() {
+                    if l > 1 {
+                        made += sizes[l];
+                    }
+                }
+                best = best.max(made);
+            }
+        }
+    }
+    best
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn largest_island_iter(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut label: Vec[Vec[i64]] = (0..n).map(|_| Vec.filled(n, 0)).collect();
+    let mut size: Vec[i64] = [0];
+    let steps = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 and label[r][c] == 0 {
+                let id = size.len();
+                label[r][c] = id;
+                let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+                queue.push_back((r, c));
+                let mut count = 0;
+                while let Some((cr, cc)) = queue.pop_front() {
+                    count += 1;
+                    for (sr, sc) in steps.iter() {
+                        let nr = cr + sr;
+                        let nc = cc + sc;
+                        if nr >= 0 and nr < n and nc >= 0 and nc < n and grid[nr][nc] == 1 and label[nr][nc] == 0 {
+                            label[nr][nc] = id;
+                            queue.push_back((nr, nc));
+                        }
+                    }
+                }
+                size.push(count);
+            }
+        }
+    }
+    let whole = size.iter().max().unwrap_or(0);
+    let joined = (0..n * n).filter(|i| grid[i / n][i % n] == 0).map(|i| {
+        let (r, c) = (i / n, i % n);
+        let around: Set[i64] = steps.iter().filter_map(|(sr, sc)| {
+            let (nr, nc) = (r + sr, c + sc);
+            if nr >= 0 and nr < n and nc >= 0 and nc < n { Some(label[nr][nc]) } else { None }
+        }).collect();
+        1 + around.iter().map(|id| size[id]).sum()
+    }).max().unwrap_or(0);
+    whole.max(joined)
+}
+
+// ---- the statement, every change tried ------------------------------------
+
+fn island_from(g: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    // the size of the island at (r, c), sinking it as it is counted
+    let n = g.len();
+    if r < 0 or r >= n or c < 0 or c >= n or g[r][c] != 1 {
+        return 0;
+    }
+    g[r][c] = 0;
+    1 + island_from(mut g, r - 1, c) + island_from(mut g, r + 1, c) + island_from(mut g, r, c - 1) + island_from(mut g, r, c + 1)
+}
+
+fn largest_now(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let mut best = 0;
+    for r in 0..g.len() {
+        for c in 0..g.len() {
+            best = best.max(island_from(mut g, r, c));
+        }
+    }
+    best
+}
+
+// The statement read literally: change no cell, or each 0 in turn to a
+// 1, and measure every island of every grid that makes.
+fn statement(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut best = largest_now(grid.clone());
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 0 {
+                let mut changed = grid.clone();
+                changed[r][c] = 1;
+                best = best.max(largest_now(changed));
+            }
+        }
+    }
+    best
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        largest_island_star(grid)
+    } else if arm == 1 {
+        largest_island_dsu(grid)
+    } else if arm == 2 {
+        largest_island_stack(grid)
+    } else {
+        largest_island_iter(grid)
+    }
+}
+
+fn transposed(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    let mut t: Vec[Vec[i64]] = Vec.new();
+    for c in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..n {
+            row.push(grid[r][c]);
+        }
+        t.push(row);
+    }
+    t
+}
+
+fn mirrored(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut m = grid.clone();
+    for row in m.iter_mut() {
+        row.reverse();
+    }
+    m
+}
+
+fn main() {
+    let names = ["star", "dsu", "stack", "iter"];
+    let properties = ["answer", "transposed", "mirrored", "monotone in land"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 827;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 7;
+        let land = if kind == 0 {
+            20 + next_random(mut seed) % 61
+        } else if kind == 1 {
+            next_random(mut seed) % 21
+        } else if kind == 2 {
+            80 + next_random(mut seed) % 21
+        } else {
+            50
+        };
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for r in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..n {
+                if kind == 3 {
+                    // stripes and checks with holes: many islands one 0 apart
+                    let on = if (r + c) % 2 == 0 or r % 3 == 0 { 1 } else { 0 };
+                    row.push(if next_random(mut seed) % 10 == 0 { 1 - on } else { on });
+                } else {
+                    row.push(if next_random(mut seed) % 100 < land { 1 } else { 0 });
+                }
+            }
+            grid.push(row);
+        }
+        let want = statement(grid.clone());
+        let pr = next_random(mut seed) % n;
+        let pc = next_random(mut seed) % n;
+        let mut flipped = grid.clone();
+        flipped[pr][pc] = 1 - flipped[pr][pc];
+        let added = grid[pr][pc] == 0;
+        for arm in 0..4 {
+            let got = answer(arm, grid.clone());
+            let other = answer(arm, flipped.clone());
+            let oks = [
+                got == want,
+                answer(arm, transposed(grid.clone())) == got,
+                answer(arm, mirrored(grid.clone())) == got,
+                if added { other >= got } else { other <= got },
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {grid} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, dsu {by_arm[1]}, stack {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, transposed {by_property[1]}, mirrored {by_property[2]}, monotone in land {by_property[3]}");
+}

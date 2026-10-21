@@ -1,0 +1,97 @@
+// LeetCode #827: Making A Large Island -- labels, then an iterator chain.
+//
+// The islands labelled by a breadth-first search as in the ★ arm, then
+// the answer a `max` over the 0 cells of 1 plus a `sum` over the
+// distinct labels its in-grid neighbours carry, the labels gathered by
+// `filter_map` into a `Set`. O(n^2).
+
+fn largest_island(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut label: Vec[Vec[i64]] = (0..n).map(|_| Vec.filled(n, 0)).collect();
+    let mut size: Vec[i64] = [0];
+    let steps = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    for r in 0..n {
+        for c in 0..n {
+            if grid[r][c] == 1 and label[r][c] == 0 {
+                let id = size.len();
+                label[r][c] = id;
+                let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+                queue.push_back((r, c));
+                let mut count = 0;
+                while let Some((cr, cc)) = queue.pop_front() {
+                    count += 1;
+                    for (sr, sc) in steps.iter() {
+                        let nr = cr + sr;
+                        let nc = cc + sc;
+                        if nr >= 0 and nr < n and nc >= 0 and nc < n and grid[nr][nc] == 1 and label[nr][nc] == 0 {
+                            label[nr][nc] = id;
+                            queue.push_back((nr, nc));
+                        }
+                    }
+                }
+                size.push(count);
+            }
+        }
+    }
+    let whole = size.iter().max().unwrap_or(0);
+    let joined = (0..n * n).filter(|i| grid[i / n][i % n] == 0).map(|i| {
+        let (r, c) = (i / n, i % n);
+        let around: Set[i64] = steps.iter().filter_map(|(sr, sc)| {
+            let (nr, nc) = (r + sr, c + sc);
+            if nr >= 0 and nr < n and nc >= 0 and nc < n { Some(label[nr][nc]) } else { None }
+        }).collect();
+        1 + around.iter().map(|id| size[id]).sum()
+    }).max().unwrap_or(0);
+    whole.max(joined)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{grid} -> {largest_island(grid.clone())}");
+}
+
+fn random_grid(seed: mut ref i64, n: i64, land: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < land { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[1, 0], [0, 1]]);
+    show([[1, 1], [1, 0]]);
+    show([[1, 1], [1, 1]]);
+    show([[0]]);
+    show([[1]]);
+    show([[0, 0], [0, 0]]);
+    show([[1, 1, 1], [1, 0, 1], [1, 1, 1]]);
+    show([[1, 0, 1], [0, 0, 0], [1, 0, 1]]);
+    show([[1, 1, 0, 1, 1], [1, 1, 0, 1, 1], [0, 0, 0, 0, 0], [1, 1, 0, 1, 1], [1, 1, 0, 1, 1]]);
+    // LeetCode's largest, 500 by 500: random land at 50% and 60%, and a
+    // grid that is all water.
+    let mut seed = 827;
+    println(f"500 by 500, half land -> {largest_island(random_grid(mut seed, 500, 50))}");
+    println(f"500 by 500, 60% land -> {largest_island(random_grid(mut seed, 500, 60))}");
+    println(f"500 by 500, all water -> {largest_island(random_grid(mut seed, 500, 0))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 8;
+        let land = 20 + next_random(mut seed) % 60;
+        let r = largest_island(random_grid(mut seed, n, land));
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"300 random grids: total {total}, checksum {check}");
+}
