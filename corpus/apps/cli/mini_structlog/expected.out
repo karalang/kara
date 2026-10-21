@@ -1,0 +1,508 @@
+== the default configuration ==
+2024-05-01 14:00:00 [info     ] hello                          n=3 user=alice
+2024-05-01 14:00:00 [debug    ] details                        items=[1, 2.5, None]
+2024-05-01 14:00:00 [warning  ] disk low                       mount=/var pct=91.5
+2024-05-01 14:00:00 [error    ] write failed                   path=/var/log/app.log
+2024-05-01 14:00:01 [critical ] out of memory
+2024-05-01 14:00:01 [info     ] msg logs at info
+2024-05-01 14:00:01 [warning  ] warn is warning
+2024-05-01 14:00:01 [error    ] fatal is error, not critical
+2024-05-01 14:00:02 [error    ] no exception is being handled
+2024-05-01 14:00:02 [info     ] a str stays bare               b=b'raw' q=it's s=two words
+2024-05-01 14:00:02 [info     ]                                empty=
+2024-05-01 14:00:02 [info     ] stack_info=False is dropped
+== log() takes a level number ==
+2024-05-01 14:00:01 [info     ] twenty is info
+2024-05-01 14:00:01 [critical ] answer=42
+2024-05-01 14:00:01 [debug    ] ten is debug
+!! KeyError: 25
+!! KeyError: 0
+!! TypeError: '<' not supported between instances of 'str' and 'int'
+!! TypeError: _make_filtering_bound_logger.<locals>.log() missing 1 required positional argument: 'event'
+!! TypeError: _make_filtering_bound_logger.<locals>.log() missing 2 required positional arguments: 'level' and 'event'
+== positional arguments are %-formatted ==
+-> "event='user bob logged in from 10.0.0.7'"
+-> "event='50% done'"
+-> 'event=" 3.14|ab    |\'q\'| right"'
+-> "event='00042|+7| 3|ff|FF|10|0xff'"
+-> "event='3 and -2 of floats'"
+-> "event='abc|    2.0000|-0.2    |'"
+-> 'event="{\'a\': 1}"'
+-> 'event="None and b\'x\'"'
+!! TypeError: format requires a mapping
+!! TypeError: not enough arguments for format string
+!! TypeError: not all arguments converted during string formatting
+!! TypeError: %d format: a real number is required, not str
+!! TypeError: %x format: an integer is required, not float
+!! TypeError: must be real number, not str
+!! ValueError: unsupported format character 'q' (0x71) at index 1
+!! ValueError: incomplete format
+-> "event='True|0'"
+-> "event='-3   | None|0|0.2|2.67'"
+== the event argument ==
+!! TypeError: _make_filtering_bound_logger.<locals>.make_method.<locals>.meth() missing 1 required positional argument: 'event'
+!! TypeError: _nop() missing 1 required positional argument: 'event'
+!! TypeError: _make_filtering_bound_logger.<locals>.make_method.<locals>.meth() got multiple values for argument 'event'
+-> "event='given by keyword' level='info'"
+!! TypeError: exception() missing 1 required positional argument: 'event'
+-> "a=1 level='info'"
+-> "event=42 level='info'"
+-> "n=1 event=['a', 'list'] level='info'"
+== the generic BoundLogger ==
+-> "event='info' level='info'"
+-> "event='any method name reaches the processors' level='failure'"
+-> "event='exception maps to error' level='error'"
+-> "event='warn maps to warning' level='warning'"
+-> "level='info'"
+!! TypeError: BoundLoggerBase._proxy_to_logger() takes from 2 to 3 positional arguments but 4 were given
+!! TypeError: BoundLoggerBase._proxy_to_logger() got multiple values for argument 'event'
+!! TypeError: BoundLoggerBase._proxy_to_logger() got multiple values for argument 'method_name'
+!! AttributeError: 'ReturnLogger' object has no attribute 'trace'
+!! TypeError: BoundLoggerBase._proxy_to_logger() takes from 2 to 3 positional arguments but 4 were given
+-> "event='with one argument' level='log'"
+== the generic BoundLogger over a PrintLogger ==
+level='err' event='err'
+level='failure' event='failure'
+!! AttributeError: 'PrintLogger' object has no attribute 'notice'
+level='msg' event='msg'
+level='debug' event='the generic logger never filters'
+== bind, unbind and try_unbind ==
+-> "a=10 b=2 c=3 event='a keeps its place'"
+-> "a=10 c=3 event='b is gone'"
+!! KeyError: 'zzz'
+!! KeyError: 'zzz'
+-> "b=2 c=3 event='zzz was never there'"
+context log: {'a': 1, 'b': 2}
+context l2: {'a': 10, 'b': 2, 'c': 3}
+context l3: {'a': 10, 'c': 3}
+context l4: {'b': 2, 'c': 3}
+log == log: True
+log == l2: False
+l2 == l3: False
+log == l5: True
+-> "a=99 b=2 c=None event='an event keyword wins'"
+== new() clears the context it is called on ==
+-> "event='b lost x and y'"
+-> "z=3 event='c has only z'"
+context b: {}
+-> "z=3 event='c keeps z'"
+-> "event='e is empty'"
+== a lazy proxy's new() keeps its initial values ==
+-> "event='from new' region='eu' req=1 svc='api'"
+-> "event='from the proxy' region='eu' svc='api'"
+context p: {'svc': 'api', 'region': 'eu'}
+-> "event='unbound' svc='api'"
+-> "event='tried' svc='api'"
+!! KeyError: 'nope'
+-> "event='rebound' region='eu' svc='override'"
+== cache_logger_on_first_use ==
+-> "a=1 event='first use fixes the processors'"
+-> "a=1 event='still the KeyValueRenderer'"
+-> '{"event": "a new proxy sees the JSONRenderer"}'
+b == b: True
+-> 'event="new() on the cached logger cleared the proxy\'s a"'
+-> "event='bind with values copies' k=2"
+-> "event='the proxy is unchanged'"
+== without the cache every use builds a logger ==
+-> "a=1 event='first'"
+-> '{"a": 1, "event": "second"}'
+-> '{"a": 1, "event": "new() cleared a copy"}'
+-> "x=1 event='this proxy opts out'"
+-> "x=1 event='and so sees the new processors'"
+== make_filtering_bound_logger(10) ==
+-> "event='debug' method='debug' level='debug'"
+-> "event='info' method='info' level='info'"
+-> "event='msg' method='info' level='info'"
+-> "event='warning' method='warning' level='warning'"
+-> "event='warn' method='warning' level='warning'"
+-> "event='error' method='error' level='error'"
+-> "event='fatal' method='error' level='error'"
+-> "exc_info=True event='exception' method='error' level='error'"
+-> "event='critical' method='critical' level='critical'"
+-> "event='log 30' method='warning' level='warning'"
+!! AttributeError: 'BoundLoggerFilteringAtDebug' object has no attribute 'trace'
+== make_filtering_bound_logger(20) ==
+-> "event='info' method='info' level='info'"
+-> "event='msg' method='info' level='info'"
+-> "event='warning' method='warning' level='warning'"
+-> "event='warn' method='warning' level='warning'"
+-> "event='error' method='error' level='error'"
+-> "event='fatal' method='error' level='error'"
+-> "exc_info=True event='exception' method='error' level='error'"
+-> "event='critical' method='critical' level='critical'"
+-> "event='log 30' method='warning' level='warning'"
+!! AttributeError: 'BoundLoggerFilteringAtInfo' object has no attribute 'trace'
+== make_filtering_bound_logger(30) ==
+-> "event='warning' method='warning' level='warning'"
+-> "event='warn' method='warning' level='warning'"
+-> "event='error' method='error' level='error'"
+-> "event='fatal' method='error' level='error'"
+-> "exc_info=True event='exception' method='error' level='error'"
+-> "event='critical' method='critical' level='critical'"
+-> "event='log 30' method='warning' level='warning'"
+!! AttributeError: 'BoundLoggerFilteringAtWarning' object has no attribute 'trace'
+== make_filtering_bound_logger(40) ==
+-> "event='error' method='error' level='error'"
+-> "event='fatal' method='error' level='error'"
+-> "exc_info=True event='exception' method='error' level='error'"
+-> "event='critical' method='critical' level='critical'"
+!! AttributeError: 'BoundLoggerFilteringAtError' object has no attribute 'trace'
+== make_filtering_bound_logger(50) ==
+-> "event='critical' method='critical' level='critical'"
+!! AttributeError: 'BoundLoggerFilteringAtCritical' object has no attribute 'trace'
+== make_filtering_bound_logger with no such level ==
+!! KeyError: 25
+-> "event='the bad level changed nothing' configured=True"
+== exception() and exc_info ==
+-> "level='error' event='failed' exception='ValueError: bad input'"
+-> "level='error' event='exc_info=False wins'"
+-> "level='error' event='error with exc_info' exception='ValueError: bad input'"
+-> "level='info' event='a truthy str' exception='ValueError: bad input'"
+-> "level='info' event='zero is falsy'"
+-> "level='error' event='outside an except block' exception='MISSING'"
+-> 'level=\'error\' event=\'an instance\' exception="KeyError: \'user_id\'"'
+-> "level='error' event='an empty list is falsy'"
+-> "level='error' event='a list is truthy' exception='MISSING'"
+== exceptions as format_exc_info prints them ==
+-> 'event=no args exception=RuntimeError'
+-> "event=two args exception=ValueError: ('a', 1)"
+-> 'event=KeyError prints its repr exception=KeyError: "it\'s"'
+-> 'event=a module exception=billing.errors.CardDeclined: insufficient funds'
+-> 'event=__main__ is left out exception=AppError: x'
+-> 'event=raise from exception=ConnectionError: reset by peer\n\nThe above exception was the direct cause of the following exception:\n\nRuntimeError: charge failed'
+-> 'event=during handling exception=OSError: disk full\n\nDuring handling of the above exception, another exception occurred:\n\nTypeError: cleanup broke'
+-> 'event=suppressed exception=TypeError: quiet'
+-> "event=cause beats context exception=KeyError: 'k'\n\nThe above exception was the direct cause of the following exception:\n\nValueError: v"
+-> 'event=a chain of three exception=ZeroDivisionError: division by zero\n\nDuring handling of the above exception, another exception occurred:\n\nValueError: middle\n\nThe above exception was the direct cause of the following exception:\n\nRuntimeError: top'
+-> 'event=notes exception=ValueError: bad row\nrow 7\nline one\nline two'
+-> 'event=an empty message exception=ValueError'
+-> 'event=a non-str arg exception=TimeoutError: 30'
+== dict_tracebacks ==
+-> '{"event": "inside", "exception": [{"exc_type": "ValueError", "exc_value": "bad input", "frames": [], "is_cause": false, "syntax_error": null}], "level": "error"}'
+-> '{"event": "an instance", "exception": [{"exc_type": "KeyError", "exc_value": "\'k\'", "frames": [], "is_cause": false, "syntax_error": null}], "level": "error"}'
+-> '{"event": "two args", "exception": [{"exc_type": "ValueError", "exc_value": "(\'a\', b\'b\')", "frames": [], "is_cause": false, "syntax_error": null}], "level": "error"}'
+!! AttributeError: 'NoneType' object has no attribute '__name__'
+-> '{"event": "falsy", "level": "error"}'
+== the ConsoleRenderer without colors ==
+-> "2024-05-01T12:00:02Z [info     ] values                         d={'k': b'v'} f=1.5 l=[1, 'a'] n=3 none=None s=text t=(1,)"
+-> '2024-05-01T12:00:02.250000Z [warning  ] an event longer than the thirty columns it is padded to x=1'
+-> '2024-05-01T12:00:02.500000Z [info     ] short                          [db] [db.pool]'
+-> '2024-05-01T12:00:02.750000Z [info     ] unsorted keys sort             alpha=2 mid=3 zeta=1'
+-> '2024-05-01T12:00:03Z [info     ] a str with quotes              nl=two\nlines q=it\'s "quoted"'
+-> '2024-05-01T12:00:03.250000Z [info     ] objects                        o=<Point x=1 y=2>'
+-> "2024-05-01T12:00:03.500000Z [info     ] an exception value             e=ValueError('x')"
+-> '2024-05-01T12:00:03.750000Z [error    ] exc_info prints below\nValueError: bad\nsee docs'
+-> '2024-05-01T12:00:04Z [error    ] exc_info=True outside prints nothing'
+-> '2024-05-01T12:00:04.250000Z [error    ] an exception key\nTraceback text\nhere'
+-> '2024-05-01T12:00:04.500000Z [info     ]'
+-> '[trace    ] a level with no style'
+-> '[x        ] a short level'
+-> '[verbose_debug] a level padded past nine'
+== ConsoleRenderer options ==
+-> '[info] short        k=1'
+-> '[critical] longer than twelve k=2'
+-> "[info     ] repr_native_str                zeta='z' alpha='a' n=1"
+-> '12:00:03 [info     ] renamed user=u'
+-> 'no level, no timestamp         a=1'
+-> '1714564800.5 a timestamp of any type'
+-> 'trailing blanks are stripped'
+== the ConsoleRenderer with colors ==
+-> '\x1b[2m12:00:04\x1b[0m [\x1b[32m\x1b[1mdebug    \x1b[0m] \x1b[1mdebug                         \x1b[0m \x1b[36ma\x1b[0m=\x1b[35m1\x1b[0m'
+-> '\x1b[2m12:00:04\x1b[0m [\x1b[32m\x1b[1minfo     \x1b[0m] \x1b[1minfo                          \x1b[0m \x1b[36ms\x1b[0m=\x1b[35mtext\x1b[0m'
+-> '\x1b[2m12:00:04\x1b[0m [\x1b[33m\x1b[1mwarning  \x1b[0m] \x1b[1mwarning                       \x1b[0m'
+-> '\x1b[2m12:00:04\x1b[0m [\x1b[31m\x1b[1merror    \x1b[0m] \x1b[1merror                         \x1b[0m\nRuntimeError: boom'
+-> '\x1b[2m12:00:05\x1b[0m [\x1b[31m\x1b[1mcritical \x1b[0m] \x1b[1mcritical                      \x1b[0m [\x1b[0m\x1b[1m\x1b[34mcore\x1b[0m]\x1b[0m'
+-> '[\x1b[41m\x1b[1mnotset   \x1b[0m] \x1b[1mnotset                        \x1b[0m'
+-> '[trace    \x1b[0m] \x1b[1munknown level                 \x1b[0m'
+-> '[\x1b[32m\x1b[1minfo\x1b[0m] \x1b[1mx       \x1b[0m \x1b[36mk\x1b[0m=\x1b[35mv\x1b[0m'
+== level_styles is changed in place ==
+S: {'critical': '\x1b[31m', 'exception': '\x1b[31m', 'error': '\x1b[31m', 'warn': '\x1b[33m', 'warning': '\x1b[33m', 'info': '\x1b[32m', 'debug': '\x1b[32m', 'notset': '\x1b[41m'}
+S: {'critical': '\x1b[31m\x1b[1m', 'exception': '\x1b[31m\x1b[1m', 'error': '\x1b[31m\x1b[1m', 'warn': '\x1b[33m\x1b[1m', 'warning': '\x1b[33m\x1b[1m', 'info': '\x1b[32m\x1b[1m', 'debug': '\x1b[32m\x1b[1m', 'notset': '\x1b[41m\x1b[1m'}
+S: {'critical': '\x1b[31m\x1b[1m\x1b[1m', 'exception': '\x1b[31m\x1b[1m\x1b[1m', 'error': '\x1b[31m\x1b[1m\x1b[1m', 'warn': '\x1b[33m\x1b[1m\x1b[1m', 'warning': '\x1b[33m\x1b[1m\x1b[1m', 'info': '\x1b[32m\x1b[1m\x1b[1m', 'debug': '\x1b[32m\x1b[1m\x1b[1m', 'notset': '\x1b[41m\x1b[1m\x1b[1m'}
+-> '[\x1b[32m\x1b[1m\x1b[1minfo     \x1b[0m] \x1b[1mbuilt first                   \x1b[0m'
+-> '[\x1b[32m\x1b[1m\x1b[1minfo     \x1b[0m] \x1b[1mbuilt second                  \x1b[0m'
+C: {'info': '<I>', 'oops': '<O>'}
+-> '[<I>info] the widest key is four'
+-> '[warning] no style'
+P: {'critical': '', 'exception': '', 'error': '', 'warn': '', 'warning': '', 'info': '', 'debug': '', 'notset': ''}
+-> '[info     ] plain'
+!! ValueError: max() iterable argument is empty
+== KeyValueRenderer options ==
+-> "b=1 a='x' c=[1] event='insertion order' level='info'"
+-> "a='x' b=1 c=[1] event='sorted' level='info'"
+-> "event='key_order first' missing=None level='info' z=1 a=2"
+-> "level='info' missing=None a=2 event='then sorted' z=1"
+-> "event='drop_missing' x=1 level='info'"
+-> "s=two words q=it's n=1 b=b'b' event=bare strs level=info"
+== LogfmtRenderer ==
+-> 'n=1 f=2.5 s=word event=plain level=info'
+-> 's="two words" eq="a=b" q="say \\"hi\\"" event="needs quotes" level=info'
+-> 'alone=C:\\temp spaced="C:\\\\Program Files" nl=a\\nb tab=a\tb event=backslashes level=info'
+-> 'on off=false none= event=flags level=info'
+-> 'l="[1, 2]" d="{\'a\': 1}" t=() b="b\'x y\'" e= u=café event=containers level=info'
+!! ValueError: Invalid key: "my key"
+!! ValueError: Invalid key: "a	b"
+-> '=1 event="empty key" level=info'
+-> 'level=info event="bools spelled out" missing= on=true off=false'
+-> 'event="dropped and sorted" a=1 level=info z='
+== JSONRenderer ==
+-> '{"i": 1, "f": 2.5, "s": "x", "n": null, "b": true, "l": [1, [2]], "d": {"a": {"b": []}}, "t": [1, 2], "event": "types", "level": "info"}'
+-> '{"raw": "b\'\\\\x00\\\\xc3\\\\xbf\'", "o": "<Conn #4>", "e": "ValueError(\'x\')", "event": "fallbacks", "level": "info"}'
+-> '{"o": {"id": 7, "name": "ada"}, "r": "<inner>", "event": "__structlog__", "level": "info"}'
+-> '{"nan": NaN, "inf": Infinity, "ninf": -Infinity, "big": 1e+22, "small": 1e-07, "neg": -0.0, "event": "floats", "level": "info"}'
+-> '{"d": {"1": "bool", "null": "none", "2.5": "float", "false": 0}, "event": "keys", "level": "info"}'
+!! TypeError: keys must be str, int, float, bool or None, not tuple
+-> '{"s": "tab\\there \\"q\\" back\\\\slash\\u0001\\u007f", "u": "caf\\u00e9 \\u2615 \\ud83d\\ude00", "event": "escapes", "level": "info"}'
+-> '{\n  "a": {\n    "x": [],\n    "y": [\n      1,\n      {}\n    ]\n  },\n  "event": "sorted and indented",\n  "level": "info",\n  "z": 1\n}'
+-> '{"u":"café ☕ 😀","c":"\\u0001\x7f","event":"not ascii"}'
+-> '{\n"l": [\n1,\n2\n],\n"event": "indent zero"\n}'
+== TimeStamper ==
+-> "event='utc iso has a Z and no zero microseconds' timestamp='2024-05-01T12:00:00Z'"
+-> "event='a quarter second later' timestamp='2024-05-01T12:00:00.250000Z'"
+-> "event='local iso is naive' timestamp='2024-05-01T14:00:00.500000'"
+-> "event='unix' timestamp=1714564800.75"
+-> "event='unix' timestamp=1714564801.0"
+-> "event='apache style' time='01/May/2024:12:00:01 +0000'"
+-> "event='local, so no zone' timestamp='Wed Wednesday May 122 24 02PM 500000 ||%'"
+-> "event='utc' timestamp='Wed Wednesday May 122 24 12PM 750000 UTC'"
+-> "event='the last microsecond of 2024' timestamp='2024-12-31T23:59:59.999999Z'"
+-> "event='the first of 2025, local' timestamp='Wed Wednesday January 001 25 02AM 249999 ||%'"
+-> "event='a leap day' timestamp='Tue Tuesday February 060 00 12PM 000000 UTC'"
+!! ValueError: UNIX timestamps are always UTC.
+-> "event='adds one' timestamp='2000-02-29T12:00:00.250000Z'"
+-> "timestamp='given' event='keeps one'"
+-> "ts='2000-02-29T12:00:00.500000Z' event='looks for timestamp, not ts'"
+-> "timestamp='t' event='so timestamp stops it'"
+== EventRenamer ==
+-> "a=1 msg='renamed'"
+!! KeyError: 'event'
+-> "u=1 message='took the event' event='user.login'"
+-> "message='no _event'"
+-> "message='None counts as missing'"
+-> "a=1 event='renamed to itself'"
+== UnicodeEncoder and UnicodeDecoder ==
+-> "n=1 b=b'x' event=b'caf\\xc3\\xa9'"
+-> "s=b'caf\\\\xe9 \\\\u2615 \\\\U0001f600' event=b'backslashreplace'"
+-> "s=b'caf? ? ?' event=b'replace'"
+-> "s=b'caf  ' event=b'ignore'"
+-> "event=b'plain ascii is fine'"
+!! UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 3: ordinal not in range(128)
+-> "ok='café' bad='a�b' cut='x�' mid='�z' n=1 event='decoded'"
+-> '{"s": "na\\u00efve", "event": "there and back"}'
+== contextvars ==
+-> "event='merged in' request_id='r-1' user='ada'"
+-> "event='an event value wins' request_id='r-1' user='bob'"
+-> "event='a bound value wins too' request_id='bound' user='ada'"
+contextvars: [('request_id', 'r-1'), ('user', 'ada')]
+merged b: [('request_id', 'bound'), ('user', 'ada')]
+-> "event='user unbound' request_id='r-1'"
+-> "event='None is a value' request_id='r-1' user=None"
+-> "event='inside bound_contextvars' request_id='inner' span=7 user=None"
+contextvars: [('request_id', 'inner'), ('span', 7), ('user', None)]
+-> "event='restored, and span is gone' request_id='r-1' user=None"
+contextvars: [('request_id', 'r-1'), ('user', None)]
+-> "event='cleared'"
+contextvars: []
+-> "event='a fresh key' only=1"
+-> "event='a key bound only in the block is unbound after'"
+== contextvars are cleared between jobs ==
+-> "event='nothing left over'"
+contextvars: []
+== capture_logs ==
+2024-05-01 14:00:05 [info     ] printed before
+captured: [{'a': 1, 'event': 'captured', 'log_level': 'info'}, {'event': 'also captured', 'log_level': 'warning'}, {'exc_info': True, 'event': 'exception', 'log_level': 'error'}, {'event': 'debug too', 'log_level': 'debug'}, {'event': 'a new logger is captured too', 'log_level': 'info'}]
+2024-05-01 14:00:05 [info     ] printed after
+== capture_logs keeps a configured chain ==
+-> "event='rendered' level='info'"
+captured: [{'x': 1, 'event': 'captured', 'log_level': 'info'}, {'event': 'warn', 'log_level': 'warning'}]
+-> "event='rendered again' level='info'"
+== a cached logger sees capture_logs ==
+-> "event='cached' level='info'"
+captured: [{'event': 'the default list is changed in place', 'log_level': 'info'}]
+-> "event='but now it has its own list' level='info'"
+captured: []
+-> "event='rendered by the old list' level='info'"
+== LogCapture as a processor ==
+cap: [{'a': 1, 'event': 'one', 'log_level': 'info'}, {'event': 'exception', 'log_level': 'error'}, {'event': 'warn', 'log_level': 'warning'}, {'event': 'custom', 'log_level': 'custom'}]
+cap2: [{'event': 'fatal', 'log_level': 'error'}]
+== dropping events ==
+-> "event='kept' level='info'"
+-> "n=1 event='heartbeat'"
+-> "event='other'"
+-> "n=4 event='heartbeat'"
+== what the last processor returns ==
+-> (('a tuple is (args, kwargs)',), {'a': 1})
+-> ((), {'a': 1, 'event': 'a dict becomes keyword arguments', 'level': 'info'})
+-> 'just this'
+-> b'bytes'
+!! ValueError: Last processor didn't return an appropriate value.  Valid return values are a dict, a tuple of (args, kwargs), bytes, or a str.
+!! ValueError: Last processor didn't return an appropriate value.  Valid return values are a dict, a tuple of (args, kwargs), bytes, or a str.
+!! ValueError: Last processor didn't return an appropriate value.  Valid return values are a dict, a tuple of (args, kwargs), bytes, or a str.
+-> ((), {'k': 1, 'event': 'no processors at all'})
+-> (('a', 'b'), {'k': 1})
+== a PrintLogger takes one message ==
+!! TypeError: PrintLogger.msg() got an unexpected keyword argument 'event'
+!! TypeError: PrintLogger.msg() missing 1 required positional argument: 'message'
+by keyword
+!! TypeError: PrintLogger.msg() takes 2 positional arguments but 3 were given
+!! TypeError: PrintLogger.msg() got multiple values for argument 'message'
+b'bytes print as a repr'
+event='a str'
+== WriteLogger and BytesLogger ==
+event='write logger'
+!! TypeError: can't concat str to bytes
+!! TypeError: WriteLogger.msg() got an unexpected keyword argument 'event'
+u='café' event='bytes logger'
+!! TypeError: can only concatenate str (not "bytes") to str
+a
+== CapturingLogger ==
+c: 4 call(s)
+  CapturedCall(method_name='info', args=("event='info' level='info'",), kwargs={})
+  CapturedCall(method_name='anything_goes', args=("event='x' level='anything_goes'",), kwargs={})
+  CapturedCall(method_name='warning', args=(), kwargs={'k': 1, 'event': 'as kwargs', 'level': 'warning'})
+  CapturedCall(method_name='info', args=(1, 2), kwargs={'a': b'b'})
+c: 0 call(s)
+d: 2 call(s)
+  CapturedCall(method_name='info', args=("event='from p' level='info'",), kwargs={})
+  CapturedCall(method_name='info', args=("event='from q, the same logger' level='info'",), kwargs={})
+== processors that raise ==
+!! RuntimeError: processor broke
+!! KeyError: 'missing'
+!! ValueError: after the drop
+== the context and the event dict ==
+-> "event='the event argument wins' user='a'"
+-> "event='from the context' user='a'"
+-> "event='keyword' user='b'"
+-> "level='info' event='add_log_level overwrites in place'"
+-> "level='warning' z=1 event='and keeps the place'"
+== values in the KeyValueRenderer ==
+-> 'e=KeyError(\'k\') e2=ValueError() o=<Obj> t=(1,) t2=() t3=(\'a\', None) d={1: 2, (1,): [3]} f=1e+16 g=1.0 h=0.30000000000000004 neg=-0.0 nan=nan inf=-inf s=\'tab\\tnew\\nline\' q=\'\\\'"\' u=\'é\\xa0\\u200b\' big=4611686018427387904 nb=b\'\\x00\\t\\\\\\\'"\' nb2=b"\'" emp=b\'\' event=\'repr\''
+== set_exc_info ==
+-> "event='outside' exception='MISSING'"
+-> "event='inside' exception='ConnectionError: refused'"
+-> "event='explicit False'"
+-> "event='error is not exception'"
+-> "event='the filtering logger calls error' exception='ConnectionError: refused'"
+-> "event='error alone'"
+== exceptions in the default configuration ==
+2024-05-01 14:00:06 [error    ] parse failed                   line=3
+ValueError: invalid literal for int() with base 10: 'x'
+2024-05-01 14:00:06 [error    ] payment                        order=17
+TimeoutError: gateway
+
+The above exception was the direct cause of the following exception:
+
+shop.payments.PaymentError: card declined
+2024-05-01 14:00:06 [error    ] a formatted exception wins over exc_info
+ValueError: x
+2024-05-01 14:00:06 [error    ] a formatted exception alone
+pre-formatted
+== configure, then reset_defaults ==
+-> "event='configured' level='warning'"
+2024-05-01 14:00:07 [info     ] the proxy reads the defaults again
+-> '2024-05-01 14:00:07 [info     ] only the factory changed'
+!! AttributeError: 'ReturnLogger' object has no attribute 'notice'
+== note on positional arguments to a lazy proxy ==
+-> "event='factory arguments go to the factory, unused'"
+== program: an API's access log ==
+wrote 52 lines to data/out/api.jsonl, the first four:
+  {"bytes": 15879, "client_ip": "10.0.20.149", "duration_ms": 12, "level": "info", "message": "request.completed", "method": "GET", "path": "/api/orders", "request_id": "req-0001", "service": "orders-api", "status": 200, "timestamp": "2024-05-01T13:00:02.304406Z", "version": "2.4.1"}
+  {"bytes": 211, "client_ip": "10.1.78.150", "duration_ms": 214, "exception": "orders.upstream.UpstreamError: upstream returned 503", "level": "error", "message": "request.failed", "method": "GET", "path": "/api/orders", "request_id": "req-0002", "service": "orders-api", "status": 503, "timestamp": "2024-05-01T13:00:04.256922Z", "user": "bj\u00f6rn", "version": "2.4.1"}
+  {"authorization": "[redacted]", "bytes": 11601, "client_ip": "10.1.213.62", "duration_ms": 248, "level": "info", "message": "request.completed", "method": "DELETE", "path": "/api/orders/565", "request_id": "req-0003", "service": "orders-api", "status": 200, "timestamp": "2024-05-01T13:00:06.366409Z", "user": "ada", "version": "2.4.1"}
+  {"bytes": 255, "client_ip": "10.2.175.203", "duration_ms": 272, "level": "warning", "message": "request.rejected", "method": "POST", "path": "/api/orders", "request_id": "req-0004", "service": "orders-api", "status": 401, "timestamp": "2024-05-01T13:00:07.207740Z", "user": "linus", "version": "2.4.1"}
+by level: error=6, info=28, warning=18
+by message: request.completed=28, request.failed=6, request.rejected=9, request.slow=4, request.throttled=5
+by status: 2xx=28, 4xx=14, 5xx=6
+p50: 217 ms
+p90: 387 ms
+p99: 3519 ms
+bytes sent: 259313
+authorization redacted in 18 lines
+requests by user: -=10, mei=8, Zoë=7, ada=7, björn=6, grace=5, linus=5
+slow: req-0034 GET /api/users/818 3519 ms at 2024-05-01T13:00:47.142546Z
+slow: req-0031 GET /api/orders/45 3219 ms at 2024-05-01T13:00:41.706705Z
+slow: req-0010 DELETE /api/orders/268 1474 ms at 2024-05-01T13:00:13.717664Z
+failed: req-0002 /api/orders -> orders.upstream.UpstreamError: upstream returned 503
+failed: req-0006 /api/orders -> orders.upstream.UpstreamError: upstream returned 503
+failed: req-0032 /api/users/708 -> orders.upstream.UpstreamError: upstream returned 502
+failed: req-0033 /api/login -> orders.upstream.UpstreamError: upstream returned 503
+failed: req-0041 /health -> orders.upstream.UpstreamError: upstream returned 500
+failed: req-0047 /api/orders/214 -> orders.upstream.UpstreamError: upstream returned 502
+== program: a task worker ==
+18:00:05 [error    ] task failed          error=PermissionError kind=export task=t001
+18:00:49 [error    ] task failed          error=PermissionError kind=export task=t007
+18:01:12 [error    ] task failed          error=PermissionError kind=email task=t013
+18:01:21 [error    ] task failed          error=PermissionError kind=email task=t017
+18:01:26 [error    ] task failed          error=PermissionError kind=resize task=t018
+18:01:39 [error    ] task failed          error=PermissionError kind=email task=t021
+18:01:45 [error    ] task failed          error=PermissionError kind=email task=t022
+data/out/worker.log, 68 lines:
+  ts=2024-05-01T16:00:00.000000Z level=debug event=task.received task=t001 worker=w-1 kind=export rows=28486
+  ts=2024-05-01T16:00:00.250000Z level=debug event=heartbeat task=t001 worker=w-1 kind=export attempt=1 beat=1
+  ts=2024-05-01T16:00:05.684582Z level=error event=task.failed task=t001 worker=w-1 kind=export attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:00:06.184582Z level=debug event=task.received task=t002 worker=w-1 kind=resize w=64 h=256
+  ts=2024-05-01T16:00:06.434582Z level=debug event=heartbeat task=t002 worker=w-1 kind=resize attempt=1 beat=1
+  ts=2024-05-01T16:00:09.134849Z level=warning event=task.retry task=t002 worker=w-1 kind=resize attempt=1 error=TimeoutError will_retry
+  ts=2024-05-01T16:00:12.085116Z level=info event=task.done task=t002 worker=w-1 kind=resize attempt=2 elapsed_ms=200.267 retried
+  ts=2024-05-01T16:00:12.335116Z level=debug event=task.received task=t003 worker=w-1 kind=export rows=28186
+  ts=2024-05-01T16:00:12.585116Z level=debug event=heartbeat task=t003 worker=w-1 kind=export attempt=1 beat=1
+  ts=2024-05-01T16:00:17.217079Z level=info event=task.done task=t003 worker=w-1 kind=export attempt=1 elapsed_ms=881.963 retried=false
+  ts=2024-05-01T16:00:17.467079Z level=debug event=task.received task=t004 worker=w-1 kind=webhook url=https://hooks.example.com/3 secret=[redacted]
+  ts=2024-05-01T16:00:18.967079Z level=debug event=heartbeat task=t004 worker=w-1 kind=webhook attempt=1 beat=2
+  ts=2024-05-01T16:00:21.992298Z level=info event=task.done task=t004 worker=w-1 kind=webhook attempt=1 elapsed_ms=525.219 retried=false
+  ts=2024-05-01T16:00:22.242298Z level=debug event=task.received task=t005 worker=w-1 kind=email to=user4@example.com
+  ts=2024-05-01T16:00:22.769355Z level=info event=task.done task=t005 worker=w-1 kind=email attempt=1 elapsed_ms=277.057 retried=false
+  ts=2024-05-01T16:00:23.019355Z level=debug event=task.received task=t006 worker=w-1 kind=resize w=1024 h=256
+  ts=2024-05-01T16:00:26.257737Z level=warning event=task.retry task=t006 worker=w-1 kind=resize attempt=1 error=ValueError will_retry
+  ts=2024-05-01T16:00:26.507737Z level=debug event=heartbeat task=t006 worker=w-1 kind=resize attempt=2 beat=1
+  ts=2024-05-01T16:00:29.496119Z level=warning event=task.retry task=t006 worker=w-1 kind=resize attempt=2 error=TimeoutError will_retry
+  ts=2024-05-01T16:00:32.734501Z level=info event=task.done task=t006 worker=w-1 kind=resize attempt=3 elapsed_ms=488.382 retried
+  ts=2024-05-01T16:00:32.984501Z level=debug event=task.received task=t007 worker=w-1 kind=export rows=15368
+  ts=2024-05-01T16:00:33.234501Z level=debug event=heartbeat task=t007 worker=w-1 kind=export attempt=1 beat=1
+  ts=2024-05-01T16:00:38.453477Z level=warning event=task.retry task=t007 worker=w-1 kind=export attempt=1 error=TimeoutError will_retry
+  ts=2024-05-01T16:00:38.703477Z level=debug event=heartbeat task=t007 worker=w-1 kind=export attempt=2 beat=1
+  ts=2024-05-01T16:00:43.922453Z level=warning event=task.retry task=t007 worker=w-1 kind=export attempt=2 error=TimeoutError will_retry
+  ts=2024-05-01T16:00:44.172453Z level=debug event=heartbeat task=t007 worker=w-1 kind=export attempt=3 beat=1
+  ts=2024-05-01T16:00:49.391429Z level=error event=task.failed task=t007 worker=w-1 kind=export attempt=3 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:00:49.891429Z level=debug event=task.received task=t008 worker=w-1 kind=webhook url=https://hooks.example.com/7 secret=[redacted]
+  ts=2024-05-01T16:00:50.141429Z level=debug event=heartbeat task=t008 worker=w-1 kind=webhook attempt=1 beat=1
+  ts=2024-05-01T16:00:51.705256Z level=info event=task.done task=t008 worker=w-1 kind=webhook attempt=1 elapsed_ms=313.827 retried=false
+  ts=2024-05-01T16:00:51.955256Z level=debug event=task.received task=t009 worker=w-1 kind=email to=user8@example.com
+  ts=2024-05-01T16:00:53.590829Z level=info event=task.done task=t009 worker=w-1 kind=email attempt=1 elapsed_ms=135.573 retried=false
+  ts=2024-05-01T16:00:53.840829Z level=debug event=task.received task=t010 worker=w-1 kind=resize w=1024 h=256
+  ts=2024-05-01T16:00:57.111974Z level=warning event=task.retry task=t010 worker=w-1 kind=resize attempt=1 error=TimeoutError will_retry
+  ts=2024-05-01T16:00:57.361974Z level=debug event=heartbeat task=t010 worker=w-1 kind=resize attempt=2 beat=1
+  ts=2024-05-01T16:01:00.383119Z level=info event=task.done task=t010 worker=w-1 kind=resize attempt=2 elapsed_ms=521.145 retried
+  ts=2024-05-01T16:01:00.633119Z level=debug event=task.received task=t011 worker=w-1 kind=export rows=24275
+  ts=2024-05-01T16:01:03.383119Z level=debug event=heartbeat task=t011 worker=w-1 kind=export attempt=1 beat=3
+  ts=2024-05-01T16:01:05.482593Z level=info event=task.done task=t011 worker=w-1 kind=export attempt=1 elapsed_ms=849.474 retried=false
+  ts=2024-05-01T16:01:05.732593Z level=debug event=task.received task=t012 worker=w-1 kind=webhook url=https://hooks.example.com/11 secret=[redacted]
+  ts=2024-05-01T16:01:09.777852Z level=info event=task.done task=t012 worker=w-1 kind=webhook attempt=1 elapsed_ms=45.259 retried=false
+  ts=2024-05-01T16:01:10.027852Z level=debug event=task.received task=t013 worker=w-1 kind=email to=user12@example.com
+  ts=2024-05-01T16:01:10.277852Z level=debug event=heartbeat task=t013 worker=w-1 kind=email attempt=1 beat=1
+  ts=2024-05-01T16:01:12.345749Z level=error event=task.failed task=t013 worker=w-1 kind=email attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:01:12.845749Z level=debug event=task.received task=t014 worker=w-1 kind=resize w=1024 h=256
+  ts=2024-05-01T16:01:13.669434Z level=warning event=task.retry task=t014 worker=w-1 kind=resize attempt=1 error=TimeoutError will_retry
+  ts=2024-05-01T16:01:14.493119Z level=warning event=task.retry task=t014 worker=w-1 kind=resize attempt=2 error=ValueError will_retry
+  ts=2024-05-01T16:01:15.316804Z level=info event=task.done task=t014 worker=w-1 kind=resize attempt=3 elapsed_ms=573.685 retried
+  ts=2024-05-01T16:01:15.566804Z level=debug event=task.received task=t015 worker=w-1 kind=email to=user14@example.com
+  ts=2024-05-01T16:01:15.865997Z level=info event=task.done task=t015 worker=w-1 kind=email attempt=1 elapsed_ms=49.193 retried=false
+  ts=2024-05-01T16:01:16.115997Z level=debug event=task.received task=t016 worker=w-1 kind=webhook url=https://hooks.example.com/15 secret=[redacted]
+  ts=2024-05-01T16:01:20.243459Z level=info event=task.done task=t016 worker=w-1 kind=webhook attempt=1 elapsed_ms=127.462 retried=false
+  ts=2024-05-01T16:01:20.493459Z level=debug event=task.received task=t017 worker=w-1 kind=email to=user16@example.com
+  ts=2024-05-01T16:01:21.406773Z level=error event=task.failed task=t017 worker=w-1 kind=email attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:01:21.906773Z level=debug event=task.received task=t018 worker=w-1 kind=resize w=64 h=64
+  ts=2024-05-01T16:01:22.156773Z level=debug event=heartbeat task=t018 worker=w-1 kind=resize attempt=1 beat=1
+  ts=2024-05-01T16:01:26.155141Z level=error event=task.failed task=t018 worker=w-1 kind=resize attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:01:26.655141Z level=debug event=task.received task=t019 worker=w-1 kind=export rows=26510
+  ts=2024-05-01T16:01:28.155141Z level=debug event=heartbeat task=t019 worker=w-1 kind=export attempt=1 beat=2
+  ts=2024-05-01T16:01:31.086158Z level=info event=task.done task=t019 worker=w-1 kind=export attempt=1 elapsed_ms=431.017 retried=false
+  ts=2024-05-01T16:01:31.336158Z level=debug event=task.received task=t020 worker=w-1 kind=webhook url=https://hooks.example.com/19 secret=[redacted]
+  ts=2024-05-01T16:01:33.204885Z level=info event=task.done task=t020 worker=w-1 kind=webhook attempt=1 elapsed_ms=368.727 retried=false
+  ts=2024-05-01T16:01:33.454885Z level=debug event=task.received task=t021 worker=w-1 kind=email to=user20@example.com
+  ts=2024-05-01T16:01:34.954885Z level=debug event=heartbeat task=t021 worker=w-1 kind=email attempt=1 beat=2
+  ts=2024-05-01T16:01:38.833100Z level=error event=task.failed task=t021 worker=w-1 kind=email attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+  ts=2024-05-01T16:01:39.333100Z level=debug event=task.received task=t022 worker=w-1 kind=email to=user21@example.com
+  ts=2024-05-01T16:01:40.833100Z level=debug event=heartbeat task=t022 worker=w-1 kind=email attempt=1 beat=2
+  ts=2024-05-01T16:01:44.950377Z level=error event=task.failed task=t022 worker=w-1 kind=email attempt=1 will_retry=false exception="PermissionError: /srv/out is read-only"
+tasks: 15 done, 7 failed, 8 retries; heartbeats: 63 seen, 47 dropped

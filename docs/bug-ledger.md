@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 314 |
 | codegen-gap | 281 |
-| false-positive | 264 |
+| false-positive | 266 |
 | other | 191 |
 | diagnostics | 184 |
 | perf | 181 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2998 |
-| interp | 1018 |
-| typecheck | 534 |
-| ownership | 127 |
+| codegen | 2999 |
+| interp | 1019 |
+| typecheck | 535 |
+| ownership | 128 |
 | other | 123 |
 | runtime | 84 |
 | cli | 82 |
@@ -180,6 +180,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-35 | 2026-10-21 | interp+runtime | low | `Vec.try_resize` with an unrepresentable length does not return the failure as a value: `v.try_resize(i64.MAX, 0)` runs until killed on `__mir-run` (timeout at 20 s) and panics on compiled MIR ("attempt to multiply with overflow", runtime/src/mir.rs:415); collections.md says a `try_*` method returns the failure as a value, which is `Err(AllocError.CapacityOverflow)` here | — |
 | B-2026-10-21-36 | 2026-10-21 | ownership | medium | `karac check` treats the target of a range assignment `v[a..b] = other` as a slice borrow that stays live, so a later `mut v` borrow of the same Vec is refused ("`v` cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"); both MIR backends run the program | — |
 | B-2026-10-21-38 | 2026-10-21 | codegen | medium | Compiled MIR aborts a pool's health check whenever the connection type needs dropping: `Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5)` with `impl Drop for Conn` stops with "runtime error: a health check that takes the connection by value" at the second `acquire` on `__mir-llvm-run`, while `__mir-run` lends the idle value to the closure (whose bare parameter borrows it), evicts it and mints a fresh one | — |
+| B-2026-10-21-39 | 2026-10-21 | ownership | medium | `karac check` refuses a call that borrows one field of a struct and moves a DIFFERENT field in the same argument list: `take(p.a, p.b)` with `fn take(x: ref Vec[i64], y: own Vec[i64])` is 'cannot move `p` while a borrow into it is still live', while the MIR backend accepts it and prints 3 | — |
+| B-2026-10-21-40 | 2026-10-21 | typecheck+interp+codegen | medium | A `"lit".bytes()` view chosen in an `if` expression is refused with E0516 'drop of _N while it is borrowed' by `karac check` and the MIR borrow checker: `let digits = if upper { "ABC".bytes() } else { "abc".bytes() }; digits[1]`, while binding the `Str` first and calling `.bytes()` after the `if` is accepted | — |
 
 ### Relocated
 
