@@ -1,0 +1,435 @@
+// LeetCode #839: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random lists of anagrams,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn similar_star(a: Vec[u8], b: Vec[u8]) -> bool {
+    let mut diff = 0;
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            diff += 1;
+            if diff > 2 {
+                return false;
+            }
+        }
+    }
+    diff != 1
+}
+
+fn find_star(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn num_similar_groups_star(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[u8]] = strs.iter().map(|s| s.bytes().iter().collect()).collect();
+    let n = words.len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut groups = n;
+    for i in 0..n {
+        for j in i + 1..n {
+            let a = find_star(mut parent, i);
+            let b = find_star(mut parent, j);
+            if a != b and similar_star(words[i], words[j]) {
+                parent[a] = b;
+                groups -= 1;
+            }
+        }
+    }
+    groups
+}
+
+// ---- depth-first arm ------------------------------------------------
+
+fn one_swap_apart_dfs(a: Vec[u8], b: Vec[u8]) -> bool {
+    let mut first = -1;
+    let mut second = -1;
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            if first < 0 {
+                first = k;
+            } else if second < 0 {
+                second = k;
+            } else {
+                return false;
+            }
+        }
+    }
+    first < 0 or (second >= 0 and a[first] == b[second] and a[second] == b[first])
+}
+
+fn visit_dfs(words: Vec[Vec[u8]], seen: mut ref Vec[bool], i: i64) {
+    seen[i] = true;
+    for j in 0..words.len() {
+        if not seen[j] and one_swap_apart_dfs(words[i], words[j]) {
+            visit_dfs(words, mut seen, j);
+        }
+    }
+}
+
+fn num_similar_groups_dfs(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[u8]] = strs.iter().map(|s| s.bytes().iter().collect()).collect();
+    let n = words.len();
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut groups = 0;
+    for i in 0..n {
+        if not seen[i] {
+            groups += 1;
+            visit_dfs(words, mut seen, i);
+        }
+    }
+    groups
+}
+
+// ---- labels arm -----------------------------------------------------
+
+fn alike_labels(a: Vec[u8], b: Vec[u8]) -> bool {
+    let mut diff = 0;
+    let mut k = 0;
+    while k < a.len() and diff <= 2 {
+        if a[k] != b[k] {
+            diff += 1;
+        }
+        k += 1;
+    }
+    diff == 0 or diff == 2
+}
+
+fn num_similar_groups_labels(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[u8]] = strs.iter().map(|s| s.bytes().iter().collect()).collect();
+    let n = words.len();
+    let mut near: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            if j != i and alike_labels(words[i], words[j]) {
+                row.push(j);
+            }
+        }
+        near.push(row);
+    }
+    let mut label: Vec[i64] = (0..n).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            for k in 0..near[i].len() {
+                let j = near[i][k];
+                if label[j] < label[i] {
+                    label[i] = label[j];
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut groups = 0;
+    for i in 0..n {
+        if label[i] == i {
+            groups += 1;
+        }
+    }
+    groups
+}
+
+// ---- swaps arm ------------------------------------------------------
+
+fn root_swaps(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let up = parent[x];
+    if up != x {
+        let r = root_swaps(mut parent, up);
+        parent[x] = r;
+    }
+    parent[x]
+}
+
+fn join_swaps(parent: mut ref Vec[i64], i: i64, j: i64) -> bool {
+    let a = root_swaps(mut parent, i);
+    let b = root_swaps(mut parent, j);
+    if a == b {
+        return false;
+    }
+    parent[a] = b;
+    true
+}
+
+fn num_similar_groups_swaps(strs: Vec[String]) -> i64 {
+    let n = strs.len();
+    let m = strs[0].len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut groups = n;
+    if n > m * m {
+        let mut index: Map[String, i64] = Map.new();
+        for i in 0..n {
+            let j = index.get(strs[i]) ?? -1;
+            if j >= 0 and join_swaps(mut parent, i, j) {
+                groups -= 1;
+            }
+            let w: Vec[char] = strs[i].chars().collect();
+            for p in 0..m {
+                for q in p + 1..m {
+                    if w[p] != w[q] {
+                        let mut t = w.clone();
+                        t.swap(p, q);
+                        let mut s = String.new();
+                        for c in t {
+                            s.push(c);
+                        }
+                        let j = index.get(s) ?? -1;
+                        if j >= 0 and join_swaps(mut parent, i, j) {
+                            groups -= 1;
+                        }
+                    }
+                }
+            }
+            index.insert(strs[i].clone(), i);
+        }
+    } else {
+        let words: Vec[Vec[char]] = strs.iter().map(|s| s.chars().collect()).collect();
+        for i in 0..n {
+            for j in i + 1..n {
+                let mut diff = 0;
+                for k in 0..m {
+                    if words[i][k] != words[j][k] {
+                        diff += 1;
+                    }
+                }
+                if diff <= 2 and join_swaps(mut parent, i, j) {
+                    groups -= 1;
+                }
+            }
+        }
+    }
+    groups
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// Two words are similar when they are equal or when swapping two letters
+// of the first, at any two positions, gives the second.
+fn swap_makes(x: Vec[char], y: Vec[char]) -> bool {
+    if x == y {
+        return true;
+    }
+    for p in 0..x.len() {
+        for q in p + 1..x.len() {
+            let mut t = x.clone();
+            t.swap(p, q);
+            if t == y {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The statement read literally: a group is the words joined by chains of
+// similar words, worked out as the closure of the relation, and each
+// group is counted at its first word.
+fn statement(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[char]] = strs.iter().map(|s| s.chars().collect()).collect();
+    let n = words.len();
+    let mut joined: Vec[Vec[bool]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[bool] = Vec.new();
+        for j in 0..n {
+            row.push(swap_makes(words[i], words[j]));
+        }
+        joined.push(row);
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if joined[i][k] and joined[k][j] {
+                    joined[i][j] = true;
+                }
+            }
+        }
+    }
+    let mut groups = 0;
+    for i in 0..n {
+        let mut first = true;
+        for j in 0..i {
+            if joined[j][i] {
+                first = false;
+            }
+        }
+        if first {
+            groups += 1;
+        }
+    }
+    groups
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, strs: Vec[String]) -> i64 {
+    if arm == 0 {
+        num_similar_groups_star(strs)
+    } else if arm == 1 {
+        num_similar_groups_dfs(strs)
+    } else if arm == 2 {
+        num_similar_groups_labels(strs)
+    } else {
+        num_similar_groups_swaps(strs)
+    }
+}
+
+// a word of m letters drawn from the first `letters` of the alphabet
+fn random_word(seed: mut ref i64, m: i64, letters: i64) -> Vec[u8] {
+    let mut w: Vec[u8] = Vec.new();
+    for _ in 0..m {
+        w.push(97 + (next_random(mut seed) % letters) as u8);
+    }
+    w
+}
+
+fn swapped(seed: mut ref i64, w: Vec[u8], swaps: i64) -> Vec[u8] {
+    let mut v = w.clone();
+    for _ in 0..swaps {
+        let p = next_random(mut seed) % v.len();
+        let q = next_random(mut seed) % v.len();
+        v.swap(p, q);
+    }
+    v
+}
+
+fn text(w: Vec[u8]) -> String {
+    let mut s = String.new();
+    for b in w {
+        s.push(b as char);
+    }
+    s
+}
+
+// n words, each an earlier one (or the first word) with one swap, or
+// with `far` swaps once in `jump` words
+fn random_family(seed: mut ref i64, n: i64, m: i64, letters: i64, far: i64, jump: i64) -> Vec[String] {
+    let mut words: Vec[Vec[u8]] = Vec.new();
+    words.push(random_word(mut seed, m, letters));
+    for _ in 1..n {
+        let from = next_random(mut seed) % words.len();
+        let swaps = if next_random(mut seed) % jump == 0 { far } else { 1 };
+        let w = swapped(mut seed, words[from], swaps);
+        words.push(w);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for w in words {
+        out.push(text(w));
+    }
+    out
+}
+
+fn reordered(strs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in (0..strs.len()).rev() {
+        out.push(strs[i].clone());
+    }
+    out
+}
+
+fn doubled(strs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        out.push(s.clone());
+        out.push(s.clone());
+    }
+    out
+}
+
+// every word read backwards: the same positions exchanged in every word
+fn backwards(strs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        let mut t = String.new();
+        for c in s.chars().rev() {
+            t.push(c);
+        }
+        out.push(t);
+    }
+    out
+}
+
+// the same letter put before every word
+fn prefixed(strs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs.iter() {
+        out.push(f"q{s}");
+    }
+    out
+}
+
+fn main() {
+    let names = ["star", "dfs", "labels", "swaps"];
+    let properties = ["answer", "reordered", "doubled", "backwards", "prefixed"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 839;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let strs = if kind == 0 {
+            // few short words of few letters
+            let n = 1 + next_random(mut seed) % 8;
+            let m = 1 + next_random(mut seed) % 5;
+            let letters = 1 + next_random(mut seed) % 4;
+            let far = 2 + next_random(mut seed) % 3;
+            random_family(mut seed, n, m, letters, far, 1 + next_random(mut seed) % 3)
+        } else if kind == 1 {
+            // families that seldom jump: large groups
+            let n = 1 + next_random(mut seed) % 12;
+            let m = 1 + next_random(mut seed) % 6;
+            let letters = 1 + next_random(mut seed) % 6;
+            let far = 2 + next_random(mut seed) % 2;
+            random_family(mut seed, n, m, letters, far, 3 + next_random(mut seed) % 3)
+        } else if kind == 2 {
+            // every word jumps: small groups
+            let n = 1 + next_random(mut seed) % 12;
+            let m = 1 + next_random(mut seed) % 6;
+            let letters = 1 + next_random(mut seed) % 6;
+            random_family(mut seed, n, m, letters, 2 + next_random(mut seed) % 5, 1)
+        } else {
+            // more words than the square of their length
+            let m = 1 + next_random(mut seed) % 3;
+            let n = m * m + 1 + next_random(mut seed) % 8;
+            let letters = 1 + next_random(mut seed) % 3;
+            random_family(mut seed, n, m, letters, 2, 1 + next_random(mut seed) % 3)
+        };
+        let want = statement(strs);
+        for arm in 0..4 {
+            let got = answer(arm, strs);
+            let oks = [
+                got == want,
+                answer(arm, reordered(strs)) == got,
+                answer(arm, doubled(strs)) == got,
+                answer(arm, backwards(strs)) == got,
+                answer(arm, prefixed(strs)) == got,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {strs} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, dfs {by_arm[1]}, labels {by_arm[2]}, swaps {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reordered {by_property[1]}, doubled {by_property[2]}, backwards {by_property[3]}, prefixed {by_property[4]}");
+}

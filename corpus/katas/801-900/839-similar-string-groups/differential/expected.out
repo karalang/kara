@@ -1,0 +1,3 @@
+1600 cases, 32000 checks over 4 arms: 0 failures
+by arm: star 0, dfs 0, labels 0, swaps 0
+by property: answer 0, reordered 0, doubled 0, backwards 0, prefixed 0

@@ -1,0 +1,18 @@
+[tars, rats, arts, star] -> 2
+[omv, ovm] -> 1
+[a] -> 1
+[abc, abc] -> 1
+[ab, ba] -> 1
+[aaaa, aaaa, aaaa] -> 1
+[abcd, badc] -> 2
+[abcd, badc, bacd] -> 1
+[abc, acb, bac, bca, cab, cba] -> 1
+[abc, bca, cab] -> 3
+[aab, aba, baa] -> 1
+[abcde, edcba, abced, bacde, edcab] -> 2
+[xy, xy, yx, yx] -> 1
+300 words of 300 letters from 26, 3 swaps 1 in 4: 76 groups
+300 words of 300 letters from 5, 4 swaps 1 in 2: 136 groups
+300 words of 300 letters from 26, 300 swaps 1 in 1: 300 groups
+300 words of 8 letters, each 4 swaps from an earlier one: 35 groups
+300 random cases: 529 groups, checksum 266272433

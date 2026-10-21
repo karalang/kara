@@ -1,0 +1,142 @@
+// LeetCode #839: Similar String Groups -- depth-first search.
+//
+// The words are the nodes of a graph whose edges join similar words, and
+// the groups are its connected parts. A recursive search from each word
+// not yet seen marks everything reachable from it. Two words are
+// similar when they are equal, or when they differ in exactly two
+// positions holding each other's letters. O(n^2 m).
+
+fn one_swap_apart(a: Vec[u8], b: Vec[u8]) -> bool {
+    let mut first = -1;
+    let mut second = -1;
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            if first < 0 {
+                first = k;
+            } else if second < 0 {
+                second = k;
+            } else {
+                return false;
+            }
+        }
+    }
+    first < 0 or (second >= 0 and a[first] == b[second] and a[second] == b[first])
+}
+
+fn visit(words: Vec[Vec[u8]], seen: mut ref Vec[bool], i: i64) {
+    seen[i] = true;
+    for j in 0..words.len() {
+        if not seen[j] and one_swap_apart(words[i], words[j]) {
+            visit(words, mut seen, j);
+        }
+    }
+}
+
+fn num_similar_groups(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[u8]] = strs.iter().map(|s| s.bytes().iter().collect()).collect();
+    let n = words.len();
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut groups = 0;
+    for i in 0..n {
+        if not seen[i] {
+            groups += 1;
+            visit(words, mut seen, i);
+        }
+    }
+    groups
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a word of m letters drawn from the first `letters` of the alphabet
+fn random_word(seed: mut ref i64, m: i64, letters: i64) -> Vec[u8] {
+    let mut w: Vec[u8] = Vec.new();
+    for _ in 0..m {
+        w.push(97 + (next_random(mut seed) % letters) as u8);
+    }
+    w
+}
+
+fn swapped(seed: mut ref i64, w: Vec[u8], swaps: i64) -> Vec[u8] {
+    let mut v = w.clone();
+    for _ in 0..swaps {
+        let p = next_random(mut seed) % v.len();
+        let q = next_random(mut seed) % v.len();
+        v.swap(p, q);
+    }
+    v
+}
+
+fn text(w: Vec[u8]) -> String {
+    let mut s = String.new();
+    for b in w {
+        s.push(b as char);
+    }
+    s
+}
+
+// n words, each an earlier one (or the first word) with one swap, or
+// with `far` swaps once in `jump` words
+fn random_family(seed: mut ref i64, n: i64, m: i64, letters: i64, far: i64, jump: i64) -> Vec[String] {
+    let mut words: Vec[Vec[u8]] = Vec.new();
+    words.push(random_word(mut seed, m, letters));
+    for _ in 1..n {
+        let from = next_random(mut seed) % words.len();
+        let swaps = if next_random(mut seed) % jump == 0 { far } else { 1 };
+        let w = swapped(mut seed, words[from], swaps);
+        words.push(w);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for w in words {
+        out.push(text(w));
+    }
+    out
+}
+
+fn show(strs: Vec[String]) {
+    println(f"{strs} -> {num_similar_groups(strs)}");
+}
+
+fn main() {
+    show(["tars", "rats", "arts", "star"]);
+    show(["omv", "ovm"]);
+    show(["a"]);
+    show(["abc", "abc"]);
+    show(["ab", "ba"]);
+    show(["aaaa", "aaaa", "aaaa"]);
+    show(["abcd", "badc"]);
+    show(["abcd", "badc", "bacd"]);
+    show(["abc", "acb", "bac", "bca", "cab", "cba"]);
+    show(["abc", "bca", "cab"]);
+    show(["aab", "aba", "baa"]);
+    show(["abcde", "edcba", "abced", "bacde", "edcab"]);
+    show(["xy", "xy", "yx", "yx"]);
+    // LeetCode's most and longest words, 300 of 300 letters: a family of
+    // swaps, a family that jumps often, and words shuffled apart
+    let mut seed = 839;
+    for (letters, far, jump) in [(26, 3, 4), (5, 4, 2), (26, 300, 1)] {
+        let strs = random_family(mut seed, 300, 300, letters, far, jump);
+        println(f"300 words of 300 letters from {letters}, {far} swaps 1 in {jump}: {num_similar_groups(strs)} groups");
+    }
+    // many short words, more than the square of their length
+    let strs = random_family(mut seed, 300, 8, 8, 4, 1);
+    println(f"300 words of 8 letters, each 4 swaps from an earlier one: {num_similar_groups(strs)} groups");
+    let mut check = 0;
+    let mut total = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let m = 1 + next_random(mut seed) % 10;
+        let letters = 1 + next_random(mut seed) % 6;
+        let far = 2 + next_random(mut seed) % 4;
+        let jump = 1 + next_random(mut seed) % 4;
+        let groups = num_similar_groups(random_family(mut seed, n, m, letters, far, jump));
+        total += groups;
+        check = (check * 31 + groups) % 1000000007;
+    }
+    println(f"300 random cases: {total} groups, checksum {check}");
+}

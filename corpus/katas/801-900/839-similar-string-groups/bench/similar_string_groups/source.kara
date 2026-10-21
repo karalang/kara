@@ -1,0 +1,104 @@
+// Benchmark for #839: Similar String Groups -- the ★ arm (union-find).
+//
+// Every pair of words is compared once, and a pair that is similar joins
+// its two groups. The words are anagrams of each other, so two of them
+// are similar exactly when they differ in no position or in two: one
+// difference cannot happen, and the two letters at two differing
+// positions must be each other's. The comparison stops at a third
+// difference. The groups are a union-find forest with path halving.
+// O(n^2 m).
+
+fn similar(a: Vec[u8], b: Vec[u8]) -> bool {
+    let mut diff = 0;
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            diff += 1;
+            if diff > 2 {
+                return false;
+            }
+        }
+    }
+    diff != 1
+}
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut v = x;
+    while parent[v] != v {
+        parent[v] = parent[parent[v]];
+        v = parent[v];
+    }
+    v
+}
+
+fn num_similar_groups(strs: Vec[String]) -> i64 {
+    let words: Vec[Vec[u8]] = strs.iter().map(|s| s.bytes().iter().collect()).collect();
+    let n = words.len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut groups = n;
+    for i in 0..n {
+        for j in i + 1..n {
+            let a = find(mut parent, i);
+            let b = find(mut parent, j);
+            if a != b and similar(words[i], words[j]) {
+                parent[a] = b;
+                groups -= 1;
+            }
+        }
+    }
+    groups
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 cases drawn once, each LeetCode's most and longest words, 300 of
+    // 300 letters. The first word of case g is random; each later one is
+    // an earlier word with one swap, or with three once in 1 + g % 4
+    // words. Each round counts the groups of the next case.
+    let count = 16;
+    let rounds = 500;
+    let n = 300;
+    let m = 300;
+    let mut seed: i64 = 839;
+    let mut cases: Vec[Vec[String]] = Vec.new();
+    for g in 0..count {
+        let jump = 1 + g % 4;
+        let mut words: Vec[Vec[u8]] = Vec.new();
+        let mut first: Vec[u8] = Vec.new();
+        for _ in 0..m {
+            first.push(97 + (next_random(mut seed) % 26) as u8);
+        }
+        words.push(first);
+        for _ in 1..n {
+            let from = next_random(mut seed) % words.len();
+            let swaps = if next_random(mut seed) % jump == 0 { 3 } else { 1 };
+            let mut w = words[from].clone();
+            for _ in 0..swaps {
+                let p = next_random(mut seed) % m;
+                let q = next_random(mut seed) % m;
+                w.swap(p, q);
+            }
+            words.push(w);
+        }
+        let mut strs: Vec[String] = Vec.new();
+        for w in words {
+            let mut s = String.new();
+            for b in w {
+                s.push(b as char);
+            }
+            strs.push(s);
+        }
+        cases.push(strs);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let groups = num_similar_groups(cases[round % count]);
+        total += groups;
+        checksum = (checksum * 31 + groups + round) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} cases: {total} groups, checksum {checksum}");
+}
