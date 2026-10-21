@@ -1,0 +1,62 @@
+// Benchmark for #828: Count Unique Characters of All Substrings of a Given
+// String -- the ★ arm (each character's contribution).
+//
+// A character at i is unique in (i - prev) * (next - i) substrings, prev
+// and next the copies of its letter beside it; one pass keeps the last
+// two positions of each letter and settles the middle one each time a
+// letter recurs.
+
+fn unique_letter_string(s: String) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut last: Vec[i64] = Vec.filled(26, -1);
+    let mut before: Vec[i64] = Vec.filled(26, -1);
+    let mut total = 0;
+    for i in 0..n {
+        let c = (b[i] - b'A') as i64;
+        if last[c] >= 0 {
+            total += (last[c] - before[c]) * (i - last[c]);
+        }
+        before[c] = last[c];
+        last[c] = i;
+    }
+    for c in 0..26 {
+        if last[c] >= 0 {
+            total += (last[c] - before[c]) * (n - last[c]);
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 32 strings of 100,000 letters, LeetCode's longest, drawn once: the
+    // g-th over the first 1 + g % 26 letters, so that some letters recur
+    // every few places and some hardly at all. Each round answers the
+    // next one.
+    let count = 32;
+    let rounds = 12800;
+    let n = 100000;
+    let mut seed: i64 = 828;
+    let mut strings: Vec[String] = Vec.new();
+    for g in 0..count {
+        let letters = 1 + g % 26;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((b'A' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        strings.push(s);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let r = unique_letter_string(strings[round % count]);
+        total += r;
+        checksum = (checksum * 131 + r) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} strings: total {total}, checksum {checksum}");
+}

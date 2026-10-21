@@ -1,0 +1,13 @@
+"ABC" -> 10
+"ABA" -> 8
+"LEETCODE" -> 92
+"A" -> 1
+"AA" -> 2
+"AAAA" -> 4
+"ABAB" -> 12
+"ABCDEFGHIJKLMNOPQRSTUVWXYZ" -> 3276
+"ZYXWVUTSRQPONMLKJIHGFEDCBAZ" -> 3652
+100000 letters of 26 -> 67711146
+100000 letters of 2 -> 400334
+100000 letters of 1 -> 100000
+300 random strings: total 43473, checksum 502598448

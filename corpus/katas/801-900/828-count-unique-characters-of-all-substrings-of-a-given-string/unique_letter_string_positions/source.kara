@@ -1,0 +1,75 @@
+// LeetCode #828: Count Unique Characters of All Substrings of a Given
+// String -- the positions of each letter.
+//
+// The positions of every letter gathered into its own list between the
+// sentinels -1 and n, so that each copy's neighbours are the entries
+// beside it, and each copy counted in (here - prev) * (next - here)
+// substrings. O(n).
+
+fn unique_letter_string(s: String) -> i64 {
+    let n = s.len();
+    let mut at: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..26 {
+        at.push([-1]);
+    }
+    let mut i = 0;
+    for b in s.bytes() {
+        at[(b - b'A') as i64].push(i);
+        i += 1;
+    }
+    let mut total = 0;
+    for c in 0..26 {
+        at[c].push(n);
+        for k in 1..at[c].len() - 1 {
+            total += (at[c][k] - at[c][k - 1]) * (at[c][k + 1] - at[c][k]);
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(seed: mut ref i64, n: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'A' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {unique_letter_string(s.clone())}");
+}
+
+fn main() {
+    show("ABC");
+    show("ABA");
+    show("LEETCODE");
+    show("A");
+    show("AA");
+    show("AAAA");
+    show("ABAB");
+    show("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    show("ZYXWVUTSRQPONMLKJIHGFEDCBAZ");
+    // LeetCode's longest, 100,000 letters: random over all 26, random
+    // over two, and one letter throughout.
+    let mut seed = 828;
+    println(f"100000 letters of 26 -> {unique_letter_string(random_string(mut seed, 100000, 26))}");
+    println(f"100000 letters of 2 -> {unique_letter_string(random_string(mut seed, 100000, 2))}");
+    println(f"100000 letters of 1 -> {unique_letter_string(random_string(mut seed, 100000, 1))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let letters = 1 + next_random(mut seed) % 6;
+        let r = unique_letter_string(random_string(mut seed, n, letters));
+        total += r;
+        check = (check * 131 + r) % 1000000007;
+    }
+    println(f"300 random strings: total {total}, checksum {check}");
+}
