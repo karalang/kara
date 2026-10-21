@@ -1,0 +1,650 @@
+== encode with each HMAC algorithm
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImFkbWluIjp0cnVlfQ.2IlbYeBiiatid2PeLx9xbODmJ--ROLWen1TyBqGWlIg
+  token: eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImFkbWluIjp0cnVlfQ.9xlb37DwppA4twFiaNc9qQXNHTzqbtlXzKVkq7LW6tZkILlwR6iQCNmn-WSFN4LD
+  token: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImFkbWluIjp0cnVlfQ.ThtW0zKqwe2XvmeK-_0SD4bLbiAaO7jMt3Q_WfzyWlwZXuvnLV5N24NvCv3rM-DV1N2XE_VMC8ftxG4nZhJ2Iw
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.vIOYXD-s1lY2Q2y2Cb1EiibRgAiftbaFIRkhcaGCQaA
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.NTCsFnANH30FjsiL5mbusI6m3ejHNzHW-EZpjxsITrM
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.7J6Xkdl2NQk7Zd1WH5_RIXbkWOjCbkoM1ouwqOjp3bI
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.JsyEqxcxH9D05mSQxgxeK6ZZlyDcL4YsGRUpJGU3LUY
+  token: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.Z0WHpN1nuBVmiWLCfNols_Xb3mveNq1XHSMVBe4YgG0dmKUq9oPgxvCA7hF-b9842K0nUK1lzDq0qxlv1ibAeQ
+  token: eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.YaT_valeyd_nI7IC1b0GJZKNksa_zXM7XxY2eakPpwsf13zo_ZXLSiH4pLv4oLXF
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.8R3fVqcQzrtTps8veEXWQNHJOg_fRDxe4Qfoa8CFEfU
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.MplAcYG2CmBDfaVi_amlzBpXtiQ-vSCEfLrukLsHorc
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib2IifQ.ruKzAhF7lIMdiV1apHPR8omKf4piFBMxMksxQhPpLrQ
+  payload: {'sub': 'alice', 'admin': True}
+  payload: {'sub': 'alice', 'admin': True}
+  header: {'alg': 'HS512', 'typ': 'JWT'}
+  payload: {'sub': 'alice', 'admin': True}
+  signature: 4e1b56d332aac1ed97be678afbfd120f86cb6e201a3bb8ccb7743f59fcf25a5c195eebe72d5e4ddb836f0afdeb33e0d5d4dd9713f54c0bc7edc46e2766127623
+  payload: {'sub': 'bob'}
+  payload: {'sub': 'bob'}
+  payload: {'sub': 'bob'}
+== payload values
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiWm9cdTAwZWIiLCJjaXR5IjoiXHU2NzcxXHU0ZWFjIiwiZW1vamkiOiJcdWQ4M2RcdWRlNDIiLCJ0YWIiOiJhXHRiIiwibmwiOiJ4XG55IiwicXVvdGUiOiJzYXkgXCJoaVwiIiwiYXBvcyI6Iml0J3MiLCJib3RoIjoiJ1wiIiwic2xhc2giOiJhL2JcXGMiLCJjdGwiOiJcdTAwMDFcdTAwMWZcdTAwN2ZcdTAwODUiLCJuYnNwIjoiYVx1MDBhMGIiLCJ6dyI6Ilx1MjAwYiJ9.Rc456u4CCWSu8bXAp3rmahyyeMqmlzNI6Mxad-yuc8c
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpIjowLCJuZWciOi03LCJiaWciOjEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MCwiZiI6MS41LCJnIjowLjEsImUiOjFlKzE2LCJzbWFsbCI6MWUtMDcsIm5lZzAiOi0wLjAsInRoaXJkIjowLjMzMzMzMzMzMzMzMzMzMzMsIndob2xlIjozLjAsIm5hbiI6TmFOLCJpbmYiOkluZmluaXR5LCJuaW5mIjotSW5maW5pdHl9.VV4OptKG7oZNvrW42yn_EOd5jYnsFCHk1c77nmXO4vc
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0Ijp0cnVlLCJmIjpmYWxzZSwibiI6bnVsbCwibGlzdCI6WzEsInR3byIsWzMseyJmb3VyIjo0fV0sW11dLCJvYmoiOnsibmVzdGVkIjp7ImRlZXAiOnt9fX0sIiI6ImVtcHR5IGtleSJ9.Et9kpb3cVcJ-W25EaIRCb581e3QLnbmaXbd953TK1FU
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJiIjoyLCJhIjoxLCJjIjp7InoiOjEsInkiOjJ9fQ.syqyoO7z58N3Gb7VXjAmoqUMCLWK6eBw8pAawcpt5i8
+  payload: {'name': 'Zoë', 'city': '東京', 'emoji': '🙂', 'tab': 'a\tb', 'nl': 'x\ny', 'quote': 'say "hi"', 'apos': "it's", 'both': '\'"', 'slash': 'a/b\\c', 'ctl': '\x01\x1f\x7f\x85', 'nbsp': 'a\xa0b', 'zw': '\u200b'}
+  payload: {'i': 0, 'neg': -7, 'big': 123456789012345678901234567890, 'f': 1.5, 'g': 0.1, 'e': 1e+16, 'small': 1e-07, 'neg0': -0.0, 'third': 0.3333333333333333, 'whole': 3.0, 'nan': nan, 'inf': inf, 'ninf': -inf}
+  payload: {'t': True, 'f': False, 'n': None, 'list': [1, 'two', [3, {'four': 4}], []], 'obj': {'nested': {'deep': {}}}, '': 'empty key'}
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: {'b': 2, 'a': 1, 'c': {'z': 1, 'y': 2}}
+  signature: b32ab2a0eef3e7c37719bed55e3026a2a50c08b58ae9e070f2901ac1ca6de62f
+  error: TypeError: Expecting a dict object, as JWT only supports JSON objects as payloads.
+  error: TypeError: Expecting a dict object, as JWT only supports JSON objects as payloads.
+  error: TypeError: Expecting a dict object, as JWT only supports JSON objects as payloads.
+== datetime claims
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNTE2MDB9.JeTYL_7h3i89WOFmgXygqXQcqKEH4igC-ftOeQWi1iI
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDAsIm5iZiI6MTc2MTA0ODAwMCwiZXhwIjoxNzYxMDU1MjAwfQ.Q6reGtOvhGuKrFruckbXxHDPSkdeVy3Lz2kEufLCSgI
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOi0xLCJpYXQiOjk1MTc4MjQwMH0.gISStgwYl3UwP8YhkOfFySxgsKkNgg_Uy6jt3o7xet8
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjQxMDc1NDI0MDAsIndoZW4iOiJub3QgY29udmVydGVkIn0.nPOZR-hkfb5snxFOJ2QmMgU-dQL1t7dJvM_FjroxR8E
+  payload: {'exp': 1761051600}
+  payload: {'iat': 1761048000, 'nbf': 1761048000, 'exp': 1761055200}
+  error: ExpiredSignatureError: Signature has expired
+  payload: {'exp': -1, 'iat': 951782400}
+  payload: {'exp': 4107542400, 'when': 'not converted'}
+== headers
+  token: eyJhbGciOiJIUzI1NiIsImtpZCI6IjIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJoIn0.Qyz7DwKEB3VzEXbkVXf3RZqcpjZTb5-VIQwFbLzSKSc
+  token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImtpZCI6ImsxIiwiemV0YSI6MSwiY3R5IjoiSldUIn0.eyJzdWIiOiJoIn0.z8cdXp9a_XIUT8VU1g-F174TVUdSnZFV4gD8nH4xoAk
+  token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoIn0.g_McMMqCkIk1gwDv7h9yTHi-fVD2aJpUqEMjcS_ChWw
+  token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoIn0.g_McMMqCkIk1gwDv7h9yTHi-fVD2aJpUqEMjcS_ChWw
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJzdWIiOiJoIn0.6tV7l-VwLmK2oLKKo4sBFADFcDABKIeFBWf6aApqMPU
+  token: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoIn0.aM1nICGwX127ZYpgjil7ND5jHHSHpf4-IP3cJjs1HibDe78FNlbb5Gkpx1FC-9mvjfunlLhldxo_7iRNzicuOQ
+  token: eyJhbGciOiIiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJoIn0.UMlYVCTibQJdaw6lexst2H6uDfhqm7rEVS9HhFtE6k7vu596u1_UPrR0SdtDtyaz
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoIn0.HBJvawGSYttxxhGzYtDR1kqVZkC54kNR4k6sDaB6qPA
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoIn0.HBJvawGSYttxxhGzYtDR1kqVZkC54kNR4k6sDaB6qPA
+  token: eyJhbGciOiJIUzI1NiIsImprdSI6Ilx1MDBlOSIsInR5cCI6IkpXVCIsIng1dSI6Imh0dHBzOi8vZXhhbXBsZS5jb20vayJ9.eyJzdWIiOiJoIn0.Xq6bCRxJcGq-vYoEY8L3LPNiJbdQCoF7rJ7gl7um9Ic
+  error: InvalidTokenError: Key ID header parameter must be a string
+  error: InvalidTokenError: Key ID header parameter must be a string
+  error: NotImplementedError: Algorithm not supported
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoIn0.HBJvawGSYttxxhGzYtDR1kqVZkC54kNR4k6sDaB6qPA
+  header: {'alg': 'HS256', 'kid': '2025-10', 'typ': 'JWT'}
+  header: {'typ': 'JWT', 'alg': 'HS256', 'kid': 'k1', 'zeta': 1, 'cty': 'JWT'}
+  header: {'alg': 'HS256'}
+  header: {'alg': 'HS512', 'typ': 'JWT'}
+  payload: {'sub': 'h'}
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: {'sub': 'h'}
+  signature: 1c126f6b019262db71c611b362d0d1d64a956640b9e24351e24eac0da07aa8f0
+== algorithm choice
+  error: NotImplementedError: Algorithm 'RS256' could not be found. Do you have cryptography installed?
+  error: NotImplementedError: Algorithm 'ES256K' could not be found. Do you have cryptography installed?
+  error: NotImplementedError: Algorithm 'EdDSA' could not be found. Do you have cryptography installed?
+  error: NotImplementedError: Algorithm not supported
+  error: NotImplementedError: Algorithm not supported
+  token: eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhIn0.
+  token: eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhIn0.
+  error: InvalidKeyError: When alg = "none", key value must be None.
+  error: InvalidKeyError: When alg = "none", key value must be None.
+  error: TypeError: Expected a string value
+  error: TypeError: Expected a string value
+  error: TypeError: Expected a string value
+  error: InvalidSignatureError: Signature verification failed
+  payload: {'sub': 'a'}
+  payload: {'sub': 'a'}
+  algorithms: ['HS256', 'HS384', 'HS512', 'none']
+  'HS256': HMACAlgorithm
+  'none': NoneAlgorithm
+  'RS256': NotImplementedError: Algorithm 'RS256' could not be found. Do you have cryptography installed?
+  'PS512': NotImplementedError: Algorithm 'PS512' could not be found. Do you have cryptography installed?
+  'ES521': NotImplementedError: Algorithm 'ES521' could not be found. Do you have cryptography installed?
+  'HS1': NotImplementedError: Algorithm not supported
+  '': NotImplementedError: Algorithm not supported
+  5: NotImplementedError: Algorithm not supported
+  None: NotImplementedError: Algorithm not supported
+  algorithms: ['HS256', 'HS512', 'RS256', 'nope']
+  'HS256': HMACAlgorithm
+  'HS384': NotImplementedError: Algorithm not supported
+  'RS256': NotImplementedError: Algorithm 'RS256' could not be found. Do you have cryptography installed?
+  'nope': NotImplementedError: Algorithm not supported
+  error: NotImplementedError: Algorithm not supported
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.vIOYXD-s1lY2Q2y2Cb1EiibRgAiftbaFIRkhcaGCQaA
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+== signature checks
+  payload: {'sub': 'carol'}
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: DecodeError: It is required that you pass in a value for the "algorithms" argument when calling decode().
+  error: DecodeError: It is required that you pass in a value for the "algorithms" argument when calling decode().
+  payload: {'sub': 'carol'}
+  payload: {'sub': 'carol'}
+  payload: {'sub': 'carol'}
+  payload: {'sub': 'carol'}
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidSignatureError: Signature verification failed
+  error: DecodeError: Invalid crypto padding
+  payload: {'sub': 'carol'}
+  error: DecodeError: Invalid crypto padding
+  payload: {'sub': 'd'}
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidAlgorithmError: Algorithm not specified
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: InvalidAlgorithmError: Algorithm not supported
+  error: InvalidAlgorithmError: Algorithm not supported
+  error: InvalidAlgorithmError: Algorithm not supported
+  error: InvalidKeyError: When alg = "none", key value must be None.
+  payload: {'sub': 'd'}
+  payload: {'sub': 'd'}
+  error: TypeError: Expected a string value
+  error: InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+== malformed tokens
+  error: DecodeError: Not enough segments
+  error: DecodeError: Not enough segments
+  error: DecodeError: Not enough segments
+  error: DecodeError: Invalid header padding
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header padding
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header string: Unterminated string starting at: line 1 column 2 (char 1)
+  error: DecodeError: Invalid crypto padding
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header string: must be a json object
+  error: DecodeError: Invalid header string: must be a json object
+  error: DecodeError: Invalid header string: must be a json object
+  error: DecodeError: Invalid header string: must be a json object
+  error: DecodeError: Invalid header padding
+  error: DecodeError: Invalid payload padding
+  error: DecodeError: Invalid crypto padding
+  error: DecodeError: Invalid payload padding
+  error: DecodeError: Not enough segments
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidSignatureError: Signature verification failed
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid token type. Token must be a <class 'bytes'>
+  error: DecodeError: Invalid token type. Token must be a <class 'bytes'>
+  payload: {'sub': 'carol'}
+== header json
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 2 (char 1)
+  error: DecodeError: Invalid header string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 2 (char 1)
+  error: DecodeError: Invalid header string: Expecting ':' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 8 (char 7)
+  error: DecodeError: Invalid header string: Expecting ',' delimiter: line 1 column 15 (char 14)
+  error: DecodeError: Invalid header string: Illegal trailing comma before end of object: line 1 column 15 (char 14)
+  error: DecodeError: Invalid header string: Expecting ':' delimiter: line 1 column 8 (char 7)
+  error: DecodeError: Invalid header string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid header string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid header string: Invalid \escape: line 1 column 11 (char 10)
+  error: DecodeError: Invalid header string: Invalid \uXXXX escape: line 1 column 10 (char 9)
+  error: DecodeError: Invalid header string: Invalid \uXXXX escape: line 1 column 10 (char 9)
+  error: DecodeError: Invalid header string: Invalid control character at: line 1 column 10 (char 9)
+  error: DecodeError: Invalid header string: Extra data: line 1 column 8 (char 7)
+  error: DecodeError: Invalid header string: Extra data: line 1 column 9 (char 8)
+  error: DecodeError: Invalid header string: Illegal trailing comma before end of array: line 1 column 8 (char 7)
+  error: DecodeError: Invalid header string: Expecting ',' delimiter: line 1 column 9 (char 8)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 9 (char 8)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid header string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid header string: Expecting value: line 3 column 8 (char 19)
+  error: DecodeError: Invalid header string: Expecting value: line 4 column 2 (char 11)
+  error: DecodeError: Invalid header string: Unterminated string starting at: line 1 column 6 (char 5)
+  error: DecodeError: Invalid header string: Unterminated string starting at: line 1 column 6 (char 5)
+  header: {'a': 'é🙂'}
+  header: {'a': nan, 'b': -inf, 'c': inf}
+  header: {'a': 4, 'b': 3}
+  header: {'a': [1, {}, 'x']}
+  header: {'a': inf, 'b': -inf, 'c': 0}
+  header: {'a': 123456789012345678901234567890, 'b': -0.0, 'c': 100.0, 'd': 2.5}
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0xe9 in position 6: invalid continuation byte
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode bytes in position 6-7: invalid continuation byte
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode bytes in position 6-8: invalid continuation byte
+  header: {}
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0xc0 in position 6: invalid start byte
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0xf4 in position 6: invalid continuation byte
+  header: {'a': '€'}
+  error: DecodeError: Invalid header string: 'utf-8' codec can't decode byte 0x80 in position 6: invalid start byte
+== payload json
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 2 (char 1)
+  error: DecodeError: Invalid payload string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 1 (char 0)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 2 (char 1)
+  error: DecodeError: Invalid payload string: Expecting ':' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 8 (char 7)
+  error: DecodeError: Invalid payload string: Expecting ',' delimiter: line 1 column 15 (char 14)
+  error: DecodeError: Invalid payload string: Illegal trailing comma before end of object: line 1 column 15 (char 14)
+  error: DecodeError: Invalid payload string: Expecting ':' delimiter: line 1 column 8 (char 7)
+  error: DecodeError: Invalid payload string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid payload string: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+  error: DecodeError: Invalid payload string: Invalid \escape: line 1 column 11 (char 10)
+  error: DecodeError: Invalid payload string: Invalid \uXXXX escape: line 1 column 10 (char 9)
+  error: DecodeError: Invalid payload string: Invalid \uXXXX escape: line 1 column 10 (char 9)
+  error: DecodeError: Invalid payload string: Invalid control character at: line 1 column 10 (char 9)
+  error: DecodeError: Invalid payload string: Extra data: line 1 column 8 (char 7)
+  error: DecodeError: Invalid payload string: Extra data: line 1 column 9 (char 8)
+  error: DecodeError: Invalid payload string: Illegal trailing comma before end of array: line 1 column 8 (char 7)
+  error: DecodeError: Invalid payload string: Expecting ',' delimiter: line 1 column 9 (char 8)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 9 (char 8)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid payload string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Expecting ',' delimiter: line 1 column 7 (char 6)
+  error: DecodeError: Invalid payload string: Expecting value: line 3 column 8 (char 19)
+  error: DecodeError: Invalid payload string: Expecting value: line 4 column 2 (char 11)
+  error: DecodeError: Invalid payload string: Unterminated string starting at: line 1 column 6 (char 5)
+  error: DecodeError: Invalid payload string: Unterminated string starting at: line 1 column 6 (char 5)
+  payload: {'a': 'é🙂'}
+  payload: {'a': nan, 'b': -inf, 'c': inf}
+  payload: {'a': 4, 'b': 3}
+  payload: {'a': [1, {}, 'x']}
+  payload: {'a': inf, 'b': -inf, 'c': 0}
+  payload: {'a': 123456789012345678901234567890, 'b': -0.0, 'c': 100.0, 'd': 2.5}
+  error: DecodeError: Invalid payload string: must be a json object
+  error: DecodeError: Invalid payload string: must be a json object
+  error: DecodeError: Invalid payload string: must be a json object
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0xe9 in position 6: invalid continuation byte
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode bytes in position 6-7: invalid continuation byte
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode bytes in position 6-8: invalid continuation byte
+  payload: {}
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0xc0 in position 6: invalid start byte
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0xf4 in position 6: invalid continuation byte
+  payload: {'a': '€'}
+  error: DecodeError: Invalid payload string: 'utf-8' codec can't decode byte 0x80 in position 6: invalid start byte
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 1 (char 0)
+== expiry and not-before
+  payload: {'exp': 1761048001}
+  error: ExpiredSignatureError: Signature has expired
+  error: ExpiredSignatureError: Signature has expired
+  error: ExpiredSignatureError: Signature has expired
+  error: ExpiredSignatureError: Signature has expired
+  payload: {'exp': 1761047970}
+  error: ExpiredSignatureError: Signature has expired
+  payload: {'exp': 1761048001.9}
+  payload: {'exp': '1761048010'}
+  payload: {'exp': ' 1761048010 '}
+  payload: {'exp': '1_761_048_100'}
+  payload: {'exp': '+1761048010'}
+  error: DecodeError: Expiration Time claim (exp) must be an integer.
+  error: DecodeError: Expiration Time claim (exp) must be an integer.
+  error: DecodeError: Expiration Time claim (exp) must be an integer.
+  error: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+  error: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'
+  error: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'dict'
+  error: ExpiredSignatureError: Signature has expired
+  error: ExpiredSignatureError: Signature has expired
+  error: DecodeError: Expiration Time claim (exp) must be an integer.
+  error: OverflowError: cannot convert float infinity to integer
+  error: OverflowError: cannot convert float infinity to integer
+  payload: {'exp': 1e+300}
+  payload: {'exp': 99999999999999999999999}
+  error: ExpiredSignatureError: Signature has expired
+  payload: {'exp': 1761047999}
+  payload: {'exp': 'soon'}
+  payload: {'nbf': 1761048000}
+  error: ImmatureSignatureError: The token is not yet valid (nbf)
+  payload: {'nbf': 1761048060}
+  error: ImmatureSignatureError: The token is not yet valid (nbf)
+  error: DecodeError: Not Before claim (nbf) must be an integer.
+  payload: {'nbf': 1761048001}
+  error: ImmatureSignatureError: The token is not yet valid (nbf)
+  error: ImmatureSignatureError: The token is not yet valid (nbf)
+  payload: {'exp': 1761048001}
+  error: ExpiredSignatureError: Signature has expired
+  error: ExpiredSignatureError: Signature has expired
+== issued at
+  payload: {'iat': 1761048000}
+  error: ImmatureSignatureError: The token is not yet valid (iat)
+  payload: {'iat': 1761048005}
+  error: InvalidIssuedAtError: Issued At claim (iat) must be an integer.
+  payload: {'iat': '1761047900'}
+  payload: {'iat': 1761048000.75}
+  error: InvalidIssuedAtError: Issued At claim (iat) must be an integer.
+  error: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+  payload: {'iat': 1761048001}
+  error: ImmatureSignatureError: The token is not yet valid (iat)
+== audience
+  payload: {'aud': 'api'}
+  error: InvalidAudienceError: Audience doesn't match
+  error: InvalidAudienceError: Invalid audience
+  payload: {'aud': ''}
+  payload: {'aud': []}
+  payload: {'aud': None}
+  payload: {'aud': 0}
+  payload: {'aud': ['web', 'api']}
+  payload: {'aud': ['web', 'api']}
+  error: InvalidAudienceError: Audience doesn't match
+  error: InvalidAudienceError: Audience doesn't match
+  error: InvalidAudienceError: Invalid claim format in token
+  error: InvalidAudienceError: Invalid claim format in token
+  error: InvalidAudienceError: Invalid claim format in token
+  error: InvalidAudienceError: Audience doesn't match
+  error: MissingRequiredClaimError: Token is missing the "aud" claim
+  error: MissingRequiredClaimError: Token is missing the "aud" claim
+  error: TypeError: audience must be a string, iterable or None
+  error: InvalidAudienceError: Invalid audience
+  payload: {'aud': 'api'}
+  payload: {'aud': 'api'}
+  error: InvalidAudienceError: Audience doesn't match (strict)
+  error: InvalidAudienceError: Invalid claim format in token (strict)
+  error: InvalidAudienceError: Invalid audience (strict)
+  payload: {'aud': 'api'}
+  payload: {'aud': 'api'}
+  error: InvalidAudienceError: Audience doesn't match
+== issuer, subject and id
+  payload: {'iss': 'https://auth.example.com'}
+  error: InvalidIssuerError: Invalid issuer
+  payload: {'iss': 'https://auth.example.com'}
+  error: InvalidIssuerError: Invalid issuer
+  error: InvalidIssuerError: Invalid issuer
+  error: MissingRequiredClaimError: Token is missing the "iss" claim
+  payload: {'iss': 1}
+  payload: {'iss': True}
+  payload: {'iss': ['a']}
+  error: InvalidIssuerError: Invalid issuer
+  payload: {'iss': 'anyone'}
+  payload: {'sub': 'u-1'}
+  error: InvalidSubjectError: Invalid subject
+  error: InvalidSubjectError: Subject must be a string
+  error: InvalidSubjectError: Subject must be a string
+  payload: {'jti': '0f8e'}
+  error: InvalidJTIError: JWT ID must be a string
+  error: InvalidJTIError: JWT ID must be a string
+  error: InvalidJTIError: JWT ID must be a string
+  payload: {'sub': 42, 'jti': 17}
+== required claims
+  payload: {'exp': 1761048009, 'sub': 'a'}
+  error: MissingRequiredClaimError: Token is missing the "exp" claim
+  error: MissingRequiredClaimError: Token is missing the "exp" claim
+  error: MissingRequiredClaimError: Token is missing the "iat" claim
+  error: MissingRequiredClaimError: Token is missing the "e" claim
+  payload: {'e': 1, 'x': 2, 'p': 3}
+  payload: {'sub': 'a'}
+  payload: {'sub': 'a'}
+== decoder options
+  payload: {'exp': 1761047999}
+  error: ExpiredSignatureError: Signature has expired
+  error: MissingRequiredClaimError: Token is missing the "exp" claim
+  payload: {'sub': 'a'}
+  error: InvalidSignatureError: Signature verification failed
+  payload: {'exp': 1}
+  error: ExpiredSignatureError: Signature has expired
+  error: InvalidIssuedAtError: Issued At claim (iat) must be an integer.
+  payload: {'exp': 1761047999}
+== raw JWS payloads
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aGVsbG8gd29ybGQ.3BAuduSvODzM3L0thFJlJr5zyGfohDAwfD7FYY8roPQ
+  token: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9..7B2jMyXap8mYv2clfRFn9jKsvNaraK6LdtExAWJRFCcZqbg2JRgobwlWFS3gFXksYOWNiRMjRYB5GN8U-7SsPw
+  token: eyJhbGciOiJIUzI1NiIsImN0eSI6Impzb24iLCJ0eXAiOiJKV1QifQ.eyJhIjoxfQ.M2purL6NUUOv1HHEgtFkPpwFh9EHLI0xjF79m-FUp7g
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.bGluZTEKbGluZTIg4pyT.wGxNrH7w6jckuWc5wSsaf7MovZaUGtuYH0BgvnPIgJ8
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: b'hello world'
+  header: {'alg': 'HS512', 'typ': 'JWT'}
+  payload: b''
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: b'line1\nline2 \xe2\x9c\x93'
+  error: DecodeError: Invalid payload string: Expecting value: line 1 column 1 (char 0)
+  payload: {'a': 1}
+  error: InvalidSignatureError: Signature verification failed
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: b'hellO world'
+== detached payloads
+  token: eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsInR5cCI6IkpXVCJ9..G_-8dInIyboprm7f3E03xxM2DLvEVeF3o-qZkxnM5EE
+  token: eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sInR5cCI6IkpXVCJ9..R71icrtmkGRP4QdHnFcYDOeIUI5g7uh1nd8qCvWyCwc
+  token: eyJhbGciOiJIUzI1NiIsImI2NCI6ZmFsc2UsInR5cCI6IkpXVCJ9..G_-8dInIyboprm7f3E03xxM2DLvEVeF3o-qZkxnM5EE
+  header: {'alg': 'HS256', 'b64': False, 'typ': 'JWT'}
+  payload: b'{"amount":100}'
+  error: InvalidSignatureError: Signature verification failed
+  error: DecodeError: It is required that you pass in a value for the "detached_payload" argument to decode a message having the b64 header set to false.
+  header: {'alg': 'HS256', 'b64': False, 'crit': ['b64'], 'typ': 'JWT'}
+  payload: b'{"amount":100}'
+  payload: {'amount': 100}
+  error: InvalidSignatureError: Signature verification failed
+  header: {'alg': 'HS256', 'b64': False, 'typ': 'JWT'}
+  payload: b'{"amount":100}'
+  header: {'alg': 'HS256', 'typ': 'JWT'}
+  payload: b'{"sub":"carol"}'
+  header: {'alg': 'HS256', 'b64': False, 'typ': 'JWT'}
+== JWKs
+  alg=HS256 kty='oct' kid='gw-1' use='sig' HMACAlgorithm key=b'gateway-key-one-32-bytes-long!!!'
+  alg=HS512 kty='oct' kid=None use=None HMACAlgorithm key=b'gateway-key-one-32-bytes-long!!!'
+  alg=HS384 kty='oct' kid=None use=None HMACAlgorithm key=b'gateway-key-one-32-bytes-long!!!'
+  error: PyJWKError: Unable to find an algorithm for key: {'kty': 'oct', 'k': 'Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE'}
+  error: NotImplementedError: 
+  alg=HS256 kty='oct' kid=None use=None HMACAlgorithm key=b'gateway-key-one-32-bytes-long!!!'
+  error: KeyError: 'k'
+  error: TypeError: Expected a string value
+  error: Error: Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4
+  alg=HS256 kty='oct' kid=None use=None HMACAlgorithm key=b''
+  alg=HS256 kty='oct' kid=None use=None HMACAlgorithm key=b'\xfb'
+  error: MissingCryptographyError: RS256 requires 'cryptography' to be installed.
+  error: MissingCryptographyError: ES384 requires 'cryptography' to be installed.
+  error: InvalidKeyError: Unsupported crv: P-999
+  error: MissingCryptographyError: ES256 requires 'cryptography' to be installed.
+  error: InvalidKeyError: crv is not found: {'kty': 'OKP', 'x': '11qY'}
+  error: InvalidKeyError: Unsupported crv: Ed448
+  error: MissingCryptographyError: EdDSA requires 'cryptography' to be installed.
+  error: InvalidKeyError: Unsupported kty: OCT
+  error: InvalidKeyError: kty is not found: {'kty': '', 'k': 'Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE'}
+  error: InvalidKeyError: kty is not found: {'k': 'Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE', 'note': 'it\'s "quoted"', 'n': None, 't': True, 'f': 1.5}
+  error: InvalidKeyError: Not an HMAC key
+  alg=HS256 kty='oct' kid='from-json' use=None HMACAlgorithm key=b'gateway-key-one-32-bytes-long!!!'
+  error: JSONDecodeError: Expecting value: line 1 column 18 (char 17)
+  error: AttributeError: 'list' object has no attribute 'get'
+  token: eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd2stdXNlciJ9.0VoHrE9XvQ3uIWUVnbHPvmVh0tIXtNBu-ZUbPdi6KjBRG4ap8WH8UdZnfJRRCDxA8fKY0yv1wCZ3Iqc0nIZ9rg
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd2stdXNlciJ9.flVsAUhXW0ENVYlV6my9FwOtE08xPjf9UvFXvN9Z0fk
+  token: eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd2stdXNlciJ9.iGpc8TQ3J_pjlrJza0osRrtSx-qq2yAJVKIPGnck-Y_yQFXOssGZ3C3DARPAK6Qb
+  error: InvalidKeyError: When alg = "none", key value must be None.
+  payload: {'sub': 'jwk-user'}
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  error: InvalidSignatureError: Signature verification failed
+  error: InvalidAlgorithmError: The specified alg value is not allowed
+  payload: {'sub': 'jwk-user'}
+  error: InvalidSignatureError: Signature verification failed
+== HMAC JWK conversion
+  jwk: '{"k": "a2FyYS1kZW1vLXNlY3JldA", "kty": "oct"}'
+  jwk: {'k': 'a2FyYS1kZW1vLXNlY3JldA', 'kty': 'oct'}
+  jwk: '{"k": "", "kty": "oct"}'
+  jwk: '{"k": "w6k_Pg", "kty": "oct"}'
+  jwk: '{"k": "-_8A", "kty": "oct"}'
+  error: TypeError: Expected a string value
+  key: b'kara-demo-secret'
+  key: b'\xfb\xff\x00'
+  error: InvalidKeyError: Not an HMAC key
+  error: InvalidKeyError: Not an HMAC key
+  error: KeyError: 'k'
+  error: TypeError: Expected a string value
+  error: InvalidKeyError: Key is not valid JSON
+  error: AttributeError: 'list' object has no attribute 'get'
+  error: AttributeError: 'str' object has no attribute 'get'
+  error: InvalidKeyError: Key is not valid JSON
+  error: Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+== JWK sets
+  keys: ['a', 'b', None, 'a']
+  'a': HS256 b'key-a'
+  'b': HS384 b'key-b'
+  'c': KeyError: 'keyset has no key for kid: c'
+  'x': KeyError: 'keyset has no key for kid: x'
+  'zz': KeyError: 'keyset has no key for kid: zz'
+  None: HS256 b'no-kid'
+  "it's": KeyError: "keyset has no key for kid: it's"
+  keys: ['a', 'b', None, 'a']
+  'b': HS384 b'key-b'
+  error: PyJWKSetError: The JWK Set did not contain any keys
+  error: PyJWKSetError: The JWK Set did not contain any keys
+  error: PyJWKSetError: Invalid JWK Set value
+  error: PyJWKSetError: Invalid JWK Set value
+  error: PyJWKSetError: The JWK Set did not contain any usable keys. Perhaps 'cryptography' is not installed?
+  error: MissingCryptographyError: RS256 requires 'cryptography' to be installed.
+  error: AttributeError: 'str' object has no attribute 'get'
+  error: AttributeError: 'int' object has no attribute 'get'
+  error: AttributeError: 'list' object has no attribute 'get'
+  error: AttributeError: 'NoneType' object has no attribute 'get'
+  error: JSONDecodeError: Expecting ',' delimiter: line 1 column 15 (char 14)
+  error: JSONDecodeError: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)
+  error: AttributeError: 'list' object has no attribute 'get'
+== base64url
+  '' -> 
+  'a' -> Error: Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4
+  'ab' -> 69
+  'abc' -> 69b7
+  'abcd' -> 69b71d
+  'abcde' -> Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+  'YQ' -> 61
+  'YQ=' -> 61
+  'YQ==' -> 61
+  'YQ===' -> 61
+  'Y=Q' -> Error: Incorrect padding
+  'ab=x=' -> 69bc
+  'a=b' -> Error: Incorrect padding
+  '====' -> 
+  '-_-_' -> fbffbf
+  '+/+/' -> fbffbf
+  'Zm9v YmFy' -> 666f6f626172
+  'Zm9v\nYmFy' -> 666f6f626172
+  'Zm9v!YmFy' -> 666f6f626172
+  'é' -> 
+  'Zm9vé' -> 666f6f
+  'zz' -> cf
+  'zz==' -> cf
+   -> 
+  00 -> AA
+  ff -> _w
+  fbff -> -_8
+  fbffbf -> -_-_
+  000000 -> AAAA
+  68656c6c6f -> aGVsbG8
+== HMAC key checks
+  pem=False ssh=False ok
+  pem=False ssh=False ok
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=False ok
+  pem=False ssh=False ok
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=False ok
+  pem=False ssh=False ok
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=True InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=True InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=False ok
+  pem=False ssh=True InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=True InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  pem=False ssh=False ok
+  pem=True ssh=False InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.
+  TypeError: Expected a string value
+  TypeError: Expected a string value
+== api gateway
+  keyset: 4 keys
+  1761048025 GET /health -> 200 anonymous
+  1761048050 GET /api/orders/17 -> 200 alice
+  1761048075 GET /api/orders/17 -> 200 bob
+  1761048100 POST /api/orders/admin/refund -> 403 needs admin
+  1761048125 POST /api/orders/admin/refund -> 200 root
+  1761048150 GET /api/billing/invoices -> 401 InvalidAudienceError: Audience doesn't match
+  1761048175 GET /api/billing/invoices -> 200 carol
+  1761048200 GET /api/orders/18 -> 401 ExpiredSignatureError: Signature has expired
+  1761048225 GET /api/orders/18 -> 401 ExpiredSignatureError: Signature has expired
+  1761048250 GET /api/orders/19 -> 401 InvalidIssuerError: Invalid issuer
+  1761048275 GET /api/orders/19 -> 401 InvalidSignatureError: Signature verification failed
+  1761048300 GET /api/orders/19 -> 401 unknown kid gw-2025-11
+  1761048325 GET /api/orders/19 -> 401 key enc-1 is for enc
+  1761048350 GET /api/orders/19 -> 401 no kid
+  1761048375 GET /api/orders/19 -> 401 InvalidTokenError: Key ID header parameter must be a string
+  1761048400 GET /api/orders/19 -> 401 InvalidAlgorithmError: The specified alg value is not allowed
+  1761048425 GET /api/orders/20 -> 401 MissingRequiredClaimError: Token is missing the "exp" claim
+  1761048450 GET /api/orders/20 -> 401 MissingRequiredClaimError: Token is missing the "sub" claim
+  1761048475 GET /api/orders/21 -> 403 scope is not a string
+  1761048500 GET /api/orders/21 -> 403 needs orders:read
+  1761048525 GET /api/public/catalog -> 401 InvalidAudienceError: Invalid audience
+  1761048550 GET /api/public/catalog -> 200 hal
+  1761048575 GET /api/public/catalog -> 200 anonymous
+  1761048600 GET /api/orders/22 -> 401 DecodeError: Not enough segments
+  1761048625 GET /api/orders/22 -> 401 DecodeError: Invalid header padding
+  1761048650 GET /static/logo.png -> 404 no route
+  1761048675 GET /api/orders/23 -> 200 ivan
+  1761048700 GET /api/orders/24 -> 200 judy
+  1761048725 GET /api/orders/24 -> 200 judy
+  statuses: 200=10, 401=15, 403=3, 404=1
+  callers: alice=1, anonymous=2, bob=1, carol=1, hal=1, ivan=1, judy=2, root=1
+== api gateway with an RSA key in the set
+  keyset: MissingCryptographyError: RS256 requires 'cryptography' to be installed.
+  1761048025 GET /health -> 200 anonymous
+  1761048050 GET /api/orders/17 -> 503 no keys
+  1761048075 GET /api/orders/17 -> 503 no keys
+  1761048100 POST /api/orders/admin/refund -> 503 no keys
+  1761048125 POST /api/orders/admin/refund -> 503 no keys
+  1761048150 GET /api/billing/invoices -> 503 no keys
+  1761048175 GET /api/billing/invoices -> 503 no keys
+  1761048200 GET /api/orders/18 -> 503 no keys
+  1761048225 GET /api/orders/18 -> 503 no keys
+  1761048250 GET /api/orders/19 -> 503 no keys
+  1761048275 GET /api/orders/19 -> 503 no keys
+  1761048300 GET /api/orders/19 -> 503 no keys
+  1761048325 GET /api/orders/19 -> 503 no keys
+  1761048350 GET /api/orders/19 -> 503 no keys
+  1761048375 GET /api/orders/19 -> 503 no keys
+  1761048400 GET /api/orders/19 -> 503 no keys
+  1761048425 GET /api/orders/20 -> 503 no keys
+  1761048450 GET /api/orders/20 -> 503 no keys
+  1761048475 GET /api/orders/21 -> 503 no keys
+  1761048500 GET /api/orders/21 -> 503 no keys
+  1761048525 GET /api/public/catalog -> 503 no keys
+  1761048550 GET /api/public/catalog -> 503 no keys
+  1761048575 GET /api/public/catalog -> 200 anonymous
+  1761048600 GET /api/orders/22 -> 503 no keys
+  1761048625 GET /api/orders/22 -> 503 no keys
+  1761048650 GET /static/logo.png -> 404 no route
+  1761048675 GET /api/orders/23 -> 503 no keys
+  1761048700 GET /api/orders/24 -> 503 no keys
+  1761048725 GET /api/orders/24 -> 503 no keys
+  statuses: 200=2, 404=1, 503=26
+  callers: anonymous=2
+== token issuer
+  erin: NotImplementedError: Algorithm 'RS256' could not be found. Do you have cryptography installed?
+  issued 5 tokens
+  +0 alice: ok roles=['admin', 'ops']
+  +0 bob: ok roles=[]
+  +0 carol: ok roles=['ops']
+  +0 dave: MissingRequiredClaimError: Token is missing the "aud" claim
+  +0 frank: ExpiredSignatureError: Signature has expired
+  +59 alice: ok roles=['admin', 'ops']
+  +59 bob: ok roles=[]
+  +59 carol: ok roles=['ops']
+  +59 dave: MissingRequiredClaimError: Token is missing the "aud" claim
+  +59 frank: ExpiredSignatureError: Signature has expired
+  +60 alice: ok roles=['admin', 'ops']
+  +60 bob: ok roles=[]
+  +60 carol: ExpiredSignatureError: Signature has expired
+  +60 dave: MissingRequiredClaimError: Token is missing the "aud" claim
+  +60 frank: ExpiredSignatureError: Signature has expired
+  +600 alice: ok roles=['admin', 'ops']
+  +600 bob: ExpiredSignatureError: Signature has expired
+  +600 carol: ExpiredSignatureError: Signature has expired
+  +600 dave: MissingRequiredClaimError: Token is missing the "aud" claim
+  +600 frank: ExpiredSignatureError: Signature has expired
+  +3600 alice: ExpiredSignatureError: Signature has expired
+  +3600 bob: ExpiredSignatureError: Signature has expired
+  +3600 carol: ExpiredSignatureError: Signature has expired
+  +3600 dave: MissingRequiredClaimError: Token is missing the "aud" claim
+  +3600 frank: ExpiredSignatureError: Signature has expired
+  +7200 alice: ExpiredSignatureError: Signature has expired
+  +7200 bob: ExpiredSignatureError: Signature has expired
+  +7200 carol: ExpiredSignatureError: Signature has expired
+  +7200 dave: ExpiredSignatureError: Signature has expired
+  +7200 frank: ExpiredSignatureError: Signature has expired

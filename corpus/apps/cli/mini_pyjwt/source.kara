@@ -1,0 +1,3395 @@
+// mini_pyjwt: PyJWT 2.10.1 (jwt.encode / decode / decode_complete,
+// get_unverified_header, PyJWS for raw and detached payloads, PyJWK and
+// PyJWKSet, HMACAlgorithm's JWK conversion) as it runs without the
+// cryptography package, so with HMAC (HS256/384/512) and "none":
+// - the token shape and its errors: the three segments, base64url as
+//   binascii's lenient decoder reads it, the header and payload loaded by
+//   json.loads with each of its messages and positions, and UTF-8 decode
+//   errors;
+// - signatures with SHA-2 and HMAC written here from FIPS 180-4 and RFC
+//   2104, and the PEM and SSH key checks HMAC keys go through;
+// - the claims: exp, nbf and iat through int() with leeway, aud (with
+//   strict_aud), iss, sub, jti and required claims, with the options that
+//   switch each off, and the decoder-level options;
+// - JWKs and JWK sets, including what a key that needs cryptography does
+//   to a whole set;
+// - an API gateway that checks bearer tokens against a JWK set by kid,
+//   audience and scope over an access log, and a token issuer that writes
+//   tokens for a user list to a file and checks them at later times.
+//
+// The inputs are data/jobs.jsonl and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through PyJWT itself (the copy in jwt/).
+
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+
+// ------------------------------------------------------------ json.dumps
+
+fn push_u_escape(out: mut ref String, cp: i64) {
+    out.push_str("\\u");
+    out.push_str(hex4(cp));
+}
+
+// encode_basestring_ascii, or encode_basestring without ensure_ascii.
+fn encode_str(ensure_ascii: bool, s: ref String, out: mut ref String) {
+    out.push('"');
+    for ch in s.chars() {
+        let c = ch as i64;
+        if c == 34 {
+            out.push_str("\\\"");
+        } else if c == 92 {
+            out.push_str("\\\\");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 8 {
+            out.push_str("\\b");
+        } else if c == 12 {
+            out.push_str("\\f");
+        } else if c < 0x20 {
+            push_u_escape(mut out, c);
+        } else if not ensure_ascii or c <= 0x7E {
+            out.push(ch);
+        } else if c >= 0x10000 {
+            let n = c - 0x10000;
+            push_u_escape(mut out, 0xD800 | ((n >> 10) & 0x3FF));
+            push_u_escape(mut out, 0xDC00 | (n & 0x3FF));
+        } else {
+            push_u_escape(mut out, c);
+        }
+    }
+    out.push('"');
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// float.__repr__, or NaN / Infinity / -Infinity, as allow_nan writes them.
+fn float_json(x: f64) -> String {
+    if x != x {
+        "NaN".to_string()
+    } else if x == 1.0 / 0.0 {
+        "Infinity".to_string()
+    } else if x == -1.0 / 0.0 {
+        "-Infinity".to_string()
+    } else {
+        f"{x}"
+    }
+}
+
+// The order an object's members are written in: as stored, or by key.
+fn member_order(sort_keys: bool, members: ref Vec[Member]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..members.len() {
+        order.push(i);
+    }
+    if sort_keys {
+        let mut k = 1;
+        while k < order.len() {
+            let cur = order[k];
+            let mut j = k;
+            while j > 0 and members[order[j - 1]].key > members[cur].key {
+                order[j] = order[j - 1];
+                j -= 1;
+            }
+            order[j] = cur;
+            k += 1;
+        }
+    }
+    order
+}
+
+struct Dump {
+    item_sep: String,
+    key_sep: String,
+    sort_keys: bool,
+}
+
+// separators=(",", ":"), as PyJWT writes headers and payloads.
+fn compact(sort_keys: bool) -> Dump {
+    Dump { item_sep: ",".to_string(), key_sep: ":".to_string(), sort_keys: sort_keys }
+}
+
+fn encode(o: ref Dump, v: ref J, out: mut ref String) {
+    match v {
+        J.Null => out.push_str("null"),
+        J.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        J.Int(digits) => out.push_str(digits),
+        J.Float(x) => out.push_str(float_json(*x)),
+        J.Str(s) => encode_str(true, s, mut out),
+        J.Arr(items) => {
+            out.push('[');
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push_str(o.item_sep);
+                }
+                encode(o, items[i], mut out);
+            }
+            out.push(']');
+        }
+        J.Obj(members) => {
+            out.push('{');
+            let order = member_order(o.sort_keys, members);
+            for i in 0..order.len() {
+                if i > 0 {
+                    out.push_str(o.item_sep);
+                }
+                let m = ref members[order[i]];
+                encode_str(true, m.key, mut out);
+                out.push_str(o.key_sep);
+                encode(o, m.val, mut out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn dumps(o: ref Dump, v: ref J) -> String {
+    let mut out = String.new();
+    encode(o, v, mut out);
+    out
+}
+
+// ------------------------------------------------------------ repr and str
+
+// str.isprintable outside ASCII: controls, format characters, separators
+// other than space, surrogates and private use are not printable.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x8E2 or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for ch in s.chars() {
+        let c = ch as i64;
+        if ch == quote or ch == '\\' {
+            out.push('\\');
+            out.push(ch);
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c < 0x20 or c == 0x7F {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c < 0x7F or is_printable(c) {
+            out.push(ch);
+        } else if c <= 0xFF {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c <= 0xFFFF {
+            out.push_str(f"\\u{hex_n(c, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_n(c, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn repr(v: ref J) -> String {
+    match v {
+        J.Null => "None".to_string(),
+        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Int(digits) => digits.clone(),
+        J.Float(x) => float_repr(*x),
+        J.Str(s) => str_repr(s),
+        J.Arr(items) => {
+            let mut out = "[".to_string();
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr(items[i]));
+            }
+            out.push(']');
+            out
+        }
+        J.Obj(members) => {
+            let mut out = "{".to_string();
+            for i in 0..members.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(str_repr(members[i].key));
+                out.push_str(": ");
+                out.push_str(repr(members[i].val));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
+// str(v)
+fn py_str(v: ref J) -> String {
+    match v {
+        J.Str(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+// repr(bytes)
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let has_single = b.contains(39);
+    let has_double = b.contains(34);
+    let quote: u8 = if has_single and not has_double { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(quote as char);
+    for c in b.iter() {
+        let x = *c;
+        if x == quote or x == 92 {
+            out.push('\\');
+            out.push(x as char);
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x < 0x20 or x >= 0x7F {
+            out.push_str(f"\\x{x:02x}");
+        } else {
+            out.push(x as char);
+        }
+    }
+    out.push(quote as char);
+    out
+}
+
+fn type_name(v: ref J) -> String {
+    let n = match v {
+        J.Null => "NoneType",
+        J.Bool(_) => "bool",
+        J.Int(_) => "int",
+        J.Float(_) => "float",
+        J.Str(_) => "str",
+        J.Arr(_) => "list",
+        J.Obj(_) => "dict",
+    };
+    n.to_string()
+}
+
+fn truthy(v: ref J) -> bool {
+    match v {
+        J.Null => false,
+        J.Bool(b) => *b,
+        J.Int(d) => d != "0",
+        J.Float(x) => *x != 0.0,
+        J.Str(s) => s.len() > 0,
+        J.Arr(items) => items.len() > 0,
+        J.Obj(members) => members.len() > 0,
+    }
+}
+
+// The number a bool, int or float compares as.
+fn num_of(v: ref J) -> Option[f64] {
+    match v {
+        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
+        J.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+fn is_number(v: ref J) -> bool {
+    num_of(v).is_some()
+}
+
+// a == b, with Python's rules: True == 1 == 1.0, and dicts compare by
+// their members, not their order.
+fn py_eq(a: ref J, b: ref J) -> bool {
+    if let J.Int(x) = a {
+        if let J.Int(y) = b {
+            return x == y;
+        }
+    }
+    if is_number(a) and is_number(b) {
+        return num_of(a).unwrap() == num_of(b).unwrap();
+    }
+    match a {
+        J.Null => match b {
+            J.Null => true,
+            _ => false,
+        },
+        J.Str(x) => match b {
+            J.Str(y) => x == y,
+            _ => false,
+        },
+        J.Arr(xs) => match b {
+            J.Arr(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for i in 0..xs.len() {
+                    if not py_eq(xs[i], ys[i]) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        J.Obj(xs) => match b {
+            J.Obj(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for m in xs.iter() {
+                    match j_get(b, m.key.as_str()) {
+                        Some(v) => {
+                            if not py_eq(m.val, v) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn jstr(text: Str) -> J {
+    J.Str(text.to_string())
+}
+
+// d.get(key) on a dict; None for anything else.
+fn j_get(d: ref J, key: Str) -> Option[J] {
+    if let J.Obj(members) = d {
+        for m in members.iter() {
+            if m.key == key {
+                return Some(m.val.clone());
+            }
+        }
+    }
+    None
+}
+
+fn j_has(d: ref J, key: Str) -> bool {
+    j_get(d, key).is_some()
+}
+
+fn j_get_or_null(d: ref J, key: Str) -> J {
+    match j_get(d, key) {
+        Some(v) => v,
+        None => J.Null,
+    }
+}
+
+// d[key] = val, keeping the key's place when it is there already.
+fn j_set(d: mut ref J, key: Str, val: own J) {
+    if let J.Obj(members) = d {
+        put_member(mut members, key.to_string(), val);
+    }
+}
+
+fn j_del(d: mut ref J, key: Str) {
+    if let J.Obj(members) = d {
+        let mut kept: Vec[Member] = Vec.new();
+        for m in members.iter() {
+            if m.key != key {
+                kept.push(m.clone());
+            }
+        }
+        *members = kept;
+    }
+}
+
+fn is_dict(v: ref J) -> bool {
+    match v {
+        J.Obj(_) => true,
+        _ => false,
+    }
+}
+
+fn is_str(v: ref J) -> bool {
+    match v {
+        J.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn is_null(v: ref J) -> bool {
+    match v {
+        J.Null => true,
+        _ => false,
+    }
+}
+
+// x in container: a list's items, a dict's keys, or a substring of a str.
+fn contains(container: ref J, x: ref J) -> Result[bool, Exc] {
+    match container {
+        J.Arr(items) => {
+            for it in items.iter() {
+                if py_eq(it, x) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        J.Obj(members) => {
+            for m in members.iter() {
+                if py_eq(J.Str(m.key.clone()), x) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        J.Str(text) => match x {
+            J.Str(sub) => Ok(text.contains(sub.as_str())),
+            _ => Err(exc("TypeError", f"'in <string>' requires string as left operand, not {type_name(x)}")),
+        },
+        _ => Err(exc("TypeError", f"argument of type '{type_name(container)}' is not iterable")),
+    }
+}
+
+fn str_bytes(text: ref String) -> Vec[u8] {
+    text.bytes().to_vec()
+}
+
+fn bytes_str(b: ref Vec[u8]) -> String {
+    String.from_utf8(b.clone()).unwrap()
+}
+// ------------------------------------------------------------ SHA-2 (FIPS 180-4) and HMAC (RFC 2104)
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+
+// hashlib.sha256 / sha384 / sha512 by digest size in bits.
+fn sha2(bits: i64, msg: ref Vec[u8]) -> Vec[u8] {
+    if bits == 256 {
+        sha256_family(msg, false)
+    } else if bits == 384 {
+        sha512_family(msg, true)
+    } else {
+        sha512_family(msg, false)
+    }
+}
+
+// hmac.new(key, msg, hash).digest(): a key longer than the block is hashed
+// first, then padded with zeros to the block.
+fn hmac_digest(bits: i64, key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    let block = if bits == 256 { 64 } else { 128 };
+    let mut k = if key.len() > block { sha2(bits, key) } else { key.clone() };
+    while k.len() < block {
+        k.push(0);
+    }
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    for b in k.iter() {
+        inner.push(*b ^ 0x36);
+        outer.push(*b ^ 0x5c);
+    }
+    for b in msg.iter() {
+        inner.push(*b);
+    }
+    let ih = sha2(bits, inner);
+    for b in ih.iter() {
+        outer.push(*b);
+    }
+    sha2(bits, outer)
+}
+
+// hmac.compare_digest: equal length and equal bytes, looking at all of them.
+fn compare_digest(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff = diff | (a[i] ^ b[i]);
+    }
+    diff == 0
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b.iter() {
+        s.push_str(f"{*x:02x}");
+    }
+    s
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+// ------------------------------------------------------------ base64url
+
+const B64URL: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+// base64.urlsafe_b64encode(b).replace(b"=", b"")
+fn base64url_encode(b: ref Vec[u8]) -> String {
+    let alpha = B64URL.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63]);
+        out.push(alpha[(v >> 12) & 63]);
+        if n > 1 {
+            out.push(alpha[(v >> 6) & 63]);
+        }
+        if n > 2 {
+            out.push(alpha[v & 63]);
+        }
+        i += 3;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// The value of a base64 character once - and _ are read as + and /, or
+// -1 for one that binascii skips.
+fn b64_value(c: u8) -> i64 {
+    if c >= 65 and c <= 90 {
+        (c - 65) as i64
+    } else if c >= 97 and c <= 122 {
+        (c - 71) as i64
+    } else if c >= 48 and c <= 57 {
+        (c as i64) + 4
+    } else if c == 43 or c == 45 {
+        62
+    } else if c == 47 or c == 95 {
+        63
+    } else {
+        -1
+    }
+}
+
+// utils.base64url_decode: pad to a multiple of four, then
+// base64.urlsafe_b64decode, which is binascii.a2b_base64 in its lenient
+// mode: characters outside the alphabet are skipped, and enough padding
+// after two or three characters of a group ends the input.
+fn base64url_decode(input: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut b = input.clone();
+    let rem = b.len() % 4;
+    if rem > 0 {
+        for _ in 0..(4 - rem) {
+            b.push(61);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad = 0;
+    let mut left = 0;
+    let mut pads = 0;
+    let mut done = false;
+    for c in b.iter() {
+        if *c == 61 {
+            if quad >= 2 {
+                pads += 1;
+                if quad + pads >= 4 {
+                    done = true;
+                    break;
+                }
+            }
+            continue;
+        }
+        let v = b64_value(*c);
+        if v < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad == 0 {
+            quad = 1;
+            left = v;
+        } else if quad == 1 {
+            quad = 2;
+            out.push(((left << 2) | (v >> 4)) as u8);
+            left = v & 0xF;
+        } else if quad == 2 {
+            quad = 3;
+            out.push((((left << 4) | (v >> 2)) & 0xFF) as u8);
+            left = v & 3;
+        } else {
+            quad = 0;
+            out.push((((left << 6) | v) & 0xFF) as u8);
+            left = 0;
+        }
+    }
+    if not done and quad != 0 {
+        if quad == 1 {
+            let n = out.len() / 3 * 4 + 1;
+            return Err(exc("Error", f"Invalid base64-encoded string: number of data characters ({n}) cannot be 1 more than a multiple of 4"));
+        }
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ keys and algorithms
+
+// The algorithms PyJWT has without the cryptography package.
+#[derive(Clone)]
+enum Alg {
+    NoneAlg,
+    Hmac(i64),
+}
+
+fn alg_class(a: ref Alg) -> String {
+    match a {
+        Alg.NoneAlg => "NoneAlgorithm".to_string(),
+        Alg.Hmac(_) => "HMACAlgorithm".to_string(),
+    }
+}
+
+// get_default_algorithms()
+fn default_alg(name: Str) -> Option[Alg] {
+    if name == "none" {
+        Some(Alg.NoneAlg)
+    } else if name == "HS256" {
+        Some(Alg.Hmac(256))
+    } else if name == "HS384" {
+        Some(Alg.Hmac(384))
+    } else if name == "HS512" {
+        Some(Alg.Hmac(512))
+    } else {
+        None
+    }
+}
+
+fn requires_cryptography(name: ref J) -> bool {
+    if let J.Str(n) = name {
+        for x in ["RS256", "RS384", "RS512", "ES256", "ES256K", "ES384", "ES521", "ES512", "PS256", "PS384", "PS512", "EdDSA"] {
+            if n == x {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// A key as PyJWT is handed one.
+#[derive(Clone)]
+enum Key {
+    Text(String),
+    Bytes(Vec[u8]),
+    Jwk(PyJWK),
+    Other(J),
+}
+
+fn is_jwk(k: ref Key) -> bool {
+    match k {
+        Key.Jwk(_) => true,
+        _ => false,
+    }
+}
+
+// utils.force_bytes
+fn force_bytes(k: ref Key) -> Result[Vec[u8], Exc] {
+    match k {
+        Key.Text(t) => Ok(str_bytes(t)),
+        Key.Bytes(b) => Ok(b.clone()),
+        _ => Err(exc("TypeError", "Expected a string value".to_string())),
+    }
+}
+
+fn force_bytes_j(v: ref J) -> Result[Vec[u8], Exc] {
+    match v {
+        J.Str(t) => Ok(str_bytes(t)),
+        _ => Err(exc("TypeError", "Expected a string value".to_string())),
+    }
+}
+
+fn at_bytes(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = pat.bytes().to_vec();
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn dash_or_space(b: ref Vec[u8], i: i64) -> bool {
+    i < b.len() and (b[i] == 45 or b[i] == 32)
+}
+
+const PEMS: Array[Str, 16] = [
+    "CERTIFICATE", "TRUSTED CERTIFICATE", "PRIVATE KEY", "PUBLIC KEY", "ENCRYPTED PRIVATE KEY",
+    "OPENSSH PRIVATE KEY", "DSA PRIVATE KEY", "RSA PRIVATE KEY", "RSA PUBLIC KEY", "EC PRIVATE KEY",
+    "DH PARAMETERS", "NEW CERTIFICATE REQUEST", "CERTIFICATE REQUEST", "SSH2 PUBLIC KEY",
+    "SSH2 ENCRYPTED PRIVATE KEY", "X509 CRL",
+];
+
+// Whether an END line for `name` starts just past the newline at `nl`.
+fn pem_end_at(b: ref Vec[u8], nl: i64, name: Str) -> bool {
+    let mut i = nl + 1;
+    if not at_bytes(b, i, "----") or not dash_or_space(b, i + 4) {
+        return false;
+    }
+    i += 5;
+    if not at_bytes(b, i, "END ") or not at_bytes(b, i + 4, name) {
+        return false;
+    }
+    i += 4 + name.len();
+    dash_or_space(b, i) and at_bytes(b, i + 1, "----")
+}
+
+// The BEGIN line for `name` at `p`, and where its body starts, if it is
+// one.
+fn pem_begin_at(b: ref Vec[u8], p: i64, name: Str) -> Option[i64] {
+    if not at_bytes(b, p, "----") or not dash_or_space(b, p + 4) {
+        return None;
+    }
+    let mut i = p + 5;
+    if not at_bytes(b, i, "BEGIN ") or not at_bytes(b, i + 6, name) {
+        return None;
+    }
+    i += 6 + name.len();
+    if not dash_or_space(b, i) or not at_bytes(b, i + 1, "----") {
+        return None;
+    }
+    i += 5;
+    if i < b.len() and b[i] == 13 {
+        i += 1;
+    }
+    if i < b.len() and b[i] == 10 {
+        return Some(i + 1);
+    }
+    None
+}
+
+// utils.is_pem_format: a search for
+//   ----[- ]BEGIN (NAME)[- ]----\r?\n.+?\r?\n----[- ]END \1[- ]----
+// with . matching newlines too.
+fn is_pem_format(b: ref Vec[u8]) -> bool {
+    for p in 0..b.len() {
+        for name in PEMS {
+            if let Some(body) = pem_begin_at(b, p, name) {
+                let mut nl = body + 1;
+                while nl < b.len() {
+                    if b[nl] == 10 and pem_end_at(b, nl, name) {
+                        return true;
+                    }
+                    nl += 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_ssh_key(b: ref Vec[u8]) -> bool {
+    for f in ["ssh-ed25519", "ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"] {
+        if at_bytes(b, 0, f) {
+            return true;
+        }
+    }
+    false
+}
+
+// Algorithm.prepare_key: HMAC wants bytes that are not an asymmetric key;
+// "none" wants no key at all, an empty string counting as none.
+fn prepare_key(a: ref Alg, key: ref Key) -> Result[Vec[u8], Exc] {
+    match a {
+        Alg.NoneAlg => {
+            let empty = match key {
+                Key.Text(t) => t.len() == 0,
+                Key.Other(v) => is_null(v),
+                _ => false,
+            };
+            if not empty {
+                return Err(exc("InvalidKeyError", "When alg = \"none\", key value must be None.".to_string()));
+            }
+            Ok(Vec.new())
+        }
+        Alg.Hmac(_) => {
+            let b = force_bytes(key)?;
+            if is_pem_format(b) or is_ssh_key(b) {
+                return Err(exc("InvalidKeyError", "The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret.".to_string()));
+            }
+            Ok(b)
+        }
+    }
+}
+
+fn sign(a: ref Alg, msg: ref Vec[u8], key: ref Vec[u8]) -> Vec[u8] {
+    match a {
+        Alg.NoneAlg => Vec.new(),
+        Alg.Hmac(bits) => hmac_digest(*bits, key, msg),
+    }
+}
+
+fn verify(a: ref Alg, msg: ref Vec[u8], key: ref Vec[u8], sig: ref Vec[u8]) -> bool {
+    match a {
+        Alg.NoneAlg => false,
+        Alg.Hmac(bits) => compare_digest(sig, hmac_digest(*bits, key, msg)),
+    }
+}
+
+// HMACAlgorithm.to_jwk
+fn hmac_to_jwk(key: ref Key, as_dict: bool) -> Result[String, Exc] {
+    let k = base64url_encode(force_bytes(key)?);
+    let mut d = J.Obj(Vec.new());
+    j_set(mut d, "k", J.Str(k));
+    j_set(mut d, "kty", jstr("oct"));
+    if as_dict {
+        return Ok(repr(d));
+    }
+    let o = Dump { item_sep: ", ".to_string(), key_sep: ": ".to_string(), sort_keys: false };
+    Ok(str_repr(dumps(o, d)))
+}
+
+// HMACAlgorithm.from_jwk: a JSON string or a dict.
+fn hmac_from_jwk(jwk: ref J) -> Result[Vec[u8], Exc] {
+    let obj = match jwk {
+        J.Str(text) => match loads_str(text) {
+            Ok(v) => v,
+            Err(_) => return Err(exc("InvalidKeyError", "Key is not valid JSON".to_string())),
+        },
+        J.Obj(_) => jwk.clone(),
+        _ => return Err(exc("InvalidKeyError", "Key is not valid JSON".to_string())),
+    };
+    if not is_dict(obj) {
+        return Err(no_get(obj));
+    }
+    if not py_eq(j_get_or_null(obj, "kty"), jstr("oct")) {
+        return Err(exc("InvalidKeyError", "Not an HMAC key".to_string()));
+    }
+    let k = match j_get(obj, "k") {
+        Some(k) => k,
+        None => return Err(exc("KeyError", "'k'".to_string())),
+    };
+    base64url_decode(force_bytes_j(k)?)
+}
+
+// The AttributeError for calling .get on something that is not a dict.
+fn no_get(v: ref J) -> Exc {
+    exc("AttributeError", f"'{type_name(v)}' object has no attribute 'get'")
+}
+
+// ------------------------------------------------------------ JWK
+
+#[derive(Clone)]
+struct PyJWK {
+    data: J,
+    algorithm_name: String,
+    alg: Alg,
+    key: Vec[u8],
+}
+
+impl PyJWK {
+    fn key_type(ref self) -> J {
+        j_get_or_null(self.data, "kty")
+    }
+
+    fn key_id(ref self) -> J {
+        j_get_or_null(self.data, "kid")
+    }
+
+    fn public_key_use(ref self) -> J {
+        j_get_or_null(self.data, "use")
+    }
+}
+
+fn eq_str(v: ref J, text: Str) -> bool {
+    py_eq(v, jstr(text))
+}
+
+// PyJWK(jwk_data, algorithm): the algorithm is the one given, else the
+// key's "alg", else one picked from its kty and crv.
+fn new_jwk(data: ref J, algorithm: ref J) -> Result[PyJWK, Exc] {
+    if not is_dict(data) {
+        return Err(no_get(data));
+    }
+    let kty = j_get_or_null(data, "kty");
+    if not truthy(kty) {
+        return Err(exc("InvalidKeyError", f"kty is not found: {repr(data)}"));
+    }
+    let mut alg = algorithm.clone();
+    if not truthy(alg) {
+        alg = j_get_or_null(data, "alg");
+    }
+    if not truthy(alg) {
+        let crv = j_get_or_null(data, "crv");
+        let name = if eq_str(kty, "EC") {
+            if eq_str(crv, "P-256") or not truthy(crv) {
+                "ES256"
+            } else if eq_str(crv, "P-384") {
+                "ES384"
+            } else if eq_str(crv, "P-521") {
+                "ES512"
+            } else if eq_str(crv, "secp256k1") {
+                "ES256K"
+            } else {
+                return Err(exc("InvalidKeyError", f"Unsupported crv: {py_str(crv)}"));
+            }
+        } else if eq_str(kty, "RSA") {
+            "RS256"
+        } else if eq_str(kty, "oct") {
+            "HS256"
+        } else if eq_str(kty, "OKP") {
+            if not truthy(crv) {
+                return Err(exc("InvalidKeyError", f"crv is not found: {repr(data)}"));
+            }
+            if eq_str(crv, "Ed25519") {
+                "EdDSA"
+            } else {
+                return Err(exc("InvalidKeyError", f"Unsupported crv: {py_str(crv)}"));
+            }
+        } else {
+            return Err(exc("InvalidKeyError", f"Unsupported kty: {py_str(kty)}"));
+        };
+        alg = jstr(name);
+    }
+    if requires_cryptography(alg) {
+        return Err(exc("MissingCryptographyError", f"{py_str(alg)} requires 'cryptography' to be installed."));
+    }
+    let name = match alg {
+        J.Str(n) => n.clone(),
+        _ => String.new(),
+    };
+    let a = match default_alg(name.as_str()) {
+        Some(a) => a,
+        None => return Err(exc("PyJWKError", f"Unable to find an algorithm for key: {repr(data)}")),
+    };
+    let key = match a {
+        Alg.NoneAlg => return Err(exc("NotImplementedError", String.new())),
+        Alg.Hmac(_) => hmac_from_jwk(data)?,
+    };
+    Ok(PyJWK { data: data.clone(), algorithm_name: name, alg: a, key: key })
+}
+
+fn jwk_from_json(text: ref String, algorithm: ref J) -> Result[PyJWK, Exc] {
+    let obj = loads_str(text)?;
+    new_jwk(obj, algorithm)
+}
+
+// The exceptions under PyJWTError.
+fn is_pyjwt_error(e: ref Exc) -> bool {
+    for n in ["PyJWTError", "InvalidTokenError", "DecodeError", "InvalidSignatureError", "ExpiredSignatureError",
+              "InvalidAudienceError", "InvalidIssuerError", "InvalidIssuedAtError", "ImmatureSignatureError",
+              "InvalidKeyError", "InvalidAlgorithmError", "MissingRequiredClaimError", "PyJWKError",
+              "MissingCryptographyError", "PyJWKSetError", "PyJWKClientError", "PyJWKClientConnectionError",
+              "InvalidSubjectError", "InvalidJTIError"] {
+        if e.kind == n {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Clone)]
+struct PyJWKSet {
+    keys: Vec[PyJWK],
+}
+
+// PyJWKSet(keys): keys PyJWK cannot use are skipped, except that a key
+// needing the cryptography package fails the whole set.
+fn new_jwk_set(keys: ref J) -> Result[PyJWKSet, Exc] {
+    if not truthy(keys) {
+        return Err(exc("PyJWKSetError", "The JWK Set did not contain any keys".to_string()));
+    }
+    let items = match keys {
+        J.Arr(items) => items.clone(),
+        _ => return Err(exc("PyJWKSetError", "Invalid JWK Set value".to_string())),
+    };
+    let mut out: Vec[PyJWK] = Vec.new();
+    for k in items.iter() {
+        match new_jwk(k, J.Null) {
+            Ok(j) => out.push(j),
+            Err(e) => {
+                if e.kind == "MissingCryptographyError" or not is_pyjwt_error(e) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    if out.len() == 0 {
+        return Err(exc("PyJWKSetError", "The JWK Set did not contain any usable keys. Perhaps 'cryptography' is not installed?".to_string()));
+    }
+    Ok(PyJWKSet { keys: out })
+}
+
+fn jwk_set_from_dict(obj: ref J) -> Result[PyJWKSet, Exc] {
+    if not is_dict(obj) {
+        return Err(no_get(obj));
+    }
+    let keys = match j_get(obj, "keys") {
+        Some(k) => k,
+        None => J.Arr(Vec.new()),
+    };
+    new_jwk_set(keys)
+}
+
+fn jwk_set_from_json(text: ref String) -> Result[PyJWKSet, Exc] {
+    let obj = loads_str(text)?;
+    jwk_set_from_dict(obj)
+}
+
+impl PyJWKSet {
+    fn find(ref self, kid: ref J) -> Result[PyJWK, Exc] {
+        for k in self.keys.iter() {
+            if py_eq(k.key_id(), kid) {
+                return Ok(k.clone());
+            }
+        }
+        Err(exc("KeyError", str_repr(f"keyset has no key for kid: {py_str(kid)}")))
+    }
+}
+
+// ------------------------------------------------------------ JWS
+
+#[derive(Clone)]
+struct PyJWS {
+    valid: Vec[String],
+}
+
+fn default_jws() -> PyJWS {
+    let mut v: Vec[String] = Vec.new();
+    for n in ["none", "HS256", "HS384", "HS512"] {
+        v.push(n.to_string());
+    }
+    PyJWS { valid: v }
+}
+
+impl PyJWS {
+    // get_algorithm_by_name: the algorithm has to be one PyJWT has and one
+    // this instance allows.
+    fn algorithm_by_name(ref self, name: ref J) -> Result[Alg, Exc] {
+        match name {
+            J.Arr(_) => return Err(exc("TypeError", "unhashable type: 'list'".to_string())),
+            J.Obj(_) => return Err(exc("TypeError", "unhashable type: 'dict'".to_string())),
+            J.Str(n) => {
+                if self.valid.contains(n) {
+                    if let Some(a) = default_alg(n.as_str()) {
+                        return Ok(a);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if requires_cryptography(name) {
+            return Err(exc("NotImplementedError", f"Algorithm '{py_str(name)}' could not be found. Do you have cryptography installed?"));
+        }
+        Err(exc("NotImplementedError", "Algorithm not supported".to_string()))
+    }
+}
+
+fn validate_headers(headers: ref J) -> Result[(), Exc] {
+    if let Some(kid) = j_get(headers, "kid") {
+        if not is_str(kid) {
+            return Err(exc("InvalidTokenError", "Key ID header parameter must be a string".to_string()));
+        }
+    }
+    Ok(())
+}
+
+fn is_false(v: ref J) -> bool {
+    match v {
+        J.Bool(b) => not *b,
+        _ => false,
+    }
+}
+
+// PyJWS.encode
+fn jws_encode(jws: ref PyJWS, payload: ref Vec[u8], key: ref Key, algorithm: ref J, headers: ref J,
+              detached_arg: bool, sort_headers: bool) -> Result[String, Exc] {
+    let mut detached = detached_arg;
+    let mut alg = if is_null(algorithm) {
+        match key {
+            Key.Jwk(k) => J.Str(k.algorithm_name.clone()),
+            _ => jstr("HS256"),
+        }
+    } else {
+        algorithm.clone()
+    };
+    let have_headers = truthy(headers);
+    if have_headers {
+        let ha = j_get_or_null(headers, "alg");
+        if truthy(ha) {
+            alg = ha;
+        }
+        if let Some(b) = j_get(headers, "b64") {
+            if is_false(b) {
+                detached = true;
+            }
+        }
+    }
+    let mut header = J.Obj(Vec.new());
+    j_set(mut header, "typ", jstr("JWT"));
+    j_set(mut header, "alg", alg.clone());
+    if have_headers {
+        validate_headers(headers)?;
+        if let J.Obj(members) = headers {
+            for m in members.iter() {
+                j_set(mut header, m.key.as_str(), m.val.clone());
+            }
+        }
+    }
+    if not truthy(j_get_or_null(header, "typ")) {
+        j_del(mut header, "typ");
+    }
+    if detached {
+        j_set(mut header, "b64", J.Bool(false));
+    } else if j_has(header, "b64") {
+        j_del(mut header, "b64");
+    }
+    let json_header = dumps(compact(sort_headers), header);
+    let head = base64url_encode(str_bytes(json_header));
+    let body = if detached { bytes_str(payload) } else { base64url_encode(payload) };
+    let signing_input = str_bytes(f"{head}.{body}");
+    let a = jws.algorithm_by_name(alg)?;
+    let raw_key = match key {
+        Key.Jwk(k) => Key.Bytes(k.key.clone()),
+        _ => key.clone(),
+    };
+    let prepared = prepare_key(a, raw_key)?;
+    let signature = base64url_encode(sign(a, signing_input, prepared));
+    if detached {
+        return Ok(f"{head}..{signature}");
+    }
+    Ok(f"{head}.{body}.{signature}")
+}
+
+// A token as decode() is handed one.
+#[derive(Clone)]
+enum Token {
+    Text(String),
+    Bytes(Vec[u8]),
+    Other(J),
+}
+
+#[derive(Clone)]
+struct Loaded {
+    payload: Vec[u8],
+    signing_input: Vec[u8],
+    header: J,
+    signature: Vec[u8],
+}
+
+fn decode_error(msg: own String) -> Exc {
+    exc("DecodeError", msg)
+}
+
+fn slice_bytes(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for i in from..to {
+        out.push(b[i]);
+    }
+    out
+}
+
+fn rfind_dot(b: ref Vec[u8]) -> i64 {
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == 46 {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn find_dot(b: ref Vec[u8]) -> i64 {
+    for i in 0..b.len() {
+        if b[i] == 46 {
+            return i;
+        }
+    }
+    -1
+}
+
+// PyJWS._load: three base64url segments, the first a JSON object.
+fn jws_load(token: ref Token) -> Result[Loaded, Exc] {
+    let jwt = match token {
+        Token.Text(t) => str_bytes(t),
+        Token.Bytes(b) => b.clone(),
+        Token.Other(_) => return Err(decode_error("Invalid token type. Token must be a <class 'bytes'>".to_string())),
+    };
+    let last = rfind_dot(jwt);
+    if last < 0 {
+        return Err(decode_error("Not enough segments".to_string()));
+    }
+    let signing_input = slice_bytes(jwt, 0, last);
+    let crypto = slice_bytes(jwt, last + 1, jwt.len());
+    let first = find_dot(signing_input);
+    if first < 0 {
+        return Err(decode_error("Not enough segments".to_string()));
+    }
+    let header_seg = slice_bytes(signing_input, 0, first);
+    let payload_seg = slice_bytes(signing_input, first + 1, signing_input.len());
+    let header_data = match base64url_decode(header_seg) {
+        Ok(b) => b,
+        Err(_) => return Err(decode_error("Invalid header padding".to_string())),
+    };
+    let header = match loads_bytes(header_data) {
+        Ok(h) => h,
+        Err(e) => return Err(decode_error(f"Invalid header string: {e.msg}")),
+    };
+    if not is_dict(header) {
+        return Err(decode_error("Invalid header string: must be a json object".to_string()));
+    }
+    let payload = match base64url_decode(payload_seg) {
+        Ok(b) => b,
+        Err(_) => return Err(decode_error("Invalid payload padding".to_string())),
+    };
+    let signature = match base64url_decode(crypto) {
+        Ok(b) => b,
+        Err(_) => return Err(decode_error("Invalid crypto padding".to_string())),
+    };
+    Ok(Loaded { payload: payload, signing_input: signing_input, header: header, signature: signature })
+}
+
+fn get_unverified_header(token: ref Token) -> Result[J, Exc] {
+    let l = jws_load(token)?;
+    validate_headers(l.header)?;
+    Ok(l.header)
+}
+
+fn invalid_alg(msg: Str) -> Exc {
+    exc("InvalidAlgorithmError", msg.to_string())
+}
+
+// PyJWS._verify_signature
+fn verify_signature(jws: ref PyJWS, signing_input: ref Vec[u8], header: ref J, signature: ref Vec[u8], key: ref Key,
+                    algorithms_arg: ref J) -> Result[(), Exc] {
+    let mut algorithms = algorithms_arg.clone();
+    if is_null(algorithms) {
+        if let Key.Jwk(k) = key {
+            let mut one: Vec[J] = Vec.new();
+            one.push(J.Str(k.algorithm_name.clone()));
+            algorithms = J.Arr(one);
+        }
+    }
+    let alg = match j_get(header, "alg") {
+        Some(a) => a,
+        None => return Err(invalid_alg("Algorithm not specified")),
+    };
+    if not truthy(alg) {
+        return Err(invalid_alg("The specified alg value is not allowed"));
+    }
+    if not is_null(algorithms) and not contains(algorithms, alg)? {
+        return Err(invalid_alg("The specified alg value is not allowed"));
+    }
+    let (a, prepared) = match key {
+        Key.Jwk(k) => (k.alg.clone(), k.key.clone()),
+        _ => {
+            let a = match jws.algorithm_by_name(alg) {
+                Ok(a) => a,
+                Err(e) => {
+                    if e.kind == "NotImplementedError" {
+                        return Err(invalid_alg("Algorithm not supported"));
+                    }
+                    return Err(e);
+                }
+            };
+            let p = prepare_key(a, key)?;
+            (a, p)
+        }
+    };
+    if not verify(a, signing_input, prepared, signature) {
+        return Err(exc("InvalidSignatureError", "Signature verification failed".to_string()));
+    }
+    Ok(())
+}
+
+// What decode_complete returns.
+#[derive(Clone)]
+struct Decoded {
+    payload: Vec[u8],
+    header: J,
+    signature: Vec[u8],
+}
+
+// PyJWS.decode_complete
+fn jws_decode_complete(jws: ref PyJWS, token: ref Token, key: ref Key, algorithms: ref J, options: ref J,
+                       detached: ref Option[Vec[u8]]) -> Result[Decoded, Exc] {
+    let mut verify_sig = true;
+    if let Some(v) = j_get(options, "verify_signature") {
+        verify_sig = truthy(v);
+    }
+    if verify_sig and not truthy(algorithms) and not is_jwk(key) {
+        return Err(decode_error("It is required that you pass in a value for the \"algorithms\" argument when calling decode().".to_string()));
+    }
+    let l = jws_load(token)?;
+    let mut payload = l.payload.clone();
+    let mut signing_input = l.signing_input.clone();
+    if let Some(b) = j_get(l.header, "b64") {
+        if is_false(b) {
+            let d = match detached {
+                Some(d) => d.clone(),
+                None => return Err(decode_error("It is required that you pass in a value for the \"detached_payload\" argument to decode a message having the b64 header set to false.".to_string())),
+            };
+            let cut = rfind_dot(signing_input);
+            let mut si = if cut < 0 { signing_input.clone() } else { slice_bytes(signing_input, 0, cut) };
+            si.push(46);
+            for x in d.iter() {
+                si.push(*x);
+            }
+            payload = d;
+            signing_input = si;
+        }
+    }
+    if verify_sig {
+        verify_signature(jws, signing_input, l.header, l.signature, key, algorithms)?;
+    }
+    Ok(Decoded { payload: payload, header: l.header, signature: l.signature })
+}
+
+// ------------------------------------------------------------ JWT
+
+fn default_options() -> J {
+    let mut o = J.Obj(Vec.new());
+    for n in ["verify_signature", "verify_exp", "verify_nbf", "verify_iat", "verify_aud", "verify_iss", "verify_sub", "verify_jti"] {
+        j_set(mut o, n, J.Bool(true));
+    }
+    j_set(mut o, "require", J.Arr(Vec.new()));
+    o
+}
+
+// {**a, **b}
+fn merge(a: ref J, b: ref J) -> J {
+    let mut out = a.clone();
+    if let J.Obj(members) = b {
+        for m in members.iter() {
+            j_set(mut out, m.key.as_str(), m.val.clone());
+        }
+    }
+    out
+}
+
+fn set_default(d: mut ref J, key: Str, val: own J) {
+    if not j_has(d, key) {
+        j_set(mut d, key, val);
+    }
+}
+
+// PyJWT.encode
+fn jwt_encode(payload: ref J, key: ref Key, algorithm: ref J, headers: ref J, sort_headers: bool) -> Result[String, Exc] {
+    if not is_dict(payload) {
+        return Err(exc("TypeError", "Expecting a dict object, as JWT only supports JSON objects as payloads.".to_string()));
+    }
+    let body = dumps(compact(false), payload);
+    jws_encode(default_jws(), str_bytes(body), key, algorithm, headers, false, sort_headers)
+}
+
+// The arguments decode() takes after the token and key.
+struct DecodeArgs {
+    algorithms: J,
+    options: J,
+    audience: J,
+    issuer: J,
+    subject: J,
+    leeway: f64,
+    detached: Option[Vec[u8]],
+}
+
+fn no_args() -> DecodeArgs {
+    DecodeArgs {
+        algorithms: J.Null, options: J.Null, audience: J.Null, issuer: J.Null, subject: J.Null,
+        leeway: 0.0, detached: None,
+    }
+}
+
+struct Decoder {
+    options: J,
+}
+
+fn new_decoder(options: ref J) -> Decoder {
+    Decoder { options: merge(default_options(), options) }
+}
+
+impl Decoder {
+    // PyJWT.decode_complete: the header and signature as PyJWS gives them,
+    // and the payload loaded and its claims checked.
+    fn decode_complete(ref self, token: ref Token, key: ref Key, a: ref DecodeArgs, now: f64) -> Result[(J, J, Vec[u8]), Exc] {
+        let mut options = if is_dict(a.options) { a.options.clone() } else { J.Obj(Vec.new()) };
+        set_default(mut options, "verify_signature", J.Bool(true));
+        if not truthy(j_get_or_null(options, "verify_signature")) {
+            for n in ["verify_exp", "verify_nbf", "verify_iat", "verify_aud", "verify_iss", "verify_sub", "verify_jti"] {
+                set_default(mut options, n, J.Bool(false));
+            }
+        }
+        let d = jws_decode_complete(default_jws(), token, key, a.algorithms, options, a.detached)?;
+        let payload = match loads_bytes(d.payload) {
+            Ok(p) => p,
+            Err(e) => return Err(decode_error(f"Invalid payload string: {e.msg}")),
+        };
+        if not is_dict(payload) {
+            return Err(decode_error("Invalid payload string: must be a json object".to_string()));
+        }
+        let merged = merge(self.options, options);
+        validate_claims(payload, merged, a, now)?;
+        Ok((d.header, payload, d.signature))
+    }
+
+    fn decode(ref self, token: ref Token, key: ref Key, a: ref DecodeArgs, now: f64) -> Result[J, Exc] {
+        let (_, payload, _) = self.decode_complete(token, key, a, now)?;
+        Ok(payload)
+    }
+}
+
+// The value int() gives, kept exact while it fits in 64 bits.
+#[derive(Clone)]
+enum PyInt {
+    Small(i64),
+    Huge(f64),
+}
+
+fn int_of_digits(neg: bool, digits: ref String) -> PyInt {
+    if digits.len() <= 18 {
+        let n = i64.parse(digits).unwrap_or(0);
+        return PyInt.Small(if neg { 0 - n } else { n });
+    }
+    let x = f64.parse(digits).unwrap_or(0.0);
+    PyInt.Huge(if neg { 0.0 - x } else { x })
+}
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    o == 32 or (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x1F) or o == 0x85 or o == 0xA0
+}
+
+// int(text) in base 10: surrounding white space, a sign, and digits that
+// single underscores may separate. None for the ValueError.
+fn int_of_str(text: ref String) -> Option[PyInt] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and is_py_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (cs[lo] == '+' or cs[lo] == '-') {
+        neg = cs[lo] == '-';
+        lo += 1;
+    }
+    let mut digits = String.new();
+    let mut last_digit = false;
+    let mut i = lo;
+    while i < hi {
+        let c = cs[i];
+        if c >= '0' and c <= '9' {
+            digits.push(c);
+            last_digit = true;
+        } else if c == '_' and last_digit and i + 1 < hi and cs[i + 1] >= '0' and cs[i + 1] <= '9' {
+            last_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if digits.len() == 0 {
+        return None;
+    }
+    while digits.len() > 1 and digits.starts_with("0") {
+        digits = digits.substring(1, digits.len()).to_string();
+    }
+    Some(int_of_digits(neg, digits))
+}
+
+// int(v): Ok(None) is the ValueError the claim checks catch; other errors
+// are raised.
+fn py_int(v: ref J) -> Result[Option[PyInt], Exc] {
+    match v {
+        J.Bool(b) => Ok(Some(PyInt.Small(if *b { 1 } else { 0 }))),
+        J.Int(d) => {
+            let neg = d.starts_with("-");
+            let digits = if neg { d.substring(1, d.len()).to_string() } else { d.clone() };
+            Ok(Some(int_of_digits(neg, digits)))
+        }
+        J.Float(x) => {
+            if *x != *x {
+                return Ok(None);
+            }
+            if *x == 1.0 / 0.0 or *x == -1.0 / 0.0 {
+                return Err(exc("OverflowError", "cannot convert float infinity to integer".to_string()));
+            }
+            let t = x.trunc();
+            if t < 9.0e18 and t > -9.0e18 {
+                Ok(Some(PyInt.Small(t as i64)))
+            } else {
+                Ok(Some(PyInt.Huge(t)))
+            }
+        }
+        J.Str(text) => Ok(int_of_str(text)),
+        _ => Err(exc("TypeError", f"int() argument must be a string, a bytes-like object or a real number, not '{type_name(v)}'")),
+    }
+}
+
+// The sign of n - x, as Python compares an int with a float exactly.
+fn cmp_int_float(n: ref PyInt, x: f64) -> i64 {
+    match n {
+        PyInt.Huge(h) => if *h < x { -1 } else if *h > x { 1 } else { 0 },
+        PyInt.Small(i) => {
+            let f = *i as f64;
+            if f < x {
+                -1
+            } else if f > x {
+                1
+            } else {
+                let xi = x as i64;
+                if *i < xi { -1 } else if *i > xi { 1 } else { 0 }
+            }
+        }
+    }
+}
+
+fn int_claim(payload: ref J, name: Str, kind: Str, msg: Str) -> Result[PyInt, Exc] {
+    match py_int(j_get_or_null(payload, name))? {
+        Some(n) => Ok(n),
+        None => Err(exc(kind, msg.to_string())),
+    }
+}
+
+fn missing_claim(claim: ref String) -> Exc {
+    exc("MissingRequiredClaimError", f"Token is missing the \"{claim}\" claim")
+}
+
+// _validate_claims, in PyJWT's order.
+fn validate_claims(payload: ref J, options: ref J, a: ref DecodeArgs, now: f64) -> Result[(), Exc] {
+    match a.audience {
+        J.Null => {}
+        J.Str(_) => {}
+        J.Arr(_) => {}
+        J.Obj(_) => {}
+        _ => return Err(exc("TypeError", "audience must be a string, iterable or None".to_string())),
+    }
+    // for claim in options["require"]
+    let require = j_get_or_null(options, "require");
+    let mut claims: Vec[J] = Vec.new();
+    match require {
+        J.Arr(items) => claims = items.clone(),
+        J.Str(text) => {
+            for c in text.chars() {
+                let mut one = String.new();
+                one.push(c);
+                claims.push(J.Str(one));
+            }
+        }
+        J.Obj(members) => {
+            for m in members.iter() {
+                claims.push(J.Str(m.key.clone()));
+            }
+        }
+        _ => {}
+    }
+    for c in claims.iter() {
+        let present = match c {
+            J.Str(name) => match j_get(payload, name.as_str()) {
+                Some(v) => not is_null(v),
+                None => false,
+            },
+            _ => false,
+        };
+        if not present {
+            return Err(missing_claim(py_str(c)));
+        }
+    }
+    if j_has(payload, "iat") and truthy(j_get_or_null(options, "verify_iat")) {
+        let iat = int_claim(payload, "iat", "InvalidIssuedAtError", "Issued At claim (iat) must be an integer.")?;
+        if cmp_int_float(iat, now + a.leeway) > 0 {
+            return Err(exc("ImmatureSignatureError", "The token is not yet valid (iat)".to_string()));
+        }
+    }
+    if j_has(payload, "nbf") and truthy(j_get_or_null(options, "verify_nbf")) {
+        let nbf = int_claim(payload, "nbf", "DecodeError", "Not Before claim (nbf) must be an integer.")?;
+        if cmp_int_float(nbf, now + a.leeway) > 0 {
+            return Err(exc("ImmatureSignatureError", "The token is not yet valid (nbf)".to_string()));
+        }
+    }
+    if j_has(payload, "exp") and truthy(j_get_or_null(options, "verify_exp")) {
+        let exp = int_claim(payload, "exp", "DecodeError", "Expiration Time claim (exp) must be an integer.")?;
+        if cmp_int_float(exp, now - a.leeway) <= 0 {
+            return Err(exc("ExpiredSignatureError", "Signature has expired".to_string()));
+        }
+    }
+    if truthy(j_get_or_null(options, "verify_iss")) {
+        validate_iss(payload, a.issuer)?;
+    }
+    if truthy(j_get_or_null(options, "verify_aud")) {
+        validate_aud(payload, a.audience, truthy(j_get_or_null(options, "strict_aud")))?;
+    }
+    if truthy(j_get_or_null(options, "verify_sub")) {
+        if let Some(sub) = j_get(payload, "sub") {
+            if not is_str(sub) {
+                return Err(exc("InvalidSubjectError", "Subject must be a string".to_string()));
+            }
+            if not is_null(a.subject) and not py_eq(sub, a.subject) {
+                return Err(exc("InvalidSubjectError", "Invalid subject".to_string()));
+            }
+        }
+    }
+    if truthy(j_get_or_null(options, "verify_jti")) {
+        if let Some(jti) = j_get(payload, "jti") {
+            if not is_str(jti) {
+                return Err(exc("InvalidJTIError", "JWT ID must be a string".to_string()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bad_aud(msg: Str) -> Exc {
+    exc("InvalidAudienceError", msg.to_string())
+}
+
+fn validate_aud(payload: ref J, audience: ref J, strict: bool) -> Result[(), Exc] {
+    let claim = j_get_or_null(payload, "aud");
+    if is_null(audience) {
+        if not truthy(claim) {
+            return Ok(());
+        }
+        return Err(bad_aud("Invalid audience"));
+    }
+    if not truthy(claim) {
+        return Err(missing_claim("aud".to_string()));
+    }
+    if strict {
+        if not is_str(audience) {
+            return Err(bad_aud("Invalid audience (strict)"));
+        }
+        if not is_str(claim) {
+            return Err(bad_aud("Invalid claim format in token (strict)"));
+        }
+        if not py_eq(audience, claim) {
+            return Err(bad_aud("Audience doesn't match (strict)"));
+        }
+        return Ok(());
+    }
+    let claims = match claim {
+        J.Str(_) => one_item(claim),
+        J.Arr(items) => items.clone(),
+        _ => return Err(bad_aud("Invalid claim format in token")),
+    };
+    for c in claims.iter() {
+        if not is_str(c) {
+            return Err(bad_aud("Invalid claim format in token"));
+        }
+    }
+    let wanted: Vec[J] = match audience {
+        J.Str(_) => one_item(audience),
+        J.Arr(items) => items.clone(),
+        J.Obj(members) => {
+            let mut keys: Vec[J] = Vec.new();
+            for m in members.iter() {
+                keys.push(J.Str(m.key.clone()));
+            }
+            keys
+        }
+        _ => Vec.new(),
+    };
+    let list = J.Arr(claims);
+    for w in wanted.iter() {
+        if contains(list, w)? {
+            return Ok(());
+        }
+    }
+    Err(bad_aud("Audience doesn't match"))
+}
+
+fn validate_iss(payload: ref J, issuer: ref J) -> Result[(), Exc] {
+    if is_null(issuer) {
+        return Ok(());
+    }
+    let iss = match j_get(payload, "iss") {
+        Some(v) => v,
+        None => return Err(missing_claim("iss".to_string())),
+    };
+    let ok = if is_str(issuer) { py_eq(iss, issuer) } else { contains(issuer, iss)? };
+    if not ok {
+        return Err(exc("InvalidIssuerError", "Invalid issuer".to_string()));
+    }
+    Ok(())
+}
+
+fn one_item(v: ref J) -> Vec[J] {
+    let mut out: Vec[J] = Vec.new();
+    out.push(v.clone());
+    out
+}
+
+// ------------------------------------------------------------ job values
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn int_at(items: ref Vec[J], i: i64) -> i64 {
+    if i < items.len() {
+        if let J.Int(d) = items[i] {
+            return i64.parse(d).unwrap_or(0);
+        }
+    }
+    0
+}
+
+// timegm(dt.utctimetuple()) for [y, mo, d, h, mi, s, us, offset minutes]:
+// the microseconds are dropped.
+fn timegm_of(items: ref Vec[J], aware: bool) -> i64 {
+    let days = days_from_civil(int_at(items, 0), int_at(items, 1), int_at(items, 2));
+    let mut t = days * 86400 + int_at(items, 3) * 3600 + int_at(items, 4) * 60 + int_at(items, 5);
+    if aware and items.len() > 7 {
+        t -= int_at(items, 7) * 60;
+    }
+    t
+}
+
+fn num(v: ref J) -> f64 {
+    num_of(v).unwrap_or(0.0)
+}
+
+// A dict with one "$" key stands for a Python value JSON has no form for.
+// Datetimes only appear as the exp, iat and nbf claims, which PyJWT turns
+// into seconds, so they are those seconds here.
+fn conv(v: ref J) -> J {
+    match v {
+        J.Obj(members) => {
+            if members.len() == 1 {
+                let m = ref members[0];
+                if let J.Arr(items) = m.val {
+                    if m.key == "$dt" {
+                        return J.Int(f"{timegm_of(items, true)}");
+                    }
+                    if m.key == "$naive" {
+                        return J.Int(f"{timegm_of(items, false)}");
+                    }
+                }
+                if m.key == "$td" {
+                    return J.Float(num(m.val));
+                }
+            }
+            let mut out: Vec[Member] = Vec.new();
+            for m in members.iter() {
+                out.push(Member { key: m.key.clone(), val: conv(m.val) });
+            }
+            J.Obj(out)
+        }
+        J.Arr(items) => {
+            let mut out: Vec[J] = Vec.new();
+            for it in items.iter() {
+                out.push(conv(it));
+            }
+            J.Arr(out)
+        }
+        _ => v.clone(),
+    }
+}
+
+fn key_of(v: ref J) -> Result[Key, Exc] {
+    if let Some(h) = j_get(v, "$bytes") {
+        return Ok(Key.Bytes(unhex(py_str(h))));
+    }
+    if let Some(d) = j_get(v, "$jwk") {
+        let alg = j_get_or_null(v, "$alg");
+        return Ok(Key.Jwk(new_jwk(conv(d), alg)?));
+    }
+    match v {
+        J.Str(t) => Ok(Key.Text(t.clone())),
+        _ => Ok(Key.Other(conv(v))),
+    }
+}
+
+struct Job {
+    tokens: Vec[String],
+    now: f64,
+}
+
+fn token_of(job: ref Job, spec: ref J) -> Token {
+    if let Some(r) = j_get(spec, "ref") {
+        let mut t = job.tokens[num(r) as i64].clone();
+        if let Some(seg) = j_get(spec, "seg") {
+            let mut parts: Vec[String] = Vec.new();
+            for p in t.split(".") {
+                parts.push(p.to_string());
+            }
+            parts[num(seg) as i64] = py_str(j_get_or_null(spec, "value"));
+            t = join(parts, ".");
+        }
+        if let Some(extra) = j_get(spec, "append") {
+            t = f"{t}{py_str(extra)}";
+        }
+        return Token.Text(t);
+    }
+    if let Some(h) = j_get(spec, "$bytes") {
+        return Token.Bytes(unhex(py_str(h)));
+    }
+    match spec {
+        J.Str(t) => Token.Text(t.clone()),
+        _ => Token.Other(spec.clone()),
+    }
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn jws_of(op: ref J) -> PyJWS {
+    if let Some(J.Arr(items)) = j_get(op, "allowed") {
+        let mut valid: Vec[String] = Vec.new();
+        for it in items.iter() {
+            let n = py_str(it);
+            if not valid.contains(n) {
+                valid.push(n);
+            }
+        }
+        return PyJWS { valid: valid };
+    }
+    default_jws()
+}
+
+fn opt(op: ref J, name: Str) -> J {
+    conv(j_get_or_null(op, name))
+}
+
+fn decode_args(op: ref J) -> DecodeArgs {
+    let mut a = no_args();
+    a.algorithms = opt(op, "algorithms");
+    a.options = opt(op, "options");
+    a.audience = opt(op, "audience");
+    a.issuer = opt(op, "issuer");
+    a.subject = opt(op, "subject");
+    a.leeway = num(opt(op, "leeway"));
+    if let Some(d) = j_get(op, "detached") {
+        a.detached = Some(str_bytes(py_str(d)));
+    }
+    a
+}
+
+fn decode_key(op: ref J) -> Result[Key, Exc] {
+    match j_get(op, "key") {
+        Some(k) => key_of(k),
+        None => Ok(Key.Text(String.new())),
+    }
+}
+
+fn sort_headers_of(op: ref J) -> bool {
+    match j_get(op, "sort_headers") {
+        Some(v) => truthy(v),
+        None => true,
+    }
+}
+
+fn print_err(e: ref Exc) {
+    println(f"  error: {failure(e)}");
+}
+
+fn op_encode(job: mut ref Job, op: ref J) -> Result[(), Exc] {
+    let key = key_of(j_get_or_null(op, "key"))?;
+    match jwt_encode(opt(op, "payload"), key, opt(op, "algorithm"), opt(op, "headers"), sort_headers_of(op)) {
+        Ok(t) => {
+            println(f"  token: {t}");
+            job.tokens.push(t);
+        }
+        Err(e) => print_err(e),
+    }
+    Ok(())
+}
+
+fn op_decode(job: ref Job, op: ref J) -> Result[(), Exc] {
+    let key = decode_key(op)?;
+    let a = decode_args(op);
+    let dec = new_decoder(opt(op, "instance"));
+    let token = token_of(job, j_get_or_null(op, "token"));
+    if truthy(j_get_or_null(op, "complete")) {
+        match dec.decode_complete(token, key, a, job.now) {
+            Ok((h, p, sig)) => {
+                println(f"  header: {repr(h)}");
+                println(f"  payload: {repr(p)}");
+                println(f"  signature: {hex_of(sig)}");
+            }
+            Err(e) => print_err(e),
+        }
+    } else {
+        match dec.decode(token, key, a, job.now) {
+            Ok(p) => println(f"  payload: {repr(p)}"),
+            Err(e) => print_err(e),
+        }
+    }
+    Ok(())
+}
+
+fn op_jws_encode(job: mut ref Job, op: ref J) -> Result[(), Exc] {
+    let key = key_of(j_get_or_null(op, "key"))?;
+    let payload = str_bytes(py_str(j_get_or_null(op, "payload")));
+    let detached = truthy(j_get_or_null(op, "detached"));
+    match jws_encode(jws_of(op), payload, key, opt(op, "algorithm"), opt(op, "headers"), detached, sort_headers_of(op)) {
+        Ok(t) => {
+            println(f"  token: {t}");
+            job.tokens.push(t);
+        }
+        Err(e) => print_err(e),
+    }
+    Ok(())
+}
+
+fn op_jws_decode(job: ref Job, op: ref J) -> Result[(), Exc] {
+    let key = decode_key(op)?;
+    let a = decode_args(op);
+    let options = if is_dict(a.options) { a.options.clone() } else { J.Obj(Vec.new()) };
+    let token = token_of(job, j_get_or_null(op, "token"));
+    match jws_decode_complete(jws_of(op), token, key, a.algorithms, options, a.detached) {
+        Ok(d) => {
+            println(f"  header: {repr(d.header)}");
+            println(f"  payload: {bytes_repr(d.payload)}");
+        }
+        Err(e) => print_err(e),
+    }
+    Ok(())
+}
+
+fn op_algorithms(op: ref J) {
+    let w = jws_of(op);
+    let mut names = w.valid.clone();
+    names.sort();
+    let mut shown: Vec[J] = Vec.new();
+    for n in names.iter() {
+        shown.push(J.Str(n.clone()));
+    }
+    println(f"  algorithms: {repr(J.Arr(shown))}");
+    if let J.Arr(items) = j_get_or_null(op, "names") {
+        for name in items.iter() {
+            match w.algorithm_by_name(name) {
+                Ok(a) => println(f"  {repr(name)}: {alg_class(a)}"),
+                Err(e) => println(f"  {repr(name)}: {failure(e)}"),
+            }
+        }
+    }
+}
+
+fn op_jwk(op: ref J) {
+    let data = j_get_or_null(op, "data");
+    let alg = j_get_or_null(op, "algorithm");
+    let made = match data {
+        J.Str(text) => jwk_from_json(text, alg),
+        _ => new_jwk(conv(data), alg),
+    };
+    match made {
+        Ok(k) => println(f"  alg={k.algorithm_name} kty={repr(k.key_type())} kid={repr(k.key_id())} use={repr(k.public_key_use())} {alg_class(k.alg)} key={bytes_repr(k.key)}"),
+        Err(e) => print_err(e),
+    }
+}
+
+fn op_jwks(op: ref J) {
+    let data = j_get_or_null(op, "data");
+    let made = match data {
+        J.Str(text) => jwk_set_from_json(text),
+        _ => jwk_set_from_dict(conv(data)),
+    };
+    let ks = match made {
+        Ok(ks) => ks,
+        Err(e) => {
+            print_err(e);
+            return;
+        }
+    };
+    let mut ids: Vec[J] = Vec.new();
+    for k in ks.keys.iter() {
+        ids.push(k.key_id());
+    }
+    println(f"  keys: {repr(J.Arr(ids))}");
+    if let J.Arr(kids) = j_get_or_null(op, "kids") {
+        for kid in kids.iter() {
+            match ks.find(kid) {
+                Ok(k) => println(f"  {repr(kid)}: {k.algorithm_name} {bytes_repr(k.key)}"),
+                Err(e) => println(f"  {repr(kid)}: {failure(e)}"),
+            }
+        }
+    }
+}
+
+fn op_to_jwk(op: ref J) -> Result[(), Exc] {
+    let key = key_of(j_get_or_null(op, "key"))?;
+    match hmac_to_jwk(key, truthy(j_get_or_null(op, "as_dict"))) {
+        Ok(text) => println(f"  jwk: {text}"),
+        Err(e) => print_err(e),
+    }
+    Ok(())
+}
+
+fn op_from_jwk(op: ref J) {
+    match hmac_from_jwk(opt(op, "jwk")) {
+        Ok(k) => println(f"  key: {bytes_repr(k)}"),
+        Err(e) => print_err(e),
+    }
+}
+
+fn op_b64(op: ref J) {
+    if let J.Arr(items) = j_get_or_null(op, "decode") {
+        for it in items.iter() {
+            let text = py_str(it);
+            match base64url_decode(str_bytes(text)) {
+                Ok(b) => println(f"  {str_repr(text)} -> {hex_of(b)}"),
+                Err(e) => println(f"  {str_repr(text)} -> {failure(e)}"),
+            }
+        }
+    }
+    if let J.Arr(items) = j_get_or_null(op, "encode") {
+        for it in items.iter() {
+            let h = py_str(it);
+            println(f"  {h} -> {base64url_encode(unhex(h))}");
+        }
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn op_keys(op: ref J) -> Result[(), Exc] {
+    let alg = Alg.Hmac(256);
+    if let J.Arr(items) = j_get_or_null(op, "keys") {
+        for it in items.iter() {
+            let key = key_of(it)?;
+            let verdict = match prepare_key(alg, key) {
+                Ok(_) => "ok".to_string(),
+                Err(e) => failure(e),
+            };
+            match force_bytes(key) {
+                Ok(b) => println(f"  pem={py_bool(is_pem_format(b))} ssh={py_bool(is_ssh_key(b))} {verdict}"),
+                Err(_) => println(f"  {verdict}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_op(job: mut ref Job, op: ref J) -> Result[(), Exc] {
+    if let Some(n) = j_get(op, "now") {
+        job.now = num(n);
+    }
+    let kind = py_str(j_get_or_null(op, "op"));
+    if kind == "encode" {
+        op_encode(mut job, op)?;
+    } else if kind == "decode" {
+        op_decode(job, op)?;
+    } else if kind == "header" {
+        match get_unverified_header(token_of(job, j_get_or_null(op, "token"))) {
+            Ok(h) => println(f"  header: {repr(h)}"),
+            Err(e) => print_err(e),
+        }
+    } else if kind == "jws_encode" {
+        op_jws_encode(mut job, op)?;
+    } else if kind == "jws_decode" {
+        op_jws_decode(job, op)?;
+    } else if kind == "algorithms" {
+        op_algorithms(op);
+    } else if kind == "jwk" {
+        op_jwk(op);
+    } else if kind == "jwks" {
+        op_jwks(op);
+    } else if kind == "to_jwk" {
+        op_to_jwk(op)?;
+    } else if kind == "from_jwk" {
+        op_from_jwk(op);
+    } else if kind == "b64" {
+        op_b64(op);
+    } else if kind == "keys" {
+        op_keys(op)?;
+    } else if kind == "gateway" {
+        gateway(mut job, op)?;
+    } else if kind == "issue" {
+        issue(mut job, op)?;
+    } else {
+        return Err(exc("SystemExit", f"unknown op {kind}"));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_text(path: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(exc("OSError", f"{path}: {e}")),
+    }
+}
+
+// The lines of a file, each without its newline, skipping empty ones.
+fn text_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in text.split("\n") {
+        if l.len() > 0 {
+            out.push(l.to_string());
+        }
+    }
+    out
+}
+
+fn split_ws(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in text.split_whitespace() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+#[derive(Clone)]
+struct Route {
+    prefix: String,
+    aud: String,
+    scope: String,
+}
+
+struct Gateway {
+    keyset: Option[PyJWKSet],
+    routes: Vec[Route],
+    issuer: J,
+    leeway: f64,
+}
+
+// An API gateway: each request's bearer token is checked against the JWK
+// set by its kid, then against the route's audience and scope.
+fn gateway(job: mut ref Job, op: ref J) -> Result[(), Exc] {
+    let base = f"data/{py_str(j_get_or_null(op, "dir"))}";
+    let text = read_text(f"{base}/{py_str(j_get_or_null(op, "jwks"))}")?;
+    let keyset = match jwk_set_from_json(text) {
+        Ok(ks) => {
+            println(f"  keyset: {ks.keys.len()} keys");
+            Some(ks)
+        }
+        Err(e) => {
+            println(f"  keyset: {failure(e)}");
+            None
+        }
+    };
+    let mut routes: Vec[Route] = Vec.new();
+    for line in text_lines(read_text(f"{base}/routes.txt")?) {
+        if line.trim().len() > 0 and not line.starts_with("#") {
+            let w = split_ws(line);
+            routes.push(Route { prefix: w[0].clone(), aud: w[1].clone(), scope: w[2].clone() });
+        }
+    }
+    let gw = Gateway { keyset: keyset, routes: routes, issuer: j_get_or_null(op, "issuer"), leeway: num(j_get_or_null(op, "leeway")) };
+    let mut statuses: Vec[(i64, i64)] = Vec.new();
+    let mut callers: Vec[(String, i64)] = Vec.new();
+    for line in text_lines(read_text(f"{base}/access.log")?) {
+        let parts: Vec[Str] = line.split(" ").collect();
+        let ts = parts[0].to_string();
+        job.now = f64.parse(ts).unwrap_or(0.0);
+        let (status, why) = handle(gw, parts[2].to_string(), parts[3].to_string(), job.now);
+        println(f"  {ts} {parts[1]} {parts[2]} -> {status} {why}");
+        bump_status(mut statuses, status);
+        if status == 200 {
+            bump_caller(mut callers, why);
+        }
+    }
+    statuses.sort();
+    callers.sort();
+    let mut sp: Vec[String] = Vec.new();
+    for (k, v) in statuses.iter() {
+        sp.push(f"{k}={v}");
+    }
+    let mut cp: Vec[String] = Vec.new();
+    for (k, v) in callers.iter() {
+        cp.push(f"{k}={v}");
+    }
+    println(f"  statuses: {join(sp, ", ")}");
+    println(f"  callers: {join(cp, ", ")}");
+    Ok(())
+}
+
+fn bump_status(counts: mut ref Vec[(i64, i64)], status: i64) {
+    for i in 0..counts.len() {
+        if counts[i].0 == status {
+            counts[i].1 += 1;
+            return;
+        }
+    }
+    counts.push((status, 1));
+}
+
+fn bump_caller(counts: mut ref Vec[(String, i64)], who: ref String) {
+    for i in 0..counts.len() {
+        if counts[i].0 == *who {
+            counts[i].1 += 1;
+            return;
+        }
+    }
+    counts.push((who.clone(), 1));
+}
+
+fn handle(gw: ref Gateway, path: ref String, token: ref String, now: f64) -> (i64, String) {
+    let mut best: Option[Route] = None;
+    for r in gw.routes.iter() {
+        if path.starts_with(r.prefix.as_str()) {
+            let longer = match ref best {
+                Some(b) => r.prefix.len() > b.prefix.len(),
+                None => true,
+            };
+            if longer {
+                best = Some(r.clone());
+            }
+        }
+    }
+    let route = match best {
+        Some(r) => r,
+        None => return (404, "no route".to_string()),
+    };
+    if token == "-" {
+        if route.aud == "-" and route.scope == "-" {
+            return (200, "anonymous".to_string());
+        }
+        return (401, "missing token".to_string());
+    }
+    let keyset = match gw.keyset {
+        Some(ks) => ks.clone(),
+        None => return (503, "no keys".to_string()),
+    };
+    let tok = Token.Text(token.clone());
+    let header = match get_unverified_header(tok) {
+        Ok(h) => h,
+        Err(e) => return (401, failure(e)),
+    };
+    let kid = j_get_or_null(header, "kid");
+    if is_null(kid) {
+        return (401, "no kid".to_string());
+    }
+    let key = match keyset.find(kid) {
+        Ok(k) => k,
+        Err(_) => return (401, f"unknown kid {py_str(kid)}"),
+    };
+    let usage = key.public_key_use();
+    if not is_null(usage) and not eq_str(usage, "sig") {
+        return (401, f"key {py_str(kid)} is for {py_str(usage)}");
+    }
+    let mut a = no_args();
+    a.audience = if route.aud == "-" { J.Null } else { J.Str(route.aud.clone()) };
+    a.issuer = gw.issuer.clone();
+    a.leeway = gw.leeway;
+    let mut options = J.Obj(Vec.new());
+    let mut req: Vec[J] = Vec.new();
+    req.push(jstr("exp"));
+    req.push(jstr("sub"));
+    j_set(mut options, "require", J.Arr(req));
+    a.options = options;
+    let payload = match new_decoder(J.Null).decode(tok, Key.Jwk(key), a, now) {
+        Ok(p) => p,
+        Err(e) => return (401, failure(e)),
+    };
+    let scope = match j_get(payload, "scope") {
+        Some(v) => v,
+        None => jstr(""),
+    };
+    let scopes = match scope {
+        J.Str(text) => split_ws(text),
+        _ => return (403, "scope is not a string".to_string()),
+    };
+    if route.scope != "-" and not scopes.contains(route.scope) {
+        return (403, f"needs {route.scope}");
+    }
+    (200, py_str(j_get_or_null(payload, "sub")))
+}
+
+// A token issuer: one token per user in users.csv, written to a file,
+// read back and checked at several times.
+fn issue(job: mut ref Job, op: ref J) -> Result[(), Exc] {
+    let base = f"data/{py_str(j_get_or_null(op, "dir"))}";
+    let secret_text = match fs.read_bytes(f"{base}/secret.key") {
+        Ok(b) => b,
+        Err(e) => return Err(exc("OSError", f"{e}")),
+    };
+    let mut secret = secret_text.clone();
+    while secret.len() > 0 and secret[secret.len() - 1] == 10 {
+        secret.pop();
+    }
+    let start = num(j_get_or_null(op, "now"));
+    job.now = start;
+    let now = start as i64;
+    let issuer = j_get_or_null(op, "issuer");
+    let mut headers = J.Obj(Vec.new());
+    j_set(mut headers, "kid", j_get_or_null(op, "kid"));
+    let mut out = String.new();
+    let rows = text_lines(read_text(f"{base}/users.csv")?);
+    for r in 1..rows.len() {
+        let f: Vec[Str] = rows[r].split(",").collect();
+        let user = f[0].to_string();
+        let roles = f[1].to_string();
+        let ttl = i64.parse(f[2]).unwrap_or(0);
+        let aud = f[3].to_string();
+        let mut payload = J.Obj(Vec.new());
+        j_set(mut payload, "sub", J.Str(user.clone()));
+        j_set(mut payload, "iss", issuer.clone());
+        j_set(mut payload, "iat", J.Int(f"{now}"));
+        j_set(mut payload, "nbf", J.Int(f"{now}"));
+        j_set(mut payload, "exp", J.Int(f"{now + ttl}"));
+        j_set(mut payload, "roles", split_bar(roles));
+        if aud.len() > 0 {
+            j_set(mut payload, "aud", if aud.contains("|") { split_bar(aud) } else { J.Str(aud.clone()) });
+        }
+        match jwt_encode(payload, Key.Bytes(secret.clone()), jstr(f[4]), headers, true) {
+            Ok(t) => out.push_str(f"{user} {t}\n"),
+            Err(e) => println(f"  {user}: {failure(e)}"),
+        }
+    }
+    if let Err(e) = fs.create_dir_all(f"{base}/out") {
+        return Err(exc("OSError", f"{e}"));
+    }
+    if let Err(e) = fs.write(f"{base}/out/tokens.txt", out) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    let mut issued: Vec[(String, String)] = Vec.new();
+    for line in text_lines(read_text(f"{base}/out/tokens.txt")?) {
+        let w = split_ws(line);
+        issued.push((w[0].clone(), w[1].clone()));
+    }
+    println(f"  issued {issued.len()} tokens");
+    let mut algs: Vec[J] = Vec.new();
+    for n in ["HS256", "HS384", "HS512"] {
+        algs.push(jstr(n));
+    }
+    if let J.Arr(checks) = j_get_or_null(op, "checks") {
+        for at in checks.iter() {
+            job.now = start + num(at);
+            for (user, t) in issued.iter() {
+                let mut a = no_args();
+                a.algorithms = J.Arr(algs.clone());
+                a.audience = j_get_or_null(op, "audience");
+                a.issuer = issuer.clone();
+                match new_decoder(J.Null).decode(Token.Text(t.clone()), Key.Bytes(secret.clone()), a, job.now) {
+                    Ok(p) => println(f"  +{repr(at)} {user}: ok roles={repr(j_get_or_null(p, "roles"))}"),
+                    Err(e) => println(f"  +{repr(at)} {user}: {failure(e)}"),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn split_bar(text: ref String) -> J {
+    let mut items: Vec[J] = Vec.new();
+    if text.len() > 0 {
+        for p in text.split("|") {
+            items.push(J.Str(p.to_string()));
+        }
+    }
+    J.Arr(items)
+}
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.jsonl") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.jsonl: {e}"),
+    };
+    let mut job = Job { tokens: Vec.new(), now: 0.0 };
+    for line in text_lines(text) {
+        let spec = match loads_str(line) {
+            Ok(v) => v,
+            Err(e) => return Err(failure(e)),
+        };
+        println(f"== {py_str(j_get_or_null(spec, "name"))}");
+        job.tokens = Vec.new();
+        if let J.Arr(ops) = j_get_or_null(spec, "ops") {
+            for op in ops.iter() {
+                if let Err(e) = run_op(mut job, op) {
+                    return Err(failure(e));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1761048025 GET /health -\n");
+    t.push_str("1761048050 GET /api/orders/17 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZSIsImF1ZCI6Im9yZGVycyIsImV4cCI6MTc2MTA1MTYwMCwic2NvcGUiOiJvcmRlcnM6cmVhZCJ9.5yrzWyrFVZBmhU8xC7wsEM3jQ4yn9w7Ttl_7X_IdTEE4Zftk9HGSxKcH3U8JDKeYrNG7dts4jtc8lksf9vwY4A\n");
+    t.push_str("1761048075 GET /api/orders/17 eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJib2IiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.IPUPdCInZZZTYdsAc0mStHvHjvzN5T9xXdeDCupR29E\n");
+    t.push_str("1761048100 POST /api/orders/admin/refund eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZSIsImF1ZCI6Im9yZGVycyIsImV4cCI6MTc2MTA1MTYwMCwic2NvcGUiOiJvcmRlcnM6cmVhZCJ9.5yrzWyrFVZBmhU8xC7wsEM3jQ4yn9w7Ttl_7X_IdTEE4Zftk9HGSxKcH3U8JDKeYrNG7dts4jtc8lksf9vwY4A\n");
+    t.push_str("1761048125 POST /api/orders/admin/refund eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJyb290IiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6Im9yZGVyczpyZWFkIGFkbWluIn0.X_WV-1wEHDnmRPpCEPHA5_erZxip4coec2KB6G7d7Xb4hEwR3NfpTnGqwh_rJExI7yM-1lgt6C5kxUKx4ox-pg\n");
+    t.push_str("1761048150 GET /api/billing/invoices eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZSIsImF1ZCI6Im9yZGVycyIsImV4cCI6MTc2MTA1MTYwMCwic2NvcGUiOiJvcmRlcnM6cmVhZCJ9.5yrzWyrFVZBmhU8xC7wsEM3jQ4yn9w7Ttl_7X_IdTEE4Zftk9HGSxKcH3U8JDKeYrNG7dts4jtc8lksf9vwY4A\n");
+    t.push_str("1761048175 GET /api/billing/invoices eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJjYXJvbCIsImF1ZCI6WyJiaWxsaW5nIiwib3JkZXJzIl0sImV4cCI6MTc2MTA1MTYwMCwic2NvcGUiOiJiaWxsaW5nIn0.EBS2jN_jFuD1erMfKGbhtBIBEyY-j3Il3U6K_4TlLHdq4nWh9OqMB9n5t65cxyVZPbNTf6gIHSoQ93UeBFM2WQ\n");
+    t.push_str("1761048200 GET /api/orders/18 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJkYXZlIiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDQ3OTk1LCJzY29wZSI6Im9yZGVyczpyZWFkIn0.8umOvP5_UaAlbLGXOfmfCQh-neQmIvIDSelqYJCV0jB32FGZwVoUPn0G6mzcLDKCHMqSmslO7MD5AfZhx1Uwdw\n");
+    t.push_str("1761048225 GET /api/orders/18 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJkYXZlIiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDQ4MTAwLCJzY29wZSI6Im9yZGVyczpyZWFkIn0.72gcYfvZuR86R8etAlDzaipyeVOeRYzcmXqfAE6NHT5XDeZ1mCa_ir5JKLWe9UDHA65dF2Ss6QHwRp2hE3etfg\n");
+    t.push_str("1761048250 GET /api/orders/19 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2V2aWwuZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.gBhmZLiD8Mhmccu6ZSA55Pz0GdnFnYTDzS5cvyFRkwvKm9JznPesuVhJJkisZC_g4y_Z-WDJDXHcsWVgXX-Jqw\n");
+    t.push_str("1761048275 GET /api/orders/19 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.N-BdPywfgi6DwO43u_EZHFK3KuSU0JJA2z6Q34ordozBlBkQNobE86lbVxhkLWikQWbLWXt-f6AbPV1hDblLlA\n");
+    t.push_str("1761048300 GET /api/orders/19 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTEiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.leqW-CSulkgLczPtuuaw2q0UOsmlQt_DHHD7QuLGYZ2y5dhNf4uYcWMdwY48cSOyYWZkZ8Tk2cLerTj5yZ3hvg\n");
+    t.push_str("1761048325 GET /api/orders/19 eyJhbGciOiJIUzI1NiIsImtpZCI6ImVuYy0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.0SXIi8RRoyR96HdpxOYMtwdiAVfR2Dtx6fg0vP-1SO8\n");
+    t.push_str("1761048350 GET /api/orders/19 eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.sVuGZYnkrYyXQP-9mos-Uyu7_qsLZard8MXL26_rA-Y\n");
+    t.push_str("1761048375 GET /api/orders/19 eyJhbGciOiJIUzI1NiIsImtpZCI6OX0.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.VxWA90ka2Kn_EhPIuAQNnEpEtwonMDUAxSNLPNMRfiA\n");
+    t.push_str("1761048400 GET /api/orders/19 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMDkifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJldmUiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.REJGZ0KgR_Gzmf-doRF56cS_fPL4Bwo5bQTx_Hfy2gAhakyldtvc0agjyiR_o3xvX8_6zTlyL6Z3gkYV-B10hQ\n");
+    t.push_str("1761048425 GET /api/orders/20 eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJmcmFuayIsImF1ZCI6Im9yZGVycyIsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.sGe0s4SIDANh2U0aTx1REkxVVqGlR3eO-YM01GpwLac\n");
+    t.push_str("1761048450 GET /api/orders/20 eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNDgwNjB9.NpEoUJqzRxUHHTGxjh4pFNQvluCL0zgOJQ5a5yc_t24\n");
+    t.push_str("1761048475 GET /api/orders/21 eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJnaW5hIiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6WyJvcmRlcnM6cmVhZCJdfQ.ZDIWNIqpXvpqVBp0jLPHMbqZdcqMJELbMB0OPHGhP9M\n");
+    t.push_str("1761048500 GET /api/orders/21 eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJnaW5hIiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6Im9yZGVyczpyZWFkd3JpdGUifQ.mHfHqwp3evEPFep3laO3-lqEHddr59zhgayF-Awwxj4\n");
+    t.push_str("1761048525 GET /api/public/catalog eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJoYWwiLCJhdWQiOiJvcmRlcnMiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.L7Yd4vzCaJz7VKU9FjnqvGQjE49uAJ8iwVKvIte7H0c\n");
+    t.push_str("1761048550 GET /api/public/catalog eyJhbGciOiJIUzI1NiIsImtpZCI6Imd3LTIwMjUtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJoYWwiLCJleHAiOjE3NjEwNTE2MDAsInNjb3BlIjoib3JkZXJzOnJlYWQifQ.KRCi6Ao8uBOBoacJM2mnr-LHfIMLtz0PIxRz5fmCNOA\n");
+    t.push_str("1761048575 GET /api/public/catalog -\n");
+    t.push_str("1761048600 GET /api/orders/22 not-a-token\n");
+    t.push_str("1761048625 GET /api/orders/22 a.b.c\n");
+    t.push_str("1761048650 GET /static/logo.png -\n");
+    t.push_str("1761048675 GET /api/orders/23 eyJhbGciOiJIUzI1NiIsImtpZCI6ImxlZ2FjeSIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJpdmFuIiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6Im9yZGVyczpyZWFkIn0.1VXuivBljHP9YtPIhA_xZ20A9LVzAdOdZRdvMSdmOGU\n");
+    t.push_str("1761048700 GET /api/orders/24 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJqdWR5IiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6Im9yZGVyczpyZWFkIiwibmJmIjoxNzYxMDQ4MDUwfQ.NWq0lQXhgQA9mUHp94wv1pbtuSNLqJH2DVONEdR_hMBZg9yJ3GD59EoOmGxFrqwPEAgDlfXBU25fkQDHMxvegA\n");
+    t.push_str("1761048725 GET /api/orders/24 eyJhbGciOiJIUzUxMiIsImtpZCI6Imd3LTIwMjUtMTAiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJqdWR5IiwiYXVkIjoib3JkZXJzIiwiZXhwIjoxNzYxMDUxNjAwLCJzY29wZSI6Im9yZGVyczpyZWFkIiwibmJmIjoxNzYxMDQ4MDUwfQ.NWq0lQXhgQA9mUHp94wv1pbtuSNLqJH2DVONEdR_hMBZg9yJ3GD59EoOmGxFrqwPEAgDlfXBU25fkQDHMxvegA\n");
+    v.push(DataFile { path: "gateway/access.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"keys\": [{\"kty\": \"oct\", \"kid\": \"gw-2025-09\", \"alg\": \"HS256\", \"use\": \"sig\", \"k\": \"c2VwdGVtYmVyLXNpZ25pbmcta2V5\"}, {\"kty\": \"oct\", \"kid\": \"gw-2025-10\", \"alg\": \"HS512\", \"use\": \"sig\", \"k\": \"b2N0b2Jlci1zaWduaW5nLWtleS01MTI\"}, {\"kty\": \"oct\", \"kid\": \"enc-1\", \"alg\": \"HS256\", \"use\": \"enc\", \"k\": \"ZW5jcnlwdGlvbi1vbmx5\"}, {\"kty\": \"oct\", \"kid\": \"legacy\", \"k\": \"bGVnYWN5IGtleQ\"}, {\"kty\": \"RSA\", \"kid\": \"rsa-1\", \"n\": \"sXch\", \"e\": \"AQAB\"}]}\n");
+    v.push(DataFile { path: "gateway/jwks-rsa.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"keys\": [\n");
+    t.push_str("    {\n");
+    t.push_str("      \"kty\": \"oct\",\n");
+    t.push_str("      \"kid\": \"gw-2025-09\",\n");
+    t.push_str("      \"alg\": \"HS256\",\n");
+    t.push_str("      \"use\": \"sig\",\n");
+    t.push_str("      \"k\": \"c2VwdGVtYmVyLXNpZ25pbmcta2V5\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"kty\": \"oct\",\n");
+    t.push_str("      \"kid\": \"gw-2025-10\",\n");
+    t.push_str("      \"alg\": \"HS512\",\n");
+    t.push_str("      \"use\": \"sig\",\n");
+    t.push_str("      \"k\": \"b2N0b2Jlci1zaWduaW5nLWtleS01MTI\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"kty\": \"oct\",\n");
+    t.push_str("      \"kid\": \"enc-1\",\n");
+    t.push_str("      \"alg\": \"HS256\",\n");
+    t.push_str("      \"use\": \"enc\",\n");
+    t.push_str("      \"k\": \"ZW5jcnlwdGlvbi1vbmx5\"\n");
+    t.push_str("    },\n");
+    t.push_str("    {\n");
+    t.push_str("      \"kty\": \"oct\",\n");
+    t.push_str("      \"kid\": \"legacy\",\n");
+    t.push_str("      \"k\": \"bGVnYWN5IGtleQ\"\n");
+    t.push_str("    }\n");
+    t.push_str("  ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "gateway/jwks.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# prefix audience scope\n");
+    t.push_str("/api/orders orders orders:read\n");
+    t.push_str("/api/orders/admin orders admin\n");
+    t.push_str("/api/billing billing billing\n");
+    t.push_str("/api/public - -\n");
+    t.push_str("/health - -\n");
+    v.push(DataFile { path: "gateway/routes.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("alice eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3Vlci0xIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZSIsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUuY29tIiwiaWF0IjoxNzYxMDQ4MDAwLCJuYmYiOjE3NjEwNDgwMDAsImV4cCI6MTc2MTA1MTYwMCwicm9sZXMiOlsiYWRtaW4iLCJvcHMiXSwiYXVkIjoiY29uc29sZSJ9.ioVx1iLLXTcB6x1DiG5BdltQUbFhP7QzAuvVVZZ8NBw\n");
+    t.push_str("bob eyJhbGciOiJIUzM4NCIsImtpZCI6Imlzc3Vlci0xIiwidHlwIjoiSldUIn0.eyJzdWIiOiJib2IiLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLmNvbSIsImlhdCI6MTc2MTA0ODAwMCwibmJmIjoxNzYxMDQ4MDAwLCJleHAiOjE3NjEwNDg2MDAsInJvbGVzIjpbXSwiYXVkIjpbImNvbnNvbGUiLCJjbGkiXX0.ishTfqj5lzDMnb3JRYZMWtqBFnqEtFPX_7FbQ5HCiFdxkLJdgKpCcZFqxQCobn6w\n");
+    t.push_str("carol eyJhbGciOiJIUzUxMiIsImtpZCI6Imlzc3Vlci0xIiwidHlwIjoiSldUIn0.eyJzdWIiOiJjYXJvbCIsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUuY29tIiwiaWF0IjoxNzYxMDQ4MDAwLCJuYmYiOjE3NjEwNDgwMDAsImV4cCI6MTc2MTA0ODA2MCwicm9sZXMiOlsib3BzIl0sImF1ZCI6ImNsaSJ9.7lnyaIZ2OvfbUNtQdMAyO9MjBrRO2vGa1T5exNgfPh_44ERAa2lw2UfJeQYypVWzyxyK88yW0Nbl5MsE_roeQA\n");
+    t.push_str("dave eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3Vlci0xIiwidHlwIjoiSldUIn0.eyJzdWIiOiJkYXZlIiwiaXNzIjoiaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZS5jb20iLCJpYXQiOjE3NjEwNDgwMDAsIm5iZiI6MTc2MTA0ODAwMCwiZXhwIjoxNzYxMDU1MjAwLCJyb2xlcyI6WyJ2aWV3ZXIiXX0.-9t3IBVikvxH_ET3kLErAAu3RqloGcXxnUbvohKz8dQ\n");
+    t.push_str("frank eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3Vlci0xIiwidHlwIjoiSldUIn0.eyJzdWIiOiJmcmFuayIsImlzcyI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUuY29tIiwiaWF0IjoxNzYxMDQ4MDAwLCJuYmYiOjE3NjEwNDgwMDAsImV4cCI6MTc2MTA0ODAwMCwicm9sZXMiOlsib3BzIl0sImF1ZCI6ImNvbnNvbGUifQ.qc1q4EqIysy5c55cbaFXX4BBfJn9C73JHiPzYpj-7io\n");
+    v.push(DataFile { path: "issuer/out/tokens.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("issuer-signing-secret-2025\n");
+    v.push(DataFile { path: "issuer/secret.key".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("user,roles,ttl,aud,alg\n");
+    t.push_str("alice,admin|ops,3600,console,HS256\n");
+    t.push_str("bob,,600,console|cli,HS384\n");
+    t.push_str("carol,ops,60,cli,HS512\n");
+    t.push_str("dave,viewer,7200,,HS256\n");
+    t.push_str("erin,viewer,1800,console,RS256\n");
+    t.push_str("frank,ops,0,console,HS256\n");
+    v.push(DataFile { path: "issuer/users.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"encode with each HMAC algorithm\", \"ops\": [{\"op\": \"encode\", \"payload\": {\"sub\": \"alice\", \"admin\": true}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"alice\", \"admin\": true}, \"key\": \"kara-demo-secret\", \"algorithm\": \"HS384\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"alice\", \"admin\": true}, \"key\": \"kara-demo-secret\", \"algorithm\": \"HS512\"}, {\"op\": \"encode\", \"payload\": {}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"algorithm\": \"HS512\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"algorithm\": \"HS384\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": {\"$bytes\": \"00ff10e2809c\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"cl\\u00e9-secr\\u00e8te-\\u65e5\\u672c\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"bob\"}, \"key\": \"kara-demo-secret\", \"algorithm\": null}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS384\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS512\"], \"complete\": true}, {\"op\": \"decode\", \"token\": {\"ref\": 4}, \"key\": \"\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 9}, \"key\": {\"$bytes\": \"00ff10e2809c\"}, \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 10}, \"key\": \"cl\\u00e9-secr\\u00e8te-\\u65e5\\u672c\", \"algorithms\": [\"HS256\"]}]}\n");
+    t.push_str("{\"name\": \"payload values\", \"ops\": [{\"op\": \"encode\", \"payload\": {\"name\": \"Zo\\u00eb\", \"city\": \"\\u6771\\u4eac\", \"emoji\": \"\\ud83d\\ude42\", \"tab\": \"a\\tb\", \"nl\": \"x\\ny\", \"quote\": \"say \\\"hi\\\"\", \"apos\": \"it's\", \"both\": \"'\\\"\", \"slash\": \"a/b\\\\c\", \"ctl\": \"\\u0001\\u001f\\u007f\\u0085\", \"nbsp\": \"a\\u00a0b\", \"zw\": \"\\u200b\"}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"i\": 0, \"neg\": -7, \"big\": 123456789012345678901234567890, \"f\": 1.5, \"g\": 0.1, \"e\": 1e+16, \"small\": 1e-07, \"neg0\": -0.0, \"third\": 0.3333333333333333, \"whole\": 3.0, \"nan\": NaN, \"inf\": Infinity, \"ninf\": -Infinity}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"t\": true, \"f\": false, \"n\": null, \"list\": [1, \"two\", [3, {\"four\": 4}], []], \"obj\": {\"nested\": {\"deep\": {}}}, \"\": \"empty key\"}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"b\": 2, \"a\": 1, \"c\": {\"z\": 1, \"y\": 2}}, \"key\": \"kara-demo-secret\"}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 3}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"complete\": true}, {\"op\": \"encode\", \"payload\": [1, 2], \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": \"sub\", \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": null, \"key\": \"kara-demo-secret\"}]}\n");
+    t.push_str("{\"name\": \"datetime claims\", \"ops\": [{\"op\": \"encode\", \"payload\": {\"exp\": {\"$naive\": [2025, 10, 21, 13, 0, 0, 0]}}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"iat\": {\"$dt\": [2025, 10, 21, 12, 0, 0, 999999, 0]}, \"nbf\": {\"$dt\": [2025, 10, 21, 14, 0, 0, 0, 120]}, \"exp\": {\"$dt\": [2025, 10, 21, 8, 30, 0, 0, -330]}}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"exp\": {\"$naive\": [1969, 12, 31, 23, 59, 59, 0]}, \"iat\": {\"$naive\": [2000, 2, 29, 0, 0, 0, 0]}}, \"key\": \"kara-demo-secret\"}, {\"op\": \"encode\", \"payload\": {\"exp\": {\"$naive\": [2100, 3, 1, 0, 0, 0, 0]}, \"when\": \"not converted\"}, \"key\": \"kara-demo-secret\"}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761055200}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_exp\": false}}, {\"op\": \"decode\", \"token\": {\"ref\": 3}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}]}\n");
+    t.push_str("{\"name\": \"headers\", \"ops\": [{\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"kid\": \"2025-10\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"kid\": \"k1\", \"zeta\": 1, \"cty\": \"JWT\"}, \"sort_headers\": false}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"typ\": null}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"typ\": \"\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"typ\": \"at+jwt\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"alg\": \"HS512\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"HS384\", \"headers\": {\"alg\": \"\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"b64\": true}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"b64\": 0}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"x5u\": \"https://example.com/k\", \"jku\": \"\\u00e9\"}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"kid\": 7}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"kid\": null}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {\"alg\": 5}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"h\"}, \"key\": \"kara-demo-secret\", \"headers\": {}}, {\"op\": \"header\", \"token\": {\"ref\": 0}}, {\"op\": \"header\", \"token\": {\"ref\": 1}}, {\"op\": \"header\", \"token\": {\"ref\": 2}}, {\"op\": \"header\", \"token\": {\"ref\": 5}}, {\"op\": \"decode\", \"token\": {\"ref\": 5}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS512\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 6}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS384\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 7}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"complete\": true}]}\n");
+    t.push_str("{\"name\": \"algorithm choice\", \"ops\": [{\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"RS256\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"ES256K\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"EdDSA\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"hs256\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"HS1\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": null, \"algorithm\": \"none\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"\", \"algorithm\": \"none\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": \"kara-demo-secret\", \"algorithm\": \"none\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": {\"$bytes\": \"\"}, \"algorithm\": \"none\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": null}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": 42}, {\"op\": \"encode\", \"payload\": {\"sub\": \"a\"}, \"key\": [\"k\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": null, \"algorithms\": [\"none\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"algorithms\": [\"none\"], \"options\": {\"verify_signature\": false}}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"options\": {\"verify_signature\": false}}, {\"op\": \"algorithms\", \"names\": [\"HS256\", \"none\", \"RS256\", \"PS512\", \"ES521\", \"HS1\", \"\", 5, null]}, {\"op\": \"algorithms\", \"allowed\": [\"HS256\", \"HS512\", \"RS256\", \"nope\"], \"names\": [\"HS256\", \"HS384\", \"RS256\", \"nope\"]}, {\"op\": \"jws_encode\", \"payload\": \"{}\", \"key\": \"kara-demo-secret\", \"algorithm\": \"HS384\", \"allowed\": [\"HS256\"]}, {\"op\": \"jws_encode\", \"payload\": \"{}\", \"key\": \"kara-demo-secret\", \"allowed\": [\"HS256\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"allowed\": []}]}\n");
+    t.push_str("{\"name\": \"signature checks\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"other-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS384\", \"HS512\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": []}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": \"HS256\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": \"xHS256x\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"wrong\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": 0}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"wrong\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": \"no\"}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4A\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4AA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K/5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnK!LOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiJkIn0.lR5z5P7EDRkhTkgaZLRpjRnlAbqvQdxJFbUKPntz5ItcNAOvWykAqvPScX8R4mqP\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\", \"HS384\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiJkIn0.lR5z5P7EDRkhTkgaZLRpjRnlAbqvQdxJFbUKPntz5ItcNAOvWykAqvPScX8R4mqP\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkIn0.q7T1XvtefvAVIOh7V0BPt7DpLpfn8-6qvYscSfvNy6uN-PQLFhA8IGcYxsJLwB6Nw_SqcpqQqYipKtrbShU_zw\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJ0eXAiOiJKV1QifQ.eyJzdWIiOiJkIn0.SJ6dWgeU6cu677EZCdOPKuBhZ8tC2YxlSqL2LqnMIMI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiIifQ.eyJzdWIiOiJkIn0.PUl03dhsLAmivagxCynhuerZLkOR-m26gLE1zgbfO0w\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOm51bGx9.eyJzdWIiOiJkIn0.hFuvzLNxiLF7ywZYO4X8oJRLNv2wJKgMIxSsZh3kOko\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOjB9.eyJzdWIiOiJkIn0.X5NLcBiHE91NwSsJTV7TDodJYysXi3wXQ-zg9aEW0Uc\", \"key\": \"kara-demo-secret\", \"algorithms\": [0]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOjF9.eyJzdWIiOiJkIn0.uo1yIgY1DbFuPXTojEYXbuXNqX265EFCnpMfFpTKsUk\", \"key\": \"kara-demo-secret\", \"algorithms\": [true]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJYWDI1NiJ9.eyJzdWIiOiJkIn0.GXudGMuCzuyC7_nulee1K_CFqybD6JwlH6LRvXR_X0w\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"XX256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJkIn0.oZkgcNDfqZDTSZpkGcEhiGHKNu_bilE6BEUGg8O3lHE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"RS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJub25lIn0.eyJzdWIiOiJkIn0.HxdOj6_IGIzvFobsjfOKXBazjT2D6stl-6Ej9u20GYk\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"none\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkIn0.CUgsXfALssxAhGMvQbAgtg90sbABAHrLx7lsjnCi8uw\", \"key\": \"\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkIn0.CUgsXfALssxAhGMvQbAgtg90sbABAHrLx7lsjnCi8uw\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": 99, \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"-----BEGIN PUBLIC KEY-----\\nMFkw\\n-----END PUBLIC KEY-----\\n\", \"algorithms\": [\"HS256\"]}]}\n");
+    t.push_str("{\"name\": \"malformed tokens\", \"ops\": [{\"op\": \"decode\", \"token\": \"\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"abc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"a.b\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"a.b.c\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"..\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"...\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"a..\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \".b.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJ.eyJ.sig\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9..x\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"!!!.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"W10.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"InN0ciI.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"NDI.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"bnVsbA.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"e.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"e30.e.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"e30.e30.e\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"e30.e=e.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9 .e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiJ9\\n.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"  eyJhbGciOiJIUzI1NiJ9.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"\\u00e9.e30.\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": 5, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": null, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"$bytes\": \"65794a68624763694f694a49557a49314e694973496e523563434936496b705856434a392e65794a7a645749694f694a6a59584a7662434a392e4b5f356433536e56764855464b69716145754d4962376f5243596e457355334c7447694e676e4b4c4f6934\"}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}]}\n");
+    t.push_str("{\"name\": \"header json\", \"ops\": [{\"op\": \"header\", \"token\": \".e30.\"}, {\"op\": \"header\", \"token\": \"IA.e30.\"}, {\"op\": \"header\", \"token\": \"ew.e30.\"}, {\"op\": \"header\", \"token\": \"fQ.e30.\"}, {\"op\": \"header\", \"token\": \"Ww.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGci.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOg.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJIUzI1NiI.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJIUzI1NiIsfQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciICJIUzI1NiJ9.e30.\"}, {\"op\": \"header\", \"token\": \"e2FsZzoiSFMyNTYifQ.e30.\"}, {\"op\": \"header\", \"token\": \"eydhbGcnOidIUzI1Nid9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJIU1x4In0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJcdTEyIn0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJcdTEyZzQifQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhbGciOiJhCWIifQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxfXt9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxfSB4.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjpbMSxdfQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjpbMSAyXX0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjpbMSwsMl19.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjp0cnV9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjpudWx9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjotfQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjowMX0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxLn0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjouNX0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjorMX0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxZX0.e30.\"}, {\"op\": \"header\", \"token\": \"ewogICJhIjogMSwKICAiYiI6ID8KfQ.e30.\"}, {\"op\": \"header\", \"token\": \"CgogIHsiYSI6CiB4fQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoidW50ZXJtaW5hdGVk.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoiXA.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoiXHUwMGU5XHVkODNkXHVkZTQyIn0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjpOYU4sImIiOi1JbmZpbml0eSwiYyI6SW5maW5pdHl9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxLCJhIjoyLCJiIjozLCJhIjo0fQ.e30.\"}, {\"op\": \"header\", \"token\": \"IHsiYSIgOiBbIDEgLCB7IH0gLCAieCIgXSB9IA.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxZTQwMCwiYiI6LTFlNDAwLCJjIjotMH0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAsImIiOi0wLjAsImMiOjFFMiwiZCI6Mi41MH0.e30.\"}, {\"op\": \"header\", \"token\": \"_w.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoi6SJ9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoi4oIifQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoi8J-YIn0.e30.\"}, {\"op\": \"header\", \"token\": \"77u_e30.e30.\"}, {\"op\": \"header\", \"token\": \"77u__3t9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoiwK8ifQ.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoi9JCAgCJ9.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoi4oKsIn0.e30.\"}, {\"op\": \"header\", \"token\": \"eyJhIjoigCJ9.e30.\"}]}\n");
+    t.push_str("{\"name\": \"payload json\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..D8xiWfHAmpfUIAZgWe1K54o_y5MpyXezwPxAmG8GIk8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.IA.ZU0MFIcD40P-wk3LxQq98M8yMLUGiKEEw1UnPjHDu08\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ew.NQcc5urr2tYxOcpDkkQSDrT9MI7COF0t4V0newd3Z3k\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fQ.sXArPzSBf1lk9jhDHDIeUxwp6uoQAts1kadBc1ZEjtI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.Ww.mM-sfPuKjqxjK5xtCcNI7bWXE8HUP9i7VlzecMU6f1o\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGci.PzZEuQw4-zRNY8VxVRtyYJfH1DZQFX1ICZ2h-z7p4oA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOg.cBlfswq5yrr6umS0Q5U6DGYIHdwAwQFhsGLmxzWJViI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJIUzI1NiI.1xHFmf2wTixCIJeTb1N7AWLgNqAloNUJD0fQ0_WCbeQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJIUzI1NiIsfQ.a-r-tRHYVm1Fn5AmDmUl5ARWX89AU_X_1ahkYc56Iz8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciICJIUzI1NiJ9.RZO7ExlkKvWeZlaQ1ddUw3nHWq1jaOqKIidKCjvg5H8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e2FsZzoiSFMyNTYifQ.7U-706ld4ZNQryH9pR1mQ17ckeVJEpO5MeXqD7zf0b0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eydhbGcnOidIUzI1Nid9.BhBeMk73YzBdxmNTIIaMVTdGgx54nxI_qSnvczTuKFg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJIU1x4In0.6pz9mqYL5QZ-__VIKCWZEIbLGxPlIvFepVwu3LhKBHY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJcdTEyIn0.O1Jl_qPQkScvg9oPq7tZa0TqQp8qiTKH7HgdjoGLkoY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJcdTEyZzQifQ.KhE7Oap3RNmgd3M6oZ3JcO2DoDb66YbtpV0U11zaHjQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJhCWIifQ.Ubd7c1uftNje_0oY2WDZBKBJvS2VGsgn5yogUxql7d8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxfXt9.lXasqjBvjypxfRsjig2pFnds3_QCl4s0xkHx_7HSw40\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxfSB4.EA8UNtHQwYId8NY1g9fG9X_Q-4wWsjjR9VM8e9mNPho\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjpbMSxdfQ.azaM4XI_HVIl48s2zhgSwF7NRfPbvUirHtBkUhmX_nM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjpbMSAyXX0.PRmZ7mNtp5tWO-p-UmC7FI-Hx8U6RIUlnmC-jvZm3Gg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjpbMSwsMl19.4Rh9qSisz4xOIBr_GO5b7Jheck9OMgUaTFQZA1boDYo\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjp0cnV9.4UDhsBPBrC1QhaWy2EiDveOjZIJedBQhlOPcTMgzrHM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjpudWx9.XdwdBBuHK4gGLiSeAYBi5nvh8MUisj2B4WeUrLzz5FI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjotfQ.x8ChGW-2d7XawjQ4DunIx_Iaz6JoKM6wVsfVjYhRu4A\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjowMX0.h9zmIdPRlppPRDCneqphQhNbci_aMg2rpM4bw4mJfAQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxLn0.sC3HAexCrjUKNoxsHJrbIyUFRH0_bboQgxoMN887tPQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjouNX0.ooPs5kHXYuXan6C9dyP3WxXmSd0lUE4_e3YjNCcb-OY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjorMX0.9TplZHyJX4LFtRSyfltLuW-AcJfGMO1gyc4u-eJHYl0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxZX0.rYl2kLr-Uod6RRD2ASUqFHZcXPKM1_PX6DNi2H8i03M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJhIjogMSwKICAiYiI6ID8KfQ.mFfOfjf9Bxet7L2scJbzPFzCi-rwRigLG1jIvUy095M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.CgogIHsiYSI6CiB4fQ.-fQRcWFrNln0xmFJsKupunWtf7lqeamGS4x6YJzmrAQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoidW50ZXJtaW5hdGVk.I_IgMlCBa32jVgtGKazBocZselZq4ITfQoBEKWaKbuY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoiXA.pq7LzLGggKhwqpsj2k6dqB9z7UHCG27VyGzbiBughlE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoiXHUwMGU5XHVkODNkXHVkZTQyIn0.3drg_5rjxSK01rLLgdcqvRl6CKSLJDLw_oQSCb4dwiE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjpOYU4sImIiOi1JbmZpbml0eSwiYyI6SW5maW5pdHl9.J5plPnQfKvQv0Kf35r9ZX1GtI3G2Oaqq_jgQgvAFRkw\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxLCJhIjoyLCJiIjozLCJhIjo0fQ.MpaWkpnvYUTaluvznjtVIMFxu9MHbZpNXPYKdauKvGI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.IHsiYSIgOiBbIDEgLCB7IH0gLCAieCIgXSB9IA.PFJJuigsQbUBEZ6PUHyNWBtiXT6aOlFqvKrmcC4Nddk\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxZTQwMCwiYiI6LTFlNDAwLCJjIjotMH0.0kDntgLBjN_tHipQIRfkaOZFgRibwq64jqxcLO5RfSc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAsImIiOi0wLjAsImMiOjFFMiwiZCI6Mi41MH0.BDONpWvhZIFP4Dyvtke_h8ythMxyB2HYLsryzdoGt4U\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.WzEsMl0.3RzRBUzqS4y_IxKDU3ZxY4D0Ei6me9SNx-G0zYZKG-s\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.Ingi.65Dk5Z8_VCUUWOv4sQP5Q1Os32zFwV1Ck7mUNXRELkc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.Nw.Ti__O7gqMP2Lq_RqQUGy4_L_aHsXxyQPz4LKacVx9lc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9._w.AS6YiqaVSE2vCJFT3Mcqz4qNuHZO97BBalz9ISnLHB8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoi6SJ9.PltK2NiC6jzqG_I1_wHcf0-rlqIXJOKqrfEEMtT1rsM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoi4oIifQ.0hPV9ydsPKLpWXFmrKlEqiew0h5o2q63Dd3Zp8TtFug\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoi8J-YIn0.2sou4V3IMp5T1wieb-lQwHK_4l0OTMWrt_H6xkInfFI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.77u_e30.VtcwjhA53S2r1JUJ8EZC4WuUav8XliKsf2QLw3G-b0w\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.77u__3t9.p6gzEDvAnJ7HVwwnTc028Vq9Q-R9vXG1BZt666R9JZQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoiwK8ifQ.b4BMeZSWpKOsq_SZyp9Qoj0ZZhNU2stYLxwYP28KVvY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoi9JCAgCJ9.gh_mm3u6wGD58W8vyDgRFr49iyU7HourAOVtMQg78VM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoi4oKsIn0.kMftUQdpKvgLPn3rW2TLpCsrcvv3UxPAcqHCebDFGWY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhIjoigCJ9.Nmv-Eq-dAAYm8dwRO6gmxV5VLXSX65LEWZ1pAvtHxN8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.bm90IGpzb24.Ji5jLVnwGE9UNjcLjMAlrVJB5THyAL9eWeU-zhfD3bw\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"complete\": true, \"options\": {\"verify_signature\": false}}]}\n");
+    t.push_str("{\"name\": \"expiry and not-before\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDF9.nF4-HxE3FzOFjGE6gq-UrwM-t61Wqxp6_tVMsvVRj8M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDB9.K8vWOBs1x5oeK5GNX6AtsPKT4v2Q4RTEfZBcTLW3wkI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTl9.gqYIja3qmVSpUs96Abqw4xjNzqgn1_aD9Nh7vz27uBQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5NzB9.ZNazLYsK7RIBKxbxIulxdQWhWAT0fSgNmPe8L5xH2bQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": 30}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5NzB9.ZNazLYsK7RIBKxbxIulxdQWhWAT0fSgNmPe8L5xH2bQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": 29.5}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5NzB9.ZNazLYsK7RIBKxbxIulxdQWhWAT0fSgNmPe8L5xH2bQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": {\"$td\": 31}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDAuOX0.-MkCdsyvwvZFthtNBeN5JsqSH9q_D5JsP8fGOFOLyTY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDEuOX0.uOCgDwQm_5n2pa3YFkiGsjSS7PodJeNfGPu0aX3ZKFI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIxNzYxMDQ4MDEwIn0.F1DUvsoy6t54C0XoczKZP0RNpGl1GZJY39qVxgz3olA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIgMTc2MTA0ODAxMCAifQ.fG0L-ZHuSND6BJh9MxMzJJwt9kearh_RxJef15hdlpE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIxXzc2MV8wNDhfMTAwIn0.Y3IHs-lagyg2Ei2F50owKCEtV-aMeGg4PqswxgurDxc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIrMTc2MTA0ODAxMCJ9.gnHR0lbQTjdL66vlUdlL8N-FUtB3Qy0l0tk8gAf1mkY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIxNzYxMDQ4MDEwLjAifQ.p6JqoZBVlEhJKJEN2djH44gUk0ir-y8g9kc-mquqpl0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiJzb29uIn0.DcfNtyTiKQkBjCaw1sxUOatnrKQJ9G9rph9feu_lMRU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIifQ.1snC0AQz4hoM6aN13tsk0QNdFx2k8Xh8bXhcu88Jpeg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOm51bGx9.eRNsEHOwzV7cpki0H5MxQW4A795R9XeHduJE3oKsKD4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOlsxXX0.NU0Sq4ZmTqWdRfi4ffJXX-ScMBTLTiHu7pMtCaWDVWM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOnsiYXQiOjF9fQ._DtyaaCl_pRWM7u7UxfMW_fniIo9Y6vRam7kcdhXlAs\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOnRydWV9.YQo_U0XSiffPJ_uwmfTncIkS8nl1vf2NxMYHIMuT5M4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOmZhbHNlfQ.lX4Zgmu0Ii_oOyReBSKZdOtRAzpcjYhfV2ELOqMGh_o\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOk5hTn0.ztuc5OcCfvO8HQacTBZlhiK3hFf2t8csETrDBFC8LnY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOkluZmluaXR5fQ.70G0hkNx1-CvCvdPJmw1qkBxJNaEbYNvTfPysQm76-w\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOi1JbmZpbml0eX0.RwafwQMXHCN8iCI3DyrIplsTgmjkkto0Aqpa2MoZP9w\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjFlMzAwfQ.SQWG7CeHa77__PmZXlzyCDhcvnfUo9T2vfD2pncmTFA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5fQ.YGH6PA5-wOx5GtxmIZTq2xP7Qngj4NhO6HKW3EW-FgE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOi05OTk5OTk5OTk5OTk5OTk5OTk5OTk5OX0.xjYC_drf4UgdNEXhREFDVtXV4yx5rFQ2iK69ts7bfm0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTl9.gqYIja3qmVSpUs96Abqw4xjNzqgn1_aD9Nh7vz27uBQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_exp\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOiJzb29uIn0.DcfNtyTiKQkBjCaw1sxUOatnrKQJ9G9rph9feu_lMRU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_exp\": 0}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwMDB9.um6LykKV_BkNCtFRiRO1IiyfyhKpUQtwEG5UsqPZjn8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwMDF9.FBqPEjf1vwNnqMWjW19vkbk-RAUIBuQ-eB7t_uF3XTA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwNjB9.vJ1oGgmIpUofyZ9OJSi3BX6LEumHXUioGLYdFXwifWE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": 60}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwNjF9.dMrwmbN_VliheSUXab-NOFZMYvcdpThE2O8-2X_xcIE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": 60}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOiJsYXRlciJ9.72znKH-zGYE6DKhOmZOg561X5JQmOcZA1RlG_D64K1o\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwMDF9.FBqPEjf1vwNnqMWjW19vkbk-RAUIBuQ-eB7t_uF3XTA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_nbf\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NjEwNDgwMTAsImV4cCI6MTc2MTA0Nzk5MH0.ULkmsCmVP-XyfYnhtq6jZ-AoG2JVPUywsDWTfLu-_Ck\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTAsIm5iZiI6MTc2MTA0ODAxMH0.z1smGHVkKZaL34vjfcTvboOojP4MxnbSiHjYXRGueEU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDF9.nF4-HxE3FzOFjGE6gq-UrwM-t61Wqxp6_tVMsvVRj8M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000.5}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDF9.nF4-HxE3FzOFjGE6gq-UrwM-t61Wqxp6_tVMsvVRj8M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048001.25}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDF9.nF4-HxE3FzOFjGE6gq-UrwM-t61Wqxp6_tVMsvVRj8M\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": -1}]}\n");
+    t.push_str("{\"name\": \"issued at\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDB9.wWkfTjEY5Kd29m_ojh2QYaX4xTQ2tzFU4ZrAJCcMgNA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDF9.MeanZWgvxQnblAuFSvIyKfEGciBZQDasuL56hnNV3ZM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDV9.yXDgMsy8OVhMz-MCZnnpUaKAKrcSmkmSBYszmMp61rk\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"leeway\": 5}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiJ5ZXN0ZXJkYXkifQ.EQ-a6o5xZKLxWSItV1BbCHJI7j5w4gELn1H9Cin8MnA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiIxNzYxMDQ3OTAwIn0.VW8QoOwqQKwHqVLXEafwZ70gomjIn3iRBMPULsE-ZRw\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDAuNzV9.3RHTJjcO1eEC6XPq4BpuzpERe_enuQwkHw9NCWqKy7Y\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOk5hTn0.nTNL7c-FUfTkb-i6T4d536maj-nLeCU2uF7urkespcU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOm51bGx9.Aag4a2MadHs2B0d5FmgFCgsnpm7hnJPxQbZ8xOyYOLk\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDF9.MeanZWgvxQnblAuFSvIyKfEGciBZQDasuL56hnNV3ZM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_iat\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjEwNDgwMDksIm5iZiI6MTc2MTA0ODAwOSwiZXhwIjoxNzYxMDQ3OTkxfQ.uexSxwzZVkbSy6_wQTa_LxXs4apeBVMB1_EB8J0zTMI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}]}\n");
+    t.push_str("{\"name\": \"audience\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIifQ.ZnE-L0LsupVoJ9ynAcEUaXzQfFdM5zzwxHPWQ0NFid0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOltdfQ.b_6-ctpvhmTWEyWZxruS2jP5G_7Xn4TwXJ9Gvk08Dhw\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOm51bGx9.BuNkPGrUBdIJEID175yXAl_TyK8iZIWUeJWrY_2pL2U\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOjB9.sM8ntrZq6t3UvcZZ8mo_RjTG9XKstKEMHZHuKeVtFbA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsid2ViIiwiYXBpIl19.WGNGftpZYAKmIyYiZZMm71EwQpD5H3nXNWWsgDehXPY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsid2ViIiwiYXBpIl19.WGNGftpZYAKmIyYiZZMm71EwQpD5H3nXNWWsgDehXPY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": [\"mobile\", \"api\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsid2ViIiwiYXBpIl19.WGNGftpZYAKmIyYiZZMm71EwQpD5H3nXNWWsgDehXPY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": [\"mobile\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsid2ViIiwiYXBpIl19.WGNGftpZYAKmIyYiZZMm71EwQpD5H3nXNWWsgDehXPY\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": []}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsid2ViIiw3XX0.j2EaaxIwAE4mIWY2pnB0haKYvmxIVpdpNdy7ZpXqGzE\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOnsid2ViIjoxfX0.hTiSwYdeu22aWrKxqPEfagwWPrj_SfT24gFKntluQnc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOjd9.zrS3iagx2-n9gi64W-OMCzqz5i33FlVhQ_-uMnxYuRQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"7\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGl2MiJ9.oR4KCIn8jy5e8n4czxW0cRRO5Yd_cdUhEpIiiFS9Gww\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.GXnozRKjU_HUSDzBr3wJ6qYRHAV3JXt4KvmUHwqt1Xo\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIifQ.ZnE-L0LsupVoJ9ynAcEUaXzQfFdM5zzwxHPWQ0NFid0\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": 7}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": null}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": {\"api\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\", \"options\": {\"strict_aud\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\", \"options\": {\"strict_aud\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiYXBpIl19.9YtWzLNhWfZ_BHb-zrTgEP-US-linfOSGa7g2mqgO1s\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"api\", \"options\": {\"strict_aud\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": [\"api\"], \"options\": {\"strict_aud\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\", \"options\": {\"verify_aud\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\", \"options\": {\"verify_signature\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhcGkifQ.uPWvA2J0og30SqWSp67Bl7dthX8hYyMKeSdUE5wHkO8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"audience\": \"web\", \"options\": {\"verify_signature\": false, \"verify_aud\": true}}]}\n");
+    t.push_str("{\"name\": \"issuer, subject and id\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20ifQ.UhzJWaNwcqMLf9TV6zNobWQFqBVU4xQZm0C-c5I9FM4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": \"https://auth.example.com\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20ifQ.UhzJWaNwcqMLf9TV6zNobWQFqBVU4xQZm0C-c5I9FM4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": \"https://auth.example.com/\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20ifQ.UhzJWaNwcqMLf9TV6zNobWQFqBVU4xQZm0C-c5I9FM4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": [\"https://a.example.com\", \"https://auth.example.com\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20ifQ.UhzJWaNwcqMLf9TV6zNobWQFqBVU4xQZm0C-c5I9FM4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": [\"https://a.example.com\"]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20ifQ.UhzJWaNwcqMLf9TV6zNobWQFqBVU4xQZm0C-c5I9FM4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": []}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.GXnozRKjU_HUSDzBr3wJ6qYRHAV3JXt4KvmUHwqt1Xo\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": \"https://auth.example.com\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOjF9.fGBsT5pekbWXMev8c4TlhAh0iENyf1pqSn8e0Ll74qg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": [1.0]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOnRydWV9.vu0JXPJxGYHuNPbzURwhtdH9jaGv9gVimJLQcXq6irA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": [1]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOlsiYSJdfQ.KvFrMSmOXLW020wX9OokH9FvhJg_Vu6E340x3IHNCEM\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": [[\"a\"]]}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOm51bGx9.Gc0cFJy-db8rlX5fJUSrKQ3m2i9-322XiMXkBJPlyAk\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"issuer\": \"x\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhbnlvbmUifQ.VBJsvSZGhhdNprnOrEembBwDhuqO-_Icy93SRQal6eA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1LTEifQ.WbsypdTisa5v4_AS6EPHeavHL2-dSABdT72Gm1zegrc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"subject\": \"u-1\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1LTEifQ.WbsypdTisa5v4_AS6EPHeavHL2-dSABdT72Gm1zegrc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"subject\": \"u-2\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjQyfQ.8BcphfZEdnzVo3pF15K9in3YgS_4wOVofhQ1CYmnegA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOm51bGx9.sHAZvhBTQqomGBFCpem8xlh7Pq_3MW4FiVJGYGybwXU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"subject\": \"u-1\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwZjhlIn0.cBvxUAj689Gwv3x9Ug7W72ISBK5UAEd87SZuvZHOSko\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"subject\": \"u-1\"}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOjE3fQ.wMoxU9uKfKQJKZla_o0FAkiwTqvGcarb7VkaqmJHsBU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOm51bGx9.7YGft_Au1FqyYRuIjR8aVIB9pX-ITVrhuzOt2SfFaOo\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjQyLCJqdGkiOjE3fQ.220SlwEqtR3i8MXOqw0x1uJHO4GekhOQTTA4rYhdRoc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_sub\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjQyLCJqdGkiOjE3fQ.220SlwEqtR3i8MXOqw0x1uJHO4GekhOQTTA4rYhdRoc\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_sub\": false, \"verify_jti\": false}}]}\n");
+    t.push_str("{\"name\": \"required claims\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDksInN1YiI6ImEifQ.C9LqxltPsbQlz5el5sFwIOGwS9Ru6dGz_aNHnN5xeVA\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": [\"exp\", \"sub\"]}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.tkZU6ker6uwlnKRga-79Fx8i6e_x4oQVk8eml9gpOXg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": [\"exp\", \"sub\"]}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOm51bGwsInN1YiI6ImEifQ.OiPKZyiHPh_Ke3OXtbB5vKMN1L1dztS_rmSvOP5Eh_I\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": [\"exp\"]}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDl9.rS5awIAAjZBwVnCiaMmVsTpyzlR-SwQKM5Ye2Uvbeb8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": [\"exp\", \"iat\", \"nbf\"]}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDgwMDl9.rS5awIAAjZBwVnCiaMmVsTpyzlR-SwQKM5Ye2Uvbeb8\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": \"exp\"}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlIjoxLCJ4IjoyLCJwIjozfQ.H1mxaNnRFhUzFfjMAYDv2vj2PiVaeT9Aphj8r8JAqLU\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": \"exp\"}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.tkZU6ker6uwlnKRga-79Fx8i6e_x4oQVk8eml9gpOXg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": []}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.tkZU6ker6uwlnKRga-79Fx8i6e_x4oQVk8eml9gpOXg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"require\": [\"sub\", \"sub\"]}}]}\n");
+    t.push_str("{\"name\": \"decoder options\", \"ops\": [{\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTl9.gqYIja3qmVSpUs96Abqw4xjNzqgn1_aD9Nh7vz27uBQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"instance\": {\"verify_exp\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTl9.gqYIja3qmVSpUs96Abqw4xjNzqgn1_aD9Nh7vz27uBQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"instance\": {\"verify_exp\": false}, \"options\": {\"verify_exp\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.tkZU6ker6uwlnKRga-79Fx8i6e_x4oQVk8eml9gpOXg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"instance\": {\"require\": [\"exp\"]}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.tkZU6ker6uwlnKRga-79Fx8i6e_x4oQVk8eml9gpOXg\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"instance\": {\"require\": [\"exp\"]}, \"options\": {\"require\": []}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjF9.g5y_VHCZH5afY2QMdHsN97aFrQONfOjoQjzHvkH7atI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"instance\": {\"verify_signature\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjF9.g5y_VHCZH5afY2QMdHsN97aFrQONfOjoQjzHvkH7atI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": false}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjF9.g5y_VHCZH5afY2QMdHsN97aFrQONfOjoQjzHvkH7atI\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": false, \"verify_exp\": true}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiJiYWQifQ.gMSgSyHW_EslpWROH8etj1E5zXo-uBzIM21dE8CM6Ic\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": false, \"verify_iat\": 1}}, {\"op\": \"decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwNDc5OTl9.gqYIja3qmVSpUs96Abqw4xjNzqgn1_aD9Nh7vz27uBQ\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"now\": 1761048000, \"options\": {\"verify_exp\": \"\", \"unknown_option\": true}}]}\n");
+    t.push_str("{\"name\": \"raw JWS payloads\", \"ops\": [{\"op\": \"jws_encode\", \"payload\": \"hello world\", \"key\": \"kara-demo-secret\"}, {\"op\": \"jws_encode\", \"payload\": \"\", \"key\": \"kara-demo-secret\", \"algorithm\": \"HS512\"}, {\"op\": \"jws_encode\", \"payload\": \"{\\\"a\\\":1}\", \"key\": \"kara-demo-secret\", \"headers\": {\"cty\": \"json\"}}, {\"op\": \"jws_encode\", \"payload\": \"line1\\nline2 \\u2713\", \"key\": \"kara-demo-secret\"}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS512\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 3}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0, \"seg\": 1, \"value\": \"aGVsbE8gd29ybGQ\"}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0, \"seg\": 1, \"value\": \"aGVsbE8gd29ybGQ\"}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"options\": {\"verify_signature\": false}}]}\n");
+    t.push_str("{\"name\": \"detached payloads\", \"ops\": [{\"op\": \"jws_encode\", \"payload\": \"{\\\"amount\\\":100}\", \"key\": \"kara-demo-secret\", \"detached\": true}, {\"op\": \"jws_encode\", \"payload\": \"{\\\"amount\\\":100}\", \"key\": \"kara-demo-secret\", \"headers\": {\"b64\": false, \"crit\": [\"b64\"]}}, {\"op\": \"encode\", \"payload\": {\"amount\": 100}, \"key\": \"kara-demo-secret\", \"headers\": {\"b64\": false}}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"{\\\"amount\\\":100}\"}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"{\\\"amount\\\":999}\"}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 0}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"]}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 1}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"{\\\"amount\\\":100}\"}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"{\\\"amount\\\":100}\"}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"[100]\"}, {\"op\": \"jws_decode\", \"token\": {\"ref\": 2, \"seg\": 1, \"value\": \"ignored\"}, \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"{\\\"amount\\\":100}\"}, {\"op\": \"jws_decode\", \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYXJvbCJ9.K_5d3SnVvHUFKiqaEuMIb7oRCYnEsU3LtGiNgnKLOi4\", \"key\": \"kara-demo-secret\", \"algorithms\": [\"HS256\"], \"detached\": \"unused\"}, {\"op\": \"header\", \"token\": {\"ref\": 0}}]}\n");
+    t.push_str("{\"name\": \"JWKs\", \"ops\": [{\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"kid\": \"gw-1\", \"use\": \"sig\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"HS512\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"HS512\"}, \"algorithm\": \"HS384\"}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}, \"algorithm\": \"HS999\"}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"none\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": 12}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"a\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"oct\", \"k\": \"+/==\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"RSA\", \"n\": \"0vx7\", \"e\": \"AQAB\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"EC\", \"crv\": \"P-384\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"EC\", \"crv\": \"P-999\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"EC\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"OKP\", \"x\": \"11qY\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"OKP\", \"crv\": \"Ed448\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"OKP\", \"crv\": \"Ed25519\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"OCT\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}, {\"op\": \"jwk\", \"data\": {\"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"note\": \"it's \\\"quoted\\\"\", \"n\": null, \"t\": true, \"f\": 1.5}}, {\"op\": \"jwk\", \"data\": {\"kty\": \"RSA\"}, \"algorithm\": \"HS256\"}, {\"op\": \"jwk\", \"data\": \"{\\\"kty\\\":\\\"oct\\\",\\\"k\\\":\\\"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\\\",\\\"kid\\\":\\\"from-json\\\"}\"}, {\"op\": \"jwk\", \"data\": \"{\\\"kty\\\":\\\"oct\\\",\\\"k\\\":\"}, {\"op\": \"jwk\", \"data\": \"[1]\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"jwk-user\"}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"HS512\"}}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"jwk-user\"}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}}, {\"op\": \"encode\", \"payload\": {\"sub\": \"jwk-user\"}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}, \"algorithm\": \"HS384\"}, {\"op\": \"encode\", \"payload\": {\"sub\": \"jwk-user\"}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}, \"algorithm\": \"none\"}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\", \"alg\": \"HS512\"}}}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}}, {\"op\": \"decode\", \"token\": {\"ref\": 0}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}, \"algorithms\": [\"HS512\"]}, {\"op\": \"decode\", \"token\": {\"ref\": 2}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}}}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"Z2F0ZXdheS1rZXktb25lLTMyLWJ5dGVzLWxvbmchISE\"}, \"$alg\": \"HS256\"}}, {\"op\": \"decode\", \"token\": {\"ref\": 1}, \"key\": {\"$jwk\": {\"kty\": \"oct\", \"k\": \"b3RoZXI\"}}}]}\n");
+    t.push_str("{\"name\": \"HMAC JWK conversion\", \"ops\": [{\"op\": \"to_jwk\", \"key\": \"kara-demo-secret\"}, {\"op\": \"to_jwk\", \"key\": \"kara-demo-secret\", \"as_dict\": true}, {\"op\": \"to_jwk\", \"key\": \"\"}, {\"op\": \"to_jwk\", \"key\": \"\\u00e9?>\"}, {\"op\": \"to_jwk\", \"key\": {\"$bytes\": \"fbff00\"}}, {\"op\": \"to_jwk\", \"key\": 5}, {\"op\": \"from_jwk\", \"jwk\": \"{\\\"kty\\\": \\\"oct\\\", \\\"k\\\": \\\"a2FyYS1kZW1vLXNlY3JldA\\\"}\"}, {\"op\": \"from_jwk\", \"jwk\": {\"kty\": \"oct\", \"k\": \"-_8A\"}}, {\"op\": \"from_jwk\", \"jwk\": {\"kty\": \"RSA\", \"k\": \"AA\"}}, {\"op\": \"from_jwk\", \"jwk\": {\"k\": \"AA\"}}, {\"op\": \"from_jwk\", \"jwk\": {\"kty\": \"oct\"}}, {\"op\": \"from_jwk\", \"jwk\": \"{\\\"kty\\\": \\\"oct\\\", \\\"k\\\": 5}\"}, {\"op\": \"from_jwk\", \"jwk\": \"not json\"}, {\"op\": \"from_jwk\", \"jwk\": \"[]\"}, {\"op\": \"from_jwk\", \"jwk\": \"\\\"oct\\\"\"}, {\"op\": \"from_jwk\", \"jwk\": 7}, {\"op\": \"from_jwk\", \"jwk\": {\"kty\": \"oct\", \"k\": \"abcde\"}}]}\n");
+    t.push_str("{\"name\": \"JWK sets\", \"ops\": [{\"op\": \"jwks\", \"data\": {\"keys\": [{\"kty\": \"oct\", \"kid\": \"a\", \"k\": \"a2V5LWE\"}, {\"kty\": \"oct\", \"kid\": \"b\", \"k\": \"a2V5LWI\", \"alg\": \"HS384\"}, {\"kty\": \"oct\", \"k\": \"bm8ta2lk\"}, {\"kty\": \"bogus\", \"kid\": \"c\"}, {\"kty\": \"oct\", \"kid\": \"a\", \"k\": \"ZHVwLWE\"}, {\"kty\": \"oct\", \"kid\": \"x\", \"alg\": \"HS999\", \"k\": \"AA\"}]}, \"kids\": [\"a\", \"b\", \"c\", \"x\", \"zz\", null, \"it's\"]}, {\"op\": \"jwks\", \"data\": \"{\\\"keys\\\": [{\\\"kty\\\": \\\"oct\\\", \\\"kid\\\": \\\"a\\\", \\\"k\\\": \\\"a2V5LWE\\\"}, {\\\"kty\\\": \\\"oct\\\", \\\"kid\\\": \\\"b\\\", \\\"k\\\": \\\"a2V5LWI\\\", \\\"alg\\\": \\\"HS384\\\"}, {\\\"kty\\\": \\\"oct\\\", \\\"k\\\": \\\"bm8ta2lk\\\"}, {\\\"kty\\\": \\\"bogus\\\", \\\"kid\\\": \\\"c\\\"}, {\\\"kty\\\": \\\"oct\\\", \\\"kid\\\": \\\"a\\\", \\\"k\\\": \\\"ZHVwLWE\\\"}, {\\\"kty\\\": \\\"oct\\\", \\\"kid\\\": \\\"x\\\", \\\"alg\\\": \\\"HS999\\\", \\\"k\\\": \\\"AA\\\"}]}\", \"kids\": [\"b\"]}, {\"op\": \"jwks\", \"data\": {\"keys\": []}}, {\"op\": \"jwks\", \"data\": {}}, {\"op\": \"jwks\", \"data\": {\"keys\": {\"kty\": \"oct\"}}}, {\"op\": \"jwks\", \"data\": {\"keys\": \"abc\"}}, {\"op\": \"jwks\", \"data\": {\"keys\": [{\"kty\": \"bogus\"}]}}, {\"op\": \"jwks\", \"data\": {\"keys\": [{\"kty\": \"oct\", \"kid\": \"a\", \"k\": \"AA\"}, {\"kty\": \"RSA\", \"n\": \"AQAB\"}]}}, {\"op\": \"jwks\", \"data\": {\"keys\": [{\"kty\": \"oct\", \"kid\": \"a\", \"k\": \"AA\"}, \"not-a-dict\"]}}, {\"op\": \"jwks\", \"data\": {\"keys\": [7]}}, {\"op\": \"jwks\", \"data\": {\"keys\": [[]]}}, {\"op\": \"jwks\", \"data\": {\"keys\": [null]}}, {\"op\": \"jwks\", \"data\": \"{\\\"keys\\\": [1, 2\"}, {\"op\": \"jwks\", \"data\": \"\\ufeff{\\\"keys\\\": []}\"}, {\"op\": \"jwks\", \"data\": \"[]\"}]}\n");
+    t.push_str("{\"name\": \"base64url\", \"ops\": [{\"op\": \"b64\", \"decode\": [\"\", \"a\", \"ab\", \"abc\", \"abcd\", \"abcde\", \"YQ\", \"YQ=\", \"YQ==\", \"YQ===\", \"Y=Q\", \"ab=x=\", \"a=b\", \"====\", \"-_-_\", \"+/+/\", \"Zm9v YmFy\", \"Zm9v\\nYmFy\", \"Zm9v!YmFy\", \"\\u00e9\", \"Zm9v\\u00e9\", \"zz\", \"zz==\"], \"encode\": [\"\", \"00\", \"ff\", \"fbff\", \"fbffbf\", \"000000\", \"68656c6c6f\"]}]}\n");
+    t.push_str("{\"name\": \"HMAC key checks\", \"ops\": [{\"op\": \"keys\", \"keys\": [\"kara-demo-secret\", \"\", \"-----BEGIN PUBLIC KEY-----\\nMFkw\\n-----END PUBLIC KEY-----\\n\", \"-----BEGIN PUBLIC KEY-----\\nMFkw\\n-----END PUBLIC KEY-----\", \"-----BEGIN PUBLIC KEY-----\\r\\nMFkw\\r\\n-----END PUBLIC KEY-----\\r\\n\", \"notes\\n-----BEGIN CERTIFICATE-----\\nMIIB\\nMIIC\\n-----END CERTIFICATE-----\\ntrailer\", \"-----BEGIN CERTIFICATE REQUEST-----\\nMII\\n-----END CERTIFICATE REQUEST-----\", \"-----BEGIN CERTIFICATE-----\\nMII\\n-----END CERTIFICATE REQUEST-----\", \"-----BEGIN PUBLIC KEY-----\\n\\n-----END PUBLIC KEY-----\", \"-----BEGIN PUBLIC KEY-----\\n\\r\\n-----END PUBLIC KEY-----\", \"---- BEGIN SSH2 PUBLIC KEY ----\\nAAAA\\n---- END SSH2 PUBLIC KEY ----\", \"-----BEGIN MY KEY-----\\nAAAA\\n-----END MY KEY-----\", \"-----BEGIN PUBLIC KEY----- MFkw -----END PUBLIC KEY-----\", \"-----BEGIN PUBLIC KEY-----\\nMFkw\\n-----END PRIVATE KEY-----\\n-----END PUBLIC KEY-----\", \"ssh-rsa AAAAB3NzaC1yc2E user@host\", \"ssh-ed25519 AAAA\", \" ssh-rsa AAAA\", \"ecdsa-sha2-nistp384 AAAA\", \"ssh-dss\", \"SSH-RSA AAAA\", {\"$bytes\": \"2d2d2d2d2d424547494e205253412050524956415445204b45592d2d2d2d2d0aff0a2d2d2d2d2d454e44205253412050524956415445204b45592d2d2d2d2d\"}, 5, null]}]}\n");
+    t.push_str("{\"name\": \"api gateway\", \"ops\": [{\"op\": \"gateway\", \"dir\": \"gateway\", \"jwks\": \"jwks.json\", \"issuer\": \"https://auth.example.com\", \"leeway\": 30}]}\n");
+    t.push_str("{\"name\": \"api gateway with an RSA key in the set\", \"ops\": [{\"op\": \"gateway\", \"dir\": \"gateway\", \"jwks\": \"jwks-rsa.json\", \"issuer\": \"https://auth.example.com\", \"leeway\": 30}]}\n");
+    t.push_str("{\"name\": \"token issuer\", \"ops\": [{\"op\": \"issue\", \"dir\": \"issuer\", \"issuer\": \"https://issuer.example.com\", \"kid\": \"issuer-1\", \"now\": 1761048000, \"audience\": [\"console\", \"cli\"], \"checks\": [0, 59, 60, 600, 3600, 7200]}]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
