@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 754 |
-| run-vs-build | 609 |
+| run-vs-build | 610 |
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 314 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2997 |
+| codegen | 2998 |
 | interp | 1018 |
 | typecheck | 534 |
 | ownership | 127 |
@@ -179,6 +179,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-34 | 2026-10-21 | typecheck+interp+codegen | high | A trait default method whose own generic shares a name with the implementing impl's (`fn pair[K]` in a trait, `impl[K: Clone] Tr for W[K]`) is instantiated with the method's K in the impl's place on both v2 backends: `__mir-run` stops with `use of a0 after it was freed`, `build --mir` aborts with `free(): double free` | — |
 | B-2026-10-21-35 | 2026-10-21 | interp+runtime | low | `Vec.try_resize` with an unrepresentable length does not return the failure as a value: `v.try_resize(i64.MAX, 0)` runs until killed on `__mir-run` (timeout at 20 s) and panics on compiled MIR ("attempt to multiply with overflow", runtime/src/mir.rs:415); collections.md says a `try_*` method returns the failure as a value, which is `Err(AllocError.CapacityOverflow)` here | — |
 | B-2026-10-21-36 | 2026-10-21 | ownership | medium | `karac check` treats the target of a range assignment `v[a..b] = other` as a slice borrow that stays live, so a later `mut v` borrow of the same Vec is refused ("`v` cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"); both MIR backends run the program | — |
+| B-2026-10-21-38 | 2026-10-21 | codegen | medium | Compiled MIR aborts a pool's health check whenever the connection type needs dropping: `Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5)` with `impl Drop for Conn` stops with "runtime error: a health check that takes the connection by value" at the second `acquire` on `__mir-llvm-run`, while `__mir-run` lends the idle value to the closure (whose bare parameter borrows it), evicts it and mints a fresh one | — |
 
 ### Relocated
 
