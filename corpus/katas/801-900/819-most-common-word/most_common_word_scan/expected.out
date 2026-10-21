@@ -1,0 +1,9 @@
+Bob hit a ball, the hit BALL flew far after it was hit. / [hit] -> ball
+a. / [] -> a
+a, a, a, a, b,b,b,c, c / [a] -> b
+Bob. hIt, baLl / [bob, hit] -> ball
+abc abc? abcd the jeff! / [abc, abcd, jeff] -> the
+tie Tie apple APPLE zebra / [] -> apple
+j. t? s' J! / [s, t] -> j
+993 characters, 101 banned -> far
+300 random paragraphs: total 954, checksum 263917322

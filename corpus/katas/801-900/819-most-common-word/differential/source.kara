@@ -1,0 +1,335 @@
+// LeetCode #819: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random paragraphs,
+// against the statement read word by word off the text.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn most_common_word_star(paragraph: Str, banned: Vec[String]) -> String {
+    let mut cleaned = String.new();
+    for c in paragraph.chars() {
+        if c.is_ascii_alphabetic() {
+            cleaned.push(c.to_ascii_lowercase());
+        } else {
+            cleaned.push(' ');
+        }
+    }
+    let mut ruled_out: Set[String] = Set.new();
+    for word in banned.iter() {
+        ruled_out.insert(word.clone());
+    }
+    let mut counts: Map[String, i64] = [:];
+    for word in cleaned.split_whitespace() {
+        if not ruled_out.contains(word) {
+            let n = counts.get(word) ?? 0;
+            counts[word.to_string()] = n + 1;
+        }
+    }
+    let mut best = String.new();
+    let mut most = 0;
+    for (word, n) in counts.iter() {
+        if *n > most or (*n == most and *word < best) {
+            best = word.clone();
+            most = *n;
+        }
+    }
+    best
+}
+
+// ---- scan arm -------------------------------------------------------
+
+fn most_common_word_scan(paragraph: Str, banned: Vec[String]) -> String {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    let mut word = String.new();
+    for c in paragraph.chars() {
+        if c.is_ascii_alphabetic() {
+            word.push(c.to_ascii_lowercase());
+        } else if not word.is_empty() {
+            let n = counts.get(word) ?? 0;
+            counts.insert(word.clone(), n + 1);
+            word.clear();
+        }
+    }
+    if not word.is_empty() {
+        let n = counts.get(word) ?? 0;
+        counts.insert(word, n + 1);
+    }
+    let mut best = String.new();
+    let mut most = 0;
+    for (word, n) in counts.iter() {
+        if *n > most and not banned.contains(word) {
+            best = word.clone();
+            most = *n;
+        }
+    }
+    best
+}
+
+// ---- sort arm -------------------------------------------------------
+
+fn most_common_word_sort(paragraph: Str, banned: Vec[String]) -> String {
+    let mut all: Vec[String] = Vec.new();
+    let mut start = -1;
+    let lower = paragraph.to_lowercase();
+    let bytes = lower.bytes();
+    for i in 0..bytes.len() + 1 {
+        let letter = i < bytes.len() and bytes[i].is_ascii_alphabetic();
+        if letter and start < 0 {
+            start = i;
+        } else if not letter and start >= 0 {
+            let word = lower[start..i].to_string();
+            if not banned.contains(word) {
+                all.push(word);
+            }
+            start = -1;
+        }
+    }
+    all.sort();
+    let mut best = String.new();
+    let mut most = 0;
+    let mut i = 0;
+    while i < all.len() {
+        let mut j = i;
+        while j < all.len() and all[j] == all[i] {
+            j += 1;
+        }
+        if j - i > most {
+            most = j - i;
+            best = all[i].clone();
+        }
+        i = j;
+    }
+    best
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn most_common_word_iter(paragraph: Str, banned: Vec[String]) -> String {
+    let cleaned: String = paragraph
+        .chars()
+        .map(|c| if c.is_ascii_alphabetic() { c.to_ascii_lowercase() } else { ' ' })
+        .collect();
+    let counts = cleaned
+        .split_whitespace()
+        .filter(|w| not banned.contains(w.to_string()))
+        .fold(Map.new(), |counts, w| {
+            let mut counts: Map[String, i64] = counts;
+            let n = counts.get(w) ?? 0;
+            counts[w.to_string()] = n + 1;
+            counts
+        });
+    counts
+        .iter()
+        .min_by_key(|(w, n)| (-*n, w.clone()))
+        .map(|(w, _)| w.clone())
+        ?? String.new()
+}
+
+// ---- the definition -------------------------------------------------------
+
+// A letter's lower case, as a byte.
+fn lower(b: u8) -> u8 {
+    if b >= b'A' and b <= b'Z' { b + 32 } else { b }
+}
+
+fn is_letter(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z')
+}
+
+// Where each word starts and ends: the maximal runs of letters.
+fn word_spans(text: Str) -> Vec[(i64, i64)] {
+    let bytes = text.bytes();
+    let mut spans: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if is_letter(bytes[i]) {
+            let start = i;
+            while i < bytes.len() and is_letter(bytes[i]) {
+                i += 1;
+            }
+            spans.push((start, i));
+        } else {
+            i += 1;
+        }
+    }
+    spans
+}
+
+// How many words of the text are `word`, letter for letter, case aside.
+fn occurrences(text: Str, word: Str) -> i64 {
+    let bytes = text.bytes();
+    let target = word.bytes();
+    let mut n = 0;
+    for (start, end) in word_spans(text).iter() {
+        if *end - *start == target.len() {
+            let mut same = true;
+            for k in 0..target.len() {
+                if lower(bytes[*start + k]) != lower(target[k]) {
+                    same = false;
+                }
+            }
+            if same {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+// The statement: of the words of the paragraph, case aside, that are not
+// banned, the one that occurs most, counting every occurrence afresh;
+// of two that occur as often, the first in alphabetical order.
+fn answer_by_definition(paragraph: Str, banned: Vec[String]) -> String {
+    let bytes = paragraph.bytes();
+    let mut best = String.new();
+    let mut most = 0;
+    for (start, end) in word_spans(paragraph).iter() {
+        let mut word = String.new();
+        for k in *start..*end {
+            word.push(lower(bytes[k]) as char);
+        }
+        let mut is_banned = false;
+        for b in banned.iter() {
+            if *b == word {
+                is_banned = true;
+            }
+        }
+        if is_banned {
+            continue;
+        }
+        let n = occurrences(paragraph, word.as_str());
+        if n > most or (n == most and word < best) {
+            best = word;
+            most = n;
+        }
+    }
+    best
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, paragraph: Str, banned: Vec[String]) -> String {
+    if which == 0 {
+        most_common_word_star(paragraph, banned)
+    } else if which == 1 {
+        most_common_word_scan(paragraph, banned)
+    } else if which == 2 {
+        most_common_word_sort(paragraph, banned)
+    } else {
+        most_common_word_iter(paragraph, banned)
+    }
+}
+
+// The words written out with random case and random marks between them.
+fn render(seed: mut ref i64, words: Vec[String], kind: i64) -> String {
+    let marks = [" ", " ", ", ", ". ", "! ", "? ", "; ", "'", ",", "!?", " ' ", ".;"];
+    let mut text = String.new();
+    if kind == 3 and next_random(mut seed) % 2 == 0 {
+        text.push_str("' ");
+    }
+    for k in 0..words.len() {
+        for c in words[k].chars() {
+            let up = next_random(mut seed) % 3 == 0;
+            text.push(if up { c.to_ascii_uppercase() } else { c });
+        }
+        if k + 1 < words.len() or next_random(mut seed) % 2 == 0 {
+            // Kind 3 joins words by marks alone, with no space.
+            let m = if kind == 3 { 7 + next_random(mut seed) % 5 } else { next_random(mut seed) % 7 };
+            text.push_str(marks[m]);
+        }
+    }
+    text
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8190;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut ties = 0;
+    let common = ["the", "car", "bob", "ball", "hit", "far"];
+    for case in 0..cases {
+        // kind 0: up to 30 words of six; kind 1: of two, so that counts
+        // tie; kind 2: words of a and b up to four letters long, many of
+        // them prefixes of others; kind 3: as kind 0, joined by marks with
+        // no space.
+        let kind = case % 4;
+        let count = 1 + next_random(mut seed) % 30;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let word = if kind == 1 {
+                common[next_random(mut seed) % 2].to_string()
+            } else if kind == 2 {
+                let mut w = String.new();
+                for _ in 0..1 + next_random(mut seed) % 4 {
+                    w.push(if next_random(mut seed) % 2 == 0 { 'a' } else { 'b' });
+                }
+                w
+            } else {
+                common[next_random(mut seed) % 6].to_string()
+            };
+            words.push(word);
+        }
+        // Ban some of the words, never the first, and a word or two that
+        // is not there.
+        let mut banned: Vec[String] = Vec.new();
+        for w in words.iter() {
+            if *w != words[0] and not banned.contains(w.clone()) and next_random(mut seed) % 3 == 0 {
+                banned.push(w.clone());
+            }
+        }
+        if next_random(mut seed) % 2 == 0 {
+            banned.push("zebra".to_string());
+        }
+        let paragraph = render(mut seed, words.clone(), kind);
+        let want = answer_by_definition(paragraph.as_str(), banned.clone());
+        let top = occurrences(paragraph.as_str(), want.as_str());
+        let mut level = 0;
+        for (start, end) in word_spans(paragraph.as_str()).iter() {
+            let w = paragraph[*start..*end].to_lowercase();
+            if not banned.contains(w.clone()) and w != want and occurrences(paragraph.as_str(), w.as_str()) == top {
+                level += 1;
+            }
+        }
+        if level > 0 {
+            ties += 1;
+        }
+        let again = render(mut seed, words.clone(), kind);
+        for which in 0..arms {
+            // 1: the statement's answer.
+            // 2: a word of the paragraph in lower case, and not banned.
+            // 3: the same words with their case and marks drawn afresh
+            //    give the same answer.
+            // 4: with the answer banned too, the answer is another word,
+            //    occurring no more often, or none is left.
+            let got = arm(which, paragraph.as_str(), banned.clone());
+            let mut more_banned = banned.clone();
+            more_banned.push(got.clone());
+            let next = arm(which, paragraph.as_str(), more_banned);
+            let ok = [
+                got == want,
+                got == got.to_lowercase() and occurrences(paragraph.as_str(), got.as_str()) > 0 and not banned.contains(got.clone()),
+                arm(which, again.as_str(), banned.clone()) == got,
+                next != got and (next.is_empty() or occurrences(paragraph.as_str(), next.as_str()) <= occurrences(paragraph.as_str(), got.as_str())),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({ties} with a tie for most), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, scan {fails[1]}, sort {fails[2]}, iter {fails[3]}");
+    println(f"by property: answer {by_property[0]}, word {by_property[1]}, recased {by_property[2]}, banned {by_property[3]}");
+}

@@ -1,0 +1,111 @@
+// LeetCode 819 — Most Common Word, one scan into an ordered map.
+//
+// Read the paragraph once, growing the current word letter by letter
+// and counting it when a non-letter or the end closes it. The counts go
+// in a `SortedMap`, so a walk in key order meets the words
+// alphabetically, and the first word with the highest count is the
+// answer. O(n log w) for n characters and w distinct words.
+
+fn most_common_word(paragraph: Str, banned: Vec[String]) -> String {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    let mut word = String.new();
+    for c in paragraph.chars() {
+        if c.is_ascii_alphabetic() {
+            word.push(c.to_ascii_lowercase());
+        } else if not word.is_empty() {
+            let n = counts.get(word) ?? 0;
+            counts.insert(word.clone(), n + 1);
+            word.clear();
+        }
+    }
+    if not word.is_empty() {
+        let n = counts.get(word) ?? 0;
+        counts.insert(word, n + 1);
+    }
+    let mut best = String.new();
+    let mut most = 0;
+    for (word, n) in counts.iter() {
+        if *n > most and not banned.contains(word) {
+            best = word.clone();
+            most = *n;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn words(list: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in list.iter() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+fn show(paragraph: Str, banned: Vec[Str]) {
+    let answer = most_common_word(paragraph, words(banned.clone()));
+    println(f"{paragraph} / {banned} -> {answer}");
+}
+
+fn main() {
+    show("Bob hit a ball, the hit BALL flew far after it was hit.", ["hit"]);
+    show("a.", []);
+    show("a, a, a, a, b,b,b,c, c", ["a"]);
+    show("Bob. hIt, baLl", ["bob", "hit"]);
+    show("abc abc? abcd the jeff!", ["abc", "abcd", "jeff"]);
+    show("tie Tie apple APPLE zebra", []);
+    show("j. t? s' J!", ["s", "t"]);
+    // LeetCode's largest: about 1,000 characters and 100 banned words, and one more.
+    let vocabulary = ["the", "car", "bob", "ball", "hit", "far", "a", "it", "was", "fly", "sun", "moon"];
+    let marks = [" ", " ", " ", ", ", ". ", "! ", "? ", "; ", "' ", ","];
+    let mut seed = 819;
+    let mut big = String.new();
+    while big.len() < 990 {
+        let mut word = vocabulary[next_random(mut seed) % 12].to_string();
+        if next_random(mut seed) % 3 == 0 {
+            word = word.to_uppercase();
+        }
+        big.push_str(word.as_str());
+        big.push_str(marks[next_random(mut seed) % 10]);
+    }
+    let mut many: Vec[String] = Vec.new();
+    for k in 0..100 {
+        many.push(f"w{k}");
+    }
+    many.push("the".to_string());
+    println(f"{big.len()} characters, {many.len()} banned -> {most_common_word(big.as_str(), many)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let mut paragraph = String.new();
+        let count = 1 + next_random(mut seed) % 20;
+        for _ in 0..count {
+            let mut word = vocabulary[next_random(mut seed) % 6].to_string();
+            if next_random(mut seed) % 4 == 0 {
+                word = word.to_uppercase();
+            }
+            paragraph.push_str(word.as_str());
+            paragraph.push_str(marks[next_random(mut seed) % 10]);
+        }
+        // "far" is never banned, so every paragraph has an answer.
+        paragraph.push_str("far");
+        let mut banned: Vec[String] = Vec.new();
+        for k in 0..5 {
+            if next_random(mut seed) % 4 == 0 {
+                banned.push(vocabulary[k].to_string());
+            }
+        }
+        let answer = most_common_word(paragraph.as_str(), banned);
+        total += answer.len();
+        for b in answer.bytes().iter() {
+            check = (check * 131 + *b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random paragraphs: total {total}, checksum {check}");
+}

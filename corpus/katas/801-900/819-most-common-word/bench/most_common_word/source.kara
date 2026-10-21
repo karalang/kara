@@ -1,0 +1,101 @@
+// Benchmark for #819: Most Common Word -- the ★ arm (a map of counts).
+//
+// Lower every letter and turn everything else into a space, split at
+// the spaces, and count each word that is not banned in a map; the
+// answer is the word counted most, the first alphabetically of two
+// counted as often. O(n) time for n characters.
+
+fn most_common_word(paragraph: Str, banned: Vec[String]) -> String {
+    let mut cleaned = String.new();
+    for c in paragraph.chars() {
+        if c.is_ascii_alphabetic() {
+            cleaned.push(c.to_ascii_lowercase());
+        } else {
+            cleaned.push(' ');
+        }
+    }
+    let mut ruled_out: Set[String] = Set.new();
+    for word in banned.iter() {
+        ruled_out.insert(word.clone());
+    }
+    let mut counts: Map[String, i64] = [:];
+    for word in cleaned.split_whitespace() {
+        if not ruled_out.contains(word) {
+            let n = counts.get(word) ?? 0;
+            counts[word.to_string()] = n + 1;
+        }
+    }
+    let mut best = String.new();
+    let mut most = 0;
+    for (word, n) in counts.iter() {
+        if *n > most or (*n == most and *word < best) {
+            best = word.clone();
+            most = *n;
+        }
+    }
+    best
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64) -> String {
+    let mut word = String.new();
+    let length = 1 + next_random(mut seed) % 10;
+    for _ in 0..length {
+        word.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+    }
+    word
+}
+
+fn main() {
+    // 64 paragraphs of about 1,000 characters with 100 banned words each,
+    // LeetCode's largest, drawn once from 300 words of up to 10 letters,
+    // the earlier words more often. Each round answers the next one.
+    let count = 64;
+    let rounds = 200000;
+    let mut seed: i64 = 819;
+    let marks = [" ", " ", " ", ", ", ". ", "! ", "? ", "; ", "' ", ","];
+    let mut vocabulary: Vec[String] = Vec.new();
+    for _ in 0..300 {
+        vocabulary.push(random_word(mut seed));
+    }
+    let mut paragraphs: Vec[String] = Vec.new();
+    let mut banned: Vec[Vec[String]] = Vec.new();
+    for _ in 0..count {
+        let mut paragraph = String.new();
+        while paragraph.len() < 990 {
+            let k = (next_random(mut seed) % 300) * (next_random(mut seed) % 300) / 300;
+            let mut word = vocabulary[k].clone();
+            if next_random(mut seed) % 4 == 0 {
+                word = word.to_uppercase();
+            }
+            paragraph.push_str(word.as_str());
+            paragraph.push_str(marks[next_random(mut seed) % 10]);
+        }
+        paragraphs.push(paragraph);
+        let mut ruled_out: Vec[String] = Vec.new();
+        for _ in 0..50 {
+            ruled_out.push(vocabulary[next_random(mut seed) % 30].clone());
+        }
+        for _ in 0..50 {
+            ruled_out.push(random_word(mut seed));
+        }
+        banned.push(ruled_out);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let answer = most_common_word(paragraphs[g].as_str(), banned[g]);
+        total += answer.len();
+        for b in answer.bytes().iter() {
+            checksum = (checksum * 131 + *b as i64) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {count} paragraphs: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,9 @@
+p - about
+
+USAGE:
+    p
+
+OPTIONS:
+    -h, --help     Print help
+    -V, --version  Print version
+
