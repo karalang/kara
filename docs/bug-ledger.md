@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 754 |
 | run-vs-build | 609 |
 | leak | 605 |
-| double-free | 427 |
+| double-free | 428 |
 | missing-feature | 314 |
 | codegen-gap | 281 |
 | false-positive | 263 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2996 |
-| interp | 1015 |
-| typecheck | 533 |
+| codegen | 2997 |
+| interp | 1016 |
+| typecheck | 534 |
 | ownership | 126 |
 | other | 123 |
 | runtime | 83 |
@@ -165,7 +165,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
-| B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` replaced by the method's own type parameter, also named `K` (the key the closure returns): `SortedMap[String, i64].iter().max_by_key(|(w, n)| *n)` runs as `SortedMapIter[i64, i64].max_by_key[i64]` and answers with the wrong entry, and a String key on an i64-keyed map exits 101; `__mir-run` is right, and a key of the map's own key type is right | — |
 | B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
 | B-2026-10-21-7 | 2026-10-21 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All checks passed." when the name is not used | — |
 | B-2026-10-21-16 | 2026-10-21 | typecheck | low | `VarError.NotUnicode.into()` is refused by check ("no method 'into' on type 'VarError'") though the library provides `impl From[VarError] for IoError` | — |
@@ -180,6 +179,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-31 | 2026-10-21 | typecheck | low | `CStr` does not have the methods docs/library/strings.md lists: `bytes(self) -> Slice[u8]` is spelled `as_bytes` in the typechecker's table (and in the corpus), and `to_str(self) -> Result[Str, Utf8Error]` does not exist under any name; `to_string` does. Later. | — |
 | B-2026-10-21-32 | 2026-10-21 | resolver+typecheck | low | The prelude exports the variants of `Ordering`, `MemoryOrdering`, `Entry` and `NormalizationForm` bare, so `"x".normalize(Nfc)` and an expression `Less` check, against design.md (around line 1310: only `Some`, `None`, `Ok` and `Err` are bare in expressions) and strings.md ("its variants are written qualified"). The review thread ruled 2026-10-21 that the spec holds: drop them from the prelude, refuse a bare one in an expression with a machine-applicable fix to the qualified form, keep accepting it in a pattern whose scrutinee type is known, and migrate the corpus and katas with `karac fix` in the same push. Later. | — |
 | B-2026-10-21-33 | 2026-10-21 | codegen | medium | MIR finish_build is roughly cubic in a body's `?` exits times its live owned locals: one 287-line constructor with ~90 `?` takes 36 s, so mini_inflect times out on mir-interp | — |
+| B-2026-10-21-34 | 2026-10-21 | typecheck+interp+codegen | high | A trait default method whose own generic shares a name with the implementing impl's (`fn pair[K]` in a trait, `impl[K: Clone] Tr for W[K]`) is instantiated with the method's K in the impl's place on both v2 backends: `__mir-run` stops with `use of a0 after it was freed`, `build --mir` aborts with `free(): double free` | — |
 
 ### Relocated
 
@@ -4309,6 +4309,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-39 | interp+codegen | medium | The prelude's dynamic `Json` value passes `karac check` but neither v2 backend runs `Json.parse` or `j.stringify()`: `__mir-run` stops with "call of… | 8a5fbc89f1 |
 | B-2026-10-21-1 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = \|\| { let o = Opts { sub: Some(s) }; match o.sub { Some(s)… | bd9d84960b |
 | B-2026-10-21-2 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receive… | 4dee76dc4f |
+| B-2026-10-21-4 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` repl… | 7ef38b7694 |
 | B-2026-10-21-6 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | 06cddc56a9 |
 | B-2026-10-21-8 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check ref… | 3749d30728 |
 | B-2026-10-21-9 | codegen | medium | On the compiled MIR backend `stdin.read_line()` and `stdin.read_to_string()` fail with `IoError.NotFound`, not `InvalidUtf8`, on input that is not UT… | 3749d30728 |
