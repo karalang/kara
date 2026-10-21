@@ -1,8 +1,9 @@
 # mini_git: a small git that real git can read
 
 Writes a real `.git` directory inside `proj/`. Objects use git's format:
-`<type> <len>\0<body>`, named by SHA-1 and zlib-compressed. The SHA-1 and
-the zlib inflater are this program's own. The compressor writes stored
+`<type> <len>\0<body>`, named by SHA-1 and zlib-compressed. The SHA-1 is
+`std.crypto.legacy.sha1` (until B-2026-10-21-6 it was this program's own);
+the zlib inflater is the program's own. The compressor writes stored
 deflate blocks. The inflater handles all three block types, and is checked
 on two objects that real git compressed (one dynamic Huffman, one fixed).
 Trees use git's binary format and its ordering, where a directory sorts as

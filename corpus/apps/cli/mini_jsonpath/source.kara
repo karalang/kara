@@ -4100,8 +4100,7 @@ impl W {
                     return Ok(Hits.L(Vec.new()));
                 }
                 let mut out: Vec[i64] = Vec.new();
-                let ks = self.keys(v);
-                for k in ks {
+                for k in self.keys(v) {
                     let p = self.node(Pn.Keys);
                     out.push(self.dat(k, p, -1));
                 }
@@ -4862,8 +4861,7 @@ impl W {
                 self.update_recursively(r, c, val)?;
             }
         } else if self.is_dict(data) {
-            let ks = self.keys(data);
-            for k in ks {
+            for k in self.keys(data) {
                 let c = self.getitem(data, k)?;
                 self.update_recursively(r, c, val)?;
             }
@@ -5090,8 +5088,7 @@ impl W {
                 self.filter_recursively(r, f, c)?;
             }
         } else if self.is_dict(data) {
-            let ks = self.keys(data);
-            for k in ks {
+            for k in self.keys(data) {
                 let c = self.getitem(data, k)?;
                 self.filter_recursively(r, f, c)?;
             }

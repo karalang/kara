@@ -2,8 +2,8 @@
 
 A WebSocket chat server (RFC 6455) on `127.0.0.1:47742`. The server:
 
-- does the opening handshake, with `Sec-WebSocket-Accept` computed from the
-  program's own SHA-1 and base64. It reproduces the RFC's sample key
+- does the opening handshake, with `Sec-WebSocket-Accept` computed with
+  `std.crypto.legacy.sha1` and `std.encoding.base64_encode`. It reproduces the RFC's sample key
   (`s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`);
 - refuses a bad upgrade with 400, a wrong version with 426 and a wrong path
   with 404;
@@ -25,10 +25,10 @@ Oracle: `ws_chat.py`, the same program using `hashlib` and `base64`.
 
 ## Compiler gaps (filed in kara `docs/bug-ledger.jsonl`)
 
-- **B-2026-10-15-17** (low): the library has no base64, hex or digest
-  (SHA-1, SHA-256) functions, so every WebSocket server, HTTP basic-auth
-  check or content-addressed store writes its own. This app and mini_git
-  each carry a SHA-1.
+- **B-2026-10-15-17** (low): the library had no base64, hex or digest
+  functions, so this app carried its own SHA-1 and base64 until
+  `std.crypto` (kara 1fffa163ef) and `std.encoding` landed; it uses both
+  now (B-2026-10-21-6).
 - Known and worked around: B-2026-10-14-44 (socket addresses are `String`),
   B-2026-10-12-7 (`split` is an eager `Vec[String]`).
 

@@ -18,6 +18,9 @@
 //   B-2026-10-15-15  no `rfind`: parent_dir scans bytes by hand
 //   B-2026-10-15-16  see the comment at `victim` in run()
 
+import std.crypto.legacy.{sha1};
+import std.encoding.{hex_encode};
+
 // Everything happens inside this directory, so the files the program was
 // started next to are not part of the work tree.
 const ROOT: Str = "proj";
@@ -31,79 +34,11 @@ const REAL_HEX_1: Str = "780105c1cb0d8020140440cf54b10578f3603d7c1625597806d044a
 const REAL_ID_2: Str = "51c58a0ee0d53a01e061d94002e84926562b9c07";
 const REAL_HEX_2: Str = "78014bcac94f52306528c9ccabe4020019b103c3";
 
-// ---- SHA-1 ------------------------------------------------------------
+// ---- object ids -------------------------------------------------------
 
-fn rotl(x: u32, n: u32) -> u32 {
-    (x << n) | (x >> (32u32 - n))
-}
-
-fn sha1(data: Slice[u8]) -> String {
-    let mut msg: Vec[u8] = Vec.new();
-    for b in data {
-        msg.push(b);
-    }
-    let bit_len: u64 = (data.len() as u64) * 8u64;
-    msg.push(0x80u8);
-    while msg.len() % 64 != 56 {
-        msg.push(0u8);
-    }
-    let mut s = 56u64;
-    loop {
-        msg.push(((bit_len >> s) & 0xffu64) as u8);
-        if s == 0u64 {
-            break;
-        }
-        s = s - 8u64;
-    }
-    let mut h: Vec[u32] = vec![0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32];
-    let mut w: Vec[u32] = Vec.new();
-    for _ in 0..80 {
-        w.push(0u32);
-    }
-    let mut chunk = 0;
-    while chunk < msg.len() {
-        for i in 0..16 {
-            let at = chunk + i * 4;
-            w[i] = ((msg[at] as u32) << 24u32) | ((msg[at + 1] as u32) << 16u32)
-                | ((msg[at + 2] as u32) << 8u32) | (msg[at + 3] as u32);
-        }
-        for i in 16..80 {
-            w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1u32);
-        }
-        let mut a = h[0];
-        let mut b = h[1];
-        let mut c = h[2];
-        let mut d = h[3];
-        let mut e = h[4];
-        for i in 0..80 {
-            let (f, k) = if i < 20 {
-                ((b & c) | ((~b) & d), 0x5A827999u32)
-            } else if i < 40 {
-                (b ^ c ^ d, 0x6ED9EBA1u32)
-            } else if i < 60 {
-                ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32)
-            } else {
-                (b ^ c ^ d, 0xCA62C1D6u32)
-            };
-            let t = rotl(a, 5u32).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
-            e = d;
-            d = c;
-            c = rotl(b, 30u32);
-            b = a;
-            a = t;
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-        chunk = chunk + 64;
-    }
-    let mut out = String.new();
-    for x in h.iter() {
-        out.push_str(f"{x:08x}");
-    }
-    out
+// An object's id: the SHA-1 of its framed bytes, in hex.
+fn object_id(data: Slice[u8]) -> String {
+    hex_encode(sha1(data))
 }
 
 fn hex_val(c: u8) -> u8 {
@@ -519,7 +454,7 @@ fn frame(kind: Str, body: Slice[u8]) -> Vec[u8] {
 
 fn write_object(kind: Str, body: Slice[u8]) -> Result[String, String] {
     let raw = frame(kind, body);
-    let id = sha1(raw);
+    let id = object_id(raw);
     sh(f"mkdir -p .git/objects/{id[0..2]}")?;
     write_bytes(object_path(id), zlib_store(raw))?;
     Ok(id)
@@ -569,7 +504,7 @@ fn parse_object(raw: Slice[u8]) -> Result[Object, String] {
 fn read_object(id: Str) -> Result[Object, String] {
     let packed = read_bytes(object_path(id))?;
     let raw = inflate(packed)?;
-    if sha1(raw) != id {
+    if object_id(raw) != id {
         return Err(f"object {id[0..7]} does not hash to its name");
     }
     parse_object(raw)
@@ -746,7 +681,7 @@ fn commit(repo: ref Repo, message: Str) -> Result[String, String] {
 
 fn blob_id_of(path: Str) -> Result[String, String] {
     let bytes = read_bytes(path)?;
-    Ok(sha1(frame("blob", bytes)))
+    Ok(object_id(frame("blob", bytes)))
 }
 
 fn status(repo: ref Repo) -> Result[(), String] {
@@ -963,7 +898,7 @@ fn run() -> Result[(), String] {
     let reals = [(REAL_ID_1, REAL_HEX_1), (REAL_ID_2, REAL_HEX_2)];
     for (id, hex) in reals {
         let raw = inflate(unhex(hex))?;
-        let ok = if sha1(raw) == id { "ok" } else { "MISMATCH" };
+        let ok = if object_id(raw) == id { "ok" } else { "MISMATCH" };
         let obj = parse_object(raw)?;
         let body_text = text_of(obj.body);
         let first: Vec[Str] = body_text.lines().collect();
