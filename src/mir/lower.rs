@@ -12476,8 +12476,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                     for a in args {
                         ops.push(self.expr_operand(&a.value)?);
                     }
-                    let built = self.temp(pt);
                     let ty_name = self.tys().display(pt);
+                    // `with_capacity` of a `Vec`, `String` or `VecDeque` can
+                    // fail, so it is its own native, which writes the
+                    // `Result` (B-2026-10-21-28).
+                    if base == "with_capacity"
+                        && matches!(
+                            self.tys().kind(pt),
+                            super::ty::TyKind::Intrinsic(
+                                super::ty::IntrinsicTy::Vec(_)
+                                    | super::ty::IntrinsicTy::String
+                                    | super::ty::IntrinsicTy::VecDeque(_)
+                            )
+                        )
+                    {
+                        self.call_native(&format!("{ty_name}.try_with_capacity"), ops, dest);
+                        return Ok(());
+                    }
+                    let built = self.temp(pt);
                     self.call_native(&format!("{ty_name}.{base}"), ops, Place::local(built));
                     self.build_variant(rt, idx, vec![Operand::Move(Place::local(built))], dest);
                     return Ok(());

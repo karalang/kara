@@ -416,6 +416,107 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: usize, size
     v.cap = cap;
 }
 
+/// The bytes `n` elements of `size` bytes take, or `None` when that is
+/// more than any buffer may hold ([`crate::alloc::KARAC_MAX_ALLOC_BYTES`]):
+/// the capacity cannot be represented. The MIR interpreter uses the same
+/// bound for its `CapacityOverflow`.
+fn capacity_bytes(n: usize, size: usize) -> Option<usize> {
+    n.checked_mul(size)
+        .filter(|&b| b as u64 <= crate::alloc::KARAC_MAX_ALLOC_BYTES)
+}
+
+/// `reserve` for the fallible twins (`try_reserve`, `try_reserve_exact`):
+/// makes room for `more` elements of `size` bytes in the vector at `v` and
+/// returns -1, or leaves it unchanged and returns -2 when the capacity
+/// cannot be represented, or the byte count the allocator refused.
+///
+/// # Safety
+/// `v` is a live `String` or `Vec` of `size`-byte elements.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_vec_try_reserve(
+    v: *mut RawVec,
+    more: usize,
+    size: usize,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let v = unsafe { &mut *v };
+    let Some(want) = v.len.checked_add(more) else {
+        return -2;
+    };
+    if capacity_bytes(want, size).is_none() {
+        return -2;
+    }
+    if want <= v.cap || size == 0 {
+        if size == 0 {
+            v.cap = usize::MAX;
+        }
+        return -1;
+    }
+    // The growth `karac_mir_vec_reserve` picks, unless only `want` fits.
+    let grown = want
+        .max(v.cap.saturating_mul(2))
+        .max(if size == 1 { 8 } else { 4 });
+    let cap = if capacity_bytes(grown, size).is_some() {
+        grown
+    } else {
+        want
+    };
+    let bytes = cap * size;
+    let p = crate::alloc::karac_alloc_fallible(bytes);
+    if p.is_null() {
+        return bytes as i64;
+    }
+    if v.len > 0 {
+        // SAFETY: the vector holds `len` elements; `p` has room for them.
+        unsafe { std::ptr::copy_nonoverlapping(v.ptr, p, v.len * size) };
+    }
+    if v.cap != 0 {
+        // SAFETY: an owned buffer (a borrowed literal has `cap == 0`).
+        unsafe { free(v.ptr.cast()) };
+    }
+    v.ptr = p;
+    v.cap = cap;
+    -1
+}
+
+/// `with_capacity` for the fallible twin: writes an empty `Vec` with room
+/// for exactly `n` elements of `size` bytes at `out` and returns -1, or
+/// writes nothing and returns -2 or the refused byte count, as
+/// [`karac_mir_vec_try_reserve`] does. Without an allocation (`n` or `size`
+/// zero) the vector is empty with no buffer.
+///
+/// # Safety
+/// `out` is writable for a `Vec`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: usize, size: usize) -> i64 {
+    let Some(bytes) = capacity_bytes(n, size) else {
+        return -2;
+    };
+    let (ptr, cap) = if bytes == 0 {
+        (std::ptr::null_mut(), 0)
+    } else {
+        let p = crate::alloc::karac_alloc_fallible(bytes);
+        if p.is_null() {
+            return bytes as i64;
+        }
+        (p, n)
+    };
+    // SAFETY: the caller's contract.
+    unsafe { out.write(RawVec { ptr, len: 0, cap }) };
+    -1
+}
+
+/// -1 when `n` elements of `size` bytes can be represented, -2 when not:
+/// the check of `VecDeque.try_with_capacity`, which allocates nothing.
+#[no_mangle]
+pub extern "C" fn karac_mir_capacity_fits(n: usize, size: usize) -> i64 {
+    if capacity_bytes(n, size).is_some() {
+        -1
+    } else {
+        -2
+    }
+}
+
 /// Writes a `Vec` of `n` uninitialized `size`-byte elements at `out`
 /// (`len == cap == n`), for the caller to fill.
 ///

@@ -34,6 +34,34 @@ impl<'ctx> Cx<'ctx, '_> {
                 .map_err(e)?;
             return Ok(Some(()));
         }
+        if method == "try_with_capacity" {
+            // `with_capacity` allocates nothing, so only a capacity that
+            // cannot be represented fails (B-2026-10-21-28).
+            let [n] = args else {
+                return Ok(None);
+            };
+            let n = self.int_arg(n)?;
+            let ok = self.non_negative(n)?;
+            self.abort_unless(ok, "explicit panic")?;
+            let okv = self.variant_of(dty, "Ok")?;
+            let qty = self
+                .tys
+                .tcx()
+                .field_ty(dty, Some(okv), 0)
+                .ok_or("Result.Ok has no payload")?;
+            let TyKind::Intrinsic(IntrinsicTy::VecDeque(el)) = self.tys.kind(qty) else {
+                return Ok(None);
+            };
+            let size = self.layout(el)?.size;
+            let d = self.place_ptr(dest)?;
+            let q = self.offset(d, self.field_offset(dty, Some(okv), 0)?)?;
+            self.builder
+                .build_memset(q, 1, self.llcx.i8_type().const_zero(), self.i64(32))
+                .map_err(e)?;
+            let code = self.rt_int("capacity_fits", &[n.into(), self.i64(size).into()], 64)?;
+            self.store_alloc_result(dest, code)?;
+            return Ok(Some(()));
+        }
         let Some(recv) = args.first() else {
             return Ok(None);
         };

@@ -1,7 +1,8 @@
-//! VecDeque `clear`, `insert` and `try_insert` (B-2026-10-21-26) and
-//! `StableHash.siphash24` (B-2026-10-21-27) on the v2 backends: each
-//! program runs on the MIR interpreter and, compiled, at -O0 and -O2, with
-//! the output docs/library/collections.md gives; `clear` also runs under
+//! VecDeque `clear`, `insert` and `try_insert` (B-2026-10-21-26),
+//! `StableHash.siphash24` (B-2026-10-21-27) and the fallible twins'
+//! `AllocError` (B-2026-10-21-28) on the v2 backends: each program runs on
+//! the MIR interpreter and, compiled, at -O0 and -O2, with the output
+//! docs/library/collections.md gives; `clear` and the twins also run under
 //! the ASan lane.
 #![cfg(feature = "llvm")]
 
@@ -208,4 +209,79 @@ fn stable_siphash24_agrees_on_both_backends() {
         "8246050544436514353\n11613035633349379557\ntrue false\n"
     );
     agrees(SIPHASH, &want, 0);
+}
+
+/// The fallible twins return a failure as a value (collections.md §
+/// Fallible allocation, B-2026-10-21-28): a capacity that cannot be
+/// represented is `CapacityOverflow`, a request the allocator refuses is
+/// `OutOfMemory`, and the collection is unchanged by either.
+const TRY_TWINS: &str = r#"fn show(r: Result[(), AllocError]) -> String {
+    match r {
+        Ok(_) => "ok".to_string(),
+        Err(AllocError.CapacityOverflow) => "overflow".to_string(),
+        Err(AllocError.OutOfMemory { requested_bytes }) => f"oom {requested_bytes > 0}",
+    }
+}
+fn main() {
+    let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(i64.MAX);
+    match r { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let r2: Result[Vec[i64], AllocError] = Vec.try_with_capacity(10);
+    match r2 { Ok(v) => println(f"ok {v.len()} {v.capacity()}"), Err(e) => println(f"{e}") }
+    let s: Result[String, AllocError] = String.try_with_capacity(i64.MAX);
+    match s { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let q: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(i64.MAX / 4);
+    match q { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let q2: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(3);
+    match q2 { Ok(d) => println(f"ok {d.len()}"), Err(e) => println(f"{e}") }
+    let mut v: Vec[i64] = [1, 2];
+    println(show(v.try_reserve(i64.MAX)));
+    println(show(v.try_reserve_exact(i64.MAX - 1)));
+    println(show(v.try_reserve(1 << 58)));
+    println(show(v.try_reserve(100)));
+    println(show(v.try_reserve(0)));
+    println(f"{v.len()} {v.capacity() >= 102}");
+    v.push(3);
+    println(f"{v}");
+    let mut w: Vec[String] = Vec.new();
+    w.push("a".to_string());
+    println(show(w.try_reserve(i64.MAX / 8)));
+    println(f"{w}");
+    let mut t = "ab".to_string();
+    println(show(t.try_reserve(i64.MAX)));
+    println(show(t.try_reserve(10)));
+    t.push_str("cd");
+    println(t);
+}
+"#;
+
+const WANT_TRY_TWINS: &str = "capacity overflow\nok 0 10\ncapacity overflow\ncapacity overflow\n\
+                              ok 0\noverflow\noverflow\noverflow\nok\nok\n2 true\n[1, 2, 3]\n\
+                              overflow\n[a]\noverflow\nok\nabcd\n";
+
+#[test]
+fn fallible_twins_return_capacity_overflow_on_both_backends() {
+    agrees(TRY_TWINS, WANT_TRY_TWINS, 0);
+}
+
+/// The twins leave nothing behind when they fail or succeed.
+#[test]
+fn fallible_twins_are_clean_under_asan() {
+    if let Some(out) = under_asan(TRY_TWINS) {
+        assert_eq!(out, WANT_TRY_TWINS);
+    }
+}
+
+/// A request below the representable bound that no allocator can satisfy
+/// (2^60 bytes) is `OutOfMemory` with that byte count, not an abort. Not
+/// run under ASan, whose allocator aborts on such a request by default.
+#[test]
+fn fallible_twins_report_out_of_memory() {
+    agrees(
+        "fn main() {\n    let r: Result[Vec[u8], AllocError] = Vec.try_with_capacity(1 << 60);\n    \
+         match r {\n        Ok(_) => println(\"ok\"),\n        \
+         Err(AllocError.OutOfMemory { requested_bytes }) => println(f\"oom {requested_bytes}\"),\n        \
+         Err(AllocError.CapacityOverflow) => println(\"overflow\"),\n    }\n}\n",
+        "oom 1152921504606846976\n",
+        0,
+    );
 }

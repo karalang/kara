@@ -94,6 +94,94 @@ impl<'ctx> Cx<'ctx, '_> {
         self.reserve_header(v, ptr, len, cap, more, size)
     }
 
+    /// [`Self::reserve_via_copy`] for the fallible twins, through
+    /// `karac_mir_vec_try_reserve`: -1 when the room was made, -2 when the
+    /// capacity cannot be represented, or the byte count the allocator
+    /// refused; the vector is unchanged unless it is -1.
+    pub(super) fn try_reserve_header(
+        &mut self,
+        v: PointerValue<'ctx>,
+        more: IntValue<'ctx>,
+        size: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let tmp = self.entry_slot(24, "grow")?;
+        self.store(tmp, self.load_ptr(v)?.into())?;
+        self.store(
+            self.offset(tmp, 8)?,
+            self.load_i64(self.offset(v, 8)?)?.into(),
+        )?;
+        self.store(
+            self.offset(tmp, 16)?,
+            self.load_i64(self.offset(v, 16)?)?.into(),
+        )?;
+        let code = self.rt_int(
+            "vec_try_reserve",
+            &[tmp.into(), more.into(), size.into()],
+            64,
+        )?;
+        self.store(v, self.load_ptr(tmp)?.into())?;
+        let cap = self.load_i64(self.offset(tmp, 16)?)?;
+        self.store(self.offset(v, 16)?, cap.into())?;
+        Ok(code)
+    }
+
+    /// `String.try_reserve(n)` / `try_reserve_exact(n)`: room for `n` more
+    /// bytes, or the `AllocError`; a non-positive `n` changes nothing.
+    pub(super) fn string_try_reserve(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let [recv, k] = args else {
+            return Err("String.try_reserve takes one count".into());
+        };
+        let k = self.int_arg(k)?;
+        let pos = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
+            .map_err(e)?;
+        let v = self.ref_arg(recv)?;
+        let code = self.entry_slot(8, "try.code")?;
+        self.store(code, self.i64(u64::MAX).into())?;
+        self.if_then(pos, |cx| {
+            let c = cx.try_reserve_header(v, k, cx.i64(1))?;
+            cx.store(code, c.into())
+        })?;
+        let code = self.load_i64(code)?;
+        self.store_alloc_result(dest, code)
+    }
+
+    /// Writes the `Result[_, AllocError]` a fallible twin returns at
+    /// `dest`, from the code [`Self::try_reserve_header`] and
+    /// `karac_mir_vec_try_alloc` return: -1 is `Ok` (its payload, if any,
+    /// already written), -2 `Err(CapacityOverflow)`, and any other value
+    /// `Err(OutOfMemory { requested_bytes })` of that many bytes.
+    pub(super) fn store_alloc_result(&mut self, dest: &Place, code: IntValue<'ctx>) -> R<()> {
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let ok = self.variant_of(dty, "Ok")?;
+        let er = self.variant_of(dty, "Err")?;
+        let aty = self
+            .tys
+            .tcx()
+            .field_ty(dty, Some(er), 0)
+            .ok_or("Result.Err has no payload")?;
+        self.store_tag(d, dty, ok)?;
+        let failed = self
+            .builder
+            .build_int_compare(IntPredicate::NE, code, self.i64(u64::MAX), "")
+            .map_err(e)?;
+        self.if_then(failed, |cx| {
+            cx.store_tag(d, dty, er)?;
+            let a = cx.offset(d, cx.field_offset(dty, Some(er), 0)?)?;
+            let oom = cx.variant_of(aty, "OutOfMemory")?;
+            cx.store_tag(a, aty, oom)?;
+            let bytes = cx.offset(a, cx.field_offset(aty, Some(oom), 0)?)?;
+            cx.store(bytes, code.into())?;
+            let over = cx
+                .builder
+                .build_int_compare(IntPredicate::EQ, code, cx.i64(u64::MAX - 1), "")
+                .map_err(e)?;
+            cx.if_then(over, |cx| cx.store_variant(a, aty, "CapacityOverflow"))
+        })
+    }
+
     fn reserve_header(
         &mut self,
         v: PointerValue<'ctx>,
@@ -1550,17 +1638,23 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.if_then(pos, |cx| cx.reserve_via_copy(v, k, cx.i64(size)))?;
             }
             ("try_reserve" | "try_reserve_exact", [k]) if is_vec => {
-                // Allocation failure aborts, so the request always succeeds.
+                // A capacity that cannot be represented, or one the
+                // allocator refuses, is an `Err` and leaves the vector as
+                // it was (B-2026-10-21-28).
                 let k = self.int_arg(k)?;
                 let pos = self
                     .builder
                     .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
                     .map_err(e)?;
                 let v = self.ref_arg(recv)?;
-                self.if_then(pos, |cx| cx.reserve_via_copy(v, k, cx.i64(size)))?;
-                let ok = self.variant_of(dty, "Ok")?;
-                let d = self.place_ptr(dest)?;
-                self.store_tag(d, dty, ok)?;
+                let code = self.entry_slot(8, "try.code")?;
+                self.store(code, self.i64(u64::MAX).into())?;
+                self.if_then(pos, |cx| {
+                    let c = cx.try_reserve_header(v, k, cx.i64(size))?;
+                    cx.store(code, c.into())
+                })?;
+                let code = self.load_i64(code)?;
+                self.store_alloc_result(dest, code)?;
             }
             ("capacity", []) if is_vec => {
                 // At least the length: a borrowed literal has capacity 0.

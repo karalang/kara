@@ -574,14 +574,25 @@ impl<'ctx> Cx<'ctx, '_> {
         if base == "VecDeque" && self.deque_native(method, args, dest)?.is_some() {
             return Ok(());
         }
+        if base == "String" && matches!(method, "try_reserve" | "try_reserve_exact") {
+            return self.string_try_reserve(args, dest);
+        }
+        // The capacity-bearing twins of a `Vec` or `String` can fail, so
+        // they have their own natives (B-2026-10-21-28).
+        let can_fail = matches!(base, "Vec" | "String")
+            && matches!(
+                method,
+                "try_with_capacity" | "try_reserve" | "try_reserve_exact"
+            );
         if matches!(
             base,
             "Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet"
         ) && method.starts_with("try_")
             && !matches!(method, "try_into" | "try_from")
+            && !can_fail
         {
-            // The fallible companions: the allocator aborts rather than
-            // fails, so each is its base method, in `Ok`.
+            // The other fallible companions: the allocator aborts rather
+            // than fails, so each is its base method, in `Ok`.
             let ok = self.variant_of(dty, "Ok")?;
             let pt = self
                 .tys
@@ -960,6 +971,32 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
                 self.store(self.offset(d, 8)?, self.i64(0).into())
+            }
+            // The fallible twin: exactly `n` slots in the `Ok`, or the
+            // `AllocError` (B-2026-10-21-28). A negative `n` panics, as it
+            // does for `with_capacity`.
+            ("String" | "Vec", "try_with_capacity") => {
+                let n = self.int_arg(&args[0])?;
+                let nonneg = self.non_negative(n)?;
+                self.abort_unless(nonneg, "explicit panic")?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let vty = self
+                    .tys
+                    .tcx()
+                    .field_ty(dty, Some(ok), 0)
+                    .ok_or("Result.Ok has no payload")?;
+                let size = match self.tys.kind(vty) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(el)) => self.layout(el)?.size,
+                    _ => 1,
+                };
+                let d = self.place_ptr(dest)?;
+                let out = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let code = self.rt_int(
+                    "vec_try_alloc",
+                    &[out.into(), n.into(), self.i64(size).into()],
+                    64,
+                )?;
+                self.store_alloc_result(dest, code)
             }
             ("String", "clear") => {
                 // Bytes need no drop; a literal's borrowed bytes are left

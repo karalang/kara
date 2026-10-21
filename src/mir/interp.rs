@@ -2003,9 +2003,23 @@ impl<'a> Interp<'a> {
             ("Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet", m)
                 if m.starts_with("try_") && m != "try_into" && m != "try_from" =>
             {
-                // The fallible companions: the interpreter's allocator never
-                // fails, so each is its base method, in `Ok`.
+                // The fallible companions: each is its base method, in
+                // `Ok`, except that a capacity that cannot be represented,
+                // or one the allocator refuses, is an `Err` (B-2026-10-21-28).
                 let ok_ty = self.payload_ty(ret, "Ok")?;
+                if let Some(failure) = self.alloc_failure(base, m, &args, arg_tys, ok_ty)? {
+                    let err_ty = self.payload_ty(ret, "Err")?;
+                    let e = match failure {
+                        None => self.variant_named(err_ty, None, "CapacityOverflow", vec![])?,
+                        Some(bytes) => self.variant_named(
+                            err_ty,
+                            None,
+                            "OutOfMemory",
+                            vec![Value::Int(bytes as i128)],
+                        )?,
+                    };
+                    return self.variant_named(ret, None, "Err", vec![e]);
+                }
                 let base_name = name.replacen(".try_", ".", 1);
                 let v = self.native(&base_name, args, arg_tys, ok_ty)?;
                 self.variant_named(ret, None, "Ok", vec![v])
@@ -6729,9 +6743,9 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             // Element `i` becomes `v`, the ones after it moving back; `i`
-            // may be the length. An allocation here does not fail, so
-            // `try_insert` is always `Ok`.
-            ("insert" | "try_insert", [Value::Int(i), v]) => {
+            // may be the length. (`try_insert` is this in an `Ok`, through
+            // the fallible companions' arm.)
+            ("insert", [Value::Int(i), v]) => {
                 let n = (self.vec_elems(id)?.len() - off) as i128;
                 if !(0..=n).contains(i) {
                     if self.trace {
@@ -6740,14 +6754,82 @@ impl<'a> Interp<'a> {
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 self.vec_elems(id)?.insert(off + *i as usize, v.clone());
-                if method == "insert" {
-                    Ok(Value::Unit)
-                } else {
-                    self.variant_named(ret, None, "Ok", vec![Value::Unit])
-                }
+                Ok(Value::Unit)
             }
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// Whether the fallible twin `method` of the `Vec`, `String` or
+    /// `VecDeque` `base` fails: `Some(None)` when the capacity it asks for
+    /// cannot be represented, `Some(Some(bytes))` when the allocator
+    /// refuses that many bytes, `None` when it succeeds. The bound and the
+    /// growth are the compiled backend's (`karac_mir_vec_try_reserve` and
+    /// `karac_mir_vec_try_alloc`); a `VecDeque` allocates nothing for
+    /// `with_capacity`, so only the bound applies to it.
+    fn alloc_failure(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Value],
+        arg_tys: &[Ty],
+        ok_ty: Ty,
+    ) -> R<Option<Option<usize>>> {
+        /// runtime/src/alloc.rs's `KARAC_MAX_ALLOC_BYTES`.
+        const MAX_BYTES: u128 = (1 << 61) - 1;
+        let elem_size = |me: &Self, t: Ty| -> usize {
+            match me.tys.kind(t) {
+                TyKind::Intrinsic(IntrinsicTy::Vec(el) | IntrinsicTy::VecDeque(el)) => {
+                    super::layout::layout(me.tys, el).map_or(1, |l| l.size as usize)
+                }
+                _ => 1,
+            }
+        };
+        let (n, len, cap, size) = match (base, method, args) {
+            ("Vec" | "String" | "VecDeque", "try_with_capacity", [Value::Int(n)]) if *n >= 0 => {
+                (*n as u128, 0, 0, elem_size(self, ok_ty))
+            }
+            ("Vec" | "String", "try_reserve" | "try_reserve_exact", [recv, Value::Int(n)])
+                if *n > 0 =>
+            {
+                let t = self.deref_ty(arg_tys.first().copied(), method)?;
+                let id = self.box_behind(recv)?;
+                let len = match self.slot(&Addr {
+                    root: Root::Heap(id),
+                    path: Path::from_slice(&[]),
+                })? {
+                    Value::Str(text) => text.len(),
+                    _ => self.vec_elems(id)?.len(),
+                };
+                let cap = self.caps.get(&id).copied().unwrap_or(0).max(len);
+                (*n as u128, len as u128, cap as u128, elem_size(self, t))
+            }
+            _ => return Ok(None),
+        };
+        let want = len + n;
+        let size = size as u128;
+        if want * size > MAX_BYTES {
+            return Ok(Some(None));
+        }
+        if base == "VecDeque" || want <= cap || size == 0 {
+            return Ok(None);
+        }
+        let reserving = method != "try_with_capacity";
+        let grown = if reserving {
+            want.max(cap * 2).max(if size == 1 { 8 } else { 4 })
+        } else {
+            want
+        };
+        let bytes = if grown * size > MAX_BYTES {
+            want
+        } else {
+            grown
+        } * size;
+        let mut probe: Vec<u8> = Vec::new();
+        if probe.try_reserve_exact(bytes as usize).is_err() {
+            return Ok(Some(Some(bytes as usize)));
+        }
+        Ok(None)
     }
 
     /// `FileSystem.write(path, text)` and `FileSystem.read_to_string(path)`
