@@ -3894,6 +3894,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         // entry is created when the key is missing, and an old value is
         // handed back and dropped.
         if let ExprKind::Index { object, index } = &target.kind {
+            if let ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } = &index.kind
+            {
+                let range = (start.as_deref(), end.as_deref(), *inclusive);
+                return self.range_assign(target, object, range, value);
+            }
             if !matches!(index.kind, ExprKind::Range { .. }) {
                 let ot = self.expr_ty(object)?;
                 let (k, base) = self.strip_ty_full(ot);
@@ -11953,6 +11962,173 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Move(Place::local(r))
             }
         }
+    }
+
+    /// `c[a..b] = other`: `other`'s elements copied into the range, which
+    /// must be as long (design.md § Range indexing; B-2026-10-21-24). The
+    /// range is viewed first, then the value, then each element is copied.
+    fn range_assign(
+        &mut self,
+        target: &'a Expr,
+        coll: &'a Expr,
+        range: (Option<&'a Expr>, Option<&'a Expr>, bool),
+        value: &'a Expr,
+    ) -> R<()> {
+        let ct = self.expr_ty(coll)?;
+        let elem = match self.strip_ty(ct) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            HK::Array { elem, .. } | HK::Vector { elem, .. } | HK::Slice { elem, .. } => elem,
+            _ => return self.unsupported(target.span, "assigning to this range"),
+        };
+        // Only a `Copy` element is copied in; `clone_from_slice` is the
+        // spelling for the others.
+        if !self.is_copy(elem) {
+            return self.unsupported(target.span, "assigning a range of non-`Copy` elements");
+        }
+        let (dst_t, src_t, usize_t, bool_t) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Slice {
+                    elem,
+                    mutable: true,
+                }),
+                tcx.intern(HK::Slice {
+                    elem,
+                    mutable: false,
+                }),
+                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::Bool),
+            )
+        };
+        let dst = self.slice_view(coll, Some(range), dst_t, true)?;
+        let (p, vt) = self.deref_place(value, false)?;
+        let src = match self.tys().tcx().kind(vt) {
+            HK::Slice { .. } => p,
+            _ => Place::local(self.slice_view_of(p, vt, src_t, false)),
+        };
+        let src_ty = self.place_type(&src);
+        let len = |bx: &mut Self, s: Place, st: Ty| {
+            let rt = bx.tys().tcx().reference(st, false);
+            let r = bx.temp(rt);
+            bx.assign(r, Rvalue::Ref(BorrowKind::Shared, s));
+            let n = bx.temp(usize_t);
+            let name = bx.tys().display(st);
+            bx.call_native(
+                &format!("{name}.len"),
+                vec![Operand::Move(Place::local(r))],
+                Place::local(n),
+            );
+            n
+        };
+        let n = len(self, Place::local(dst), dst_t);
+        let m = len(self, src.clone(), src_ty);
+        let same = self.temp(bool_t);
+        self.assign(
+            same,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(n)),
+                Operand::Copy(Place::local(m)),
+            ),
+        );
+        let ok = self.b.new_block();
+        let bad = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(same)),
+                targets: SwitchTargets::if_else(ok, bad),
+            },
+            bad,
+        );
+        let msg = self.static_str("range assignment: the value's length differs from the range's");
+        let unit = self.tys().unit();
+        let l = self.temp(unit);
+        self.call_native("panic_message", vec![msg], Place::local(l));
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Panic,
+        });
+        self.cur = ok;
+        // for i in 0..n { dst[i] = src[i] }
+        let i = self.temp(usize_t);
+        self.assign(
+            i,
+            Rvalue::Use(Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(0),
+            })),
+        );
+        let head = self.b.new_block();
+        let body = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(n)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body, exit),
+            },
+            body,
+        );
+        let (src_ref, dst_ref, er, emr) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.reference(src_ty, false),
+                tcx.reference(dst_t, true),
+                tcx.reference(elem, false),
+                tcx.reference(elem, true),
+            )
+        };
+        let sname = self.tys().display(src_ty);
+        let dname = self.tys().display(dst_t);
+        let rs = self.temp(src_ref);
+        self.assign(rs, Rvalue::Ref(BorrowKind::Shared, src.clone()));
+        let from = self.temp(er);
+        self.call_native(
+            &format!("{sname}.index"),
+            vec![
+                Operand::Move(Place::local(rs)),
+                Operand::Copy(Place::local(i)),
+            ],
+            Place::local(from),
+        );
+        let rd = self.temp(dst_ref);
+        self.assign(rd, Rvalue::Ref(BorrowKind::Mut, Place::local(dst)));
+        let to = self.temp(emr);
+        self.call_native(
+            &format!("{dname}.index_mut"),
+            vec![
+                Operand::Move(Place::local(rd)),
+                Operand::Copy(Place::local(i)),
+            ],
+            Place::local(to),
+        );
+        self.assign(
+            Place::local(to).project(ProjElem::Deref),
+            Rvalue::Use(Operand::Copy(Place::local(from).project(ProjElem::Deref))),
+        );
+        let one = Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(1),
+        });
+        self.assign(
+            i,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
+        );
+        self.goto(head);
+        self.cur = exit;
+        Ok(())
     }
 
     fn slice_view(

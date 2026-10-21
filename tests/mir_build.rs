@@ -7138,3 +7138,69 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_range_assignment_copies_into_the_range() {
+    // B-2026-10-21-24: `c[a..b] = other` copies `other`'s elements into the
+    // range and panics when the lengths differ (design.md § Range indexing);
+    // the builder assigned `other` to a temporary view, so it did nothing.
+    let src = r#"
+#[derive(Copy, Clone)]
+struct P { x: i64, y: f64 }
+fn fill(s: mut Slice[i64], src: Slice[i64]) {
+    s[1..=2] = src;
+}
+fn head(v: mut ref Vec[f64], w: ref Vec[f64]) {
+    v[..2] = w[1..];
+}
+fn tail_set(v: mut ref Vec[i64]) {
+    v[3..] = [40, 50];
+}
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4, 5];
+    let w: Vec[i64] = [8, 9, 7];
+    v[1..3] = w[0..2];
+    println(f"{v}");
+    tail_set(mut v);
+    let src: Vec[i64] = [7, 6];
+    fill(mut v, src);
+    println(f"{v}");
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    let u: Vec[i64] = [8, 9];
+    a[0..2] = u;
+    println(f"{a}");
+    let mut f: Vec[f64] = [0.5, 1.5, 2.5];
+    let g: Vec[f64] = [9.0, 8.0, 7.0];
+    head(mut f, g);
+    println(f"{f}");
+    let mut ps: Vec[P] = [P { x: 1, y: 1.0 }, P { x: 2, y: 2.0 }];
+    let qs: Vec[P] = [P { x: 3, y: 3.0 }];
+    ps[1..2] = qs;
+    println(f"{ps[0].x} {ps[1].x} {ps[1].y}");
+}
+"#;
+    let want = "[1, 8, 9, 4, 5]\n[1, 7, 6, 40, 50]\n[8, 9, 3, 4]\n[8.0, 7.0, 2.5]\n1 3 3.0\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    let short = r#"
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4];
+    let w: Vec[i64] = [8, 9, 7];
+    println("before");
+    v[1..3] = w[0..3];
+    println(f"{v}");
+}
+"#;
+    let r = karac::mir::lower::run_source(short).expect("MIR interpreter");
+    assert_eq!(r.output, "before\n");
+    assert!(
+        matches!(r.outcome, karac::mir::interp::Outcome::Aborted(_)),
+        "{:?}",
+        r.outcome
+    );
+}
