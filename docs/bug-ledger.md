@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 286 |
 | false-positive | 275 |
 | other | 194 |
-| diagnostics | 184 |
+| diagnostics | 185 |
 | perf | 182 |
 | soundness | 133 |
 | crash | 129 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3021 |
 | interp | 1033 |
-| typecheck | 554 |
+| typecheck | 555 |
 | ownership | 130 |
 | other | 123 |
 | runtime | 86 |
@@ -166,7 +166,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
 | B-2026-10-21-7 | 2026-10-21 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All checks passed." when the name is not used | — |
 | B-2026-10-21-16 | 2026-10-21 | typecheck | low | `VarError.NotUnicode.into()` is refused by check ("no method 'into' on type 'VarError'") though the library provides `impl From[VarError] for IoError` | — |
-| B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
 | B-2026-10-21-29 | 2026-10-21 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places. It refuses: `a.union(b)` then `a.intersection(b)` ("value 'b' moved here"; Set and SortedSet `union`/`intersection`/`difference` take `other` bare, which borrows under D5), and `a[0] = 10` through a half of `v.split_at_mut(2)` ("declared without `mut`", while patterns cannot carry `mut`). It accepts what the page rejects: `v.len()` while both `split_at_mut` halves are live, and `s.iter_mut()` on a `Set`/`SortedSet` ("have no `iter_mut`"); the MIR backends then exit 3 on the latter. It also types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.truncate(n)` and `d.contains(x)` check though the page's VecDeque table has none of them. Later. | — |
 | B-2026-10-21-30 | 2026-10-21 | typecheck | low | Library surface collections.md documents that no backend has: `Set.from(array)` / `Map.from(array of pairs)` (the page's opening example; `PriorityQueue.from` works), `Array.from_fn(n, f)`, the mutating `Slice` methods on an `Array` (`sort`, `reverse`, `swap`, `fill`, `split_at`, `split_at_mut`, `sort_by`, `sort_by_key`; the page says an Array "has every `Slice[T]` method"), `f64.total_cmp` as a function value (`w.sort_by(f64.total_cmp)`), `Slice.clone_from_slice`, `Vec.remove_first(pred)`, and Display / PartialEq / PartialOrd / Ord for `VecDeque`. Also the uninitialized-array diagnostic suggests `Array[v; N]` and `Array.from_fn`. Later. | — |
@@ -197,6 +196,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-76 | 2026-10-21 | typecheck | medium | `for x in s` over a value that is not iterable passes `karac check` and binds the value itself: `for msg in rx {}` over a `Receiver[i64]` types `msg` as `Receiver[i64]`, and `for x in s { x.a }` over a plain struct is accepted | — |
 | B-2026-10-21-77 | 2026-10-21 | typecheck | low | `karac __mir-run` and `__mir-llvm-run` run a program whose forwarded `mut ref` argument has no call-site `mut` marker, which `karac check` and `karac build --mir` refuse | — |
 | B-2026-10-21-78 | 2026-10-21 | codegen | medium | `karac __mir-llvm-run` takes worse-than-quadratic time in the length of one function: 2000 `push_str` statements take 8.8 s and 4000 take 43 s, while `karac build --mir` takes 2.3 s and 4.3 s | — |
+| B-2026-10-21-79 | 2026-10-21 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String]` reports "expected 'Slice[StringSlice]', found 'Vec[String]'" | — |
 
 ### Relocated
 
