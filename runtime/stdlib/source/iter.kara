@@ -71,6 +71,11 @@ trait Iterator {
         IterStepBy { it: self, step: step, first: true }
     }
 
+    // A default method's own generics are named apart from every library
+    // iterator impl's (`T`, `K`, `V`, `I`, `A`, `B`, `F`, `U`): a call's
+    // generic arguments are matched by name, so a method `K` copied into
+    // `impl[K, V] .. SortedMapIter[K, V]` was read as the map's key
+    // (B-2026-10-21-4).
     /// This iterator's items, then `other`'s.
     fn chain[J: Iterator[Item = Self.Item]](own self, other: own J) -> IterChain[Self, J] {
         IterChain { a: self, b: other, a_done: false }
@@ -82,37 +87,37 @@ trait Iterator {
     }
 
     /// `f` applied to each item.
-    fn map[U, F: MutFn(own Self.Item) -> U](own self, f: own F) -> IterMap[Self, F, U] {
+    fn map[OutV, FnV: MutFn(own Self.Item) -> OutV](own self, f: own FnV) -> IterMap[Self, FnV, OutV] {
         IterMap { it: self, f: f }
     }
 
     /// The items `pred` holds for.
-    fn filter[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> IterFilter[Self, F] {
+    fn filter[FnV: MutFn(Self.Item) -> bool](own self, pred: own FnV) -> IterFilter[Self, FnV] {
         IterFilter { it: self, pred: pred }
     }
 
     /// The `Some` results of `f` applied to each item.
-    fn filter_map[U, F: MutFn(own Self.Item) -> Option[U]](own self, f: own F) -> IterFilterMap[Self, F, U] {
+    fn filter_map[OutV, FnV: MutFn(own Self.Item) -> Option[OutV]](own self, f: own FnV) -> IterFilterMap[Self, FnV, OutV] {
         IterFilterMap { it: self, f: f }
     }
 
     /// The items up to the first one `pred` does not hold for.
-    fn take_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> IterTakeWhile[Self, F] {
+    fn take_while[FnV: MutFn(Self.Item) -> bool](own self, pred: own FnV) -> IterTakeWhile[Self, FnV] {
         IterTakeWhile { it: self, pred: pred, done: false }
     }
 
     /// The items from the first one `pred` does not hold for.
-    fn skip_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> IterSkipWhile[Self, F] {
+    fn skip_while[FnV: MutFn(Self.Item) -> bool](own self, pred: own FnV) -> IterSkipWhile[Self, FnV] {
         IterSkipWhile { it: self, pred: pred, skipping: true }
     }
 
     /// The items, calling `f` on each as it passes.
-    fn inspect[F: MutFn(Self.Item)](own self, f: own F) -> IterInspect[Self, F] {
+    fn inspect[FnV: MutFn(Self.Item)](own self, f: own FnV) -> IterInspect[Self, FnV] {
         IterInspect { it: self, f: f }
     }
 
     /// The items of each iterator `f` returns, in turn.
-    fn flat_map[U: Iterator, F: MutFn(own Self.Item) -> U](own self, f: own F) -> IterFlatMap[Self, F, U] {
+    fn flat_map[OutV: Iterator, FnV: MutFn(own Self.Item) -> OutV](own self, f: own FnV) -> IterFlatMap[Self, FnV, OutV] {
         IterFlatMap { it: self, f, cur: None }
     }
 
@@ -123,7 +128,7 @@ trait Iterator {
 
     /// Threads a state through the items: `f` returns the next state and
     /// the item to yield, and the first `None` ends the iteration.
-    fn scan[A, U, F: MutFn(own A, own Self.Item) -> Option[(A, U)]](own self, init: own A, f: own F) -> IterScan[Self, A, F, U] {
+    fn scan[StateV, OutV, FnV: MutFn(own StateV, own Self.Item) -> Option[(StateV, OutV)]](own self, init: own StateV, f: own FnV) -> IterScan[Self, StateV, FnV, OutV] {
         IterScan { it: self, state: Some(init), f }
     }
 
@@ -138,7 +143,7 @@ trait Iterator {
     }
 
     /// Folds every item into an accumulator, front to back.
-    fn fold[B](own self, init: own B, f: own MutFn(own B, own Self.Item) -> B) -> B {
+    fn fold[AccV](own self, init: own AccV, f: own MutFn(own AccV, own Self.Item) -> AccV) -> AccV {
         let mut it = self;
         let mut acc = init;
         while let Some(x) = it.next() {
@@ -277,9 +282,9 @@ trait Iterator {
     }
 
     /// The item whose `key` is smallest, the first of several equal ones.
-    fn min_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item] {
+    fn min_by_key[KeyV: Ord](own self, key: own MutFn(Self.Item) -> KeyV) -> Option[Self.Item] {
         let mut it = self;
-        let mut best: Option[(K, Self.Item)] = None;
+        let mut best: Option[(KeyV, Self.Item)] = None;
         while let Some(x) = it.next() {
             let k = key(x);
             best = match best {
@@ -294,9 +299,9 @@ trait Iterator {
     }
 
     /// The item whose `key` is largest, the last of several equal ones.
-    fn max_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item] {
+    fn max_by_key[KeyV: Ord](own self, key: own MutFn(Self.Item) -> KeyV) -> Option[Self.Item] {
         let mut it = self;
-        let mut best: Option[(K, Self.Item)] = None;
+        let mut best: Option[(KeyV, Self.Item)] = None;
         while let Some(x) = it.next() {
             let k = key(x);
             best = match best {
@@ -311,7 +316,7 @@ trait Iterator {
     }
 
     /// The first `Some` that `f` returns.
-    fn find_map[U](own self, f: own MutFn(own Self.Item) -> Option[U]) -> Option[U] {
+    fn find_map[OutV](own self, f: own MutFn(own Self.Item) -> Option[OutV]) -> Option[OutV] {
         let mut it = self;
         while let Some(x) = it.next() {
             match f(x) {
