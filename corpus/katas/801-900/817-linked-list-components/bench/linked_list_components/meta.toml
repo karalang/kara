@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/817-linked-list-components/bench/linked_list_components.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "lib:set", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "d3a53021b"
+extracted_src = "d6eb9e55"
+model_rev = "583cfb0d"
+model_src = "d6eb9e55"

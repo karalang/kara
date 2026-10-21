@@ -1,0 +1,107 @@
+// LeetCode 817 — Linked List Components, a table of marks.
+//
+// The values are 0 to n - 1, so a table of n flags indexed by value
+// stands in for the set. Count the components as the ★ arm does, by
+// their last nodes, after one walk to find n. O(n + m) with no hashing.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn num_components(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let mut n = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        n += 1;
+        cur = node.next;
+    }
+    let mut marked = Vec.filled(n, false);
+    for v in nums.iter() {
+        marked[*v] = true;
+    }
+    let mut count = 0;
+    cur = head;
+    while let Some(node) = cur {
+        if marked[node.val] {
+            match node.next {
+                Some(next) => {
+                    if not marked[next.val] {
+                        count += 1;
+                    }
+                }
+                None => count += 1,
+            }
+        }
+        cur = node.next;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn show(values: Vec[i64], nums: Vec[i64]) {
+    let text = f"head = {values}, nums = {nums}";
+    println(f"{text} -> {num_components(from_values(values), nums)}");
+}
+
+// The values 0 to n - 1 in a random order.
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 0..n {
+        values.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        values.swap(i, j);
+    }
+    values
+}
+
+fn main() {
+    show(vec![0, 1, 2, 3], vec![0, 1, 3]);
+    show(vec![0, 1, 2, 3, 4], vec![0, 3, 1, 4]);
+    show(vec![0], vec![0]);
+    show(vec![2, 0, 1], vec![1, 2]);
+    show(vec![3, 1, 4, 0, 2], vec![2, 0, 3]);
+    show(vec![0, 1, 2, 3, 4, 5], vec![5, 3, 1]);
+    show(vec![0, 1, 2, 3, 4, 5], vec![4, 2, 0, 5, 1, 3]);
+    // LeetCode's largest: 10,000 nodes in a random order, nums a random
+    // half of them, and every other value from the head.
+    let mut seed = 817;
+    let values = shuffled(mut seed, 10000);
+    let half = shuffled(mut seed, 10000)[0..5000].to_vec();
+    println(f"10000 nodes, a random half -> {num_components(from_values(values.clone()), half)}");
+    let mut alternate: Vec[i64] = Vec.new();
+    for k in 0..5000 {
+        alternate.push(values[2 * k]);
+    }
+    println(f"10000 nodes, every other one -> {num_components(from_values(values), alternate)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let values = shuffled(mut seed, n);
+        let m = 1 + next_random(mut seed) % n;
+        let nums = shuffled(mut seed, n)[0..m].to_vec();
+        let answer = num_components(from_values(values), nums);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random rounds of 1 to 30 nodes: total {total}, checksum {check}");
+}

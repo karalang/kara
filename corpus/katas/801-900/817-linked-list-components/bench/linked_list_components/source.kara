@@ -1,0 +1,90 @@
+// Benchmark for #817: Linked List Components -- the ★ arm (count the ends).
+//
+// A component is a run of list nodes whose values are all in nums, so
+// every component has exactly one last node: a node in nums whose next
+// node is missing or not in nums. Put nums in a set and count those
+// nodes in one walk. O(n + m) time for n nodes and m numbers.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn num_components(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let mut wanted: Set[i64] = Set.new();
+    for v in nums.iter() {
+        wanted.insert(*v);
+    }
+    let mut count = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        if wanted.contains(node.val) {
+            let ends = match node.next {
+                Some(next) => not wanted.contains(next.val),
+                None => true,
+            };
+            if ends {
+                count += 1;
+            }
+        }
+        cur = node.next;
+    }
+    count
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 lists of 10,000 nodes (LeetCode's largest), the values 0 to 9,999
+    // in a random order, each with nums a random set of 1 to 9,999 of
+    // them, drawn once. Each round swaps one number of the next list's
+    // nums for one outside it and counts the components.
+    let count = 64;
+    let n = 10000;
+    let rounds = 8000;
+    let mut seed: i64 = 817;
+    let mut lists: Vec[Option[ListNode]] = Vec.new();
+    let mut inside: Vec[Vec[i64]] = Vec.new();
+    let mut outside: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut order: Vec[i64] = Vec.new();
+        for v in 0..n {
+            order.push(v);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            order.swap(i, j);
+        }
+        let mut head: Option[ListNode] = None;
+        for k in 0..n {
+            head = Some(ListNode { val: order[n - 1 - k], next: head });
+        }
+        lists.push(head);
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            order.swap(i, j);
+        }
+        let m = 1 + next_random(mut seed) % (n - 1);
+        inside.push(order[0..m].to_vec());
+        outside.push(order[m..n].to_vec());
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let a = next_random(mut seed) % inside[g].len();
+        let b = next_random(mut seed) % outside[g].len();
+        let swapped = inside[g][a];
+        inside[g][a] = outside[g][b];
+        outside[g][b] = swapped;
+        let answer = num_components(lists[g], inside[g]);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} nodes: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,10 @@
+head = [0, 1, 2, 3], nums = [0, 1, 3] -> 2
+head = [0, 1, 2, 3, 4], nums = [0, 3, 1, 4] -> 2
+head = [0], nums = [0] -> 1
+head = [2, 0, 1], nums = [1, 2] -> 2
+head = [3, 1, 4, 0, 2], nums = [2, 0, 3] -> 2
+head = [0, 1, 2, 3, 4, 5], nums = [5, 3, 1] -> 3
+head = [0, 1, 2, 3, 4, 5], nums = [4, 2, 0, 5, 1, 3] -> 1
+10000 nodes, a random half -> 2494
+10000 nodes, every other one -> 5000
+300 random rounds of 1 to 30 nodes: total 923, checksum 438396218

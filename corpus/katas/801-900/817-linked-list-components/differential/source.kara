@@ -1,0 +1,277 @@
+// LeetCode #817: differential -- the four arms against the statement.
+//
+// Copies of the four arms, sharing the ★ arm's ListNode, held to four
+// properties on random lists, against a search of the graph of
+// neighbours in nums.
+
+// ---- ★ arm ----------------------------------------------------------
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn num_components_star(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let mut wanted: Set[i64] = Set.new();
+    for v in nums.iter() {
+        wanted.insert(*v);
+    }
+    let mut count = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        if wanted.contains(node.val) {
+            let ends = match node.next {
+                Some(next) => not wanted.contains(next.val),
+                None => true,
+            };
+            if ends {
+                count += 1;
+            }
+        }
+        cur = node.next;
+    }
+    count
+}
+
+// ---- starts arm -----------------------------------------------------
+
+fn num_components_starts(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let mut wanted: Set[i64] = Set.new();
+    for v in nums.iter() {
+        wanted.insert(*v);
+    }
+    let mut count = 0;
+    let mut inside = false;
+    let mut cur = head;
+    while let Some(node) = cur {
+        let here = wanted.contains(node.val);
+        if here and not inside {
+            count += 1;
+        }
+        inside = here;
+        cur = node.next;
+    }
+    count
+}
+
+// ---- marks arm ------------------------------------------------------
+
+fn num_components_marks(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let mut n = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        n += 1;
+        cur = node.next;
+    }
+    let mut marked = Vec.filled(n, false);
+    for v in nums.iter() {
+        marked[*v] = true;
+    }
+    let mut count = 0;
+    cur = head;
+    while let Some(node) = cur {
+        if marked[node.val] {
+            match node.next {
+                Some(next) => {
+                    if not marked[next.val] {
+                        count += 1;
+                    }
+                }
+                None => count += 1,
+            }
+        }
+        cur = node.next;
+    }
+    count
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn num_components_iter(head: Option[ListNode], nums: Vec[i64]) -> i64 {
+    let wanted: Set[i64] = nums.iter().map(|v| *v).collect();
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    let inside: Vec[bool] = values.iter().map(|v| wanted.contains(*v)).collect();
+    (0..inside.len()).filter(|i| inside[i] and (i + 1 == inside.len() or not inside[i + 1])).count()
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The statement: two values of nums are connected when they sit next to
+// each other in the list, and a component is a connected group. Join
+// the neighbours in a graph over the values 0 to n - 1 and count the
+// groups of values in nums by search.
+fn components_by_definition(values: Vec[i64], nums: Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut in_nums = Vec.filled(n, false);
+    for v in nums.iter() {
+        in_nums[*v] = true;
+    }
+    let mut links: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        links.push(Vec.new());
+    }
+    for k in 0..n - 1 {
+        let (a, b) = (values[k], values[k + 1]);
+        if in_nums[a] and in_nums[b] {
+            links[a].push(b);
+            links[b].push(a);
+        }
+    }
+    let mut seen = Vec.filled(n, false);
+    let mut groups = 0;
+    for v in nums.iter() {
+        if seen[*v] {
+            continue;
+        }
+        groups += 1;
+        seen[*v] = true;
+        let mut stack = vec![*v];
+        while let Some(u) = stack.pop() {
+            for w in links[u].iter() {
+                if not seen[*w] {
+                    seen[*w] = true;
+                    stack.push(*w);
+                }
+            }
+        }
+    }
+    groups
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn arm(which: i64, values: Vec[i64], nums: Vec[i64]) -> i64 {
+    let head = from_values(values);
+    if which == 0 {
+        num_components_star(head, nums)
+    } else if which == 1 {
+        num_components_starts(head, nums)
+    } else if which == 2 {
+        num_components_marks(head, nums)
+    } else {
+        num_components_iter(head, nums)
+    }
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 0..n {
+        values.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        values.swap(i, j);
+    }
+    values
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8170;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut most = 0;
+    for case in 0..cases {
+        // kind 0: a value in nums one time in two; kind 1: one time in
+        // five; kind 2: four times in five; kind 3: every value, or one.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 30;
+        let values = shuffled(mut seed, n);
+        let mut nums: Vec[i64] = Vec.new();
+        for v in shuffled(mut seed, n).iter() {
+            let keep = if kind == 0 {
+                next_random(mut seed) % 2 == 0
+            } else if kind == 1 {
+                next_random(mut seed) % 5 == 0
+            } else if kind == 2 {
+                next_random(mut seed) % 5 > 0
+            } else {
+                case % 8 == 3 or nums.is_empty()
+            };
+            if keep {
+                nums.push(*v);
+            }
+        }
+        if nums.is_empty() {
+            nums.push(values[next_random(mut seed) % n]);
+        }
+        let want = components_by_definition(values.clone(), nums.clone());
+        if want > most {
+            most = want;
+        }
+        let mut in_nums = Vec.filled(n, false);
+        for v in nums.iter() {
+            in_nums[*v] = true;
+        }
+        let mut rest: Vec[i64] = Vec.new();
+        let mut changes = 0;
+        for k in 0..n {
+            if not in_nums[values[k]] {
+                rest.push(values[k]);
+            }
+            if k + 1 < n and in_nums[values[k]] != in_nums[values[k + 1]] {
+                changes += 1;
+            }
+        }
+        let mut backwards = values.clone();
+        backwards.reverse();
+        // Every value v renamed to `rename[v]`, in the list and in nums.
+        let rename = shuffled(mut seed, n);
+        let mut renamed_values: Vec[i64] = Vec.new();
+        for v in values.iter() {
+            renamed_values.push(rename[*v]);
+        }
+        let mut renamed_nums: Vec[i64] = Vec.new();
+        for v in nums.iter() {
+            renamed_nums.push(rename[*v]);
+        }
+        for which in 0..arms {
+            // 1: the statement's count.
+            // 2: the same for the list reversed.
+            // 3: with the values not in nums, one run more than the
+            //    places where the list crosses between the two.
+            // 4: the same with every value renamed.
+            let got = arm(which, values.clone(), nums.clone());
+            let others = if rest.is_empty() { 0 } else { arm(which, values.clone(), rest.clone()) };
+            let ok = [
+                got == want,
+                arm(which, backwards.clone(), nums.clone()) == want,
+                got + others == changes + 1,
+                arm(which, renamed_values.clone(), renamed_nums.clone()) == want,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases (at most {most} components), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, starts {fails[1]}, marks {fails[2]}, iter {fails[3]}");
+    println(f"by property: count {by_property[0]}, reversed {by_property[1]}, rest {by_property[2]}, renamed {by_property[3]}");
+}
