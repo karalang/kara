@@ -10685,3 +10685,29 @@ fn a_loop_over_an_owned_result_borrows_nothing() {
         "while the `for` loop",
     );
 }
+
+/// A program's own `struct Response` serves when it has the documented shape
+/// (`status: i64`, `body: String`, optional `headers`); any other shape is a
+/// check error at the `Server.serve` call, as legacy codegen made it.
+#[test]
+fn a_handler_response_has_the_documented_shape() {
+    rejected(
+        "handler-response-without-body",
+        "struct Response { status: i64 }\n\
+         fn handle(req: Request) -> Response { Response { status: 200 } }\n\
+         fn main() with sends(Network) receives(Network) {\n\
+             Server.serve(\"127.0.0.1:0\", handle);\n\
+         }\n",
+        "must return a `Response` with `status: i64` and `body: String`",
+    );
+    accepted(
+        "handler-response-with-headers",
+        "struct Response { status: i64, body: String, headers: Vec[(String, String)] }\n\
+         fn handle(req: Request) -> Response {\n\
+             Response { status: 200, body: \"{}\".to_string(), headers: Vec.new() }\n\
+         }\n\
+         fn main() with sends(Network) receives(Network) {\n\
+             Server.serve(\"127.0.0.1:0\", handle);\n\
+         }\n",
+    );
+}

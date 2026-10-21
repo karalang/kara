@@ -1272,6 +1272,9 @@ impl Walk<'_, '_> {
     /// client (`TlsStream.connect`) is not one. Records the call and returns
     /// false, so the walk goes on as for any other call.
     fn check_m4a_call(&mut self, call: &Expr, ty: &str, method: &str) -> bool {
+        if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
+            self.check_handler_response(call, method);
+        }
         let what = match (ty, method) {
             ("Server", "serve_tls") => "the TLS server",
             ("Server", "serve_ws" | "serve_ws_tls") => "WebSocket",
@@ -1298,6 +1301,52 @@ impl Walk<'_, '_> {
             ),
         ));
         false
+    }
+
+    /// A `Server.serve` handler returns a `Response`, and a program may declare
+    /// its own (examples/shortener/README.md): `status: i64` and
+    /// `body: String`, then optionally `headers: Vec[(String, String)]`. A
+    /// struct of any other shape is refused here, where the legacy pipeline
+    /// refused it in codegen (the misshaped-handler test in
+    /// tests/http_client_codegen.rs).
+    fn check_handler_response(&mut self, call: &Expr, method: &str) {
+        let Some(own) = self.tc.program.items.iter().find_map(|it| match it {
+            Item::StructDef(s) if !s.stdlib_origin && s.name == "Response" => Some(s),
+            _ => None,
+        }) else {
+            return;
+        };
+        let fields: Vec<(String, String)> = own
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), crate::formatter::render_type_expr(&f.ty)))
+            .collect();
+        let want = [
+            ("status", "i64"),
+            ("body", "String"),
+            ("headers", "Vec[(String, String)]"),
+        ];
+        let fits = (2..=3).contains(&fields.len())
+            && fields
+                .iter()
+                .zip(want.iter())
+                .all(|((n, t), (wn, wt))| n == wn && t == wt);
+        if fits {
+            return;
+        }
+        let shape = fields
+            .iter()
+            .map(|(n, t)| format!("{n}: {t}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.m4a_calls.push((
+            call.span,
+            format!(
+                "a `Server.{method}` handler must return a `Response` with `status: i64` and \
+                 `body: String` (then, optionally, `headers: Vec[(String, String)]`), but this \
+                 program's `struct Response` is {{ {shape} }}"
+            ),
+        ));
     }
 
     /// Whether `name` is bound by the pattern of an enclosing bare `for`
