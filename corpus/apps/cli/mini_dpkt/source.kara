@@ -1,0 +1,5011 @@
+// mini_dpkt: dpkt 1.9.8, the packet parsing and building library for
+// Python, on a small office capture:
+// - the capture formats: pcap (both byte orders, microsecond and
+//   nanosecond timestamps) and pcapng (section, interface, enhanced and
+//   simple packet blocks, options, timestamp resolution and offset),
+//   read through UniversalReader and written back by the two Writers;
+// - dpkt's Packet model: __hdr__ fields with struct formats, bit-field
+//   properties, defaults, the instance attributes, and __repr__, which
+//   prints only what differs from a default;
+// - the layers the capture reaches: Ethernet with 802.1Q and QinQ tags,
+//   ARP, IPv4 with options, IPv6 with its extension headers, TCP, UDP,
+//   ICMP and ICMPv6 with their message bodies, DNS (name compression
+//   both ways), DHCP, NTP, HTTP requests and responses (chunked and
+//   Content-Length bodies) and TLS records with ClientHello and
+//   ServerHello, read against dpkt's cipher suite table;
+// - packing: lengths, the IPv4 header checksum and the TCP, UDP and
+//   ICMPv6 checksums over their pseudo-headers;
+// - the errors dpkt raises for broken input: NeedData, UnpackError,
+//   PackError, SSL3Exception and ValueError, with their messages.
+//
+// The inputs are data/jobs.txt and the captures beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through dpkt itself (the copy in dpkt/).
+
+struct DataFile {
+    path: String,
+    body: String,
+    hex: bool,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let mut dir = "data".to_string();
+        let parts: Vec[Str] = file.path.split("/").collect();
+        let mut i = 0;
+        while i + 1 < parts.len() {
+            dir = f"{dir}/{parts[i]}";
+            i += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        let p = f"data/{file.path}";
+        if file.hex {
+            if let Err(e) = fs.write_bytes(p.clone(), unhex(file.body)) {
+                return Err(f"cannot write {p}: {e}");
+            }
+        } else if let Err(e) = fs.write(p.clone(), file.body.clone()) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut jobs = 0;
+    for raw in text.lines() {
+        let line = raw.trim().to_string();
+        if line.len() == 0 or raw.starts_with("#") {
+            continue;
+        }
+        let parts = split_ws_s(line, -1);
+        println(f"== {line}");
+        jobs += 1;
+        let cmd = parts[0].clone();
+        let args = parts[1..].to_vec();
+        let mut nums: Vec[i64] = Vec.new();
+        let mut k = 1;
+        while k < args.len() {
+            nums.push(i64.parse(args[k].clone()).unwrap_or(0));
+            k += 1;
+        }
+        if cmd == "info" {
+            job_info(args[0]);
+        } else if cmd == "list" {
+            job_list(args[0]);
+        } else if cmd == "repr" {
+            job_repr(args[0], nums);
+        } else if cmd == "hexdump" {
+            job_hexdump(args[0], nums);
+        } else if cmd == "dns" {
+            job_dns(args[0]);
+        } else if cmd == "dhcp" {
+            job_dhcp(args[0]);
+        } else if cmd == "ntp" {
+            job_ntp(args[0]);
+        } else if cmd == "http" {
+            job_http(args[0]);
+        } else if cmd == "tls" {
+            job_tls(args[0]);
+        } else if cmd == "checksums" {
+            job_checksums(args[0]);
+        } else if cmd == "stats" {
+            job_stats(args[0]);
+        } else if cmd == "ngblocks" {
+            job_ngblocks(args[0]);
+        } else if cmd == "build" {
+            job_build();
+        } else if cmd == "errors" {
+            job_errors();
+        } else if cmd == "summary" {
+            job_summary(jobs);
+        } else {
+            println("unknown job");
+        }
+    }
+}
+
+// ------------------------------------------------------------ building packets
+
+fn show_built(label: Str, frame: ref Vec[u8]) {
+    println(f"{label}, {frame.len()} bytes:");
+    println(hexdump(frame));
+    match eth(frame) {
+        Ok(e) => println(f"  {repr_pkt(e)}"),
+        Err(x) => println(f"  {err_line(x)}"),
+    }
+}
+
+fn with_data(key: Str, data: own V) -> Pkt {
+    let mut p = new_pkt(key);
+    p.data = data;
+    p
+}
+
+// Ethernet(src=src, dst=dst, data=inner)
+fn ether(src: ref Vec[u8], dst: ref Vec[u8], inner: own Pkt) -> Pkt {
+    let mut e = with_data("Ethernet", pv(inner));
+    set(mut e, "src", V.Bytes(src.clone()));
+    set(mut e, "dst", V.Bytes(dst.clone()));
+    e
+}
+
+// IP(src=src, dst=dst, p=proto, data=inner), whose constructor fills in
+// len.
+fn ipv4(src: ref Vec[u8], dst: ref Vec[u8], proto: i64, inner: own Pkt) -> Pkt {
+    let mut p = with_data("IP", pv(inner));
+    set(mut p, "src", V.Bytes(src.clone()));
+    set(mut p, "dst", V.Bytes(dst.clone()));
+    seti(mut p, "p", proto);
+    let n = pkt_len(p);
+    seti(mut p, "len", n);
+    p
+}
+
+fn udp_pkt(sport: i64, dport: i64, data: own Vec[u8]) -> Pkt {
+    let mut u = with_data("UDP", V.Bytes(data));
+    seti(mut u, "sport", sport);
+    seti(mut u, "dport", dport);
+    u
+}
+
+fn echo_pkt() -> Pkt {
+    let mut body = with_data("icmp.Echo", V.Bytes(bytes_of("hello")));
+    seti(mut body, "id", 1);
+    seti(mut body, "seq", 9);
+    let mut echo = with_data("ICMP", pv(body));
+    seti(mut echo, "type", 8);
+    echo
+}
+
+fn bytes_or_report(p: mut ref Pkt) -> Vec[u8] {
+    match pkt_bytes(mut p) {
+        Ok(b) => b,
+        Err(e) => {
+            println(err_line(e));
+            Vec.new()
+        }
+    }
+}
+
+fn addr6(last: u8) -> Vec[u8] {
+    let mut b: Vec[u8] = vec![0x20, 0x01, 0x0d, 0xb8];
+    push_all(mut b, zeros(11));
+    b.push(last);
+    b
+}
+
+fn job_build() {
+    let a: Vec[u8] = vec![2, 0, 0, 0, 0, 0xaa];
+    let b: Vec[u8] = vec![2, 0, 0, 0, 0, 0xbb];
+    let src: Vec[u8] = vec![192, 0, 2, 20];
+    let dst: Vec[u8] = vec![192, 0, 2, 30];
+    // a DNS answer, packed with name compression
+    let mut d = new_pkt("DNS");
+    seti(mut d, "id", 0x0102);
+    seti(mut d, "op", DNS_QR | DNS_RD | DNS_RA);
+    let mut q = new_pkt("Q");
+    set(mut q, "name", V.Str("printer.office.example".to_string()));
+    seti(mut q, "type", DNS_A);
+    set(mut d, "qd", V.List(vec![pv(q)]));
+    let mut r1 = new_pkt("RR");
+    set(mut r1, "name", V.Str("printer.office.example".to_string()));
+    seti(mut r1, "type", DNS_CNAME);
+    seti(mut r1, "ttl", 60);
+    set(mut r1, "cname", V.Str("prn-2.office.example".to_string()));
+    let mut r2 = new_pkt("RR");
+    set(mut r2, "name", V.Str("prn-2.office.example".to_string()));
+    seti(mut r2, "type", DNS_A);
+    seti(mut r2, "ttl", 60);
+    set(mut r2, "ip", V.Bytes(vec![192, 0, 2, 31]));
+    set(mut d, "an", V.List(vec![pv(r1), pv(r2)]));
+    let packed = match dns_bytes(d) {
+        Ok(x) => x,
+        Err(e) => {
+            println(err_line(e));
+            return;
+        }
+    };
+    println(f"dns answer, {packed.len()} bytes:");
+    println(hexdump(packed));
+    match make("DNS", packed) {
+        Ok(back) => {
+            println(f"  {repr_pkt(back)}");
+            let mut names: Vec[String] = Vec.new();
+            for sect in ["qd", "an"] {
+                for x in as_list(get(back, sect.to_string())) {
+                    if let V.Pkt(r) = x {
+                        names.push(gs(r[0], "name"));
+                    }
+                }
+            }
+            let want = vec!["printer.office.example", "printer.office.example", "prn-2.office.example"];
+            let mut same = names.len() == want.len();
+            let mut i = 0;
+            while same and i < names.len() {
+                same = names[i] == want[i];
+                i += 1;
+            }
+            println(f"  same names: {py_bool(same)}");
+        }
+        Err(e) => println(f"  {err_line(e)}"),
+    }
+    // UDP, TCP and ICMP over IPv4, with every checksum computed on packing
+    let mut u = udp_pkt(5353, 53, packed.clone());
+    seti(mut u, "ulen", 8 + packed.len());
+    let mut ip_u = ipv4(src, dst, 17, u);
+    seti(mut ip_u, "ttl", 32);
+    let mut f = ether(a, b, ip_u);
+    show_built("udp", bytes_or_report(mut f));
+    let mut t = with_data("TCP", V.Bytes(bytes_of("SSH-2.0-x\r\n")));
+    seti(mut t, "sport", 40001);
+    seti(mut t, "dport", 22);
+    seti(mut t, "seq", 1);
+    seti(mut t, "ack", 2);
+    set(mut t, "flags", V.Int(TH_ACK | TH_PUSH));
+    seti(mut t, "win", 501);
+    let mut ip_t = ipv4(src, dst, 6, t);
+    seti(mut ip_t, "id", 7);
+    let mut f2 = ether(a, b, ip_t);
+    show_built("tcp", bytes_or_report(mut f2));
+    let mut f3 = ether(a, b, ipv4(src, dst, 1, echo_pkt()));
+    show_built("icmp", bytes_or_report(mut f3));
+    // IPv6 with an ICMPv6 echo, checksummed over the pseudo-header
+    let mut e6body = with_data("icmp6.Echo", V.Bytes(bytes_of("pong")));
+    seti(mut e6body, "id", 3);
+    seti(mut e6body, "seq", 4);
+    let mut e6 = with_data("ICMP6", pv(e6body));
+    seti(mut e6, "type", 129);
+    let e6len = pkt_len(e6);
+    let mut p6 = with_data("IP6", pv(e6));
+    set(mut p6, "src", V.Bytes(addr6(1)));
+    set(mut p6, "dst", V.Bytes(addr6(2)));
+    seti(mut p6, "nxt", 58);
+    seti(mut p6, "hlim", 255);
+    seti(mut p6, "plen", e6len);
+    let mut f4 = ether(a, b, p6);
+    seti(mut f4, "type", ETH_TYPE_IP6);
+    show_built("icmp6", bytes_or_report(mut f4));
+    // a VLAN tag on top
+    let mut tag = new_pkt("VLANtag8021Q");
+    seti(mut tag, "id", 42);
+    seti(mut tag, "pri", 5);
+    let mut f5 = ether(a, b, ipv4(src, dst, 17, udp_pkt(1, 2, Vec.new())));
+    set(mut f5, "vlan_tags", V.List(vec![pv(tag)]));
+    show_built("vlan", bytes_or_report(mut f5));
+    // write both capture formats and read them back
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        println(f"cannot create data/out: {e}");
+        return;
+    }
+    let mut g1 = ether(a, b, ipv4(src, dst, 17, udp_pkt(9, 9, Vec.new())));
+    let mut g2 = ether(b, a, ipv4(dst, src, 1, echo_pkt()));
+    let frames: Vec[(i64, Vec[u8])] = vec![
+        (1700010000250000, bytes_or_report(mut g1)),
+        (1700010000500000, bytes_or_report(mut g2)),
+        (1700010001125000, zeros(14)),
+    ];
+    let pcap = pcap_file(2048, frames);
+    let pcapng = pcapng_file(2048, frames);
+    for (fname, made) in [("built.pcap", pcap), ("built.pcapng", pcapng)] {
+        let path = f"data/out/{fname}";
+        match made {
+            Ok(body) => {
+                if let Err(e) = fs.write_bytes(path.clone(), body) {
+                    println(f"cannot write {path}: {e}");
+                    return;
+                }
+            }
+            Err(e) => {
+                println(err_line(e));
+                return;
+            }
+        }
+        let raw = match fs.read_bytes(path.clone()) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"cannot read {path}: {e}");
+                return;
+            }
+        };
+        println(f"{fname}, {raw.len()} bytes, starts:");
+        println(hexdump(sub(raw, 0, 48)));
+        match read_capture(raw) {
+            Ok(c) => {
+                println(f"  read back {c.frames.len()} frames, snaplen {c.snaplen}");
+                let mut i = 0;
+                while i < c.frames.len() and i < frames.len() {
+                    let fr = c.frames[i].clone();
+                    let same = if same_bytes(fr.data, frames[i].1) { "same" } else { "DIFFERENT" };
+                    println(f"  {fmt_ts(fr.ts)} {fr.data.len()} bytes {same}");
+                    i += 1;
+                }
+            }
+            Err(e) => println(f"  {err_line(e)}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ errors
+
+fn attempt(label: Str, r: own Result[String, PErr]) {
+    match r {
+        Ok(s) => println(f"{label}: {s}"),
+        Err(e) => println(f"{label}: {err_line(e)}"),
+    }
+}
+
+fn made(key: Str, buf: ref Vec[u8]) -> Result[String, PErr] {
+    let p = make(key, buf)?;
+    Ok(repr_pkt(p))
+}
+
+fn repr_of(r: own Result[Pkt, PErr]) -> Result[String, PErr] {
+    let p = r?;
+    Ok(repr_pkt(p))
+}
+
+fn packed_repr(p: mut ref Pkt) -> Result[String, PErr] {
+    let b = pkt_bytes(mut p)?;
+    Ok(repr_bytes(b))
+}
+
+fn set_v(v: i64) -> Result[String, PErr] {
+    let mut p = new_pkt("IP");
+    set_bits(mut p, "v", v)?;
+    Ok(f"{gi(p, "v")}")
+}
+
+fn three_tags() -> Result[String, PErr] {
+    let mut tags: Vec[V] = Vec.new();
+    for k in [1, 2, 3] {
+        let mut t = new_pkt("VLANtag8021Q");
+        seti(mut t, "id", k);
+        tags.push(pv(t));
+    }
+    let mut e = new_pkt("Ethernet");
+    set(mut e, "vlan_tags", V.List(tags));
+    packed_repr(mut e)
+}
+
+fn no_endofopt() -> Result[String, PErr] {
+    let mut o = with_data("PcapngOptionLE", V.Bytes(bytes_of("x")));
+    seti(mut o, "code", 1);
+    let mut s = new_pkt("SectionHeaderBlockLE");
+    set(mut s, "opts", V.List(vec![pv(o)]));
+    packed_repr(mut s)
+}
+
+fn bad_rr() -> Result[String, PErr] {
+    let mut r = new_pkt("RR");
+    set(mut r, "name", V.Str("x.example".to_string()));
+    seti(mut r, "type", 99);
+    let mut d = new_pkt("DNS");
+    set(mut d, "an", V.List(vec![pv(r)]));
+    let b = dns_bytes(d)?;
+    Ok(repr_bytes(b))
+}
+
+fn mismatch_lengths() -> Result[String, PErr] {
+    let mut s = new_pkt("SectionHeaderBlockLE");
+    let mut blk = pkt_bytes(mut s)?;
+    let at = blk.len() - 4;
+    blk[at] = blk[at] ^ 4;
+    made("SectionHeaderBlockLE", blk)
+}
+
+fn tls_multi(buf: ref Vec[u8]) -> Result[String, PErr] {
+    let (recs, used) = tls_multi_factory(buf)?;
+    let mut items: Vec[V] = Vec.new();
+    for r in recs.into_iter() {
+        items.push(pv(r));
+    }
+    Ok(repr_v(V.Tuple(vec![V.List(items), V.Int(used)])))
+}
+
+fn reader_on(name: Str, ng: bool) -> Result[String, PErr] {
+    let buf = match fs.read_bytes(f"data/{name}") {
+        Ok(b) => b,
+        Err(e) => return Err(perr("OSError", f"{e}")),
+    };
+    let c = if ng { read_pcapng(buf)? } else { read_pcap(buf)? };
+    Ok(f"{c.module} reader")
+}
+
+fn bs(s: Str) -> Vec[u8] {
+    bytes_of(s)
+}
+
+fn job_errors() {
+    let hdr: Vec[u8] = vec![0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    attempt("ethernet from 2 bytes", made("Ethernet", vec![0, 1]));
+    let mut ip16: Vec[u8] = vec![0x44];
+    push_all(mut ip16, zeros(19));
+    attempt("ip header length 16", made("IP", ip16));
+    let mut tcp4 = zeros(12);
+    tcp4.push(0x40);
+    tcp4.push(0x02);
+    push_all(mut tcp4, zeros(6));
+    attempt("tcp data offset 4", made("TCP", tcp4));
+    attempt("dns pointer to itself", made("DNS", cat(hdr, vec![0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01])));
+    let mut l80: Vec[u8] = vec![0x80];
+    push_all(mut l80, bs("abc"));
+    push_all(mut l80, vec![0x00, 0x00, 0x01, 0x00, 0x01]);
+    attempt("dns label length 0x80", made("DNS", cat(hdr, l80)));
+    attempt("dns name cut short", made("DNS", cat(hdr, cat(vec![0x03], bs("ww")))));
+    let rr99: Vec[u8] = vec![0x12, 0x34, 0x81, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                             0x01, b'x', 0x00, 0x00, 0x63, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x01, 0x00];
+    attempt("dns rr type 99", made("DNS", rr99));
+    attempt("pack dns rr type 99", bad_rr());
+    attempt("http method", repr_of(http_request(bs("FETCH / HTTP/1.1\r\n\r\n"))));
+    attempt("http version", repr_of(http_request(bs("GET / SPDY/3\r\n\r\n"))));
+    attempt("http header", repr_of(http_request(bs("GET / HTTP/1.1\r\nBad Header: 1\r\n\r\n"))));
+    attempt("http chunk size", repr_of(http_response(bs("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"))));
+    attempt("http chunked body ends early",
+            repr_of(http_response(bs("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"))));
+    attempt("http short body", repr_of(http_response(bs("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc"))));
+    attempt("http status line", repr_of(http_response(bs("HTTP/1.1 OK\r\n\r\n"))));
+    attempt("tls record cut short", made("TLSRecord", cat(vec![0x16, 0x03, 0x03, 0x00, 0x10], bs("abc"))));
+    attempt("tls version bytes", tls_multi(vec![0x16, 0x09, 0x09, 0x00, 0x01, 0x00]));
+    let mut partial: Vec[u8] = vec![0x17, 0x03, 0x03, 0x00, 0x02];
+    push_all(mut partial, bs("ab"));
+    push_all(mut partial, vec![0x17, 0x03, 0x03, 0x00, 0x09]);
+    push_all(mut partial, bs("abc"));
+    attempt("tls partial record", tls_multi(partial));
+    attempt("tls handshake type 99", made("TLSHandshake", vec![0x63, 0x00, 0x00, 0x00]));
+    attempt("ip version 16", set_v(16));
+    attempt("ip version 15", set_v(15));
+    attempt("three vlan tags", three_tags());
+    attempt("pcapng options without end", no_endofopt());
+    attempt("pcapng length fields", mismatch_lengths());
+    attempt("pcap reader on notes.txt", reader_on("notes.txt", false));
+    attempt("pcapng reader on office.pcap", reader_on("office.pcap", true));
+}
+
+fn job_summary(jobs: i64) {
+    println(f"jobs: {jobs}");
+    for name in ["office.pcap", "capture.pcapng", "nano.pcap"] {
+        let fr = frames_of(name.to_string());
+        let mut total = 0;
+        for f in fr {
+            total += f.data.len();
+        }
+        println(f"{name}: {fr.len()} frames, {total} bytes");
+    }
+}
+// ------------------------------------------------------------ values
+
+// The Python values a packet's fields and attributes hold, so that a
+// packet prints the way dpkt's Packet.__repr__ prints it.
+#[derive(Clone)]
+enum V {
+    None,
+    Int(i64),
+    Bool(bool),
+    Bytes(Vec[u8]),
+    Str(String),
+    List(Vec[V]),
+    Tuple(Vec[V]),
+    Dict(Vec[(V, V)]),
+    ODict(Vec[(String, V)]),
+    Pkt(Vec[Pkt]),
+    Suite(i64, String),
+}
+
+// One header field: its name, its struct format ("B", "H", "I", "q" or
+// "<n>s"), its default and its value.
+#[derive(Clone)]
+struct Fld {
+    name: String,
+    fmt: String,
+    dflt: V,
+    val: V,
+}
+
+// The properties __bit_fields__ makes out of one header field.
+#[derive(Clone)]
+struct Bits {
+    ph: String,
+    names: Vec[(String, i64)],
+}
+
+// A dpkt.Packet: the class (`key` tells same-named classes apart, as
+// icmp.Unreach and icmp6.Unreach), the header fields in __hdr__ order,
+// the instance __dict__ in insertion order, and data.
+#[derive(Clone)]
+struct Pkt {
+    key: String,
+    cls: String,
+    le: bool,
+    hdr: Vec[Fld],
+    bits: Vec[Bits],
+    attrs: Vec[(String, V)],
+    data: V,
+    slots: bool,
+}
+
+// A Python exception: dpkt's NeedData, UnpackError and PackError, the ssl
+// module's SSL3Exception, ValueError, and "struct" for a struct.error the
+// Packet constructor turns into one of dpkt's.
+#[derive(Clone)]
+struct PErr {
+    kind: String,
+    msg: String,
+}
+
+fn perr(kind: Str, msg: own String) -> PErr {
+    PErr { kind: kind.to_string(), msg: msg }
+}
+
+fn need(msg: own String) -> PErr {
+    perr("NeedData", msg)
+}
+
+fn unpack_err(msg: own String) -> PErr {
+    perr("UnpackError", msg)
+}
+
+fn struct_err() -> PErr {
+    perr("struct", String.new())
+}
+
+// except dpkt.UnpackError, which NeedData derives from.
+fn is_unpack(e: ref PErr) -> bool {
+    e.kind == "NeedData" or e.kind == "UnpackError"
+}
+
+fn err_line(e: ref PErr) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------ bytes
+
+fn sub(b: ref Vec[u8], start: i64, end: i64) -> Vec[u8] {
+    let mut s = start;
+    let mut e = end;
+    if e > b.len() {
+        e = b.len();
+    }
+    if s > e {
+        s = e;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = s;
+    while i < e {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn tail(b: ref Vec[u8], start: i64) -> Vec[u8] {
+    sub(b, start, b.len())
+}
+
+fn cat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for x in b {
+        out.push(x);
+    }
+    out
+}
+
+fn push_all(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for x in b {
+        out.push(x);
+    }
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn same_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn starts(b: ref Vec[u8], p: ref Vec[u8]) -> bool {
+    if p.len() > b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < p.len() {
+        if b[i] != p[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(0);
+        i += 1;
+    }
+    out
+}
+
+fn text_of(b: ref Vec[u8]) -> String {
+    String.from_utf8(b.clone()).unwrap_or("?".to_string())
+}
+
+// Big-endian (or little-endian) unsigned integer from n bytes at off.
+fn uint_at(b: ref Vec[u8], off: i64, n: i64, le: bool) -> i64 {
+    let mut v: i64 = 0;
+    let mut i = 0;
+    while i < n {
+        let k = if le { off + n - 1 - i } else { off + i };
+        v = (v << 8) | (b[k] as i64);
+        i += 1;
+    }
+    v
+}
+
+fn be16(b: ref Vec[u8], off: i64) -> i64 {
+    uint_at(b, off, 2, false)
+}
+
+fn be32(b: ref Vec[u8], off: i64) -> i64 {
+    uint_at(b, off, 4, false)
+}
+
+fn put_uint(out: mut ref Vec[u8], v: i64, n: i64, le: bool) {
+    let mut i = 0;
+    while i < n {
+        let shift = if le { 8 * i } else { 8 * (n - 1 - i) };
+        out.push(((v >> shift) & 0xff) as u8);
+        i += 1;
+    }
+}
+
+fn u16_be(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_uint(mut out, v, 2, false);
+    out
+}
+
+fn hex2(b: u8) -> String {
+    f"{b:02x}"
+}
+
+fn hex_str(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(hex2(x));
+    }
+    s
+}
+
+fn hex4(v: i64) -> String {
+    f"{v:04x}"
+}
+
+// ------------------------------------------------------------ repr
+
+fn quote_for(b: ref Vec[u8]) -> u8 {
+    let mut single = false;
+    let mut double = false;
+    for c in b {
+        if c == 39 {
+            single = true;
+        }
+        if c == 34 {
+            double = true;
+        }
+    }
+    if single and not double { 34 } else { 39 }
+}
+
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let q = quote_for(b);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for x in b {
+        if x == q or x == 92 {
+            out.push(92);
+            out.push(x);
+        } else if x == 9 {
+            push_all(mut out, bytes_of("\\t"));
+        } else if x == 10 {
+            push_all(mut out, bytes_of("\\n"));
+        } else if x == 13 {
+            push_all(mut out, bytes_of("\\r"));
+        } else if x >= 0x20 and x < 0x7F {
+            out.push(x);
+        } else {
+            push_all(mut out, bytes_of(f"\\x{hex2(x)}"));
+        }
+    }
+    out.push(q);
+    text_of(out)
+}
+
+// repr(str) for the strings dpkt makes: everything printable outside
+// ASCII passes through unchanged.
+fn repr_str(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let q = quote_for(b);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for x in b {
+        if x == q or x == 92 {
+            out.push(92);
+            out.push(x);
+        } else if x == 9 {
+            push_all(mut out, bytes_of("\\t"));
+        } else if x == 10 {
+            push_all(mut out, bytes_of("\\n"));
+        } else if x == 13 {
+            push_all(mut out, bytes_of("\\r"));
+        } else if x < 0x20 or x == 0x7F {
+            push_all(mut out, bytes_of(f"\\x{hex2(x)}"));
+        } else {
+            out.push(x);
+        }
+    }
+    out.push(q);
+    text_of(out)
+}
+
+fn repr_v(v: ref V) -> String {
+    match v {
+        V.None => "None".to_string(),
+        V.Int(n) => f"{n}",
+        V.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+        V.Bytes(b) => repr_bytes(b),
+        V.Str(s) => repr_str(s),
+        V.List(items) => f"[{join_reprs(items)}]",
+        V.Tuple(items) => {
+            if items.len() == 1 {
+                f"({repr_v(items[0])},)"
+            } else {
+                f"({join_reprs(items)})"
+            }
+        }
+        V.Dict(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for kv in items {
+                parts.push(f"{repr_v(kv.0)}: {repr_v(kv.1)}");
+            }
+            f"{{{parts.join(", ")}}}"
+        }
+        V.ODict(items) => {
+            if items.len() == 0 {
+                return "OrderedDict()".to_string();
+            }
+            let mut parts: Vec[String] = Vec.new();
+            for kv in items {
+                parts.push(f"{repr_str(kv.0)}: {repr_v(kv.1)}");
+            }
+            f"OrderedDict({{{parts.join(", ")}}})"
+        }
+        V.Pkt(p) => repr_pkt(p[0]),
+        V.Suite(code, name) => f"CipherSuite(0x{hex4(code)}, {name})",
+    }
+}
+
+fn join_reprs(items: ref Vec[V]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in items {
+        parts.push(repr_v(x));
+    }
+    parts.join(", ")
+}
+
+// Python's ==, for the values a default is compared with.
+fn veq(a: ref V, b: ref V) -> bool {
+    match (a, b) {
+        (V.None, V.None) => true,
+        (V.Int(x), V.Int(y)) => x == y,
+        (V.Bool(x), V.Bool(y)) => x == y,
+        (V.Int(x), V.Bool(y)) => x == (if y { 1 } else { 0 }),
+        (V.Bool(x), V.Int(y)) => y == (if x { 1 } else { 0 }),
+        (V.Bytes(x), V.Bytes(y)) => same_bytes(x, y),
+        (V.Str(x), V.Str(y)) => x == y,
+        (V.List(x), V.List(y)) => same_items(x, y),
+        (V.Tuple(x), V.Tuple(y)) => same_items(x, y),
+        _ => false,
+    }
+}
+
+fn same_items(a: ref Vec[V], b: ref Vec[V]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if not veq(a[i], b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// bool(value), for the `if self.data:` in __repr__; a packet counts as
+// true, as every packet here has a non-zero length.
+fn truthy(v: ref V) -> bool {
+    match v {
+        V.None => false,
+        V.Int(n) => n != 0,
+        V.Bool(b) => b,
+        V.Bytes(b) => b.len() > 0,
+        V.Str(s) => s.len() > 0,
+        V.List(x) => x.len() > 0,
+        V.Tuple(x) => x.len() > 0,
+        V.Dict(x) => x.len() > 0,
+        V.ODict(x) => x.len() > 0,
+        V.Pkt(_) => true,
+        V.Suite(_, _) => true,
+    }
+}
+
+// The public fields of Packet._create_public_fields: header fields that do
+// not start with an underscore, and the properties __bit_fields__ makes of
+// the ones that do.
+fn public_fields(p: ref Pkt) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for f in p.hdr {
+        if not f.name.starts_with("_") {
+            out.push(f.name.clone());
+            continue;
+        }
+        for b in p.bits {
+            if b.ph == f.name {
+                for nb in b.names {
+                    if not nb.0.starts_with("_") {
+                        out.push(nb.0.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn repr_pkt(p: ref Pkt) -> String {
+    if p.cls.starts_with("PcapngOption") and gi(p, "code") == 0 {
+        return f"{p.cls}(opt_endofopt)";
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for name in public_fields(p) {
+        let v = get(p, name);
+        match field_default(p, name) {
+            Some(d) => {
+                if veq(v, d) {
+                    continue;
+                }
+            }
+            None => {}
+        }
+        parts.push(f"{name}={repr_v(v)}");
+    }
+    for a in p.attrs {
+        if not a.0.starts_with("_") {
+            parts.push(f"{a.0}={repr_v(a.1)}");
+        }
+    }
+    if truthy(p.data) {
+        parts.push(f"data={repr_v(p.data)}");
+    }
+    f"{p.cls}({parts.join(", ")})"
+}
+
+// ------------------------------------------------------------ fields
+
+fn fld(name: Str, fmt: Str, d: own V) -> Fld {
+    Fld { name: name.to_string(), fmt: fmt.to_string(), dflt: d.clone(), val: d }
+}
+
+fn bits(ph: Str, names: Vec[(Str, i64)]) -> Bits {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    for n in names {
+        v.push((n.0.to_string(), n.1));
+    }
+    Bits { ph: ph.to_string(), names: v }
+}
+
+fn fmt_size(fmt: ref String) -> i64 {
+    if fmt == "B" {
+        1
+    } else if fmt == "H" {
+        2
+    } else if fmt == "I" {
+        4
+    } else if fmt == "q" {
+        8
+    } else if fmt == "s" {
+        1
+    } else {
+        i64.parse(fmt[0..fmt.len() - 1].to_string()).unwrap_or(0)
+    }
+}
+
+fn hdr_len(p: ref Pkt) -> i64 {
+    let mut n = 0;
+    for f in p.hdr {
+        n += fmt_size(f.fmt);
+    }
+    n
+}
+
+fn field_at(p: ref Pkt, name: ref String) -> i64 {
+    let mut i = 0;
+    while i < p.hdr.len() {
+        if p.hdr[i].name == name {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// Where a bit-field property sits: its placeholder field, shift and width.
+fn bit_at(p: ref Pkt, name: ref String) -> Option[(i64, i64, i64)] {
+    for b in p.bits {
+        let fi = field_at(p, b.ph);
+        let total = fmt_size(p.hdr[fi].fmt) * 8;
+        let mut used = 0;
+        for nb in b.names {
+            if nb.0 == name {
+                return Some((fi, total - used - nb.1, nb.1));
+            }
+            used += nb.1;
+        }
+    }
+    None
+}
+
+fn as_int(v: ref V) -> i64 {
+    match v {
+        V.Int(n) => n,
+        V.Bool(b) => if b { 1 } else { 0 },
+        _ => 0,
+    }
+}
+
+fn as_bytes(v: ref V) -> Vec[u8] {
+    match v {
+        V.Bytes(b) => b.clone(),
+        V.Str(s) => s.bytes().to_vec(),
+        _ => Vec.new(),
+    }
+}
+
+fn as_str(v: ref V) -> String {
+    match v {
+        V.Str(s) => s.clone(),
+        V.Bytes(b) => text_of(b),
+        _ => String.new(),
+    }
+}
+
+fn as_list(v: ref V) -> Vec[V] {
+    match v {
+        V.List(x) => x.clone(),
+        V.Tuple(x) => x.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// getattr(p, name): a header field, a bit-field property, an attribute or
+// data.
+fn get(p: ref Pkt, name: ref String) -> V {
+    let fi = field_at(p, name);
+    if fi >= 0 {
+        return p.hdr[fi].val.clone();
+    }
+    match bit_at(p, name) {
+        Some(t) => {
+            let ph = as_int(p.hdr[t.0].val);
+            return V.Int((ph >> t.1) & ((1 << t.2) - 1));
+        }
+        None => {}
+    }
+    for a in p.attrs {
+        if a.0 == name {
+            return a.1.clone();
+        }
+    }
+    if name == "data" {
+        return p.data.clone();
+    }
+    V.None
+}
+
+fn has(p: ref Pkt, name: Str) -> bool {
+    for a in p.attrs {
+        if a.0 == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn field_default(p: ref Pkt, name: ref String) -> Option[V] {
+    let fi = field_at(p, name);
+    if fi >= 0 {
+        return Some(p.hdr[fi].dflt.clone());
+    }
+    match bit_at(p, name) {
+        Some(t) => {
+            let ph = as_int(p.hdr[t.0].dflt);
+            Some(V.Int((ph >> t.1) & ((1 << t.2) - 1)))
+        }
+        None => None,
+    }
+}
+
+fn gi(p: ref Pkt, name: Str) -> i64 {
+    as_int(get(p, name.to_string()))
+}
+
+fn gb(p: ref Pkt, name: Str) -> Vec[u8] {
+    as_bytes(get(p, name.to_string()))
+}
+
+fn gs(p: ref Pkt, name: Str) -> String {
+    as_str(get(p, name.to_string()))
+}
+
+// setattr(p, name, v), without the range check of a bit-field setter.
+fn set(p: mut ref Pkt, name: Str, v: own V) {
+    let n = name.to_string();
+    let fi = field_at(p, n);
+    if fi >= 0 {
+        p.hdr[fi].val = v;
+        return;
+    }
+    match bit_at(p, n) {
+        Some(t) => {
+            let ph = as_int(p.hdr[t.0].val);
+            let mask = ((1 << t.2) - 1) << t.1;
+            p.hdr[t.0].val = V.Int((as_int(v) << t.1) | (ph & (0xffffffff - mask)));
+            return;
+        }
+        None => {}
+    }
+    if name == "data" {
+        p.data = v;
+        return;
+    }
+    let mut i = 0;
+    while i < p.attrs.len() {
+        if p.attrs[i].0 == n {
+            p.attrs[i].1 = v;
+            return;
+        }
+        i += 1;
+    }
+    p.attrs.push((n, v));
+}
+
+fn seti(p: mut ref Pkt, name: Str, v: i64) {
+    set(mut p, name, V.Int(v));
+}
+
+// The bit-field setter, which refuses a value too wide for the field.
+fn set_bits(p: mut ref Pkt, name: Str, v: i64) -> Result[(), PErr] {
+    match bit_at(p, name.to_string()) {
+        Some(t) => {
+            if v >= (1 << t.2) {
+                return Err(perr("ValueError", f"value {v} is too large for field {name}"));
+            }
+        }
+        None => {}
+    }
+    seti(mut p, name, v);
+    Ok(())
+}
+
+fn data_bytes(p: ref Pkt) -> Vec[u8] {
+    as_bytes(p.data)
+}
+
+// The packet in p.data, when there is one.
+fn inner(p: ref Pkt) -> Option[Pkt] {
+    match p.data {
+        V.Pkt(x) => Some(x[0].clone()),
+        _ => None,
+    }
+}
+
+fn inner_is(p: ref Pkt, cls: Str) -> bool {
+    match p.data {
+        V.Pkt(x) => x[0].cls == cls,
+        _ => false,
+    }
+}
+
+fn pv(p: own Pkt) -> V {
+    V.Pkt(vec![p])
+}
+
+// ------------------------------------------------------------ struct
+
+// struct.unpack of the header, as Packet.unpack does it, and the rest of
+// the buffer as data.
+fn base_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    let n = hdr_len(p);
+    if buf.len() < n {
+        return Err(struct_err());
+    }
+    let mut off = 0;
+    let le = p.le;
+    let mut i = 0;
+    while i < p.hdr.len() {
+        let f = p.hdr[i].fmt.clone();
+        let size = fmt_size(f);
+        if f.ends_with("s") {
+            p.hdr[i].val = V.Bytes(sub(buf, off, off + size));
+        } else if f == "q" {
+            // signed: the top byte carries the sign
+            let top_at = if le { off + 7 } else { off };
+            let rest_at = if le { off } else { off + 1 };
+            let mut top = buf[top_at] as i64;
+            if top >= 128 {
+                top -= 256;
+            }
+            p.hdr[i].val = V.Int((top << 56) | uint_at(buf, rest_at, 7, le));
+        } else {
+            p.hdr[i].val = V.Int(uint_at(buf, off, size, le));
+        }
+        off += size;
+        i += 1;
+    }
+    p.data = V.Bytes(tail(buf, n));
+    Ok(())
+}
+
+fn pack_value(out: mut ref Vec[u8], f: ref Fld, le: bool) -> Result[(), PErr] {
+    let size = fmt_size(f.fmt);
+    if f.fmt.ends_with("s") {
+        match f.val {
+            V.Bytes(b) => {
+                let mut i = 0;
+                while i < size {
+                    out.push(if i < b.len() { b[i] } else { 0 });
+                    i += 1;
+                }
+            }
+            _ => return Err(perr("PackError", "argument for 's' must be a bytes object".to_string())),
+        }
+        return Ok(());
+    }
+    match f.val {
+        V.Int(n) => {
+            if f.fmt != "q" and (n < 0 or n >= (1 << (8 * size))) {
+                let msg = if f.fmt == "B" {
+                    "ubyte format requires 0 <= number <= 255".to_string()
+                } else {
+                    f"'{f.fmt}' format requires 0 <= number <= {(1 << (8 * size)) - 1}"
+                };
+                return Err(perr("PackError", msg));
+            }
+            put_uint(mut out, n, size, le);
+        }
+        V.Bool(b) => put_uint(mut out, if b { 1 } else { 0 }, size, le),
+        _ => return Err(perr("PackError", "required argument is not an integer".to_string())),
+    }
+    Ok(())
+}
+
+// Packet.pack_hdr: the header fields through struct.pack.
+fn pack_hdr(p: ref Pkt) -> Result[Vec[u8], PErr] {
+    let mut out: Vec[u8] = Vec.new();
+    for f in p.hdr {
+        pack_value(mut out, f, p.le)?;
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ classes
+
+fn bz(n: i64) -> V {
+    V.Bytes(zeros(n))
+}
+
+fn vi(n: i64) -> V {
+    V.Int(n)
+}
+
+fn vb() -> V {
+    V.Bytes(Vec.new())
+}
+
+fn nul_str(n: i64) -> V {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < n {
+        s.push_str("\u{0}");
+        i += 1;
+    }
+    V.Str(s)
+}
+
+// A fresh instance of a dpkt class, with every header field at its
+// default: the __hdr__ and __bit_fields__ of each class this port knows.
+fn new_pkt(key: Str) -> Pkt {
+    let mut h: Vec[Fld] = Vec.new();
+    let mut b: Vec[Bits] = Vec.new();
+    let mut le = false;
+    let mut slots = true;
+    let mut k = key.to_string();
+    if k.ends_with("LE") {
+        le = true;
+        k = k[0..k.len() - 2].to_string();
+    } else if k.starts_with("LE") {
+        le = true;
+        k = k[2..k.len()].to_string();
+    }
+    if k == "Ethernet" {
+        h.push(fld("dst", "6s", vb()));
+        h.push(fld("src", "6s", vb()));
+        h.push(fld("type", "H", vi(0x0800)));
+    } else if k == "VLANtag8021Q" {
+        h.push(fld("_pri_cfi_id", "H", vi(0)));
+        h.push(fld("type", "H", vi(0x0800)));
+        b.push(bits("_pri_cfi_id", vec![("pri", 3), ("cfi", 1), ("id", 12)]));
+    } else if k == "ARP" {
+        h.push(fld("hrd", "H", vi(1)));
+        h.push(fld("pro", "H", vi(0x0800)));
+        h.push(fld("hln", "B", vi(6)));
+        h.push(fld("pln", "B", vi(4)));
+        h.push(fld("op", "H", vi(1)));
+        h.push(fld("sha", "6s", vb()));
+        h.push(fld("spa", "4s", vb()));
+        h.push(fld("tha", "6s", vb()));
+        h.push(fld("tpa", "4s", vb()));
+    } else if k == "IP" {
+        h.push(fld("_v_hl", "B", vi((4 << 4) | (20 >> 2))));
+        h.push(fld("tos", "B", vi(0)));
+        h.push(fld("len", "H", vi(20)));
+        h.push(fld("id", "H", vi(0)));
+        h.push(fld("_flags_offset", "H", vi(0)));
+        h.push(fld("ttl", "B", vi(64)));
+        h.push(fld("p", "B", vi(0)));
+        h.push(fld("sum", "H", vi(0)));
+        h.push(fld("src", "4s", bz(4)));
+        h.push(fld("dst", "4s", bz(4)));
+        b.push(bits("_v_hl", vec![("v", 4), ("hl", 4)]));
+        b.push(bits("_flags_offset", vec![("rf", 1), ("df", 1), ("mf", 1), ("offset", 13)]));
+    } else if k == "TCP" {
+        h.push(fld("sport", "H", vi(0xdead)));
+        h.push(fld("dport", "H", vi(0)));
+        h.push(fld("seq", "I", vi(0xdeadbeef)));
+        h.push(fld("ack", "I", vi(0)));
+        h.push(fld("_off_flags", "H", vi((5 << 12) | TH_SYN)));
+        h.push(fld("win", "H", vi(65535)));
+        h.push(fld("sum", "H", vi(0)));
+        h.push(fld("urp", "H", vi(0)));
+        b.push(bits("_off_flags", vec![("off", 4), ("_rsv", 3), ("flags", 9)]));
+    } else if k == "UDP" {
+        h.push(fld("sport", "H", vi(0xdead)));
+        h.push(fld("dport", "H", vi(0)));
+        h.push(fld("ulen", "H", vi(8)));
+        h.push(fld("sum", "H", vi(0)));
+    } else if k == "ICMP" {
+        h.push(fld("type", "B", vi(8)));
+        h.push(fld("code", "B", vi(0)));
+        h.push(fld("sum", "H", vi(0)));
+    } else if k == "ICMP6" {
+        h.push(fld("type", "B", vi(0)));
+        h.push(fld("code", "B", vi(0)));
+        h.push(fld("sum", "H", vi(0)));
+    } else if k == "icmp.Echo" or k == "icmp6.Echo" {
+        h.push(fld("id", "H", vi(0)));
+        h.push(fld("seq", "H", vi(0)));
+    } else if k == "icmp.Unreach" {
+        h.push(fld("pad", "H", vi(0)));
+        h.push(fld("mtu", "H", vi(0)));
+    } else if k == "icmp.Quench" or k == "icmp.TimeExceed" or k == "icmp6.Unreach" or k == "icmp6.TimeExceed" {
+        h.push(fld("pad", "I", vi(0)));
+    } else if k == "icmp.Redirect" {
+        h.push(fld("gw", "I", vi(0)));
+    } else if k == "icmp6.TooBig" {
+        h.push(fld("mtu", "I", vi(1232)));
+    } else if k == "icmp6.ParamProb" {
+        h.push(fld("ptr", "I", vi(0)));
+    } else if k == "IP6" {
+        h.push(fld("_v_fc_flow", "I", vi(0x60000000)));
+        h.push(fld("plen", "H", vi(0)));
+        h.push(fld("nxt", "B", vi(0)));
+        h.push(fld("hlim", "B", vi(0)));
+        h.push(fld("src", "16s", vb()));
+        h.push(fld("dst", "16s", vb()));
+        b.push(bits("_v_fc_flow", vec![("v", 4), ("fc", 8), ("flow", 20)]));
+    } else if k == "IP6HopOptsHeader" or k == "IP6DstOptsHeader" {
+        h.push(fld("nxt", "B", vi(0)));
+        h.push(fld("len", "B", vi(0)));
+    } else if k == "IP6RoutingHeader" {
+        h.push(fld("nxt", "B", vi(0)));
+        h.push(fld("len", "B", vi(0)));
+        h.push(fld("type", "B", vi(0)));
+        h.push(fld("segs_left", "B", vi(0)));
+        h.push(fld("_rsvd_sl_bits", "I", vi(0)));
+        b.push(bits("_rsvd_sl_bits", vec![("_rsvd", 8), ("sl_bits", 24)]));
+    } else if k == "IP6FragmentHeader" {
+        h.push(fld("nxt", "B", vi(0)));
+        h.push(fld("_resv", "B", vi(0)));
+        h.push(fld("_frag_off_resv_m", "H", vi(0)));
+        h.push(fld("id", "I", vi(0)));
+        b.push(bits("_frag_off_resv_m", vec![("frag_off", 13), ("_resv", 2), ("m_flag", 1)]));
+    } else if k == "IP6AHHeader" {
+        h.push(fld("nxt", "B", vi(0)));
+        h.push(fld("len", "B", vi(0)));
+        h.push(fld("_resv", "H", vi(0)));
+        h.push(fld("spi", "I", vi(0)));
+        h.push(fld("seq", "I", vi(0)));
+    } else if k == "IP6ESPHeader" {
+        h.push(fld("spi", "I", vi(0)));
+        h.push(fld("seq", "I", vi(0)));
+    } else if k == "DNS" {
+        h.push(fld("id", "H", vi(0)));
+        h.push(fld("op", "H", vi(DNS_RD)));
+        h.push(fld("qd", "H", V.List(Vec.new())));
+        h.push(fld("an", "H", V.List(Vec.new())));
+        h.push(fld("ns", "H", V.List(Vec.new())));
+        h.push(fld("ar", "H", V.List(Vec.new())));
+    } else if k == "Q" {
+        h.push(fld("name", "1025s", vb()));
+        h.push(fld("type", "H", vi(1)));
+        h.push(fld("cls", "H", vi(1)));
+    } else if k == "RR" {
+        h.push(fld("name", "1025s", vb()));
+        h.push(fld("type", "H", vi(1)));
+        h.push(fld("cls", "H", vi(1)));
+        h.push(fld("ttl", "I", vi(0)));
+        h.push(fld("rlen", "H", vi(4)));
+        h.push(fld("rdata", "s", vb()));
+    } else if k == "DHCP" {
+        h.push(fld("op", "B", vi(1)));
+        h.push(fld("hrd", "B", vi(1)));
+        h.push(fld("hln", "B", vi(6)));
+        h.push(fld("hops", "B", vi(0)));
+        h.push(fld("xid", "I", vi(0xdeadbeef)));
+        h.push(fld("secs", "H", vi(0)));
+        h.push(fld("flags", "H", vi(0)));
+        h.push(fld("ciaddr", "I", vi(0)));
+        h.push(fld("yiaddr", "I", vi(0)));
+        h.push(fld("siaddr", "I", vi(0)));
+        h.push(fld("giaddr", "I", vi(0)));
+        h.push(fld("chaddr", "16s", bz(16)));
+        h.push(fld("sname", "64s", bz(64)));
+        h.push(fld("file", "128s", bz(128)));
+        h.push(fld("magic", "I", vi(0x63825363)));
+    } else if k == "NTP" {
+        h.push(fld("flags", "B", vi(0)));
+        h.push(fld("stratum", "B", vi(0)));
+        h.push(fld("interval", "B", vi(0)));
+        h.push(fld("precision", "B", vi(0)));
+        h.push(fld("delay", "I", vi(0)));
+        h.push(fld("dispersion", "I", vi(0)));
+        h.push(fld("id", "4s", vi(0)));
+        h.push(fld("update_time", "8s", vi(0)));
+        h.push(fld("originate_time", "8s", vi(0)));
+        h.push(fld("receive_time", "8s", vi(0)));
+        h.push(fld("transmit_time", "8s", vi(0)));
+        b.push(bits("flags", vec![("li", 2), ("v", 3), ("mode", 3)]));
+    } else if k == "TLSRecord" {
+        h.push(fld("type", "B", vi(0)));
+        h.push(fld("version", "H", vi(0)));
+        h.push(fld("length", "H", vi(0)));
+    } else if k == "TLSHandshake" {
+        h.push(fld("type", "B", vi(0)));
+        h.push(fld("length_bytes", "3s", vi(0)));
+    } else if k == "TLSClientHello" {
+        h.push(fld("version", "H", vi(0x0301)));
+        h.push(fld("random", "32s", nul_str(32)));
+    } else if k == "TLSServerHello" {
+        h.push(fld("version", "H", V.Str("0x0301".to_string())));
+        h.push(fld("random", "32s", nul_str(32)));
+    } else if k == "PcapngOption" {
+        h.push(fld("code", "H", vi(0)));
+        h.push(fld("len", "H", vi(0)));
+    } else if k == "PcapngBlock" {
+        h.push(fld("type", "I", vi(0)));
+        h.push(fld("len", "I", vi(12)));
+        h.push(fld("_len", "I", vi(12)));
+    } else if k == "SectionHeaderBlock" {
+        h.push(fld("type", "I", vi(PCAPNG_BT_SHB)));
+        h.push(fld("len", "I", vi(28)));
+        h.push(fld("bom", "I", vi(BYTE_ORDER_MAGIC)));
+        h.push(fld("v_major", "H", vi(1)));
+        h.push(fld("v_minor", "H", vi(0)));
+        h.push(fld("sec_len", "q", vi(-1)));
+        h.push(fld("_len", "I", vi(28)));
+    } else if k == "InterfaceDescriptionBlock" {
+        h.push(fld("type", "I", vi(PCAPNG_BT_IDB)));
+        h.push(fld("len", "I", vi(20)));
+        h.push(fld("linktype", "H", vi(1)));
+        h.push(fld("_reserved", "H", vi(0)));
+        h.push(fld("snaplen", "I", vi(1500)));
+        h.push(fld("_len", "I", vi(20)));
+    } else if k == "EnhancedPacketBlock" {
+        h.push(fld("type", "I", vi(PCAPNG_BT_EPB)));
+        h.push(fld("len", "I", vi(64)));
+        h.push(fld("iface_id", "I", vi(0)));
+        h.push(fld("ts_high", "I", vi(0)));
+        h.push(fld("ts_low", "I", vi(0)));
+        h.push(fld("caplen", "I", vi(0)));
+        h.push(fld("pkt_len", "I", vi(0)));
+        h.push(fld("_len", "I", vi(64)));
+    } else if k == "PacketBlock" {
+        h.push(fld("type", "I", vi(PCAPNG_BT_PB)));
+        h.push(fld("len", "I", vi(64)));
+        h.push(fld("iface_id", "H", vi(0)));
+        h.push(fld("drops_count", "H", vi(0)));
+        h.push(fld("ts_high", "I", vi(0)));
+        h.push(fld("ts_low", "I", vi(0)));
+        h.push(fld("caplen", "I", vi(0)));
+        h.push(fld("pkt_len", "I", vi(0)));
+        h.push(fld("_len", "I", vi(64)));
+    } else if k == "FileHdr" {
+        h.push(fld("magic", "I", vi(TCPDUMP_MAGIC)));
+        h.push(fld("v_major", "H", vi(2)));
+        h.push(fld("v_minor", "H", vi(4)));
+        h.push(fld("thiszone", "I", vi(0)));
+        h.push(fld("sigfigs", "I", vi(0)));
+        h.push(fld("snaplen", "I", vi(1500)));
+        h.push(fld("linktype", "I", vi(1)));
+    } else if k == "PktHdr" {
+        h.push(fld("tv_sec", "I", vi(0)));
+        h.push(fld("tv_usec", "I", vi(0)));
+        h.push(fld("caplen", "I", vi(0)));
+        h.push(fld("len", "I", vi(0)));
+    } else if k == "Request" or k == "Response" {
+        slots = false;
+    }
+    // the class name a repr shows: the part after the module, and the
+    // LE suffix kept
+    let mut cls = key.to_string();
+    let parts: Vec[Str] = key.split(".").collect();
+    if parts.len() == 2 {
+        cls = parts[1].to_string();
+    }
+    Pkt { key: k, cls: cls, le: le, hdr: h, bits: b, attrs: Vec.new(), data: vb(), slots: slots }
+}
+
+const TH_FIN: i64 = 0x01;
+const TH_SYN: i64 = 0x02;
+const TH_RST: i64 = 0x04;
+const TH_PUSH: i64 = 0x08;
+const TH_ACK: i64 = 0x10;
+const TH_URG: i64 = 0x20;
+const TH_ECE: i64 = 0x40;
+const TH_CWR: i64 = 0x80;
+const TH_NS: i64 = 0x100;
+
+const DNS_QR: i64 = 0x8000;
+const DNS_AA: i64 = 0x0400;
+const DNS_TC: i64 = 0x0200;
+const DNS_RD: i64 = 0x0100;
+const DNS_RA: i64 = 0x0080;
+const DNS_Z: i64 = 0x0040;
+
+const DNS_A: i64 = 1;
+const DNS_NS: i64 = 2;
+const DNS_CNAME: i64 = 5;
+const DNS_SOA: i64 = 6;
+const DNS_NULL: i64 = 10;
+const DNS_PTR: i64 = 12;
+const DNS_HINFO: i64 = 13;
+const DNS_MX: i64 = 15;
+const DNS_TXT: i64 = 16;
+const DNS_AAAA: i64 = 28;
+const DNS_SRV: i64 = 33;
+const DNS_OPT: i64 = 41;
+
+const PCAPNG_BT_IDB: i64 = 0x00000001;
+const PCAPNG_BT_PB: i64 = 0x00000002;
+const PCAPNG_BT_EPB: i64 = 0x00000006;
+const PCAPNG_BT_SHB: i64 = 0x0A0D0D0A;
+const BYTE_ORDER_MAGIC: i64 = 0x1A2B3C4D;
+const BYTE_ORDER_MAGIC_LE: i64 = 0x4D3C2B1A;
+const PCAPNG_OPT_ENDOFOPT: i64 = 0;
+const PCAPNG_OPT_COMMENT: i64 = 1;
+const PCAPNG_OPT_IF_TSRESOL: i64 = 9;
+const PCAPNG_OPT_IF_TSOFFSET: i64 = 14;
+
+const TCPDUMP_MAGIC: i64 = 0xa1b2c3d4;
+const TCPDUMP_MAGIC_NANO: i64 = 0xa1b23c4d;
+const MODPCAP_MAGIC: i64 = 0xa1b2cd34;
+const PMUDPCT_MAGIC: i64 = 0xd4c3b2a1;
+const PMUDPCT_MAGIC_NANO: i64 = 0x4d3cb2a1;
+const PACPDOM_MAGIC: i64 = 0x34cdb2a1;
+
+const ETH_TYPE_IP: i64 = 0x0800;
+const ETH_TYPE_ARP: i64 = 0x0806;
+const ETH_TYPE_IP6: i64 = 0x86DD;
+const ETH_TYPE_8021Q: i64 = 0x8100;
+const ETH_TYPE_8021AD: i64 = 0x88a8;
+const ETH_TYPE_QINQ1: i64 = 0x9100;
+const ETH_TYPE_QINQ2: i64 = 0x9200;
+
+fn is_qinq(t: i64) -> bool {
+    t == ETH_TYPE_8021Q or t == ETH_TYPE_8021AD or t == ETH_TYPE_QINQ1 or t == ETH_TYPE_QINQ2
+}
+// ------------------------------------------------------------ unpacking
+
+// Packet(buf): the class's unpack, with Packet.__init__'s handling of a
+// struct.error (NeedData when the buffer is shorter than the header,
+// UnpackError otherwise).
+fn make(key: Str, buf: ref Vec[u8]) -> Result[Pkt, PErr] {
+    let mut p = new_pkt(key);
+    if p.key == "TLSRecord" {
+        set(mut p, "compressed", V.Bool(false));
+        set(mut p, "encrypted", V.Bool(false));
+    }
+    if let Err(e) = unpack(mut p, buf) {
+        if e.kind == "struct" {
+            let n = hdr_len(p);
+            if buf.len() < n {
+                return Err(need(f"got {buf.len()}, {n} needed at least"));
+            }
+            return Err(unpack_err(f"invalid {p.cls}: {repr_bytes(buf)}"));
+        }
+        return Err(e);
+    }
+    if p.key == "TLSRecord" {
+        let n = data_bytes(p).len();
+        seti(mut p, "length", n);
+    }
+    Ok(p)
+}
+
+fn unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    let k = p.key.clone();
+    if k == "Ethernet" {
+        eth_unpack(mut p, buf)
+    } else if k == "VLANtag8021Q" {
+        base_unpack(mut p, buf)?;
+        p.data = vb();
+        Ok(())
+    } else if k == "IP" {
+        ip_unpack(mut p, buf)
+    } else if k == "TCP" {
+        tcp_unpack(mut p, buf)
+    } else if k == "ICMP" {
+        base_unpack(mut p, buf)?;
+        let t = gi(p, "type");
+        let cls = if t == 0 or t == 8 {
+            "icmp.Echo"
+        } else if t == 3 {
+            "icmp.Unreach"
+        } else if t == 4 {
+            "icmp.Quench"
+        } else if t == 5 {
+            "icmp.Redirect"
+        } else if t == 11 {
+            "icmp.TimeExceed"
+        } else {
+            ""
+        };
+        let d = data_bytes(p);
+        dispatch(mut p, cls, d)
+    } else if k == "icmp.Unreach" or k == "icmp.Quench" or k == "icmp.Redirect" or k == "icmp.TimeExceed" {
+        // ICMP.Quote: the IP header the error is about
+        base_unpack(mut p, buf)?;
+        let q = make("IP", data_bytes(p))?;
+        p.data = pv(q);
+        Ok(())
+    } else if k == "ICMP6" {
+        base_unpack(mut p, buf)?;
+        let t = gi(p, "type");
+        let cls = if t == 1 {
+            "icmp6.Unreach"
+        } else if t == 2 {
+            "icmp6.TooBig"
+        } else if t == 3 {
+            "icmp6.TimeExceed"
+        } else if t == 4 {
+            "icmp6.ParamProb"
+        } else if t == 128 or t == 129 {
+            "icmp6.Echo"
+        } else {
+            ""
+        };
+        let d = data_bytes(p);
+        dispatch(mut p, cls, d)
+    } else if k == "icmp6.Unreach" or k == "icmp6.TooBig" or k == "icmp6.TimeExceed" or k == "icmp6.ParamProb" {
+        // ICMP6.Error
+        base_unpack(mut p, buf)?;
+        let q = make("IP6", data_bytes(p))?;
+        p.data = pv(q);
+        Ok(())
+    } else if k == "IP6" {
+        ip6_unpack(mut p, buf)
+    } else if k == "IP6HopOptsHeader" or k == "IP6DstOptsHeader" {
+        ip6_opts_unpack(mut p, buf)
+    } else if k == "IP6RoutingHeader" {
+        base_unpack(mut p, buf)?;
+        let n = gi(p, "len") / 2;
+        let b = sub(buf, 8, 8 + n * 16);
+        let mut addrs: Vec[V] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            addrs.push(V.Bytes(sub(b, i * 16, i * 16 + 16)));
+            i += 1;
+        }
+        p.data = V.Bytes(b);
+        set(mut p, "addresses", V.List(addrs));
+        seti(mut p, "length", gi(p, "len") * 8 + 8);
+        Ok(())
+    } else if k == "IP6FragmentHeader" {
+        base_unpack(mut p, buf)?;
+        seti(mut p, "length", 8);
+        p.data = vb();
+        Ok(())
+    } else if k == "IP6AHHeader" {
+        base_unpack(mut p, buf)?;
+        let n = gi(p, "len");
+        seti(mut p, "length", (n + 2) * 4);
+        let d = data_bytes(p);
+        let mut end = (n - 1) * 4;
+        if end < 0 {
+            end += d.len();
+        }
+        set(mut p, "auth_data", V.Bytes(sub(d, 0, end)));
+        Ok(())
+    } else if k == "IP6ESPHeader" {
+        base_unpack(mut p, buf)?;
+        seti(mut p, "length", 8 + data_bytes(p).len());
+        Ok(())
+    } else if k == "DNS" {
+        dns_unpack(mut p, buf)
+    } else if k == "DHCP" {
+        dhcp_unpack(mut p, buf)
+    } else if k == "TLSRecord" {
+        base_unpack(mut p, buf)?;
+        let n = gi(p, "length");
+        let d = sub(buf, 5, 5 + n);
+        let got = d.len();
+        p.data = V.Bytes(d);
+        if got != n {
+            return Err(need("TLSRecord data was too short.".to_string()));
+        }
+        set(mut p, "compressed", V.Bool(true));
+        set(mut p, "encrypted", V.Bool(true));
+        Ok(())
+    } else if k == "TLSHandshake" {
+        tls_handshake_unpack(mut p, buf)
+    } else if k == "TLSClientHello" {
+        client_hello_unpack(mut p, buf)
+    } else if k == "TLSServerHello" {
+        match server_hello_unpack(mut p, buf) {
+            Err(e) => {
+                if e.kind == "struct" {
+                    return Err(need(String.new()));
+                }
+                Err(e)
+            }
+            Ok(()) => Ok(()),
+        }
+    } else if k == "TLSCertificate" {
+        match certificate_unpack(mut p, buf) {
+            Err(e) => {
+                if e.kind == "struct" {
+                    return Err(need(String.new()));
+                }
+                Err(e)
+            }
+            Ok(()) => Ok(()),
+        }
+    } else if k == "PcapngOption" {
+        base_unpack(mut p, buf)?;
+        let d = sub(buf, 4, 4 + gi(p, "len"));
+        p.data = V.Bytes(d.clone());
+        if gi(p, "code") == PCAPNG_OPT_COMMENT {
+            set(mut p, "text", V.Str(text_of(d)));
+        }
+        Ok(())
+    } else if k == "PcapngBlock" or k == "SectionHeaderBlock" or k == "InterfaceDescriptionBlock" {
+        base_unpack(mut p, buf)?;
+        if gi(p, "len") > buf.len() {
+            return Err(need(String.new()));
+        }
+        unpack_options(mut p, buf, 0)
+    } else if k == "EnhancedPacketBlock" or k == "PacketBlock" {
+        base_unpack(mut p, buf)?;
+        if gi(p, "len") > buf.len() {
+            return Err(need(String.new()));
+        }
+        let po = hdr_len(p) - 4;
+        let caplen = gi(p, "caplen");
+        set(mut p, "pkt_data", V.Bytes(sub(buf, po, po + caplen)));
+        unpack_options(mut p, buf, po + align32(caplen))
+    } else {
+        base_unpack(mut p, buf)
+    }
+}
+
+// The `try: self.data = cls(buf) except (KeyError, dpkt.UnpackError):
+// self.data = buf` every layer ends with.
+fn dispatch(p: mut ref Pkt, cls: Str, buf: own Vec[u8]) -> Result[(), PErr] {
+    if cls == "" {
+        p.data = V.Bytes(buf);
+        return Ok(());
+    }
+    match make(cls, buf) {
+        Ok(x) => p.data = pv(x),
+        Err(e) => {
+            if not is_unpack(e) {
+                return Err(e);
+            }
+            p.data = V.Bytes(buf);
+        }
+    }
+    Ok(())
+}
+
+fn eth_type_cls(t: i64) -> Str {
+    if t == ETH_TYPE_IP {
+        "IP"
+    } else if t == ETH_TYPE_ARP {
+        "ARP"
+    } else if t == ETH_TYPE_IP6 {
+        "IP6"
+    } else if t == 0x6558 {
+        "Ethernet"
+    } else {
+        ""
+    }
+}
+
+// Ethernet._typesw_rev: the type a layer above Ethernet calls for.
+fn eth_type_of(cls: ref String) -> i64 {
+    if cls == "IP" {
+        ETH_TYPE_IP
+    } else if cls == "ARP" {
+        ETH_TYPE_ARP
+    } else if cls == "IP6" {
+        ETH_TYPE_IP6
+    } else if cls == "Ethernet" {
+        0x6558
+    } else {
+        -1
+    }
+}
+
+// IP._protosw, for the protocols this port decodes.
+fn ip_proto_cls(p: i64) -> Str {
+    if p == 0 {
+        "IP"
+    } else if p == 1 {
+        "ICMP"
+    } else if p == 6 {
+        "TCP"
+    } else if p == 17 {
+        "UDP"
+    } else if p == 41 {
+        "IP6"
+    } else if p == 58 {
+        "ICMP6"
+    } else {
+        ""
+    }
+}
+
+fn eth_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let t = gi(p, "type");
+    if t > 1500 {
+        let d = data_bytes(p);
+        eth_unpack_data(mut p, t, d)?;
+    }
+    Ok(())
+}
+
+fn eth_unpack_data(p: mut ref Pkt, next: i64, buf0: own Vec[u8]) -> Result[(), PErr] {
+    let mut buf = buf0;
+    let mut nt = next;
+    if is_qinq(nt) {
+        let mut tags: Vec[V] = Vec.new();
+        let mut first: Vec[Pkt] = Vec.new();
+        for _ in 0..2 {
+            let tag = make("VLANtag8021Q", buf)?;
+            buf = tail(buf, 4);
+            nt = gi(tag, "type");
+            if first.len() == 0 {
+                first.push(tag.clone());
+            }
+            tags.push(pv(tag));
+            if nt != ETH_TYPE_8021Q {
+                break;
+            }
+        }
+        set(mut p, "vlan_tags", V.List(tags));
+        seti(mut p, "vlanid", gi(first[0], "id"));
+        seti(mut p, "priority", gi(first[0], "pri"));
+        seti(mut p, "cfi", gi(first[0], "cfi"));
+    }
+    let t = if nt != 0 { nt } else { gi(p, "type") };
+    dispatch(mut p, eth_type_cls(t), buf)
+}
+
+fn ip_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let ol = ((gi(p, "_v_hl") & 0xf) << 2) - 20;
+    if ol < 0 {
+        return Err(unpack_err("invalid header length".to_string()));
+    }
+    set(mut p, "opts", V.Bytes(sub(buf, 20, 20 + ol)));
+    let n = gi(p, "len");
+    let rest = if n != 0 { sub(buf, 20 + ol, n) } else { tail(buf, 20 + ol) };
+    if gi(p, "offset") != 0 {
+        p.data = V.Bytes(rest);
+        return Ok(());
+    }
+    dispatch(mut p, ip_proto_cls(gi(p, "p")), rest)
+}
+
+fn tcp_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let ol = ((gi(p, "_off_flags") >> 12) << 2) - 20;
+    if ol < 0 {
+        return Err(unpack_err("invalid header length".to_string()));
+    }
+    set(mut p, "opts", V.Bytes(sub(buf, 20, 20 + ol)));
+    p.data = V.Bytes(tail(buf, 20 + ol));
+    Ok(())
+}
+
+fn is_ext_hdr(n: i64) -> bool {
+    n == 0 or n == 43 or n == 44 or n == 51 or n == 50 or n == 60
+}
+
+fn ext_hdr_cls(n: i64) -> Str {
+    if n == 0 {
+        "IP6HopOptsHeader"
+    } else if n == 43 {
+        "IP6RoutingHeader"
+    } else if n == 44 {
+        "IP6FragmentHeader"
+    } else if n == 50 {
+        "IP6ESPHeader"
+    } else if n == 51 {
+        "IP6AHHeader"
+    } else {
+        "IP6DstOptsHeader"
+    }
+}
+
+fn ip6_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    set(mut p, "extension_hdrs", V.Dict(Vec.new()));
+    set(mut p, "all_extension_headers", V.List(Vec.new()));
+    let plen = gi(p, "plen");
+    let d = data_bytes(p);
+    let mut b = if plen != 0 { sub(d, 0, plen) } else { d };
+    let mut exts: Vec[(V, V)] = Vec.new();
+    let mut all: Vec[V] = Vec.new();
+    let mut next = gi(p, "nxt");
+    let mut have_next = true;
+    let mut frag_off = 0;
+    while have_next and is_ext_hdr(next) {
+        let ext = make(ext_hdr_cls(next), b)?;
+        b = tail(b, gi(ext, "length"));
+        frag_off = gi(ext, "frag_off");
+        let has_nxt = field_at(ext, "nxt".to_string()) >= 0;
+        let n = gi(ext, "nxt");
+        exts.push((V.Int(next), pv(ext.clone())));
+        all.push(pv(ext));
+        if has_nxt {
+            next = n;
+        } else {
+            have_next = false;
+        }
+    }
+    set(mut p, "extension_hdrs", V.Dict(exts));
+    set(mut p, "all_extension_headers", V.List(all));
+    if have_next {
+        seti(mut p, "p", next);
+    }
+    if gi(p, "nxt") == 44 and frag_off > 0 {
+        p.data = V.Bytes(b);
+        return Ok(());
+    }
+    let cls = if have_next { ip_proto_cls(next) } else { "" };
+    dispatch(mut p, cls, b)
+}
+
+fn ip6_opts_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let length = (gi(p, "len") + 1) * 8;
+    seti(mut p, "length", length);
+    let d = data_bytes(p);
+    let mut options: Vec[V] = Vec.new();
+    let mut index = 0;
+    while index < length - 2 {
+        if index >= d.len() {
+            return Err(need(String.new()));
+        }
+        let t = d[index] as i64;
+        if t == 0 {
+            index += 1;
+            continue;
+        }
+        if index + 1 >= d.len() {
+            return Err(need(String.new()));
+        }
+        let ol = d[index + 1] as i64;
+        if t == 1 {
+            index += ol + 2;
+            continue;
+        }
+        let mut o: Vec[(V, V)] = Vec.new();
+        o.push((V.Str("type".to_string()), V.Int(t)));
+        o.push((V.Str("opt_length".to_string()), V.Int(ol)));
+        o.push((V.Str("data".to_string()), V.Bytes(sub(d, index + 2, index + 2 + ol))));
+        options.push(V.Dict(o));
+        index += ol + 2;
+    }
+    set(mut p, "options", V.List(options));
+    p.data = V.Bytes(sub(buf, 2, length));
+    Ok(())
+}
+
+fn dhcp_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let hln = gi(p, "hln");
+    set(mut p, "chaddr", V.Bytes(sub(gb(p, "chaddr"), 0, hln)));
+    let mut b = data_bytes(p);
+    let mut opts: Vec[V] = Vec.new();
+    while b.len() > 0 {
+        let t = b[0] as i64;
+        if t == 0xff {
+            b = tail(b, 1);
+            break;
+        } else if t == 0 {
+            b = tail(b, 1);
+        } else {
+            let n = if b.len() > 1 { b[1] as i64 } else { 0 };
+            opts.push(V.Tuple(vec![V.Int(t), V.Bytes(sub(b, 2, 2 + n))]));
+            b = tail(b, 2 + n);
+        }
+    }
+    set(mut p, "opts", V.List(opts));
+    p.data = V.Bytes(b);
+    Ok(())
+}
+
+// ------------------------------------------------------------ dns
+
+fn unpack_name(buf: ref Vec[u8], off0: i64) -> Result[(String, i64), PErr] {
+    let mut parts: Vec[String] = Vec.new();
+    let mut off = off0;
+    let mut saved = 0;
+    let mut start = off0;
+    let mut total = 0;
+    loop {
+        if off >= buf.len() {
+            return Err(need(String.new()));
+        }
+        let n = buf[off] as i64;
+        if n == 0 {
+            off += 1;
+            break;
+        } else if (n & 0xc0) == 0xc0 {
+            if off + 2 > buf.len() {
+                return Err(struct_err());
+            }
+            let ptr = be16(buf, off) & 0x3fff;
+            if ptr >= start {
+                return Err(unpack_err("Invalid label compression pointer".to_string()));
+            }
+            off += 2;
+            if saved == 0 {
+                saved = off;
+            }
+            start = ptr;
+            off = ptr;
+        } else if (n & 0xc0) == 0 {
+            off += 1;
+            parts.push(text_of(sub(buf, off, off + n)));
+            total += n + 1;
+            if total > 255 {
+                return Err(unpack_err("name longer than 255 bytes".to_string()));
+            }
+            off += n;
+        } else {
+            return Err(unpack_err(f"Invalid label length {n:02x}"));
+        }
+    }
+    if saved == 0 {
+        saved = off;
+    }
+    Ok((parts.join("."), saved))
+}
+
+fn dns_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let mut off = 12;
+    let mut qd: Vec[V] = Vec.new();
+    for _ in 0..gi(p, "qd") {
+        let mut q = new_pkt("Q");
+        let (name, o) = unpack_name(buf, off)?;
+        if o + 4 > buf.len() {
+            return Err(struct_err());
+        }
+        set(mut q, "name", V.Str(name));
+        seti(mut q, "type", be16(buf, o));
+        seti(mut q, "cls", be16(buf, o + 2));
+        off = o + 4;
+        qd.push(pv(q));
+    }
+    set(mut p, "qd", V.List(qd));
+    for sect in ["an", "ns", "ar"] {
+        let mut rrs: Vec[V] = Vec.new();
+        for _ in 0..gi(p, sect) {
+            let mut rr = new_pkt("RR");
+            let (name, o) = unpack_name(buf, off)?;
+            if o + 10 > buf.len() {
+                return Err(struct_err());
+            }
+            set(mut rr, "name", V.Str(name));
+            seti(mut rr, "type", be16(buf, o));
+            seti(mut rr, "cls", be16(buf, o + 2));
+            seti(mut rr, "ttl", be32(buf, o + 4));
+            let rdlen = be16(buf, o + 8);
+            let at = o + 10;
+            set(mut rr, "rdata", V.Bytes(sub(buf, at, at + rdlen)));
+            seti(mut rr, "rlen", rdlen);
+            unpack_rdata(mut rr, buf, at)?;
+            off = at + rdlen;
+            rrs.push(pv(rr));
+        }
+        set(mut p, sect, V.List(rrs));
+    }
+    p.data = vb();
+    Ok(())
+}
+
+fn unpack_rdata(rr: mut ref Pkt, buf: ref Vec[u8], off: i64) -> Result[(), PErr] {
+    let t = gi(rr, "type");
+    let rdata = gb(rr, "rdata");
+    if t == DNS_A {
+        set(mut rr, "ip", V.Bytes(rdata));
+    } else if t == DNS_NS {
+        let (n, _) = unpack_name(buf, off)?;
+        set(mut rr, "nsname", V.Str(n));
+    } else if t == DNS_CNAME {
+        let (n, _) = unpack_name(buf, off)?;
+        set(mut rr, "cname", V.Str(n));
+    } else if t == DNS_PTR {
+        let (n, _) = unpack_name(buf, off)?;
+        set(mut rr, "ptrname", V.Str(n));
+    } else if t == DNS_SOA {
+        let (m, o1) = unpack_name(buf, off)?;
+        set(mut rr, "mname", V.Str(m));
+        let (r, o2) = unpack_name(buf, o1)?;
+        set(mut rr, "rname", V.Str(r));
+        if o2 + 20 > buf.len() {
+            return Err(struct_err());
+        }
+        seti(mut rr, "serial", be32(buf, o2));
+        seti(mut rr, "refresh", be32(buf, o2 + 4));
+        seti(mut rr, "retry", be32(buf, o2 + 8));
+        seti(mut rr, "expire", be32(buf, o2 + 12));
+        seti(mut rr, "minimum", be32(buf, o2 + 16));
+    } else if t == DNS_MX {
+        if rdata.len() < 2 {
+            return Err(struct_err());
+        }
+        set(mut rr, "preference", V.Tuple(vec![V.Int(be16(rdata, 0))]));
+        let (n, _) = unpack_name(buf, off + 2)?;
+        set(mut rr, "mxname", V.Str(n));
+    } else if t == DNS_TXT or t == DNS_HINFO {
+        let mut text: Vec[V] = Vec.new();
+        let mut b = rdata;
+        while b.len() > 0 {
+            let n = b[0] as i64;
+            text.push(V.Str(text_of(sub(b, 1, 1 + n))));
+            b = tail(b, 1 + n);
+        }
+        set(mut rr, "text", V.List(text));
+    } else if t == DNS_AAAA {
+        set(mut rr, "ip6", V.Bytes(rdata));
+    } else if t == DNS_NULL {
+        set(mut rr, "null", V.Bytes(bytes_of(hex_str(rdata))));
+    } else if t == DNS_SRV {
+        if rdata.len() < 6 {
+            return Err(struct_err());
+        }
+        seti(mut rr, "priority", be16(rdata, 0));
+        seti(mut rr, "weight", be16(rdata, 2));
+        seti(mut rr, "port", be16(rdata, 4));
+        let (n, _) = unpack_name(buf, off + 6)?;
+        set(mut rr, "srvname", V.Str(n));
+    } else if t != DNS_OPT {
+        return Err(unpack_err(f"RR type {t} is not supported"));
+    }
+    Ok(())
+}
+
+fn pack_name(name: ref String, off: i64, ptrs: mut ref Map[String, i64]) -> Vec[u8] {
+    let mut labels: Vec[String] = Vec.new();
+    if name.len() > 0 {
+        for l in name.split(".") {
+            labels.push(l.to_string());
+        }
+    }
+    labels.push(String.new());
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < labels.len() {
+        let key = labels[i..].to_vec().join(".").to_uppercase();
+        match ptrs.get(key) {
+            Some(ptr) => {
+                put_uint(mut out, 0xc000 | ptr, 2, false);
+                break;
+            }
+            None => {
+                if key.len() > 1 {
+                    let ptr = off + out.len();
+                    if ptr < 0xc000 {
+                        ptrs.insert(key, ptr);
+                    }
+                }
+                out.push(labels[i].len() as u8);
+                push_all(mut out, bytes_of(labels[i]));
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn pack_rdata(rr: ref Pkt, off: i64, ptrs: mut ref Map[String, i64]) -> Result[Vec[u8], PErr] {
+    let rdata = gb(rr, "rdata");
+    if rdata.len() > 0 {
+        return Ok(rdata);
+    }
+    let t = gi(rr, "type");
+    if t == DNS_A {
+        Ok(gb(rr, "ip"))
+    } else if t == DNS_NS {
+        Ok(pack_name(gs(rr, "nsname"), off, mut ptrs))
+    } else if t == DNS_CNAME {
+        Ok(pack_name(gs(rr, "cname"), off, mut ptrs))
+    } else if t == DNS_PTR {
+        Ok(pack_name(gs(rr, "ptrname"), off, mut ptrs))
+    } else if t == DNS_SOA {
+        let mut out = pack_name(gs(rr, "mname"), off, mut ptrs);
+        let r = pack_name(gs(rr, "rname"), off + out.len(), mut ptrs);
+        push_all(mut out, r);
+        for f in ["serial", "refresh", "retry", "expire", "minimum"] {
+            put_uint(mut out, gi(rr, f), 4, false);
+        }
+        Ok(out)
+    } else if t == DNS_MX {
+        let mut out = u16_be(gi(rr, "preference"));
+        push_all(mut out, pack_name(gs(rr, "mxname"), off + 2, mut ptrs));
+        Ok(out)
+    } else if t == DNS_TXT or t == DNS_HINFO {
+        let mut out: Vec[u8] = Vec.new();
+        for x in as_list(get(rr, "text".to_string())) {
+            let b = as_bytes(x);
+            out.push(b.len() as u8);
+            push_all(mut out, b);
+        }
+        Ok(out)
+    } else if t == DNS_AAAA {
+        Ok(gb(rr, "ip6"))
+    } else if t == DNS_SRV {
+        let mut out: Vec[u8] = Vec.new();
+        for f in ["priority", "weight", "port"] {
+            put_uint(mut out, gi(rr, f), 2, false);
+        }
+        push_all(mut out, pack_name(gs(rr, "srvname"), off + 6, mut ptrs));
+        Ok(out)
+    } else if t == DNS_OPT {
+        Ok(Vec.new())
+    } else {
+        Err(perr("PackError", f"RR type {t} is not supported"))
+    }
+}
+
+fn dns_bytes(d: ref Pkt) -> Result[Vec[u8], PErr] {
+    let mut ptrs: Map[String, i64] = Map.new();
+    let mut out: Vec[u8] = Vec.new();
+    put_uint(mut out, gi(d, "id"), 2, false);
+    put_uint(mut out, gi(d, "op"), 2, false);
+    for sect in ["qd", "an", "ns", "ar"] {
+        put_uint(mut out, as_list(get(d, sect.to_string())).len(), 2, false);
+    }
+    for q in as_list(get(d, "qd".to_string())) {
+        if let V.Pkt(x) = q {
+            let n = pack_name(gs(x[0], "name"), out.len(), mut ptrs);
+            push_all(mut out, n);
+            put_uint(mut out, gi(x[0], "type"), 2, false);
+            put_uint(mut out, gi(x[0], "cls"), 2, false);
+        }
+    }
+    for sect in ["an", "ns", "ar"] {
+        for r in as_list(get(d, sect.to_string())) {
+            if let V.Pkt(x) = r {
+                let rr = x[0].clone();
+                let name = pack_name(gs(rr, "name"), out.len(), mut ptrs);
+                let rdata = pack_rdata(rr, out.len() + name.len() + 10, mut ptrs)?;
+                push_all(mut out, name);
+                put_uint(mut out, gi(rr, "type"), 2, false);
+                put_uint(mut out, gi(rr, "cls"), 2, false);
+                put_uint(mut out, gi(rr, "ttl"), 4, false);
+                put_uint(mut out, rdata.len(), 2, false);
+                push_all(mut out, rdata);
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ tls
+
+fn parse_var(buf: ref Vec[u8], lb: i64) -> Result[(Vec[u8], i64), PErr] {
+    if buf.len() < lb {
+        return Err(struct_err());
+    }
+    let size = uint_at(buf, 0, lb, false);
+    Ok((sub(buf, lb, lb + size), size + lb))
+}
+
+fn parse_extensions(buf: ref Vec[u8]) -> Result[Vec[V], PErr] {
+    if buf.len() < 2 {
+        return Err(struct_err());
+    }
+    let n = be16(buf, 0);
+    let mut out: Vec[V] = Vec.new();
+    let mut at = 2;
+    while at < n {
+        if at + 2 > buf.len() {
+            return Err(struct_err());
+        }
+        let t = be16(buf, at);
+        at += 2;
+        let (d, used) = parse_var(tail(buf, at), 2)?;
+        out.push(V.Tuple(vec![V.Int(t), V.Bytes(d)]));
+        at += used;
+    }
+    Ok(out)
+}
+
+fn suite_v(code: i64) -> V {
+    match suite_by_code(code) {
+        Some(s) => V.Suite(code, s.name),
+        None => V.Suite(code, "Unknown".to_string()),
+    }
+}
+
+fn client_hello_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let d = data_bytes(p);
+    let (sid, at0) = parse_var(d, 1)?;
+    let mut at = at0;
+    set(mut p, "session_id", V.Bytes(sid));
+    let (cs, used) = parse_var(tail(d, at), 2)?;
+    at += used;
+    let num = cs.len() / 2;
+    if cs.len() != num * 2 {
+        return Err(struct_err());
+    }
+    let mut suites: Vec[V] = Vec.new();
+    let mut i = 0;
+    while i < num {
+        suites.push(suite_v(be16(cs, 2 * i)));
+        i += 1;
+    }
+    set(mut p, "ciphersuites", V.List(suites));
+    let (cm, used2) = parse_var(tail(d, at), 1)?;
+    at += used2;
+    let mut methods: Vec[V] = Vec.new();
+    for x in cm {
+        methods.push(V.Int(x as i64));
+    }
+    set(mut p, "compression_methods", V.Tuple(methods));
+    let rest = tail(d, at);
+    if rest.len() >= 6 {
+        let exts = parse_extensions(rest)?;
+        set(mut p, "extensions", V.List(exts));
+    }
+    Ok(())
+}
+
+fn server_hello_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let d = data_bytes(p);
+    let (sid, at0) = parse_var(d, 1)?;
+    let mut at = at0;
+    set(mut p, "session_id", V.Bytes(sid));
+    if at + 2 > d.len() {
+        return Err(struct_err());
+    }
+    set(mut p, "ciphersuite", suite_v(be16(d, at)));
+    at += 2;
+    if at + 1 > d.len() {
+        return Err(struct_err());
+    }
+    seti(mut p, "compression_method", d[at] as i64);
+    at += 1;
+    let rest = tail(d, at);
+    if rest.len() >= 6 {
+        let exts = parse_extensions(rest)?;
+        set(mut p, "extensions", V.List(exts));
+    }
+    Ok(())
+}
+
+fn certificate_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let d = data_bytes(p);
+    let (_, total) = parse_var(d, 3)?;
+    let mut certs: Vec[V] = Vec.new();
+    let mut at = 3;
+    while at < total {
+        let (c, used) = parse_var(tail(d, at), 3)?;
+        certs.push(V.Bytes(c));
+        at += used;
+    }
+    set(mut p, "certificates", V.List(certs));
+    Ok(())
+}
+
+// HANDSHAKE_TYPES: the message name and the class that parses it.
+fn handshake_type(t: i64) -> Option[(Str, Str)] {
+    if t == 0 {
+        Some(("HelloRequest", "TLSHelloRequest"))
+    } else if t == 1 {
+        Some(("ClientHello", "TLSClientHello"))
+    } else if t == 2 {
+        Some(("ServerHello", "TLSServerHello"))
+    } else if t == 4 {
+        Some(("NewSessionTicket", "TLSUnknownHandshake"))
+    } else if t == 11 {
+        Some(("Certificate", "TLSCertificate"))
+    } else if t == 12 {
+        Some(("ServerKeyExchange", "TLSUnknownHandshake"))
+    } else if t == 13 {
+        Some(("CertificateRequest", "TLSUnknownHandshake"))
+    } else if t == 14 {
+        Some(("ServerHelloDone", "TLSUnknownHandshake"))
+    } else if t == 15 {
+        Some(("CertificateVerify", "TLSUnknownHandshake"))
+    } else if t == 16 {
+        Some(("ClientKeyExchange", "TLSUnknownHandshake"))
+    } else if t == 20 {
+        Some(("Finished", "TLSUnknownHandshake"))
+    } else {
+        None
+    }
+}
+
+fn tls_handshake_unpack(p: mut ref Pkt, buf: ref Vec[u8]) -> Result[(), PErr] {
+    base_unpack(mut p, buf)?;
+    let t = gi(p, "type");
+    let cls = match handshake_type(t) {
+        Some(x) => x.1,
+        None => return Err(perr("SSL3Exception", f"Unknown or invalid handshake type {t}")),
+    };
+    let n = hs_length(p);
+    let d = sub(data_bytes(p), 0, n);
+    if d.len() != n {
+        return Err(need(String.new()));
+    }
+    let h = make(cls, d)?;
+    p.data = pv(h);
+    Ok(())
+}
+
+fn hs_length(p: ref Pkt) -> i64 {
+    uint_at(gb(p, "length_bytes"), 0, 3, false)
+}
+
+// ssl.tls_multi_factory: the records in buf, and how many bytes they took.
+fn tls_multi_factory(buf: ref Vec[u8]) -> Result[(Vec[Pkt], i64), PErr] {
+    let mut i = 0;
+    let n = buf.len();
+    let mut msgs: Vec[Pkt] = Vec.new();
+    while i + 5 <= n {
+        let v = sub(buf, i + 1, i + 3);
+        let ok = v[0] == 3 and v[1] <= 3;
+        if not ok {
+            return Err(perr("SSL3Exception", f"Bad TLS version in buf: {repr_bytes(sub(buf, i, i + 5))}"));
+        }
+        match make("TLSRecord", tail(buf, i)) {
+            Ok(m) => {
+                i += hdr_len(m) + data_bytes(m).len();
+                msgs.push(m);
+            }
+            Err(e) => {
+                if e.kind == "NeedData" {
+                    break;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok((msgs, i))
+}
+
+// ------------------------------------------------------------ pcapng blocks
+
+fn align32(n: i64) -> i64 {
+    let r = n % 4;
+    if r == 0 { n } else { n + 4 - r }
+}
+
+fn option_len(o: ref Pkt) -> i64 {
+    4 + align32(data_bytes(o).len())
+}
+
+fn unpack_options(p: mut ref Pkt, buf: ref Vec[u8], oo0: i64) -> Result[(), PErr] {
+    set(mut p, "opts", V.List(Vec.new()));
+    p.data = V.Str(String.new());
+    let oo = if oo0 != 0 { oo0 } else { hdr_len(p) - 4 };
+    let ol = gi(p, "len") - oo - 4;
+    let mut ob = sub(buf, oo, oo + ol);
+    let mut opts: Vec[V] = Vec.new();
+    let key = if p.le { "PcapngOptionLE" } else { "PcapngOption" };
+    while ob.len() > 0 {
+        let o = make(key, ob)?;
+        ob = tail(ob, option_len(o));
+        let code = gi(o, "code");
+        opts.push(pv(o));
+        if code == PCAPNG_OPT_ENDOFOPT {
+            break;
+        }
+    }
+    set(mut p, "opts", V.List(opts));
+    if buf.len() < 4 {
+        return Err(struct_err());
+    }
+    let n = uint_at(buf, buf.len() - 4, 4, p.le);
+    seti(mut p, "_len", n);
+    if n != gi(p, "len") {
+        return Err(unpack_err("length fields do not match".to_string()));
+    }
+    Ok(())
+}
+
+fn pack_options(p: ref Pkt) -> Result[Vec[u8], PErr] {
+    let opts = as_list(get(p, "opts".to_string()));
+    if opts.len() == 0 {
+        return Ok(Vec.new());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if let V.Pkt(last) = opts[opts.len() - 1] {
+        if gi(last[0], "code") != PCAPNG_OPT_ENDOFOPT {
+            return Err(perr("PackError", "options must end with opt_endofopt".to_string()));
+        }
+    }
+    for o in opts {
+        if let V.Pkt(x) = o {
+            let mut opt = x[0].clone();
+            push_all(mut out, pkt_bytes(mut opt)?);
+        }
+    }
+    Ok(out)
+}
+
+fn padded(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = b.clone();
+    while out.len() % 4 != 0 {
+        out.push(0);
+    }
+    out
+}
+
+// ------------------------------------------------------------ packing
+
+fn cksum_add(s: i64, b: ref Vec[u8]) -> i64 {
+    let n = b.len();
+    let cnt = (n / 2) * 2;
+    let mut res = s;
+    let mut i = 0;
+    while i < cnt {
+        res += (b[i] as i64) | ((b[i + 1] as i64) << 8);
+        i += 2;
+    }
+    if cnt != n {
+        res += b[n - 1] as i64;
+    }
+    res
+}
+
+fn cksum_done(s0: i64) -> i64 {
+    let mut s = (s0 >> 16) + (s0 & 0xffff);
+    s += s >> 16;
+    let v = 0xffff ^ (s & 0xffff);
+    ((v & 0xff) << 8) | (v >> 8)
+}
+
+fn in_cksum(b: ref Vec[u8]) -> i64 {
+    cksum_done(cksum_add(0, b))
+}
+
+// len(value), with each packet class's __len__.
+fn vlen(v: ref V) -> i64 {
+    match v {
+        V.Bytes(b) => b.len(),
+        V.Str(s) => s.len(),
+        V.Pkt(x) => pkt_len(x[0]),
+        _ => 0,
+    }
+}
+
+fn pkt_len(p: ref Pkt) -> i64 {
+    let k = p.key.clone();
+    if k == "IP" or k == "TCP" {
+        hdr_len(p) + gb(p, "opts").len() + vlen(p.data)
+    } else if k == "DNS" {
+        match dns_bytes(p) {
+            Ok(b) => b.len(),
+            Err(_) => 0,
+        }
+    } else if k == "IP6" {
+        let mut n = hdr_len(p) + vlen(p.data);
+        for e in as_list(get(p, "all_extension_headers".to_string())) {
+            n += vlen(e);
+        }
+        n
+    } else {
+        hdr_len(p) + vlen(p.data)
+    }
+}
+
+// bytes(p.data): a nested packet is packed in place, so the checksums it
+// fills in stay with it.
+fn data_out(p: mut ref Pkt) -> Result[Vec[u8], PErr] {
+    match p.data {
+        V.Pkt(x) => pkt_bytes(mut x[0]),
+        V.Bytes(b) => Ok(b.clone()),
+        V.Str(s) => Ok(s.bytes().to_vec()),
+        _ => Ok(Vec.new()),
+    }
+}
+
+fn inner_sum(p: ref Pkt) -> i64 {
+    match p.data {
+        V.Pkt(x) => {
+            if field_at(x[0], "sum".to_string()) >= 0 { gi(x[0], "sum") } else { -1 }
+        }
+        _ => -1,
+    }
+}
+
+fn set_inner_sum(p: mut ref Pkt, v: i64) {
+    match p.data {
+        V.Pkt(x) => seti(mut x[0], "sum", v),
+        _ => {}
+    }
+}
+
+fn data_cls(p: ref Pkt) -> String {
+    match p.data {
+        V.Pkt(x) => x[0].cls.clone(),
+        _ => String.new(),
+    }
+}
+
+// bytes(p), with each class's __bytes__.
+fn pkt_bytes(p: mut ref Pkt) -> Result[Vec[u8], PErr] {
+    let k = p.key.clone();
+    if k == "Ethernet" {
+        eth_bytes(mut p)
+    } else if k == "IP" {
+        ip_bytes(mut p)
+    } else if k == "TCP" {
+        let mut out = pack_hdr(p)?;
+        push_all(mut out, gb(p, "opts"));
+        push_all(mut out, data_out(mut p)?);
+        Ok(out)
+    } else if k == "ICMP" {
+        if gi(p, "sum") == 0 {
+            let mut whole = pack_hdr(p)?;
+            push_all(mut whole, data_out(mut p)?);
+            seti(mut p, "sum", in_cksum(whole));
+        }
+        let mut out = pack_hdr(p)?;
+        push_all(mut out, data_out(mut p)?);
+        Ok(out)
+    } else if k == "IP6" {
+        ip6_bytes(mut p)
+    } else if k == "DNS" {
+        dns_bytes(p)
+    } else if k == "PcapngOption" {
+        if gi(p, "code") == PCAPNG_OPT_COMMENT and has(p, "text") {
+            p.data = V.Bytes(gb(p, "text"));
+        }
+        let d = data_bytes(p);
+        seti(mut p, "len", d.len());
+        let mut out = pack_hdr(p)?;
+        push_all(mut out, padded(d));
+        Ok(out)
+    } else if k == "PcapngBlock" or k == "SectionHeaderBlock" or k == "InterfaceDescriptionBlock" {
+        let opts = pack_options(p)?;
+        let n = opts.len() + hdr_len(p);
+        seti(mut p, "len", n);
+        seti(mut p, "_len", n);
+        let h = pack_hdr(p)?;
+        let mut out = sub(h, 0, h.len() - 4);
+        push_all(mut out, opts);
+        push_all(mut out, tail(h, h.len() - 4));
+        Ok(out)
+    } else if k == "EnhancedPacketBlock" or k == "PacketBlock" {
+        let pkt = gb(p, "pkt_data");
+        seti(mut p, "caplen", pkt.len());
+        seti(mut p, "pkt_len", pkt.len());
+        let opts = pack_options(p)?;
+        let n = hdr_len(p) + align32(pkt.len()) + opts.len();
+        seti(mut p, "len", n);
+        seti(mut p, "_len", n);
+        let h = pack_hdr(p)?;
+        let mut out = sub(h, 0, h.len() - 4);
+        push_all(mut out, padded(pkt));
+        push_all(mut out, opts);
+        push_all(mut out, tail(h, h.len() - 4));
+        Ok(out)
+    } else {
+        let mut out = pack_hdr(p)?;
+        push_all(mut out, data_out(mut p)?);
+        Ok(out)
+    }
+}
+
+fn eth_bytes(p: mut ref Pkt) -> Result[Vec[u8], PErr] {
+    let mut tags_buf: Vec[u8] = Vec.new();
+    let mut new_type = gi(p, "type");
+    let tags = as_list(get(p, "vlan_tags".to_string()));
+    if tags.len() > 0 {
+        let mut last = gi(p, "type");
+        let rev = eth_type_of(data_cls(p));
+        if rev >= 0 {
+            last = rev;
+        }
+        let mut packed: Vec[Pkt] = Vec.new();
+        for t in tags {
+            if let V.Pkt(x) = t {
+                packed.push(x[0].clone());
+            }
+        }
+        if packed.len() == 1 {
+            if not is_qinq(new_type) {
+                new_type = ETH_TYPE_8021Q;
+            }
+            seti(mut packed[0], "type", last);
+        } else if packed.len() == 2 {
+            seti(mut packed[0], "type", ETH_TYPE_8021Q);
+            if not is_qinq(new_type) {
+                new_type = ETH_TYPE_8021AD;
+            }
+            seti(mut packed[1], "type", last);
+        } else {
+            return Err(perr("PackError", "maximum is 2 VLAN tags per Ethernet frame".to_string()));
+        }
+        for t in packed {
+            push_all(mut tags_buf, pack_hdr(t)?);
+        }
+    } else {
+        let rev = eth_type_of(data_cls(p));
+        if rev >= 0 {
+            new_type = rev;
+        }
+    }
+    let h = pack_hdr(p)?;
+    let mut out = sub(h, 0, h.len() - 2);
+    push_all(mut out, u16_be(new_type));
+    push_all(mut out, tags_buf);
+    push_all(mut out, data_out(mut p)?);
+    Ok(out)
+}
+
+fn ip_bytes(p: mut ref Pkt) -> Result[Vec[u8], PErr] {
+    let opts = gb(p, "opts");
+    if gi(p, "sum") == 0 {
+        seti(mut p, "len", pkt_len(p));
+        let mut h = pack_hdr(p)?;
+        push_all(mut h, opts);
+        seti(mut p, "sum", in_cksum(h));
+        let proto = gi(p, "p");
+        if (proto == 6 or proto == 17) and (gi(p, "_flags_offset") & (0x2000 | 0x1fff)) == 0 and inner_sum(p) == 0 {
+            let body = data_out(mut p)?;
+            let mut ph: Vec[u8] = Vec.new();
+            push_all(mut ph, gb(p, "src"));
+            push_all(mut ph, gb(p, "dst"));
+            ph.push(0);
+            ph.push(proto as u8);
+            push_all(mut ph, u16_be(body.len()));
+            let s = cksum_add(cksum_add(0, ph), body);
+            let mut sum = cksum_done(s);
+            if proto == 17 and sum == 0 {
+                sum = 0xffff;
+            }
+            set_inner_sum(mut p, sum);
+        }
+    }
+    let mut out = pack_hdr(p)?;
+    push_all(mut out, opts);
+    push_all(mut out, data_out(mut p)?);
+    Ok(out)
+}
+
+fn ip6_bytes(p: mut ref Pkt) -> Result[Vec[u8], PErr] {
+    let mut nxt = gi(p, "nxt");
+    let mut hdrs: Vec[u8] = Vec.new();
+    let all = as_list(get(p, "all_extension_headers".to_string()));
+    for e in all {
+        if let V.Pkt(x) = e {
+            nxt = gi(x[0], "nxt");
+            let mut ext = x[0].clone();
+            push_all(mut hdrs, pkt_bytes(mut ext)?);
+        }
+    }
+    seti(mut p, "p", nxt);
+    if (nxt == 6 or nxt == 17 or nxt == 58) and inner_sum(p) == 0 {
+        let body = data_out(mut p)?;
+        let mut ph: Vec[u8] = Vec.new();
+        push_all(mut ph, gb(p, "src"));
+        push_all(mut ph, gb(p, "dst"));
+        ph.push(0);
+        ph.push(nxt as u8);
+        push_all(mut ph, u16_be(body.len()));
+        set_inner_sum(mut p, cksum_done(cksum_add(cksum_add(0, ph), body)));
+    }
+    let mut out = pack_hdr(p)?;
+    push_all(mut out, hdrs);
+    push_all(mut out, data_out(mut p)?);
+    Ok(out)
+}
+// ------------------------------------------------------------ http
+
+// A BytesIO over a buffer: readline and read, as http.py uses them.
+struct Reader {
+    buf: Vec[u8],
+    pos: i64,
+}
+
+impl Reader {
+    fn readline(mut ref self) -> Vec[u8] {
+        let start = self.pos;
+        while self.pos < self.buf.len() {
+            let c = self.buf[self.pos];
+            self.pos += 1;
+            if c == 10 {
+                break;
+            }
+        }
+        sub(self.buf, start, self.pos)
+    }
+
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let start = self.pos;
+        let mut end = start + n;
+        if end > self.buf.len() {
+            end = self.buf.len();
+        }
+        self.pos = end;
+        sub(self.buf, start, end)
+    }
+
+    fn rest(mut ref self) -> Vec[u8] {
+        let n = self.buf.len() - self.pos;
+        self.read(n)
+    }
+}
+
+fn reader(b: ref Vec[u8]) -> Reader {
+    Reader { buf: b.clone(), pos: 0 }
+}
+
+fn is_ws(c: u8) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13 or c == 11 or c == 12
+}
+
+// bytes.strip() / str.strip() for ASCII whitespace
+fn strip_b(b: ref Vec[u8]) -> Vec[u8] {
+    let mut s = 0;
+    let mut e = b.len();
+    while s < e and is_ws(b[s]) {
+        s += 1;
+    }
+    while e > s and is_ws(b[e - 1]) {
+        e -= 1;
+    }
+    sub(b, s, e)
+}
+
+fn lstrip_s(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    while i < b.len() and is_ws(b[i]) {
+        i += 1;
+    }
+    text_of(tail(b, i))
+}
+
+// .decode("ascii", "ignore")
+fn ascii_ignore(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c < 0x80 {
+            out.push(c);
+        }
+    }
+    text_of(out)
+}
+
+// split(None, maxsplit): runs of whitespace separate, at most maxsplit
+// times (-1: no limit); the last piece keeps its inner whitespace.
+fn split_ws(b: ref Vec[u8], maxsplit: i64) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut i = 0;
+    let n = b.len();
+    loop {
+        while i < n and is_ws(b[i]) {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+        if maxsplit >= 0 and out.len() == maxsplit {
+            out.push(strip_b(tail(b, i)));
+            break;
+        }
+        let start = i;
+        while i < n and not is_ws(b[i]) {
+            i += 1;
+        }
+        out.push(sub(b, start, i));
+    }
+    out
+}
+
+fn split_ws_s(s: ref String, maxsplit: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in split_ws(s.bytes().to_vec(), maxsplit) {
+        out.push(text_of(p));
+    }
+    out
+}
+
+fn parse_headers(f: mut ref Reader) -> Result[Vec[(String, V)], PErr] {
+    let mut d: Vec[(String, V)] = Vec.new();
+    loop {
+        let line = ascii_ignore(strip_b(f.readline()));
+        if line.len() == 0 {
+            break;
+        }
+        let (name, value, found) = match line.find(":") {
+            Some(i) => (line[0..i].to_string(), line[i + 1..line.len()].to_string(), true),
+            None => (line.clone(), String.new(), false),
+        };
+        if split_ws_s(name, -1).len() != 1 {
+            return Err(unpack_err(f"invalid header: {repr_str(line)}"));
+        }
+        let k = name.to_lowercase();
+        let v = if found { lstrip_s(value) } else { String.new() };
+        let mut at = -1;
+        let mut i = 0;
+        while i < d.len() {
+            if d[i].0 == k {
+                at = i;
+            }
+            i += 1;
+        }
+        if at >= 0 {
+            let old = d[at].1.clone();
+            let mut items = match old {
+                V.List(x) => x,
+                other => vec![other],
+            };
+            items.push(V.Str(v));
+            d[at].1 = V.List(items);
+        } else {
+            d.push((k, V.Str(v)));
+        }
+    }
+    Ok(d)
+}
+
+fn header(h: ref Vec[(String, V)], k: Str) -> Option[V] {
+    for kv in h {
+        if kv.0 == k {
+            return Some(kv.1.clone());
+        }
+    }
+    None
+}
+
+// int(text, 16) for a chunk size.
+fn parse_hex(b: ref Vec[u8]) -> Option[i64] {
+    let mut s = strip_b(b);
+    if s.len() > 2 and s[0] == b'0' and (s[1] == b'x' or s[1] == b'X') {
+        s = tail(s, 2);
+    }
+    if s.len() == 0 {
+        return None;
+    }
+    let mut v: i64 = 0;
+    for c in s {
+        let d = if c >= b'0' and c <= b'9' {
+            (c - b'0') as i64
+        } else if c >= b'a' and c <= b'f' {
+            (c - b'a') as i64 + 10
+        } else if c >= b'A' and c <= b'F' {
+            (c - b'A') as i64 + 10
+        } else {
+            return None;
+        };
+        v = v * 16 + d;
+    }
+    Some(v)
+}
+
+fn parse_body(f: mut ref Reader, h: ref Vec[(String, V)]) -> Result[Vec[u8], PErr] {
+    let te = match header(h, "transfer-encoding") {
+        Some(v) => as_str(v).to_lowercase(),
+        None => String.new(),
+    };
+    if te == "chunked" {
+        let mut body: Vec[u8] = Vec.new();
+        let mut found_end = false;
+        loop {
+            let parts = split_ws(f.readline(), 1);
+            if parts.len() == 0 {
+                return Err(unpack_err("missing chunk size".to_string()));
+            }
+            let n = match parse_hex(parts[0]) {
+                Some(n) => n,
+                None => return Err(unpack_err("invalid chunk size".to_string())),
+            };
+            if n == 0 {
+                found_end = true;
+            }
+            let b = f.read(n);
+            if strip_b(f.readline()).len() > 0 {
+                break;
+            }
+            if n != 0 and b.len() == n {
+                push_all(mut body, b);
+            } else {
+                break;
+            }
+        }
+        if not found_end {
+            return Err(need("premature end of chunked body".to_string()));
+        }
+        return Ok(body);
+    }
+    match header(h, "content-length") {
+        Some(v) => {
+            let n = i64.parse(as_str(v)).unwrap_or(0);
+            let body = f.read(n);
+            if body.len() != n {
+                return Err(need(f"short body (missing {n - body.len()} bytes)"));
+            }
+            return Ok(body);
+        }
+        None => {}
+    }
+    if header(h, "content-type").is_some() {
+        return Ok(f.rest());
+    }
+    Ok(Vec.new())
+}
+
+// Message.unpack: the headers, the body and what follows it.
+fn message_unpack(p: mut ref Pkt, buf: ref Vec[u8], body_allowed: bool) -> Result[(), PErr] {
+    let mut f = reader(buf);
+    let h = parse_headers(mut f)?;
+    set(mut p, "headers", V.ODict(h.clone()));
+    let body = if body_allowed { parse_body(mut f, h)? } else { Vec.new() };
+    set(mut p, "body", V.Bytes(body));
+    let rest = f.rest();
+    set(mut p, "data", V.Bytes(rest.clone()));
+    p.attrs.push(("data".to_string(), V.Bytes(rest)));
+    Ok(())
+}
+
+fn http_methods() -> Vec[Str] {
+    vec!["GET", "PUT", "ICY", "COPY", "HEAD", "LOCK", "MOVE", "POLL", "POST", "BCOPY", "BMOVE", "MKCOL",
+         "TRACE", "LABEL", "MERGE", "DELETE", "SEARCH", "UNLOCK", "REPORT", "UPDATE", "NOTIFY", "BDELETE",
+         "CONNECT", "OPTIONS", "CHECKIN", "PROPFIND", "CHECKOUT", "CCM_POST", "SUBSCRIBE", "PROPPATCH",
+         "BPROPFIND", "BPROPPATCH", "UNCHECKOUT", "MKACTIVITY", "MKWORKSPACE", "UNSUBSCRIBE", "RPC_CONNECT",
+         "VERSION-CONTROL", "BASELINE-CONTROL"]
+}
+
+fn http_request(buf: ref Vec[u8]) -> Result[Pkt, PErr] {
+    let mut p = new_pkt("Request");
+    let mut f = reader(buf);
+    let line = ascii_ignore(f.readline());
+    let l = split_ws_s(line, -1);
+    if l.len() < 2 {
+        return Err(unpack_err(f"invalid request: {repr_str(line)}"));
+    }
+    let mut known = false;
+    for m in http_methods() {
+        if l[0] == m {
+            known = true;
+        }
+    }
+    if not known {
+        return Err(unpack_err(f"invalid http method: {repr_str(l[0])}"));
+    }
+    if l.len() == 2 {
+        set(mut p, "version", V.Str("0.9".to_string()));
+    } else {
+        if not l[2].starts_with("HTTP") {
+            return Err(unpack_err(f"invalid http version: {repr_str(l[2])}"));
+        }
+        let v = if l[2].len() > 5 { l[2][5..l[2].len()].to_string() } else { String.new() };
+        set(mut p, "version", V.Str(v));
+    }
+    set(mut p, "method", V.Str(l[0].clone()));
+    set(mut p, "uri", V.Str(l[1].clone()));
+    message_unpack(mut p, f.rest(), true)?;
+    Ok(p)
+}
+
+fn all_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.bytes() {
+        if c < b'0' or c > b'9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn http_response(buf: ref Vec[u8]) -> Result[Pkt, PErr] {
+    let mut p = new_pkt("Response");
+    let mut f = reader(buf);
+    let line = f.readline();
+    let l = split_ws_s(ascii_ignore(strip_b(line)), 2);
+    if l.len() < 2 or not l[0].starts_with("HTTP") or not all_digits(l[1]) {
+        return Err(unpack_err(f"invalid response: {repr_bytes(line)}"));
+    }
+    let v = if l[0].len() > 5 { l[0][5..l[0].len()].to_string() } else { String.new() };
+    set(mut p, "version", V.Str(v));
+    set(mut p, "status", V.Str(l[1].clone()));
+    set(mut p, "reason", V.Str(if l.len() > 2 { l[2].clone() } else { String.new() }));
+    let status = i64.parse(l[1].clone()).unwrap_or(0);
+    let allowed = status >= 200 and status != 204 and status != 304;
+    message_unpack(mut p, f.rest(), allowed)?;
+    Ok(p)
+}
+// ------------------------------------------------------------ captures
+
+// A timestamp as the readers yield it: pcap's float (sec + usec / 1E6),
+// pcap's Decimal for a nanosecond file, or pcapng's float (ticks / 10**k).
+#[derive(Clone)]
+struct Ts {
+    sec: i64,
+    frac: i64,
+    nano: bool,
+}
+
+#[derive(Clone)]
+struct Frame {
+    ts: Ts,
+    data: Vec[u8],
+}
+
+struct Capture {
+    module: String,
+    linktype: i64,
+    snaplen: i64,
+    frames: Vec[Frame],
+}
+
+// "%.6f" of a float timestamp, or str() of a Decimal one.
+fn fmt_ts(t: ref Ts) -> String {
+    if t.nano {
+        f"{t.sec}.{t.frac:09}"
+    } else {
+        f"{t.sec}.{t.frac:06}"
+    }
+}
+
+fn value_error(msg: own String) -> PErr {
+    perr("ValueError", msg)
+}
+
+// pcap.Reader
+fn read_pcap(buf: ref Vec[u8]) -> Result[Capture, PErr] {
+    let head = sub(buf, 0, 24);
+    let mut fh = make("FileHdr", head)?;
+    let magic = gi(fh, "magic");
+    if magic == PMUDPCT_MAGIC or magic == PMUDPCT_MAGIC_NANO or magic == PACPDOM_MAGIC {
+        fh = make("LEFileHdr", head)?;
+    }
+    let known = magic == TCPDUMP_MAGIC or magic == TCPDUMP_MAGIC_NANO or magic == MODPCAP_MAGIC
+        or magic == PMUDPCT_MAGIC or magic == PMUDPCT_MAGIC_NANO or magic == PACPDOM_MAGIC;
+    if not known {
+        return Err(value_error("invalid tcpdump header".to_string()));
+    }
+    let le = magic == PMUDPCT_MAGIC or magic == PMUDPCT_MAGIC_NANO or magic == PACPDOM_MAGIC;
+    let ph_len = if magic == MODPCAP_MAGIC or magic == PACPDOM_MAGIC { 24 } else { 16 };
+    let nano = magic == TCPDUMP_MAGIC_NANO or magic == PMUDPCT_MAGIC_NANO;
+    let mut frames: Vec[Frame] = Vec.new();
+    let mut off = 24;
+    while off < buf.len() {
+        let h = sub(buf, off, off + ph_len);
+        if h.len() < ph_len {
+            return Err(need(f"got {h.len()}, {ph_len} needed at least"));
+        }
+        let sec = uint_at(h, 0, 4, le);
+        let frac = uint_at(h, 4, 4, le);
+        let caplen = uint_at(h, 8, 4, le);
+        let data = sub(buf, off + ph_len, off + ph_len + caplen);
+        off += ph_len + caplen;
+        let ts = if nano {
+            Ts { sec: sec, frac: frac, nano: true }
+        } else {
+            Ts { sec: sec + frac / 1000000, frac: frac % 1000000, nano: false }
+        };
+        frames.push(Frame { ts: ts, data: data });
+    }
+    Ok(Capture { module: "pcap".to_string(), linktype: gi(fh, "linktype"), snaplen: gi(fh, "snaplen"), frames: frames })
+}
+
+fn swap32(v: i64) -> i64 {
+    ((v & 0xff) << 24) | (((v >> 8) & 0xff) << 16) | (((v >> 16) & 0xff) << 8) | ((v >> 24) & 0xff)
+}
+
+fn pow_i(b: i64, e: i64) -> i64 {
+    let mut v = 1;
+    let mut i = 0;
+    while i < e {
+        v *= b;
+        i += 1;
+    }
+    v
+}
+
+// ticks / divisor + offset, printed as "%.6f" prints the float
+fn ng_ts(ticks: i64, divisor: i64, offset: i64) -> Ts {
+    let mut whole = ticks / divisor;
+    let rem = ticks % divisor;
+    // the remainder to microseconds, rounding half to even
+    let num = rem * 1000000;
+    let mut micro = num / divisor;
+    let left = num % divisor;
+    if left * 2 > divisor or (left * 2 == divisor and micro % 2 == 1) {
+        micro += 1;
+    }
+    if micro == 1000000 {
+        whole += 1;
+        micro = 0;
+    }
+    Ts { sec: whole + offset, frac: micro, nano: false }
+}
+
+// pcapng.Reader
+fn read_pcapng(buf: ref Vec[u8]) -> Result[Capture, PErr] {
+    if buf.len() < 28 {
+        return Err(value_error("invalid pcapng header".to_string()));
+    }
+    let mut shb = new_pkt("SectionHeaderBlock");
+    base_unpack(mut shb, sub(buf, 0, 28))?;
+    if gi(shb, "type") != PCAPNG_BT_SHB {
+        return Err(value_error("invalid pcapng header: not a SHB".to_string()));
+    }
+    let bom = gi(shb, "bom");
+    let mut le = false;
+    if bom == BYTE_ORDER_MAGIC_LE {
+        le = true;
+        let n = swap32(gi(shb, "len"));
+        shb = make("SectionHeaderBlockLE", sub(buf, 0, n))?;
+    } else if bom == BYTE_ORDER_MAGIC {
+        let n = gi(shb, "len");
+        shb = make("SectionHeaderBlock", sub(buf, 0, n))?;
+    } else {
+        return Err(value_error("unknown endianness".to_string()));
+    }
+    if gi(shb, "v_major") != 1 {
+        return Err(value_error(f"unknown pcapng version {gi(shb, "v_major")}.{gi(shb, "v_minor")}"));
+    }
+    let mut off = gi(shb, "len");
+    let mut idb: Vec[Pkt] = Vec.new();
+    while off + 8 <= buf.len() {
+        let t = uint_at(buf, off, 4, le);
+        let n = uint_at(buf, off + 4, 4, le);
+        let blk = sub(buf, off, off + n);
+        off += n;
+        if t == PCAPNG_BT_IDB {
+            idb.push(make(if le { "InterfaceDescriptionBlockLE" } else { "InterfaceDescriptionBlock" }, blk)?);
+            break;
+        }
+    }
+    if idb.len() == 0 {
+        return Err(value_error("IDB not found".to_string()));
+    }
+    let mut divisor = 1000000;
+    let mut tsoffset = 0;
+    for o in as_list(get(idb[0], "opts".to_string())) {
+        if let V.Pkt(x) = o {
+            let code = gi(x[0], "code");
+            let d = data_bytes(x[0]);
+            if code == PCAPNG_OPT_IF_TSRESOL {
+                let v = d[0] as i64;
+                divisor = if v >= 128 { pow_i(2, v & 127) } else { pow_i(10, v & 127) };
+            } else if code == PCAPNG_OPT_IF_TSOFFSET {
+                tsoffset = uint_at(d, 0, 8, le);
+            }
+        }
+    }
+    let mut frames: Vec[Frame] = Vec.new();
+    while off + 8 <= buf.len() {
+        let t = uint_at(buf, off, 4, le);
+        let n = uint_at(buf, off + 4, 4, le);
+        let blk = sub(buf, off, off + n);
+        off += n;
+        if t == PCAPNG_BT_EPB or t == PCAPNG_BT_PB {
+            let key = if t == PCAPNG_BT_EPB { "EnhancedPacketBlock" } else { "PacketBlock" };
+            let b = make(if le { f"{key}LE" } else { key.to_string() }, blk)?;
+            let ticks = (gi(b, "ts_high") << 32) | gi(b, "ts_low");
+            frames.push(Frame { ts: ng_ts(ticks, divisor, tsoffset), data: gb(b, "pkt_data") });
+        }
+    }
+    Ok(Capture { module: "pcapng".to_string(), linktype: gi(idb[0], "linktype"), snaplen: gi(idb[0], "snaplen"), frames: frames })
+}
+
+// pcap.UniversalReader
+fn read_capture(buf: ref Vec[u8]) -> Result[Capture, PErr] {
+    match read_pcap(buf) {
+        Ok(c) => return Ok(c),
+        Err(e1) => {
+            if e1.kind != "ValueError" {
+                return Err(e1);
+            }
+            match read_pcapng(buf) {
+                Ok(c) => Ok(c),
+                Err(e2) => {
+                    if e2.kind != "ValueError" {
+                        return Err(e2);
+                    }
+                    Err(value_error(f"unknown pcap format; libpcap error: {e1.msg}, pcapng error: {e2.msg}"))
+                }
+            }
+        }
+    }
+}
+
+fn load(name: ref String) -> Result[Capture, PErr] {
+    match fs.read_bytes(f"data/{name}") {
+        Ok(b) => read_capture(b),
+        Err(e) => Err(perr("OSError", f"{e}")),
+    }
+}
+
+// pcap.Writer on a little-endian machine, timestamps in microseconds.
+fn pcap_file(snaplen: i64, frames: ref Vec[(i64, Vec[u8])]) -> Result[Vec[u8], PErr] {
+    let mut fh = new_pkt("LEFileHdr");
+    seti(mut fh, "snaplen", snaplen);
+    seti(mut fh, "linktype", 1);
+    seti(mut fh, "magic", TCPDUMP_MAGIC);
+    let mut out = pkt_bytes(mut fh)?;
+    for fr in frames {
+        let mut ph = new_pkt("LEPktHdr");
+        seti(mut ph, "tv_sec", fr.0 / 1000000);
+        seti(mut ph, "tv_usec", fr.0 % 1000000);
+        seti(mut ph, "caplen", fr.1.len());
+        seti(mut ph, "len", fr.1.len());
+        push_all(mut out, pack_hdr(ph)?);
+        push_all(mut out, fr.1);
+    }
+    Ok(out)
+}
+
+// pcapng.Writer on a little-endian machine.
+fn pcapng_file(snaplen: i64, frames: ref Vec[(i64, Vec[u8])]) -> Result[Vec[u8], PErr] {
+    let mut shb = new_pkt("SectionHeaderBlockLE");
+    let mut out = pkt_bytes(mut shb)?;
+    let mut idb = new_pkt("InterfaceDescriptionBlockLE");
+    seti(mut idb, "snaplen", snaplen);
+    seti(mut idb, "linktype", 1);
+    push_all(mut out, pkt_bytes(mut idb)?);
+    for fr in frames {
+        let mut epb = new_pkt("EnhancedPacketBlockLE");
+        seti(mut epb, "ts_high", fr.0 >> 32);
+        seti(mut epb, "ts_low", fr.0 & 0xffffffff);
+        seti(mut epb, "caplen", fr.1.len());
+        seti(mut epb, "pkt_len", fr.1.len());
+        set(mut epb, "pkt_data", V.Bytes(fr.1.clone()));
+        push_all(mut out, pkt_bytes(mut epb)?);
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ helpers
+
+fn mac_to_str(b: ref Vec[u8]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in b {
+        parts.push(hex2(x));
+    }
+    parts.join(":")
+}
+
+fn ip4_text(b: ref Vec[u8], at: i64) -> String {
+    f"{b[at]}.{b[at + 1]}.{b[at + 2]}.{b[at + 3]}"
+}
+
+// socket.inet_ntop as glibc spells an IPv6 address: the longest run of two
+// or more zero groups (the first, on a tie) becomes "::", and an IPv4
+// address at the end of ::/96 or ::ffff:0:0/96 is written dotted.
+fn ip6_text(b: ref Vec[u8]) -> String {
+    let mut w: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        w.push(be16(b, 2 * i));
+        i += 1;
+    }
+    let mut best = -1;
+    let mut best_len = 0;
+    let mut cur = -1;
+    let mut cur_len = 0;
+    i = 0;
+    while i < 8 {
+        if w[i] == 0 {
+            if cur < 0 {
+                cur = i;
+                cur_len = 1;
+            } else {
+                cur_len += 1;
+            }
+            if cur_len > best_len {
+                best = cur;
+                best_len = cur_len;
+            }
+        } else {
+            cur = -1;
+            cur_len = 0;
+        }
+        i += 1;
+    }
+    if best_len < 2 {
+        best = -1;
+    }
+    let mut out = String.new();
+    i = 0;
+    while i < 8 {
+        if best >= 0 and i >= best and i < best + best_len {
+            if i == best {
+                out.push_str(":");
+            }
+            i += 1;
+            continue;
+        }
+        if i != 0 {
+            out.push_str(":");
+        }
+        if i == 6 and best == 0 and (best_len == 6 or (best_len == 5 and w[5] == 0xffff)) {
+            out.push_str(ip4_text(b, 12));
+            break;
+        }
+        out.push_str(f"{w[i]:x}");
+        i += 1;
+    }
+    if best >= 0 and best + best_len == 8 {
+        out.push_str(":");
+    }
+    out
+}
+
+fn inet_to_str(b: ref Vec[u8]) -> String {
+    if b.len() == 4 {
+        return ip4_text(b, 0);
+    }
+    ip6_text(b)
+}
+
+fn tcp_flags_to_str(v: i64) -> String {
+    let names = ["FIN", "SYN", "RST", "PUSH", "ACK", "URG", "ECE", "CWR", "NS"];
+    let mut ff: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 9 {
+        if (v & (1 << i)) != 0 {
+            ff.push(names[i].to_string());
+        }
+        i += 1;
+    }
+    ff.join(",")
+}
+
+// dpkt.hexdump: offsets in decimal, a dot for anything but the printable
+// ASCII other than the backslash.
+fn hexdump(buf: ref Vec[u8]) -> String {
+    let mut lines: Vec[String] = Vec.new();
+    let mut n = 0;
+    while n < buf.len() {
+        let line = sub(buf, n, n + 16);
+        let mut hexa: Vec[String] = Vec.new();
+        let mut vis: Vec[u8] = Vec.new();
+        for x in line {
+            hexa.push(hex2(x));
+            vis.push(if x >= 32 and x < 127 and x != 92 { x } else { b'.' });
+        }
+        let mut h = hexa.join(" ");
+        while h.len() < 48 {
+            h.push_str(" ");
+        }
+        lines.push(f"  {n:04}:  {h} {text_of(vis)}");
+        n += 16;
+    }
+    lines.join("\n")
+}
+
+fn eth(buf: ref Vec[u8]) -> Result[Pkt, PErr] {
+    make("Ethernet", buf)
+}
+
+fn addr_port(a: ref Vec[u8], port: i64) -> String {
+    let s = inet_to_str(a);
+    if s.contains(":") {
+        return f"[{s}]:{port}";
+    }
+    f"{s}:{port}"
+}
+
+fn describe_l4(n: ref Pkt) -> String {
+    let src = gb(n, "src");
+    let dst = gb(n, "dst");
+    let head = f"{inet_to_str(src)} > {inet_to_str(dst)}";
+    match n.data {
+        V.Pkt(x) => {
+            let d = x[0].clone();
+            if d.cls == "TCP" {
+                return f"{addr_port(src, gi(d, "sport"))} > {addr_port(dst, gi(d, "dport"))} TCP [{tcp_flags_to_str(gi(d, "flags"))}] seq={gi(d, "seq")} ack={gi(d, "ack")} win={gi(d, "win")} len={data_bytes(d).len()}";
+            }
+            if d.cls == "UDP" {
+                return f"{addr_port(src, gi(d, "sport"))} > {addr_port(dst, gi(d, "dport"))} UDP len={data_bytes(d).len()}";
+            }
+            if d.cls == "ICMP" {
+                let mut s = f"{head} ICMP type={gi(d, "type")} code={gi(d, "code")}";
+                match d.data {
+                    V.Pkt(y) => {
+                        if y[0].key == "icmp.Echo" {
+                            s.push_str(f" echo id={gi(y[0], "id")} seq={gi(y[0], "seq")}");
+                        } else if y[0].key == "icmp.Unreach" {
+                            match inner(y[0]) {
+                                Some(q) => s.push_str(f" about {inet_to_str(gb(q, "src"))} > {inet_to_str(gb(q, "dst"))} proto {gi(q, "p")}"),
+                                None => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return s;
+            }
+            if d.cls == "ICMP6" {
+                let mut s = f"{head} ICMP6 type={gi(d, "type")} code={gi(d, "code")}";
+                match d.data {
+                    V.Pkt(y) => {
+                        if y[0].key == "icmp6.Echo" {
+                            s.push_str(f" echo id={gi(y[0], "id")} seq={gi(y[0], "seq")}");
+                        }
+                    }
+                    _ => {}
+                }
+                return s;
+            }
+            f"{head} proto {gi(n, "p")}, {pkt_len(d)} bytes not decoded"
+        }
+        _ => f"{head} proto {gi(n, "p")}, {vlen(n.data)} bytes not decoded",
+    }
+}
+
+fn describe(buf: ref Vec[u8]) -> String {
+    let e = match eth(buf) {
+        Ok(e) => e,
+        Err(x) => return err_line(x),
+    };
+    let mut pre = String.new();
+    if has(e, "vlan_tags") {
+        pre = f"vlan {gi(e, "vlanid")} pri {gi(e, "priority")}: ";
+    }
+    match inner(e) {
+        Some(d) => {
+            if d.cls == "ARP" {
+                if gi(d, "op") == 1 {
+                    return f"{pre}ARP who-has {inet_to_str(gb(d, "tpa"))} tell {inet_to_str(gb(d, "spa"))}";
+                }
+                return f"{pre}ARP {inet_to_str(gb(d, "spa"))} is-at {mac_to_str(gb(d, "sha"))}";
+            }
+            if d.cls == "IP" {
+                let mut s = "IP ".to_string();
+                if gi(d, "mf") != 0 or gi(d, "offset") != 0 {
+                    s.push_str(f"frag id={gi(d, "id")} off={gi(d, "offset") * 8} mf={gi(d, "mf")} ");
+                }
+                return f"{pre}{s}{describe_l4(d)}";
+            }
+            if d.cls == "IP6" {
+                let mut s = "IP6 ".to_string();
+                let exts = as_list(get(d, "all_extension_headers".to_string()));
+                if exts.len() > 0 {
+                    let mut names: Vec[String] = Vec.new();
+                    for x in exts {
+                        if let V.Pkt(h) = x {
+                            names.push(h[0].cls.clone());
+                        }
+                    }
+                    s.push_str(f"ext={names.join(",")} ");
+                }
+                return f"{pre}{s}{describe_l4(d)}";
+            }
+            f"{pre}ethertype 0x{hex4(gi(e, "type"))}, {pkt_len(d)} bytes not decoded"
+        }
+        None => f"{pre}ethertype 0x{hex4(gi(e, "type"))}, {vlen(e.data)} bytes not decoded",
+    }
+}
+
+// The frames of a capture, or the error, printed, that opening it raised.
+fn frames_of(name: ref String) -> Vec[Frame] {
+    match load(name) {
+        Ok(c) => c.frames,
+        Err(e) => {
+            println(err_line(e));
+            Vec.new()
+        }
+    }
+}
+
+// ------------------------------------------------------------ info and list
+
+fn job_info(name: ref String) {
+    let c = match load(name) {
+        Ok(c) => c,
+        Err(e) => {
+            println(err_line(e));
+            return;
+        }
+    };
+    println(f"format: {c.module}");
+    println(f"datalink: {c.linktype}");
+    println(f"snaplen: {c.snaplen}");
+    println(f"frames: {c.frames.len()}");
+    if c.frames.len() > 0 {
+        println(f"first: {fmt_ts(c.frames[0].ts)}");
+        println(f"last: {fmt_ts(c.frames[c.frames.len() - 1].ts)}");
+    }
+    let mut total = 0;
+    for fr in c.frames {
+        total += fr.data.len();
+    }
+    println(f"captured bytes: {total}");
+}
+
+fn job_list(name: ref String) {
+    let frames = frames_of(name);
+    let mut i = 1;
+    for fr in frames {
+        println(f"{i:3} {fmt_ts(fr.ts)} {describe(fr.data)}");
+        i += 1;
+    }
+}
+
+fn job_repr(name: ref String, nums: ref Vec[i64]) {
+    let frames = frames_of(name);
+    for n in nums {
+        if n < 1 or n > frames.len() {
+            println(f"frame {n}: no such frame ({frames.len()} frames)");
+            continue;
+        }
+        match eth(frames[n - 1].data) {
+            Ok(e) => println(f"frame {n}: {repr_pkt(e)}"),
+            Err(x) => println(f"frame {n}: {err_line(x)}"),
+        }
+    }
+}
+
+fn job_hexdump(name: ref String, nums: ref Vec[i64]) {
+    let frames = frames_of(name);
+    for n in nums {
+        println(f"frame {n}:");
+        println(hexdump(frames[n - 1].data));
+    }
+}
+
+// ------------------------------------------------------------ application protocols
+
+// The UDP datagrams to or from one of `ports`, with their frame numbers.
+fn udp_frames(name: ref String, ports: ref Vec[i64]) -> Vec[(i64, Pkt)] {
+    let mut out: Vec[(i64, Pkt)] = Vec.new();
+    let mut i = 0;
+    for fr in frames_of(name) {
+        i += 1;
+        let e = match eth(fr.data) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        match inner(e) {
+            Some(n) => {
+                if n.cls == "IP" or n.cls == "IP6" {
+                    match inner(n) {
+                        Some(u) => {
+                            if u.cls == "UDP" {
+                                let mut hit = false;
+                                for p in ports {
+                                    if gi(u, "sport") == p or gi(u, "dport") == p {
+                                        hit = true;
+                                    }
+                                }
+                                if hit {
+                                    out.push((i, u));
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+fn rtype_name(t: i64) -> String {
+    if t == 1 {
+        "A".to_string()
+    } else if t == 2 {
+        "NS".to_string()
+    } else if t == 5 {
+        "CNAME".to_string()
+    } else if t == 6 {
+        "SOA".to_string()
+    } else if t == 12 {
+        "PTR".to_string()
+    } else if t == 15 {
+        "MX".to_string()
+    } else if t == 16 {
+        "TXT".to_string()
+    } else if t == 28 {
+        "AAAA".to_string()
+    } else if t == 33 {
+        "SRV".to_string()
+    } else {
+        f"{t}"
+    }
+}
+
+fn rr_text(r: ref Pkt) -> String {
+    let t = gi(r, "type");
+    if t == DNS_A {
+        return inet_to_str(gb(r, "ip"));
+    }
+    if t == DNS_AAAA {
+        return inet_to_str(gb(r, "ip6"));
+    }
+    if t == DNS_CNAME {
+        return gs(r, "cname");
+    }
+    if t == DNS_NS {
+        return gs(r, "nsname");
+    }
+    if t == DNS_MX {
+        let pref = as_int(as_list(get(r, "preference".to_string()))[0]);
+        return f"{pref} {gs(r, "mxname")}";
+    }
+    if t == DNS_TXT {
+        let mut parts: Vec[String] = Vec.new();
+        for x in as_list(get(r, "text".to_string())) {
+            parts.push(f"\"{as_str(x)}\"");
+        }
+        return parts.join(" ");
+    }
+    if t == DNS_SOA {
+        return f"{gs(r, "mname")} {gs(r, "rname")} {gi(r, "serial")} {gi(r, "refresh")} {gi(r, "retry")} {gi(r, "expire")} {gi(r, "minimum")}";
+    }
+    repr_bytes(gb(r, "rdata"))
+}
+
+fn bit(op: i64, mask: i64) -> i64 {
+    if (op & mask) == mask { 1 } else { 0 }
+}
+
+fn job_dns(name: ref String) {
+    for item in udp_frames(name, vec![53]) {
+        let d = match make("DNS", data_bytes(item.1)) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"frame {item.0}: {err_line(e)}");
+                continue;
+            }
+        };
+        let op = gi(d, "op");
+        println(f"frame {item.0}: id=0x{hex4(gi(d, "id"))} qr={bit(op, DNS_QR)} opcode={(op >> 11) & 0xf} aa={bit(op, DNS_AA)} tc={bit(op, DNS_TC)} rd={bit(op, DNS_RD)} ra={bit(op, DNS_RA)} rcode={op & 0xf}");
+        for q in as_list(get(d, "qd".to_string())) {
+            if let V.Pkt(x) = q {
+                println(f"  question {gs(x[0], "name")} {rtype_name(gi(x[0], "type"))}");
+            }
+        }
+        for sect in ["an", "ns", "ar"] {
+            for r in as_list(get(d, sect.to_string())) {
+                if let V.Pkt(x) = r {
+                    let rr = x[0].clone();
+                    println(f"  {sect} {gs(rr, "name")} {gi(rr, "ttl")} {rtype_name(gi(rr, "type"))} {rr_text(rr)}");
+                }
+            }
+        }
+        println(f"  {repr_pkt(d)}");
+    }
+}
+
+fn dhcp_type(t: i64) -> String {
+    if t == 1 {
+        "DISCOVER".to_string()
+    } else if t == 2 {
+        "OFFER".to_string()
+    } else if t == 3 {
+        "REQUEST".to_string()
+    } else if t == 5 {
+        "ACK".to_string()
+    } else if t == 6 {
+        "NAK".to_string()
+    } else if t == 7 {
+        "RELEASE".to_string()
+    } else {
+        f"{t}"
+    }
+}
+
+fn dhcp_opt_name(t: i64) -> Option[String] {
+    let name = if t == 1 {
+        "netmask"
+    } else if t == 3 {
+        "router"
+    } else if t == 6 {
+        "dns"
+    } else if t == 12 {
+        "hostname"
+    } else if t == 15 {
+        "domain"
+    } else if t == 51 {
+        "lease"
+    } else if t == 53 {
+        "msgtype"
+    } else if t == 54 {
+        "server-id"
+    } else if t == 55 {
+        "params"
+    } else if t == 61 {
+        "client-id"
+    } else {
+        return None;
+    };
+    Some(name.to_string())
+}
+
+fn dhcp_opt(t: i64, v: ref Vec[u8]) -> String {
+    if t == 1 or t == 3 or t == 6 or t == 54 {
+        let mut parts: Vec[String] = Vec.new();
+        let mut k = 0;
+        while k < v.len() {
+            parts.push(inet_to_str(sub(v, k, k + 4)));
+            k += 4;
+        }
+        return parts.join(" ");
+    }
+    if t == 12 or t == 15 {
+        return text_of(v);
+    }
+    if t == 51 {
+        return f"{be32(v, 0)}s";
+    }
+    if t == 53 {
+        return dhcp_type(v[0] as i64);
+    }
+    if t == 55 {
+        let mut parts: Vec[String] = Vec.new();
+        for x in v {
+            parts.push(dhcp_opt_name(x as i64).unwrap_or(f"{x}"));
+        }
+        return parts.join(",");
+    }
+    hex_str(v)
+}
+
+fn u32_bytes(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_uint(mut out, v, 4, false);
+    out
+}
+
+fn job_dhcp(name: ref String) {
+    for item in udp_frames(name, vec![67, 68]) {
+        let d = match make("DHCP", data_bytes(item.1)) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"frame {item.0}: {err_line(e)}");
+                continue;
+            }
+        };
+        println(f"frame {item.0}: op={gi(d, "op")} xid=0x{gi(d, "xid"):08x} client={mac_to_str(gb(d, "chaddr"))} yiaddr={inet_to_str(u32_bytes(gi(d, "yiaddr")))} siaddr={inet_to_str(u32_bytes(gi(d, "siaddr")))} flags=0x{hex4(gi(d, "flags"))}");
+        for o in as_list(get(d, "opts".to_string())) {
+            let tv = as_list(o);
+            let t = as_int(tv[0]);
+            let v = as_bytes(tv[1]);
+            println(f"  option {t} {dhcp_opt_name(t).unwrap_or("?".to_string())}: {dhcp_opt(t, v)}");
+        }
+        println(f"  {repr_pkt(d)}");
+    }
+}
+
+fn job_ntp(name: ref String) {
+    for item in udp_frames(name, vec![123]) {
+        let n = match make("NTP", data_bytes(item.1)) {
+            Ok(n) => n,
+            Err(e) => {
+                println(f"frame {item.0}: {err_line(e)}");
+                continue;
+            }
+        };
+        println(f"frame {item.0}: li={gi(n, "li")} v={gi(n, "v")} mode={gi(n, "mode")} stratum={gi(n, "stratum")}");
+        for f in ["update_time", "originate_time", "receive_time", "transmit_time"] {
+            let b = gb(n, f);
+            let sec = be32(b, 0);
+            let frac = be32(b, 4);
+            if sec == 0 and frac == 0 {
+                println(f"  {f}: unset");
+            } else {
+                println(f"  {f}: {sec - 2208988800}.{(frac * 1000000) >> 32:06}");
+            }
+        }
+        println(f"  {repr_pkt(n)}");
+    }
+}
+
+// The TCP segments over IPv4, with their frame numbers and IP headers.
+fn tcp_segments(name: ref String) -> Vec[(i64, Pkt, Pkt)] {
+    let mut out: Vec[(i64, Pkt, Pkt)] = Vec.new();
+    let mut i = 0;
+    for fr in frames_of(name) {
+        i += 1;
+        let e = match eth(fr.data) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        match inner(e) {
+            Some(n) => {
+                if n.cls == "IP" {
+                    match inner(n) {
+                        Some(t) => {
+                            if t.cls == "TCP" {
+                                out.push((i, n, t));
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+struct Stream {
+    src: String,
+    sport: i64,
+    dst: String,
+    dport: i64,
+    segs: Vec[(i64, i64, Vec[u8])],
+}
+
+// Each direction of each connection on `port`, its payload in seq order.
+fn streams(name: ref String, port: i64) -> Vec[Stream] {
+    let mut out: Vec[Stream] = Vec.new();
+    for item in tcp_segments(name) {
+        let t = item.2.clone();
+        let sport = gi(t, "sport");
+        let dport = gi(t, "dport");
+        if sport != port and dport != port {
+            continue;
+        }
+        let src = inet_to_str(gb(item.1, "src"));
+        let dst = inet_to_str(gb(item.1, "dst"));
+        let mut at = -1;
+        let mut k = 0;
+        while k < out.len() {
+            if out[k].src == src and out[k].sport == sport and out[k].dst == dst and out[k].dport == dport {
+                at = k;
+            }
+            k += 1;
+        }
+        if at < 0 {
+            out.push(Stream { src: src, sport: sport, dst: dst, dport: dport, segs: Vec.new() });
+            at = out.len() - 1;
+        }
+        let d = data_bytes(t);
+        if d.len() > 0 {
+            out[at].segs.push((gi(t, "seq"), item.0, d));
+        }
+    }
+    let mut i = 0;
+    while i < out.len() {
+        sort_segs(mut out[i].segs);
+        i += 1;
+    }
+    out
+}
+
+// sorted() of (seq, frame, payload) tuples
+fn sort_segs(v: mut ref Vec[(i64, i64, Vec[u8])]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and seg_less(v[j], v[j - 1]) {
+            let tmp = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = tmp;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn seg_less(a: ref (i64, i64, Vec[u8]), b: ref (i64, i64, Vec[u8])) -> bool {
+    if a.0 != b.0 {
+        return a.0 < b.0;
+    }
+    a.1 < b.1
+}
+
+fn job_http(name: ref String) {
+    for port in [80, 8080] {
+        for s in streams(name, port) {
+            let mut data: Vec[u8] = Vec.new();
+            let mut nums: Vec[String] = Vec.new();
+            for seg in s.segs {
+                push_all(mut data, seg.2);
+                nums.push(f"{seg.1}");
+            }
+            if data.len() == 0 {
+                continue;
+            }
+            let req = s.dport == port;
+            println(f"{s.src}:{s.sport} > {s.dst}:{s.dport} {if req { "requests" } else { "responses" }}, {data.len()} bytes from frames {nums.join(",")}");
+            while data.len() > 0 {
+                let r = if req { http_request(data) } else { http_response(data) };
+                let m = match r {
+                    Ok(m) => m,
+                    Err(e) => {
+                        println(f"  {err_line(e)}");
+                        break;
+                    }
+                };
+                if req {
+                    println(f"  {gs(m, "method")} {gs(m, "uri")} HTTP/{gs(m, "version")}");
+                } else {
+                    println(f"  HTTP/{gs(m, "version")} {gs(m, "status")} {gs(m, "reason")}");
+                }
+                if let V.ODict(h) = get(m, "headers".to_string()) {
+                    for kv in h {
+                        println(f"    {kv.0}: {repr_v(kv.1)}");
+                    }
+                }
+                println(f"    body {repr_v(get(m, "body".to_string()))}");
+                println(f"    {repr_pkt(m)}");
+                data = data_bytes(m);
+            }
+        }
+    }
+}
+
+fn hex_list(b: ref Vec[u8], at: i64, count: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < count {
+        parts.push(f"0x{hex4(be16(b, at + 2 * i))}");
+        i += 1;
+    }
+    parts.join(",")
+}
+
+fn ext_text(t: i64, d: ref Vec[u8]) -> String {
+    if t == 0 {
+        let n = be16(d, 3);
+        return f"server_name {text_of(sub(d, 5, 5 + n))}";
+    }
+    if t == 16 {
+        let mut names: Vec[String] = Vec.new();
+        let mut k = 2;
+        while k < d.len() {
+            let n = d[k] as i64;
+            names.push(text_of(sub(d, k + 1, k + 1 + n)));
+            k += 1 + n;
+        }
+        return f"alpn {names.join(",")}";
+    }
+    if t == 10 {
+        return f"groups {hex_list(d, 2, (d.len() - 2) / 2)}";
+    }
+    if t == 43 {
+        if d.len() == 2 {
+            return f"supported_versions 0x{hex4(be16(d, 0))}";
+        }
+        return f"supported_versions {hex_list(d, 1, (d.len() - 1) / 2)}";
+    }
+    if t == 51 {
+        return f"key_share group 0x{hex4(be16(d, 0))}, {d.len() - 4} byte key";
+    }
+    f"type 0x{hex4(t)}, {d.len()} bytes"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn job_tls(name: ref String) {
+    for item in tcp_segments(name) {
+        let t = item.2.clone();
+        let d = data_bytes(t);
+        if (gi(t, "sport") != 443 and gi(t, "dport") != 443) or d.len() == 0 {
+            continue;
+        }
+        let (recs, used) = match tls_multi_factory(d) {
+            Ok(x) => x,
+            Err(e) => {
+                println(f"frame {item.0}: {err_line(e)}");
+                continue;
+            }
+        };
+        println(f"frame {item.0}: {recs.len()} records, {used} of {d.len()} bytes");
+        for r in recs {
+            println(f"  record type={gi(r, "type")} version=0x{hex4(gi(r, "version"))} length={gi(r, "length")}");
+            if gi(r, "type") != 22 {
+                println(f"    {repr_pkt(r)}");
+                continue;
+            }
+            let h = match make("TLSHandshake", data_bytes(r)) {
+                Ok(h) => h,
+                Err(e) => {
+                    println(f"    {err_line(e)}");
+                    continue;
+                }
+            };
+            let tname = match handshake_type(gi(h, "type")) {
+                Some(x) => x.0,
+                None => "?",
+            };
+            println(f"    handshake {tname}, {hs_length(h)} bytes");
+            let hello = inner(h).unwrap();
+            println(f"    {repr_pkt(hello)}");
+            println(f"    session id {gb(hello, "session_id").len()} bytes");
+            if hello.cls == "TLSClientHello" {
+                for c in as_list(get(hello, "ciphersuites".to_string())) {
+                    if let V.Suite(code, _) = c {
+                        let s = suite_or_unknown(code);
+                        let pfs = s.kx == "DHE" or s.kx == "ECDHE";
+                        let aead = s.mode == "CCM" or s.mode == "CCM_8" or s.mode == "GCM";
+                        println(f"    suite 0x{hex4(code)} {s.name} kx={s.kx} enc={s.encoding} mac={s.mac} pfs={py_bool(pfs)} aead={py_bool(aead)}");
+                    }
+                }
+            } else {
+                if let V.Suite(code, sname) = get(hello, "ciphersuite".to_string()) {
+                    println(f"    chosen 0x{hex4(code)} {sname}");
+                }
+            }
+            for x in as_list(get(hello, "extensions".to_string())) {
+                let tv = as_list(x);
+                println(f"    extension {ext_text(as_int(tv[0]), as_bytes(tv[1]))}");
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Suite {
+    code: i64,
+    name: String,
+    kx: String,
+    encoding: String,
+    mode: String,
+    mac: String,
+}
+
+fn suite_or_unknown(code: i64) -> Suite {
+    match suite_by_code(code) {
+        Some(s) => s,
+        None => Suite { code: code, name: "Unknown".to_string(), kx: String.new(), encoding: String.new(), mode: String.new(), mac: String.new() },
+    }
+}
+
+// ------------------------------------------------------------ checksums and statistics
+
+fn job_checksums(name: ref String) {
+    let mut good = 0;
+    let mut i = 0;
+    for fr in frames_of(name) {
+        i += 1;
+        let buf = fr.data.clone();
+        let e = match eth(buf) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let n = match inner(e) {
+            Some(n) => n,
+            None => continue,
+        };
+        let base = 14 + 4 * as_list(get(e, "vlan_tags".to_string())).len();
+        let mut seg: Vec[u8] = Vec.new();
+        if n.cls == "IP" {
+            let hl = gi(n, "hl") * 4;
+            let raw = sub(buf, base, base + hl);
+            let got = be16(raw, 10);
+            let mut z = sub(raw, 0, 10);
+            z.push(0);
+            z.push(0);
+            push_all(mut z, tail(raw, 12));
+            let want = in_cksum(z);
+            if got != want {
+                println(f"frame {i}: ip header checksum 0x{hex4(got)}, should be 0x{hex4(want)}");
+            } else {
+                good += 1;
+            }
+            seg = sub(buf, base + hl, base + gi(n, "len"));
+            if seg.len() != gi(n, "len") - hl {
+                println(f"frame {i}: truncated, {seg.len()} of {gi(n, "len") - hl} bytes captured");
+                continue;
+            }
+            let p = gi(n, "p");
+            if gi(n, "mf") != 0 or gi(n, "offset") != 0 or (p != 6 and p != 17) {
+                continue;
+            }
+        } else if n.cls == "IP6" {
+            let p = gi(n, "p");
+            if p != 6 and p != 17 and p != 58 {
+                continue;
+            }
+            let mut ext = 0;
+            for x in as_list(get(n, "all_extension_headers".to_string())) {
+                if let V.Pkt(h) = x {
+                    ext += gi(h[0], "length");
+                }
+            }
+            seg = sub(buf, base + 40 + ext, base + 40 + gi(n, "plen"));
+        } else {
+            continue;
+        }
+        let p = gi(n, "p");
+        let at = if p == 6 { 16 } else if p == 17 { 6 } else { 2 };
+        let got = be16(seg, at);
+        let mut zeroed = sub(seg, 0, at);
+        zeroed.push(0);
+        zeroed.push(0);
+        push_all(mut zeroed, tail(seg, at + 2));
+        let mut ph: Vec[u8] = Vec.new();
+        push_all(mut ph, gb(n, "src"));
+        push_all(mut ph, gb(n, "dst"));
+        ph.push(0);
+        ph.push(p as u8);
+        push_all(mut ph, u16_be(seg.len()));
+        let mut want = cksum_done(cksum_add(cksum_add(0, ph), zeroed));
+        if p == 17 and want == 0 {
+            want = 0xffff;
+        }
+        let label = if p == 6 { "tcp" } else if p == 17 { "udp" } else { "icmp6" };
+        if got != want {
+            println(f"frame {i}: {label} checksum 0x{hex4(got)}, should be 0x{hex4(want)}");
+        } else {
+            good += 1;
+        }
+    }
+    println(f"{good} checksums correct");
+}
+
+fn bump(m: mut ref Vec[(String, i64)], k: ref String, by: i64) {
+    let mut i = 0;
+    while i < m.len() {
+        if m[i].0 == k {
+            m[i].1 += by;
+            return;
+        }
+        i += 1;
+    }
+    m.push((k.clone(), by));
+}
+
+fn service_name(port: i64) -> String {
+    if port == 53 {
+        "dns".to_string()
+    } else if port == 67 or port == 68 {
+        "dhcp".to_string()
+    } else if port == 80 {
+        "http".to_string()
+    } else if port == 123 {
+        "ntp".to_string()
+    } else if port == 443 {
+        "https".to_string()
+    } else if port == 514 {
+        "syslog".to_string()
+    } else {
+        f"port {port}"
+    }
+}
+
+// ip.get_ip_proto_name, for the protocols the captures carry
+fn ip_proto_name(p: i64) -> String {
+    if p == 1 {
+        "ICMP".to_string()
+    } else if p == 6 {
+        "TCP".to_string()
+    } else if p == 17 {
+        "UDP".to_string()
+    } else if p == 58 {
+        "ICMP6".to_string()
+    } else {
+        "None".to_string()
+    }
+}
+
+// sorted(m, key=lambda k: (-m[k], k)), or by key alone
+fn sort_counts(m: mut ref Vec[(String, i64)], by_count: bool) {
+    let mut i = 1;
+    while i < m.len() {
+        let mut j = i;
+        while j > 0 {
+            let a = m[j].clone();
+            let b = m[j - 1].clone();
+            let less = if by_count and a.1 != b.1 { a.1 > b.1 } else { a.0 < b.0 };
+            if not less {
+                break;
+            }
+            m[j] = b;
+            m[j - 1] = a;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn job_stats(name: ref String) {
+    let mut eth_types: Vec[(String, i64)] = Vec.new();
+    let mut protos: Vec[(i64, i64)] = Vec.new();
+    let mut services: Vec[(String, i64)] = Vec.new();
+    let mut talkers: Vec[(String, i64)] = Vec.new();
+    for fr in frames_of(name) {
+        let e = match eth(fr.data) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let tags = as_list(get(e, "vlan_tags".to_string()));
+        let mut et = gi(e, "type");
+        if tags.len() > 0 {
+            if let V.Pkt(x) = tags[tags.len() - 1] {
+                et = gi(x[0], "type");
+            }
+        }
+        bump(mut eth_types, f"0x{hex4(et)}", 1);
+        match inner(e) {
+            Some(n) => {
+                if n.cls == "IP" or n.cls == "IP6" {
+                    let p = gi(n, "p");
+                    let mut found = false;
+                    let mut k = 0;
+                    while k < protos.len() {
+                        if protos[k].0 == p {
+                            protos[k].1 += 1;
+                            found = true;
+                        }
+                        k += 1;
+                    }
+                    if not found {
+                        protos.push((p, 1));
+                    }
+                    bump(mut talkers, inet_to_str(gb(n, "src")), fr.data.len());
+                    match inner(n) {
+                        Some(l4) => {
+                            if l4.cls == "TCP" or l4.cls == "UDP" {
+                                let a = gi(l4, "sport");
+                                let b = gi(l4, "dport");
+                                let port = if a < b { a } else { b };
+                                bump(mut services, service_name(port), 1);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    sort_counts(mut eth_types, false);
+    println("ethertypes:");
+    for kv in eth_types {
+        println(f"  {kv.0} {kv.1}");
+    }
+    println("ip protocols:");
+    let mut i = 1;
+    while i < protos.len() {
+        let mut j = i;
+        while j > 0 and protos[j].0 < protos[j - 1].0 {
+            let t = protos[j];
+            protos[j] = protos[j - 1];
+            protos[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+    for kv in protos {
+        println(f"  {kv.0} {ip_proto_name(kv.0)} {kv.1}");
+    }
+    sort_counts(mut services, true);
+    println("services:");
+    for kv in services {
+        println(f"  {kv.0} {kv.1}");
+    }
+    sort_counts(mut talkers, true);
+    println("talkers by bytes sent:");
+    for kv in talkers {
+        println(f"  {kv.0} {kv.1}");
+    }
+}
+
+// ------------------------------------------------------------ pcapng blocks
+
+fn job_ngblocks(name: ref String) {
+    let buf = match fs.read_bytes(f"data/{name}") {
+        Ok(b) => b,
+        Err(e) => {
+            println(f"error: {e}");
+            return;
+        }
+    };
+    let mut off = 0;
+    while off + 8 <= buf.len() {
+        let btype = uint_at(buf, off, 4, true);
+        let blen = uint_at(buf, off + 4, 4, true);
+        let blk = sub(buf, off, off + blen);
+        let key = if btype == PCAPNG_BT_SHB {
+            "SectionHeaderBlockLE"
+        } else if btype == PCAPNG_BT_IDB {
+            "InterfaceDescriptionBlockLE"
+        } else if btype == PCAPNG_BT_EPB {
+            "EnhancedPacketBlockLE"
+        } else {
+            "PcapngBlockLE"
+        };
+        let b = match make(key, blk) {
+            Ok(b) => b,
+            Err(e) => {
+                println(err_line(e));
+                return;
+            }
+        };
+        if btype == PCAPNG_BT_SHB {
+            println(f"SHB at {off}: version {gi(b, "v_major")}.{gi(b, "v_minor")}, {gi(b, "len")} bytes");
+        } else if btype == PCAPNG_BT_IDB {
+            println(f"IDB at {off}: linktype {gi(b, "linktype")} snaplen {gi(b, "snaplen")}");
+        } else if btype == PCAPNG_BT_EPB {
+            let ts = (gi(b, "ts_high") << 32) | gi(b, "ts_low");
+            println(f"EPB at {off}: iface {gi(b, "iface_id")} ts {ts / 1000000}.{ts % 1000000:06} caplen {gi(b, "caplen")}");
+        } else {
+            println(f"block type {btype} at {off}, {gi(b, "len")} bytes");
+        }
+        for o in as_list(get(b, "opts".to_string())) {
+            if let V.Pkt(x) = o {
+                if gi(x[0], "code") == PCAPNG_OPT_COMMENT {
+                    println(f"  comment {repr_v(get(x[0], "text".to_string()))}");
+                }
+                println(f"  {repr_pkt(x[0])}");
+            }
+        }
+        off += blen;
+    }
+}
+// ------------------------------------------------------------ tables
+
+// dpkt's cipher suites (ssl_ciphersuites.BY_CODE), as gen_kara.py read
+// them: the code, then the name, kx, encoding, mode and mac properties.
+fn suite(code: i64, name: Str, kx: Str, encoding: Str, mode: Str, mac: Str) -> Option[Suite] {
+    Some(Suite { code: code, name: name.to_string(), kx: kx.to_string(), encoding: encoding.to_string(), mode: mode.to_string(), mac: mac.to_string() })
+}
+
+fn suites_0(code: i64) -> Option[Suite] {
+    match code {
+        0x0000 => suite(code, "TLS_NULL_WITH_NULL_NULL", "NULL", "NULL", "", "NULL"),
+        0x0001 => suite(code, "TLS_RSA_WITH_NULL_MD5", "RSA", "NULL", "", "MD5"),
+        0x0002 => suite(code, "TLS_RSA_WITH_NULL_SHA", "RSA", "NULL", "", "SHA"),
+        0x0003 => suite(code, "TLS_RSA_EXPORT_WITH_RC4_40_MD5", "RSA_EXPORT", "RC4_40", "", "MD5"),
+        0x0004 => suite(code, "TLS_RSA_WITH_RC4_128_MD5", "RSA", "RC4_128", "", "MD5"),
+        0x0005 => suite(code, "TLS_RSA_WITH_RC4_128_SHA", "RSA", "RC4_128", "", "SHA"),
+        0x0006 => suite(code, "TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5", "RSA_EXPORT", "RC2_CBC_40", "CBC", "MD5"),
+        0x0007 => suite(code, "TLS_RSA_WITH_IDEA_CBC_SHA", "RSA", "IDEA_CBC", "CBC", "SHA"),
+        0x0008 => suite(code, "TLS_RSA_EXPORT_WITH_DES40_CBC_SHA", "RSA_EXPORT", "DES40_CBC", "CBC", "SHA"),
+        0x0009 => suite(code, "TLS_RSA_WITH_DES_CBC_SHA", "RSA", "DES_CBC", "CBC", "SHA"),
+        0x000a => suite(code, "TLS_RSA_WITH_3DES_EDE_CBC_SHA", "RSA", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x000b => suite(code, "TLS_DH_DSS_EXPORT_WITH_DES40_CBC_SHA", "DH", "DES40_CBC", "CBC", "SHA"),
+        0x000c => suite(code, "TLS_DH_DSS_WITH_DES_CBC_SHA", "DH", "DES_CBC", "CBC", "SHA"),
+        0x000d => suite(code, "TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA", "DH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x000e => suite(code, "TLS_DH_RSA_EXPORT_WITH_DES40_CBC_SHA", "DH", "DES40_CBC", "CBC", "SHA"),
+        0x000f => suite(code, "TLS_DH_RSA_WITH_DES_CBC_SHA", "DH", "DES_CBC", "CBC", "SHA"),
+        0x0010 => suite(code, "TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA", "DH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0011 => suite(code, "TLS_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA", "DHE", "DES40_CBC", "CBC", "SHA"),
+        0x0012 => suite(code, "TLS_DHE_DSS_WITH_DES_CBC_SHA", "DHE", "DES_CBC", "CBC", "SHA"),
+        0x0013 => suite(code, "TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA", "DHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0014 => suite(code, "TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA", "DHE", "DES40_CBC", "CBC", "SHA"),
+        0x0015 => suite(code, "TLS_DHE_RSA_WITH_DES_CBC_SHA", "DHE", "DES_CBC", "CBC", "SHA"),
+        0x0016 => suite(code, "TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA", "DHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0017 => suite(code, "TLS_DH_anon_EXPORT_WITH_RC4_40_MD5", "DH", "RC4_40", "", "MD5"),
+        0x0018 => suite(code, "TLS_DH_anon_WITH_RC4_128_MD5", "DH", "RC4_128", "", "MD5"),
+        0x0019 => suite(code, "TLS_DH_anon_EXPORT_WITH_DES40_CBC_SHA", "DH", "DES40_CBC", "CBC", "SHA"),
+        0x001a => suite(code, "TLS_DH_anon_WITH_DES_CBC_SHA", "DH", "DES_CBC", "CBC", "SHA"),
+        0x001b => suite(code, "TLS_DH_anon_WITH_3DES_EDE_CBC_SHA", "DH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x001e => suite(code, "TLS_KRB5_WITH_DES_CBC_SHA", "KRB5", "DES_CBC", "CBC", "SHA"),
+        0x001f => suite(code, "TLS_KRB5_WITH_3DES_EDE_CBC_SHA", "KRB5", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0020 => suite(code, "TLS_KRB5_WITH_RC4_128_SHA", "KRB5", "RC4_128", "", "SHA"),
+        0x0021 => suite(code, "TLS_KRB5_WITH_IDEA_CBC_SHA", "KRB5", "IDEA_CBC", "CBC", "SHA"),
+        0x0022 => suite(code, "TLS_KRB5_WITH_DES_CBC_MD5", "KRB5", "DES_CBC", "CBC", "MD5"),
+        0x0023 => suite(code, "TLS_KRB5_WITH_3DES_EDE_CBC_MD5", "KRB5", "3DES_EDE_CBC", "CBC", "MD5"),
+        0x0024 => suite(code, "TLS_KRB5_WITH_RC4_128_MD5", "KRB5", "RC4_128", "", "MD5"),
+        0x0025 => suite(code, "TLS_KRB5_WITH_IDEA_CBC_MD5", "KRB5", "IDEA_CBC", "CBC", "MD5"),
+        0x0026 => suite(code, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA", "KRB5_EXPORT", "DES_CBC_40", "CBC", "SHA"),
+        0x0027 => suite(code, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA", "KRB5_EXPORT", "RC2_CBC_40", "CBC", "SHA"),
+        0x0028 => suite(code, "TLS_KRB5_EXPORT_WITH_RC4_40_SHA", "KRB5_EXPORT", "RC4_40", "", "SHA"),
+        0x0029 => suite(code, "TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5", "KRB5_EXPORT", "DES_CBC_40", "CBC", "MD5"),
+        0x002a => suite(code, "TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5", "KRB5_EXPORT", "RC2_CBC_40", "CBC", "MD5"),
+        0x002b => suite(code, "TLS_KRB5_EXPORT_WITH_RC4_40_MD5", "KRB5_EXPORT", "RC4_40", "", "MD5"),
+        0x002c => suite(code, "TLS_PSK_WITH_NULL_SHA", "PSK", "NULL", "", "SHA"),
+        0x002d => suite(code, "TLS_DHE_PSK_WITH_NULL_SHA", "DHE", "NULL", "", "SHA"),
+        0x002e => suite(code, "TLS_RSA_PSK_WITH_NULL_SHA", "RSA", "NULL", "", "SHA"),
+        0x002f => suite(code, "TLS_RSA_WITH_AES_128_CBC_SHA", "RSA", "AES_128_CBC", "CBC", "SHA"),
+        0x0030 => suite(code, "TLS_DH_DSS_WITH_AES_128_CBC_SHA", "DH", "AES_128_CBC", "CBC", "SHA"),
+        0x0031 => suite(code, "TLS_DH_RSA_WITH_AES_128_CBC_SHA", "DH", "AES_128_CBC", "CBC", "SHA"),
+        0x0032 => suite(code, "TLS_DHE_DSS_WITH_AES_128_CBC_SHA", "DHE", "AES_128_CBC", "CBC", "SHA"),
+        0x0033 => suite(code, "TLS_DHE_RSA_WITH_AES_128_CBC_SHA", "DHE", "AES_128_CBC", "CBC", "SHA"),
+        0x0034 => suite(code, "TLS_DH_anon_WITH_AES_128_CBC_SHA", "DH", "AES_128_CBC", "CBC", "SHA"),
+        0x0035 => suite(code, "TLS_RSA_WITH_AES_256_CBC_SHA", "RSA", "AES_256_CBC", "CBC", "SHA"),
+        0x0036 => suite(code, "TLS_DH_DSS_WITH_AES_256_CBC_SHA", "DH", "AES_256_CBC", "CBC", "SHA"),
+        0x0037 => suite(code, "TLS_DH_RSA_WITH_AES_256_CBC_SHA", "DH", "AES_256_CBC", "CBC", "SHA"),
+        0x0038 => suite(code, "TLS_DHE_DSS_WITH_AES_256_CBC_SHA", "DHE", "AES_256_CBC", "CBC", "SHA"),
+        0x0039 => suite(code, "TLS_DHE_RSA_WITH_AES_256_CBC_SHA", "DHE", "AES_256_CBC", "CBC", "SHA"),
+        0x003a => suite(code, "TLS_DH_anon_WITH_AES_256_CBC_SHA", "DH", "AES_256_CBC", "CBC", "SHA"),
+        0x003b => suite(code, "TLS_RSA_WITH_NULL_SHA256", "RSA", "NULL", "", "SHA256"),
+        0x003c => suite(code, "TLS_RSA_WITH_AES_128_CBC_SHA256", "RSA", "AES_128_CBC", "CBC", "SHA256"),
+        0x003d => suite(code, "TLS_RSA_WITH_AES_256_CBC_SHA256", "RSA", "AES_256_CBC", "CBC", "SHA256"),
+        0x003e => suite(code, "TLS_DH_DSS_WITH_AES_128_CBC_SHA256", "DH", "AES_128_CBC", "CBC", "SHA256"),
+        0x003f => suite(code, "TLS_DH_RSA_WITH_AES_128_CBC_SHA256", "DH", "AES_128_CBC", "CBC", "SHA256"),
+        0x0040 => suite(code, "TLS_DHE_DSS_WITH_AES_128_CBC_SHA256", "DHE", "AES_128_CBC", "CBC", "SHA256"),
+        0x0041 => suite(code, "TLS_RSA_WITH_CAMELLIA_128_CBC_SHA", "RSA", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0042 => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA", "DH", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0043 => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA", "DH", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0044 => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA", "DHE", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0045 => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA", "DHE", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0046 => suite(code, "TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA", "DH", "CAMELLIA_128_CBC", "CBC", "SHA"),
+        0x0067 => suite(code, "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256", "DHE", "AES_128_CBC", "CBC", "SHA256"),
+        0x0068 => suite(code, "TLS_DH_DSS_WITH_AES_256_CBC_SHA256", "DH", "AES_256_CBC", "CBC", "SHA256"),
+        0x0069 => suite(code, "TLS_DH_RSA_WITH_AES_256_CBC_SHA256", "DH", "AES_256_CBC", "CBC", "SHA256"),
+        0x006a => suite(code, "TLS_DHE_DSS_WITH_AES_256_CBC_SHA256", "DHE", "AES_256_CBC", "CBC", "SHA256"),
+        0x006b => suite(code, "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", "DHE", "AES_256_CBC", "CBC", "SHA256"),
+        0x006c => suite(code, "TLS_DH_anon_WITH_AES_128_CBC_SHA256", "DH", "AES_128_CBC", "CBC", "SHA256"),
+        0x006d => suite(code, "TLS_DH_anon_WITH_AES_256_CBC_SHA256", "DH", "AES_256_CBC", "CBC", "SHA256"),
+        0x0084 => suite(code, "TLS_RSA_WITH_CAMELLIA_256_CBC_SHA", "RSA", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x0085 => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA", "DH", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x0086 => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA", "DH", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x0087 => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA", "DHE", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x0088 => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA", "DHE", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x0089 => suite(code, "TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA", "DH", "CAMELLIA_256_CBC", "CBC", "SHA"),
+        0x008a => suite(code, "TLS_PSK_WITH_RC4_128_SHA", "PSK", "RC4_128", "", "SHA"),
+        0x008b => suite(code, "TLS_PSK_WITH_3DES_EDE_CBC_SHA", "PSK", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x008c => suite(code, "TLS_PSK_WITH_AES_128_CBC_SHA", "PSK", "AES_128_CBC", "CBC", "SHA"),
+        0x008d => suite(code, "TLS_PSK_WITH_AES_256_CBC_SHA", "PSK", "AES_256_CBC", "CBC", "SHA"),
+        0x008e => suite(code, "TLS_DHE_PSK_WITH_RC4_128_SHA", "DHE", "RC4_128", "", "SHA"),
+        0x008f => suite(code, "TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA", "DHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0090 => suite(code, "TLS_DHE_PSK_WITH_AES_128_CBC_SHA", "DHE", "AES_128_CBC", "CBC", "SHA"),
+        0x0091 => suite(code, "TLS_DHE_PSK_WITH_AES_256_CBC_SHA", "DHE", "AES_256_CBC", "CBC", "SHA"),
+        0x0092 => suite(code, "TLS_RSA_PSK_WITH_RC4_128_SHA", "RSA", "RC4_128", "", "SHA"),
+        0x0093 => suite(code, "TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA", "RSA", "3DES_EDE_CBC", "CBC", "SHA"),
+        0x0094 => suite(code, "TLS_RSA_PSK_WITH_AES_128_CBC_SHA", "RSA", "AES_128_CBC", "CBC", "SHA"),
+        0x0095 => suite(code, "TLS_RSA_PSK_WITH_AES_256_CBC_SHA", "RSA", "AES_256_CBC", "CBC", "SHA"),
+        0x0096 => suite(code, "TLS_RSA_WITH_SEED_CBC_SHA", "RSA", "SEED_CBC", "CBC", "SHA"),
+        0x0097 => suite(code, "TLS_DH_DSS_WITH_SEED_CBC_SHA", "DH", "SEED_CBC", "CBC", "SHA"),
+        0x0098 => suite(code, "TLS_DH_RSA_WITH_SEED_CBC_SHA", "DH", "SEED_CBC", "CBC", "SHA"),
+        0x0099 => suite(code, "TLS_DHE_DSS_WITH_SEED_CBC_SHA", "DHE", "SEED_CBC", "CBC", "SHA"),
+        0x009a => suite(code, "TLS_DHE_RSA_WITH_SEED_CBC_SHA", "DHE", "SEED_CBC", "CBC", "SHA"),
+        0x009b => suite(code, "TLS_DH_anon_WITH_SEED_CBC_SHA", "DH", "SEED_CBC", "CBC", "SHA"),
+        0x009c => suite(code, "TLS_RSA_WITH_AES_128_GCM_SHA256", "RSA", "AES_128_GCM", "GCM", "SHA256"),
+        0x009d => suite(code, "TLS_RSA_WITH_AES_256_GCM_SHA384", "RSA", "AES_256_GCM", "GCM", "SHA384"),
+        0x009e => suite(code, "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", "DHE", "AES_128_GCM", "GCM", "SHA256"),
+        0x009f => suite(code, "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", "DHE", "AES_256_GCM", "GCM", "SHA384"),
+        0x00a0 => suite(code, "TLS_DH_RSA_WITH_AES_128_GCM_SHA256", "DH", "AES_128_GCM", "GCM", "SHA256"),
+        0x00a1 => suite(code, "TLS_DH_RSA_WITH_AES_256_GCM_SHA384", "DH", "AES_256_GCM", "GCM", "SHA384"),
+        0x00a2 => suite(code, "TLS_DHE_DSS_WITH_AES_128_GCM_SHA256", "DHE", "AES_128_GCM", "GCM", "SHA256"),
+        0x00a3 => suite(code, "TLS_DHE_DSS_WITH_AES_256_GCM_SHA384", "DHE", "AES_256_GCM", "GCM", "SHA384"),
+        0x00a4 => suite(code, "TLS_DH_DSS_WITH_AES_128_GCM_SHA256", "DH", "AES_128_GCM", "GCM", "SHA256"),
+        0x00a5 => suite(code, "TLS_DH_DSS_WITH_AES_256_GCM_SHA384", "DH", "AES_256_GCM", "GCM", "SHA384"),
+        0x00a6 => suite(code, "TLS_DH_anon_WITH_AES_128_GCM_SHA256", "DH", "AES_128_GCM", "GCM", "SHA256"),
+        0x00a7 => suite(code, "TLS_DH_anon_WITH_AES_256_GCM_SHA384", "DH", "AES_256_GCM", "GCM", "SHA384"),
+        0x00a8 => suite(code, "TLS_PSK_WITH_AES_128_GCM_SHA256", "PSK", "AES_128_GCM", "GCM", "SHA256"),
+        0x00a9 => suite(code, "TLS_PSK_WITH_AES_256_GCM_SHA384", "PSK", "AES_256_GCM", "GCM", "SHA384"),
+        0x00aa => suite(code, "TLS_DHE_PSK_WITH_AES_128_GCM_SHA256", "DHE", "AES_128_GCM", "GCM", "SHA256"),
+        0x00ab => suite(code, "TLS_DHE_PSK_WITH_AES_256_GCM_SHA384", "DHE", "AES_256_GCM", "GCM", "SHA384"),
+        0x00ac => suite(code, "TLS_RSA_PSK_WITH_AES_128_GCM_SHA256", "RSA", "AES_128_GCM", "GCM", "SHA256"),
+        0x00ad => suite(code, "TLS_RSA_PSK_WITH_AES_256_GCM_SHA384", "RSA", "AES_256_GCM", "GCM", "SHA384"),
+        0x00ae => suite(code, "TLS_PSK_WITH_AES_128_CBC_SHA256", "PSK", "AES_128_CBC", "CBC", "SHA256"),
+        0x00af => suite(code, "TLS_PSK_WITH_AES_256_CBC_SHA384", "PSK", "AES_256_CBC", "CBC", "SHA384"),
+        _ => None,
+    }
+}
+
+fn suites_1(code: i64) -> Option[Suite] {
+    match code {
+        0x00b0 => suite(code, "TLS_PSK_WITH_NULL_SHA256", "PSK", "NULL", "", "SHA256"),
+        0x00b1 => suite(code, "TLS_PSK_WITH_NULL_SHA384", "PSK", "NULL", "", "SHA384"),
+        0x00b2 => suite(code, "TLS_DHE_PSK_WITH_AES_128_CBC_SHA256", "DHE", "AES_128_CBC", "CBC", "SHA256"),
+        0x00b3 => suite(code, "TLS_DHE_PSK_WITH_AES_256_CBC_SHA384", "DHE", "AES_256_CBC", "CBC", "SHA384"),
+        0x00b4 => suite(code, "TLS_DHE_PSK_WITH_NULL_SHA256", "DHE", "NULL", "", "SHA256"),
+        0x00b5 => suite(code, "TLS_DHE_PSK_WITH_NULL_SHA384", "DHE", "NULL", "", "SHA384"),
+        0x00b6 => suite(code, "TLS_RSA_PSK_WITH_AES_128_CBC_SHA256", "RSA", "AES_128_CBC", "CBC", "SHA256"),
+        0x00b7 => suite(code, "TLS_RSA_PSK_WITH_AES_256_CBC_SHA384", "RSA", "AES_256_CBC", "CBC", "SHA384"),
+        0x00b8 => suite(code, "TLS_RSA_PSK_WITH_NULL_SHA256", "RSA", "NULL", "", "SHA256"),
+        0x00b9 => suite(code, "TLS_RSA_PSK_WITH_NULL_SHA384", "RSA", "NULL", "", "SHA384"),
+        0x00ba => suite(code, "TLS_RSA_WITH_CAMELLIA_128_CBC_SHA256", "RSA", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00bb => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA256", "DH", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00bc => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA256", "DH", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00bd => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA256", "DHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00be => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA256", "DHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00bf => suite(code, "TLS_DH_anon_WITH_CAMELLIA_128_CBC_SHA256", "DH", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0x00c0 => suite(code, "TLS_RSA_WITH_CAMELLIA_256_CBC_SHA256", "RSA", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00c1 => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA256", "DH", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00c2 => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA256", "DH", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00c3 => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA256", "DHE", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00c4 => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA256", "DHE", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00c5 => suite(code, "TLS_DH_anon_WITH_CAMELLIA_256_CBC_SHA256", "DH", "CAMELLIA_256_CBC", "CBC", "SHA256"),
+        0x00ff => suite(code, "TLS_EMPTY_RENEGOTIATION_INFO", "NULL", "NULL", "", "NULL"),
+        0x0a0a => suite(code, "GREASE", "", "", "", ""),
+        0x1301 => suite(code, "TLS_AES_128_GCM_SHA256", "", "AES_128_GCM", "GCM", "SHA256"),
+        0x1302 => suite(code, "TLS_AES_256_GCM_SHA384", "", "AES_256_GCM", "GCM", "SHA384"),
+        0x1303 => suite(code, "TLS_CHACHA20_POLY1305_SHA256", "", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0x1304 => suite(code, "TLS_AES_128_CCM_SHA256", "", "AES_128_CCM", "CCM", "SHA256"),
+        0x1305 => suite(code, "TLS_AES_128_CCM_8_SHA256", "", "AES_128_CCM_8", "CCM_8", "SHA256"),
+        0x1a1a => suite(code, "GREASE", "", "", "", ""),
+        0x2a2a => suite(code, "GREASE", "", "", "", ""),
+        0x3a3a => suite(code, "GREASE", "", "", "", ""),
+        0x4a4a => suite(code, "GREASE", "", "", "", ""),
+        0x5600 => suite(code, "TLS_FALLBACK", "", "", "", ""),
+        0x5a5a => suite(code, "GREASE", "", "", "", ""),
+        0x6a6a => suite(code, "GREASE", "", "", "", ""),
+        0x7a7a => suite(code, "GREASE", "", "", "", ""),
+        0x8a8a => suite(code, "GREASE", "", "", "", ""),
+        0x9a9a => suite(code, "GREASE", "", "", "", ""),
+        0xaaaa => suite(code, "GREASE", "", "", "", ""),
+        0xbaba => suite(code, "GREASE", "", "", "", ""),
+        0xc001 => suite(code, "TLS_ECDH_ECDSA_WITH_NULL_SHA", "ECDH", "NULL", "", "SHA"),
+        0xc002 => suite(code, "TLS_ECDH_ECDSA_WITH_RC4_128_SHA", "ECDH", "RC4_128", "", "SHA"),
+        0xc003 => suite(code, "TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA", "ECDH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc004 => suite(code, "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA", "ECDH", "AES_128_CBC", "CBC", "SHA"),
+        0xc005 => suite(code, "TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA", "ECDH", "AES_256_CBC", "CBC", "SHA"),
+        0xc006 => suite(code, "TLS_ECDHE_ECDSA_WITH_NULL_SHA", "ECDHE", "NULL", "", "SHA"),
+        0xc007 => suite(code, "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA", "ECDHE", "RC4_128", "", "SHA"),
+        0xc008 => suite(code, "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA", "ECDHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc009 => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA", "ECDHE", "AES_128_CBC", "CBC", "SHA"),
+        0xc00a => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", "ECDHE", "AES_256_CBC", "CBC", "SHA"),
+        0xc00b => suite(code, "TLS_ECDH_RSA_WITH_NULL_SHA", "ECDH", "NULL", "", "SHA"),
+        0xc00c => suite(code, "TLS_ECDH_RSA_WITH_RC4_128_SHA", "ECDH", "RC4_128", "", "SHA"),
+        0xc00d => suite(code, "TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA", "ECDH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc00e => suite(code, "TLS_ECDH_RSA_WITH_AES_128_CBC_SHA", "ECDH", "AES_128_CBC", "CBC", "SHA"),
+        0xc00f => suite(code, "TLS_ECDH_RSA_WITH_AES_256_CBC_SHA", "ECDH", "AES_256_CBC", "CBC", "SHA"),
+        0xc010 => suite(code, "TLS_ECDHE_RSA_WITH_NULL_SHA", "ECDHE", "NULL", "", "SHA"),
+        0xc011 => suite(code, "TLS_ECDHE_RSA_WITH_RC4_128_SHA", "ECDHE", "RC4_128", "", "SHA"),
+        0xc012 => suite(code, "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA", "ECDHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc013 => suite(code, "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "ECDHE", "AES_128_CBC", "CBC", "SHA"),
+        0xc014 => suite(code, "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", "ECDHE", "AES_256_CBC", "CBC", "SHA"),
+        0xc015 => suite(code, "TLS_ECDH_anon_WITH_NULL_SHA", "ECDH", "NULL", "", "SHA"),
+        0xc016 => suite(code, "TLS_ECDH_anon_WITH_RC4_128_SHA", "ECDH", "RC4_128", "", "SHA"),
+        0xc017 => suite(code, "TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA", "ECDH", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc018 => suite(code, "TLS_ECDH_anon_WITH_AES_128_CBC_SHA", "ECDH", "AES_128_CBC", "CBC", "SHA"),
+        0xc019 => suite(code, "TLS_ECDH_anon_WITH_AES_256_CBC_SHA", "ECDH", "AES_256_CBC", "CBC", "SHA"),
+        0xc01a => suite(code, "TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA", "SRP_SHA", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc01b => suite(code, "TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA", "SRP_SHA", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc01c => suite(code, "TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA", "SRP_SHA", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc01d => suite(code, "TLS_SRP_SHA_WITH_AES_128_CBC_SHA", "SRP_SHA", "AES_128_CBC", "CBC", "SHA"),
+        0xc01e => suite(code, "TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA", "SRP_SHA", "AES_128_CBC", "CBC", "SHA"),
+        0xc01f => suite(code, "TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA", "SRP_SHA", "AES_128_CBC", "CBC", "SHA"),
+        0xc020 => suite(code, "TLS_SRP_SHA_WITH_AES_256_CBC_SHA", "SRP_SHA", "AES_256_CBC", "CBC", "SHA"),
+        0xc021 => suite(code, "TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA", "SRP_SHA", "AES_256_CBC", "CBC", "SHA"),
+        0xc022 => suite(code, "TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA", "SRP_SHA", "AES_256_CBC", "CBC", "SHA"),
+        0xc023 => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256", "ECDHE", "AES_128_CBC", "CBC", "SHA256"),
+        0xc024 => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", "ECDHE", "AES_256_CBC", "CBC", "SHA384"),
+        0xc025 => suite(code, "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256", "ECDH", "AES_128_CBC", "CBC", "SHA256"),
+        0xc026 => suite(code, "TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384", "ECDH", "AES_256_CBC", "CBC", "SHA384"),
+        0xc027 => suite(code, "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", "ECDHE", "AES_128_CBC", "CBC", "SHA256"),
+        0xc028 => suite(code, "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", "ECDHE", "AES_256_CBC", "CBC", "SHA384"),
+        0xc029 => suite(code, "TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256", "ECDH", "AES_128_CBC", "CBC", "SHA256"),
+        0xc02a => suite(code, "TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384", "ECDH", "AES_256_CBC", "CBC", "SHA384"),
+        0xc02b => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "ECDHE", "AES_128_GCM", "GCM", "SHA256"),
+        0xc02c => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", "ECDHE", "AES_256_GCM", "GCM", "SHA384"),
+        0xc02d => suite(code, "TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256", "ECDH", "AES_128_GCM", "GCM", "SHA256"),
+        0xc02e => suite(code, "TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384", "ECDH", "AES_256_GCM", "GCM", "SHA384"),
+        0xc02f => suite(code, "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "ECDHE", "AES_128_GCM", "GCM", "SHA256"),
+        0xc030 => suite(code, "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", "ECDHE", "AES_256_GCM", "GCM", "SHA384"),
+        0xc031 => suite(code, "TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256", "ECDH", "AES_128_GCM", "GCM", "SHA256"),
+        0xc032 => suite(code, "TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384", "ECDH", "AES_256_GCM", "GCM", "SHA384"),
+        0xc033 => suite(code, "TLS_ECDHE_PSK_WITH_RC4_128_SHA", "ECDHE", "RC4_128", "", "SHA"),
+        0xc034 => suite(code, "TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA", "ECDHE", "3DES_EDE_CBC", "CBC", "SHA"),
+        0xc035 => suite(code, "TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA", "ECDHE", "AES_128_CBC", "CBC", "SHA"),
+        0xc036 => suite(code, "TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA", "ECDHE", "AES_256_CBC", "CBC", "SHA"),
+        0xc037 => suite(code, "TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256", "ECDHE", "AES_128_CBC", "CBC", "SHA256"),
+        0xc038 => suite(code, "TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA384", "ECDHE", "AES_256_CBC", "CBC", "SHA384"),
+        0xc039 => suite(code, "TLS_ECDHE_PSK_WITH_NULL_SHA", "ECDHE", "NULL", "", "SHA"),
+        0xc03a => suite(code, "TLS_ECDHE_PSK_WITH_NULL_SHA256", "ECDHE", "NULL", "", "SHA256"),
+        0xc03b => suite(code, "TLS_ECDHE_PSK_WITH_NULL_SHA384", "ECDHE", "NULL", "", "SHA384"),
+        0xc03c => suite(code, "TLS_RSA_WITH_ARIA_128_CBC_SHA256", "RSA", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc03d => suite(code, "TLS_RSA_WITH_ARIA_256_CBC_SHA384", "RSA", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc03e => suite(code, "TLS_DH_DSS_WITH_ARIA_128_CBC_SHA256", "DH", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc03f => suite(code, "TLS_DH_DSS_WITH_ARIA_256_CBC_SHA384", "DH", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc040 => suite(code, "TLS_DH_RSA_WITH_ARIA_128_CBC_SHA256", "DH", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc041 => suite(code, "TLS_DH_RSA_WITH_ARIA_256_CBC_SHA384", "DH", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc042 => suite(code, "TLS_DHE_DSS_WITH_ARIA_128_CBC_SHA256", "DHE", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc043 => suite(code, "TLS_DHE_DSS_WITH_ARIA_256_CBC_SHA384", "DHE", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc044 => suite(code, "TLS_DHE_RSA_WITH_ARIA_128_CBC_SHA256", "DHE", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc045 => suite(code, "TLS_DHE_RSA_WITH_ARIA_256_CBC_SHA384", "DHE", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc046 => suite(code, "TLS_DH_anon_WITH_ARIA_128_CBC_SHA256", "DH", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc047 => suite(code, "TLS_DH_anon_WITH_ARIA_256_CBC_SHA384", "DH", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc048 => suite(code, "TLS_ECDHE_ECDSA_WITH_ARIA_128_CBC_SHA256", "ECDHE", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc049 => suite(code, "TLS_ECDHE_ECDSA_WITH_ARIA_256_CBC_SHA384", "ECDHE", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc04a => suite(code, "TLS_ECDH_ECDSA_WITH_ARIA_128_CBC_SHA256", "ECDH", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc04b => suite(code, "TLS_ECDH_ECDSA_WITH_ARIA_256_CBC_SHA384", "ECDH", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc04c => suite(code, "TLS_ECDHE_RSA_WITH_ARIA_128_CBC_SHA256", "ECDHE", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc04d => suite(code, "TLS_ECDHE_RSA_WITH_ARIA_256_CBC_SHA384", "ECDHE", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc04e => suite(code, "TLS_ECDH_RSA_WITH_ARIA_128_CBC_SHA256", "ECDH", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc04f => suite(code, "TLS_ECDH_RSA_WITH_ARIA_256_CBC_SHA384", "ECDH", "ARIA_256_CBC", "CBC", "SHA384"),
+        _ => None,
+    }
+}
+
+fn suites_2(code: i64) -> Option[Suite] {
+    match code {
+        0xc050 => suite(code, "TLS_RSA_WITH_ARIA_128_GCM_SHA256", "RSA", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc051 => suite(code, "TLS_RSA_WITH_ARIA_256_GCM_SHA384", "RSA", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc052 => suite(code, "TLS_DHE_RSA_WITH_ARIA_128_GCM_SHA256", "DHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc053 => suite(code, "TLS_DHE_RSA_WITH_ARIA_256_GCM_SHA384", "DHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc054 => suite(code, "TLS_DH_RSA_WITH_ARIA_128_GCM_SHA256", "DH", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc055 => suite(code, "TLS_DH_RSA_WITH_ARIA_256_GCM_SHA384", "DH", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc056 => suite(code, "TLS_DHE_DSS_WITH_ARIA_128_GCM_SHA256", "DHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc057 => suite(code, "TLS_DHE_DSS_WITH_ARIA_256_GCM_SHA384", "DHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc058 => suite(code, "TLS_DH_DSS_WITH_ARIA_128_GCM_SHA256", "DH", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc059 => suite(code, "TLS_DH_DSS_WITH_ARIA_256_GCM_SHA384", "DH", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc05a => suite(code, "TLS_DH_anon_WITH_ARIA_128_GCM_SHA256", "DH", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc05b => suite(code, "TLS_DH_anon_WITH_ARIA_256_GCM_SHA384", "DH", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc05c => suite(code, "TLS_ECDHE_ECDSA_WITH_ARIA_128_GCM_SHA256", "ECDHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc05d => suite(code, "TLS_ECDHE_ECDSA_WITH_ARIA_256_GCM_SHA384", "ECDHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc05e => suite(code, "TLS_ECDH_ECDSA_WITH_ARIA_128_GCM_SHA256", "ECDH", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc05f => suite(code, "TLS_ECDH_ECDSA_WITH_ARIA_256_GCM_SHA384", "ECDH", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc060 => suite(code, "TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256", "ECDHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc061 => suite(code, "TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384", "ECDHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc062 => suite(code, "TLS_ECDH_RSA_WITH_ARIA_128_GCM_SHA256", "ECDH", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc063 => suite(code, "TLS_ECDH_RSA_WITH_ARIA_256_GCM_SHA384", "ECDH", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc064 => suite(code, "TLS_PSK_WITH_ARIA_128_CBC_SHA256", "PSK", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc065 => suite(code, "TLS_PSK_WITH_ARIA_256_CBC_SHA384", "PSK", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc066 => suite(code, "TLS_DHE_PSK_WITH_ARIA_128_CBC_SHA256", "DHE", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc067 => suite(code, "TLS_DHE_PSK_WITH_ARIA_256_CBC_SHA384", "DHE", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc068 => suite(code, "TLS_RSA_PSK_WITH_ARIA_128_CBC_SHA256", "RSA", "ARIA_128_CBC", "CBC", "SHA256"),
+        0xc069 => suite(code, "TLS_RSA_PSK_WITH_ARIA_256_CBC_SHA384", "RSA", "ARIA_256_CBC", "CBC", "SHA384"),
+        0xc06a => suite(code, "TLS_PSK_WITH_ARIA_128_GCM_SHA256", "PSK", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc06b => suite(code, "TLS_PSK_WITH_ARIA_256_GCM_SHA384", "PSK", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc06c => suite(code, "TLS_DHE_PSK_WITH_ARIA_128_GCM_SHA256", "DHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc06d => suite(code, "TLS_DHE_PSK_WITH_ARIA_256_GCM_SHA384", "DHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc06e => suite(code, "TLS_RSA_PSK_WITH_ARIA_128_GCM_SHA256", "RSA", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc06f => suite(code, "TLS_RSA_PSK_WITH_ARIA_256_GCM_SHA384", "RSA", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc070 => suite(code, "TLS_ECDHE_PSK_WITH_ARIA_128_GCM_SHA256", "ECDHE", "ARIA_128_GCM", "GCM", "SHA256"),
+        0xc071 => suite(code, "TLS_ECDHE_PSK_WITH_ARIA_256_GCM_SHA384", "ECDHE", "ARIA_256_GCM", "GCM", "SHA384"),
+        0xc072 => suite(code, "TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_CBC_SHA256", "ECDHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc073 => suite(code, "TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_CBC_SHA384", "ECDHE", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc074 => suite(code, "TLS_ECDH_ECDSA_WITH_CAMELLIA_128_CBC_SHA256", "ECDH", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc075 => suite(code, "TLS_ECDH_ECDSA_WITH_CAMELLIA_256_CBC_SHA384", "ECDH", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc076 => suite(code, "TLS_ECDHE_RSA_WITH_CAMELLIA_128_CBC_SHA256", "ECDHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc077 => suite(code, "TLS_ECDHE_RSA_WITH_CAMELLIA_256_CBC_SHA384", "ECDHE", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc078 => suite(code, "TLS_ECDH_RSA_WITH_CAMELLIA_128_CBC_SHA256", "ECDH", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc079 => suite(code, "TLS_ECDH_RSA_WITH_CAMELLIA_256_CBC_SHA384", "ECDH", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc07a => suite(code, "TLS_RSA_WITH_CAMELLIA_128_GCM_SHA256", "RSA", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc07b => suite(code, "TLS_RSA_WITH_CAMELLIA_256_GCM_SHA384", "RSA", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc07c => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_128_GCM_SHA256", "DHE", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc07d => suite(code, "TLS_DHE_RSA_WITH_CAMELLIA_256_GCM_SHA384", "DHE", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc07e => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_128_GCM_SHA256", "DH", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc07f => suite(code, "TLS_DH_RSA_WITH_CAMELLIA_256_GCM_SHA384", "DH", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc080 => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_128_GCM_SHA256", "DHE", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc081 => suite(code, "TLS_DHE_DSS_WITH_CAMELLIA_256_GCM_SHA384", "DHE", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc082 => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_128_GCM_SHA256", "DH", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc083 => suite(code, "TLS_DH_DSS_WITH_CAMELLIA_256_GCM_SHA384", "DH", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc084 => suite(code, "TLS_DH_anon_WITH_CAMELLIA_128_GCM_SHA256", "DH", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc085 => suite(code, "TLS_DH_anon_WITH_CAMELLIA_256_GCM_SHA384", "DH", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc086 => suite(code, "TLS_ECDHE_ECDSA_WITH_CAMELLIA_128_GCM_SHA256", "ECDHE", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc087 => suite(code, "TLS_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384", "ECDHE", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc088 => suite(code, "TLS_ECDH_ECDSA_WITH_CAMELLIA_128_GCM_SHA256", "ECDH", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc089 => suite(code, "TLS_ECDH_ECDSA_WITH_CAMELLIA_256_GCM_SHA384", "ECDH", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc08a => suite(code, "TLS_ECDHE_RSA_WITH_CAMELLIA_128_GCM_SHA256", "ECDHE", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc08b => suite(code, "TLS_ECDHE_RSA_WITH_CAMELLIA_256_GCM_SHA384", "ECDHE", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc08c => suite(code, "TLS_ECDH_RSA_WITH_CAMELLIA_128_GCM_SHA256", "ECDH", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc08d => suite(code, "TLS_ECDH_RSA_WITH_CAMELLIA_256_GCM_SHA384", "ECDH", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc08e => suite(code, "TLS_PSK_WITH_CAMELLIA_128_GCM_SHA256", "PSK", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc08f => suite(code, "TLS_PSK_WITH_CAMELLIA_256_GCM_SHA384", "PSK", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc090 => suite(code, "TLS_DHE_PSK_WITH_CAMELLIA_128_GCM_SHA256", "DHE", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc091 => suite(code, "TLS_DHE_PSK_WITH_CAMELLIA_256_GCM_SHA384", "DHE", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc092 => suite(code, "TLS_RSA_PSK_WITH_CAMELLIA_128_GCM_SHA256", "RSA", "CAMELLIA_128_GCM", "GCM", "SHA256"),
+        0xc093 => suite(code, "TLS_RSA_PSK_WITH_CAMELLIA_256_GCM_SHA384", "RSA", "CAMELLIA_256_GCM", "GCM", "SHA384"),
+        0xc094 => suite(code, "TLS_PSK_WITH_CAMELLIA_128_CBC_SHA256", "PSK", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc095 => suite(code, "TLS_PSK_WITH_CAMELLIA_256_CBC_SHA384", "PSK", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc096 => suite(code, "TLS_DHE_PSK_WITH_CAMELLIA_128_CBC_SHA256", "DHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc097 => suite(code, "TLS_DHE_PSK_WITH_CAMELLIA_256_CBC_SHA384", "DHE", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc098 => suite(code, "TLS_RSA_PSK_WITH_CAMELLIA_128_CBC_SHA256", "RSA", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc099 => suite(code, "TLS_RSA_PSK_WITH_CAMELLIA_256_CBC_SHA384", "RSA", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc09a => suite(code, "TLS_ECDHE_PSK_WITH_CAMELLIA_128_CBC_SHA256", "ECDHE", "CAMELLIA_128_CBC", "CBC", "SHA256"),
+        0xc09b => suite(code, "TLS_ECDHE_PSK_WITH_CAMELLIA_256_CBC_SHA384", "ECDHE", "CAMELLIA_256_CBC", "CBC", "SHA384"),
+        0xc09c => suite(code, "TLS_RSA_WITH_AES_128_CCM", "RSA", "AES_128_CCM", "CCM", ""),
+        0xc09d => suite(code, "TLS_RSA_WITH_AES_256_CCM", "RSA", "AES_256_CCM", "CCM", ""),
+        0xc09e => suite(code, "TLS_DHE_RSA_WITH_AES_128_CCM", "DHE", "AES_128_CCM", "CCM", ""),
+        0xc09f => suite(code, "TLS_DHE_RSA_WITH_AES_256_CCM", "DHE", "AES_256_CCM", "CCM", ""),
+        0xc0a0 => suite(code, "TLS_RSA_WITH_AES_128_CCM_8", "RSA", "AES_128_CCM_8", "CCM_8", ""),
+        0xc0a1 => suite(code, "TLS_RSA_WITH_AES_256_CCM_8", "RSA", "AES_256_CCM_8", "CCM_8", ""),
+        0xc0a2 => suite(code, "TLS_DHE_RSA_WITH_AES_128_CCM_8", "DHE", "AES_128_CCM_8", "CCM_8", ""),
+        0xc0a3 => suite(code, "TLS_DHE_RSA_WITH_AES_256_CCM_8", "DHE", "AES_256_CCM_8", "CCM_8", ""),
+        0xc0a4 => suite(code, "TLS_PSK_WITH_AES_128_CCM", "PSK", "AES_128_CCM", "CCM", ""),
+        0xc0a5 => suite(code, "TLS_PSK_WITH_AES_256_CCM", "PSK", "AES_256_CCM", "CCM", ""),
+        0xc0a6 => suite(code, "TLS_DHE_PSK_WITH_AES_128_CCM", "DHE", "AES_128_CCM", "CCM", ""),
+        0xc0a7 => suite(code, "TLS_DHE_PSK_WITH_AES_256_CCM", "DHE", "AES_256_CCM", "CCM", ""),
+        0xc0a8 => suite(code, "TLS_PSK_WITH_AES_128_CCM_8", "PSK", "AES_128_CCM_8", "CCM_8", ""),
+        0xc0a9 => suite(code, "TLS_PSK_WITH_AES_256_CCM_8", "PSK", "AES_256_CCM_8", "CCM_8", ""),
+        0xc0aa => suite(code, "TLS_DHE_PSK_WITH_AES_128_CCM_8", "DHE", "AES_128_CCM_8", "CCM_8", ""),
+        0xc0ab => suite(code, "TLS_DHE_PSK_WITH_AES_256_CCM_8", "DHE", "AES_256_CCM_8", "CCM_8", ""),
+        0xc0ac => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_128_CCM", "ECDHE", "AES_128_CCM", "CCM", ""),
+        0xc0ad => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_256_CCM", "ECDHE", "AES_256_CCM", "CCM", ""),
+        0xc0ae => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8", "ECDHE", "AES_128_CCM_8", "CCM_8", ""),
+        0xc0af => suite(code, "TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8", "ECDHE", "AES_256_CCM_8", "CCM_8", ""),
+        0xcaca => suite(code, "GREASE", "", "", "", ""),
+        0xcc13 => suite(code, "OLD_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xcc14 => suite(code, "OLD_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xcc15 => suite(code, "OLD_TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "DHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xcca8 => suite(code, "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xcca9 => suite(code, "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xccaa => suite(code, "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "DHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xccab => suite(code, "TLS_PSK_WITH_CHACHA20_POLY1305_SHA256", "PSK", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xccac => suite(code, "TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "ECDHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xccad => suite(code, "TLS_DHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "DHE", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xccae => suite(code, "TLS_RSA_PSK_WITH_CHACHA20_POLY1305_SHA256", "RSA", "CHACHA20_POLY1305", "POLY1305", "SHA256"),
+        0xdada => suite(code, "GREASE", "", "", "", ""),
+        0xeaea => suite(code, "GREASE", "", "", "", ""),
+        0xfafa => suite(code, "GREASE", "", "", "", ""),
+        0xffff => suite(code, "UNKNOWN_CIPHER", "", "", "", ""),
+        _ => None,
+    }
+}
+
+// BY_CODE.get(code)
+fn suite_by_code(code: i64) -> Option[Suite] {
+    if code <= 0x00af {
+        suites_0(code)
+    } else if code <= 0xc04f {
+        suites_1(code)
+    } else {
+        suites_2(code)
+    }
+}
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order; the captures are spelled in hex.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    v.push(data_0());
+    v.push(data_1());
+    v.push(data_2());
+    v.push(data_3());
+    v.push(data_4());
+    v
+}
+
+fn data_0() -> DataFile {
+    let mut t = String.new();
+    t.push_str("0a0d0d0a7c0000004d3c2b1a01000000ffffffffffffffff01001a006f66666963652075706c696e6b2c206166746572");
+    t.push_str("206c756e63680000020006007838365f36340000030009004c696e757820362e380000000400190064756d7063617020");
+    t.push_str("2857697265736861726b2920342e322e32000000000000007c0000000100000028000000010000000000040002000400");
+    t.push_str("657468300900010006000000000000002800000006000000d800000000000000240a0600d232b4ee9f0000009f000000");
+    t.push_str("02005e000001021a2b3c4d5e08004500009102584000400639b4c000020acb007150cb201f900000012c000111705018");
+    t.push_str("faf00ddd0000474554202f6170692f73746174757320485454502f312e310d0a486f73743a206170692e6578616d706c");
+    t.push_str("652e636f6d0d0a436f6e6e656374696f6e3a206b6565702d616c6976650d0a0d0a504f5354202f6170692f6a6f627320");
+    t.push_str("485454502f312e310d0a486f73743a0001000d006669727374207265717565737400000000000000d800000006000000");
+    t.push_str("bc00000000000000240a0600f626b5ee9b0000009b000000021a2b3c4d5e02005e00000108004500008d025940004006");
+    t.push_str("39b7cb007150c000020a1f90cb2000011170000001955018faf057bf0000485454502f312e3120323030204f4b0d0a43");
+    t.push_str("6f6e74656e742d547970653a206170706c69636174696f6e2f6a736f6e0d0a436f6e74656e742d4c656e6774683a2033");
+    t.push_str("300d0a0d0a7b22737461747573223a226f6b222c22757074696d65223a38363430307d00bc000000050000000c000000");
+    t.push_str("0c00000006000000e000000000000000240a06002c95b6eebf000000bf00000002005e000001021a2b3c4d5e08004500");
+    t.push_str("00b1025a400040063992c000020acb007150cb201f9000000195000111d55018faf033160000206170692e6578616d70");
+    t.push_str("6c652e636f6d0d0a436f6e74656e742d547970653a206170706c69636174696f6e2f6a736f6e0d0a436f6e74656e742d");
+    t.push_str("4c656e6774683a2031330d0a0d0a7b226a6f62223a22746172227d48454144202f6170692f6a6f62732f392048545450");
+    t.push_str("2f312e310d0a486f73743a206170692e6578616d706c652e636f6d0d0a0d0a00e000000006000000d000000000000000");
+    t.push_str("240a0600747db8ee8b0000008b000000021a2b3c4d5e02005e00000108004500007d025b4000400639c5cb007150c000");
+    t.push_str("020a1f90cb20000111d50000021e5018faf027bc0000485454502f312e3120323034204e6f20436f6e74656e740d0a53");
+    t.push_str("65727665723a206170690d0a0d0a485454502f312e3120343034204e6f7420466f756e640d0a436f6e74656e742d4c65");
+    t.push_str("6e6774683a20390d0a0d0a0001001c0074776f20726573706f6e73657320696e206f6e65207365676d656e7400000000");
+    t.push_str("d0000000060000007400000000000000240a0600cedfbaee360000003600000002005e000001021a2b3c4d5e08004500");
+    t.push_str("0028025c400040063a19c000020acb007150cb201f900000021e0001122a5014faf0b78a000000000100130072657365");
+    t.push_str("742062792074686520636c69656e74000000000074000000");
+    DataFile { path: "capture.pcapng".to_string(), body: t, hex: true }
+}
+
+fn data_1() -> DataFile {
+    let mut t = String.new();
+    t.push_str("# mini_dpkt jobs\n");
+    t.push_str("info office.pcap\n");
+    t.push_str("info capture.pcapng\n");
+    t.push_str("info nano.pcap\n");
+    t.push_str("info notes.txt\n");
+    t.push_str("list office.pcap\n");
+    t.push_str("list capture.pcapng\n");
+    t.push_str("list nano.pcap\n");
+    t.push_str("repr office.pcap 1 3 5 6 8 12 14 19 22 24 25 27 28 29 31 33 34 36 37 38\n");
+    t.push_str("hexdump office.pcap 1 26\n");
+    t.push_str("dns office.pcap\n");
+    t.push_str("dhcp office.pcap\n");
+    t.push_str("ntp office.pcap\n");
+    t.push_str("http office.pcap\n");
+    t.push_str("http capture.pcapng\n");
+    t.push_str("tls office.pcap\n");
+    t.push_str("checksums office.pcap\n");
+    t.push_str("stats office.pcap\n");
+    t.push_str("ngblocks capture.pcapng\n");
+    t.push_str("build\n");
+    t.push_str("errors\n");
+    t.push_str("summary\n");
+    DataFile { path: "jobs.txt".to_string(), body: t, hex: false }
+}
+
+fn data_2() -> DataFile {
+    let mut t = String.new();
+    t.push_str("a1b23c4d000200040000000000000000000400000000000165540d20075bcd150000004400000044021a2b0000090200");
+    t.push_str("5e000001080045000036032000004011f38cc0000201c0000209020202020022dc3e3c31313e726f757465723a206c69");
+    t.push_str("6e6b20646f776e206574683165540d211dcd65000000004200000042021a2b00000902005e0000010800450000340321");
+    t.push_str("00004011f38dc0000201c000020902020202002047a93c31333e726f757465723a206c696e6b2075702065746831");
+    DataFile { path: "nano.pcap".to_string(), body: t, hex: true }
+}
+
+fn data_3() -> DataFile {
+    let mut t = String.new();
+    t.push_str("captures from the office uplink, kept for a week\n");
+    DataFile { path: "notes.txt".to_string(), body: t, hex: false }
+}
+
+fn data_4() -> DataFile {
+    let mut t = String.new();
+    t.push_str("d4c3b2a1020004000000000000000000ffff00000100000000f15365093d00002a0000002a000000ffffffffffff021a");
+    t.push_str("2b3c4d5e08060001080006040001021a2b3c4d5ec000020a000000000000c000020100f15365127a00002a0000002a00");
+    t.push_str("0000021a2b3c4d5e02005e0000010806000108000604000202005e000001c0000201021a2b3c4d5ec000020a00f15365");
+    t.push_str("1bb700003801000038010000ffffffffffff021a2b3c4d5e08004500012a00000000401179c400000000ffffffff0044");
+    t.push_str("004301165206010106003903f3260000800000000000000000000000000000000000021a2b3c4d5e0000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00006382536335010137050103060f2a0c086c6170746f702d373d0701021a2b3c4d5eff00f1536524f4000050010000");
+    t.push_str("50010000ffffffffffff02005e0000010800450001424242000040117568c0000201ffffffff00430044012eaea20201");
+    t.push_str("06003903f3260000800000000000c000020ac000020100000000021a2b3c4d5e00000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501");
+    t.push_str("020104ffffff000304c00002010608c0000235c00002360f0e6f66666963652e6578616d706c653304000151803604c0");
+    t.push_str("000201ff00f153652d3101004b0000004b00000002005e000001021a2b3c4d5e08004500003d006500004011f60bc000");
+    t.push_str("020ac0000235cf090035002947961a2b0100000100000000000003777777076578616d706c6503636f6d000001000100");
+    t.push_str("f15365366e01008f0000008f000000021a2b3c4d5e02005e0000010800450000811b5900004011dad3c0000235c00002");
+    t.push_str("0a0035cf09006d77101a2b8180000100020001000103777777076578616d706c6503636f6d0000010001c00c00050001");
+    t.push_str("00000e10000603776562c010c02d000100010000012c0004cb007150c01000020001000151800006036e7331c010c04f");
+    t.push_str("00010001000151800004c633643500f153653fab0100470000004700000002005e000001021a2b3c4d5e080045000039");
+    t.push_str("006600004011f60ec000020ac0000235cf0a00350025b48a1a2c01000001000000000000076578616d706c6503636f6d");
+    t.push_str("00000f000100f1536548e801009b0000009b000000021a2b3c4d5e02005e00000108004500008d1b5a00004011dac6c0");
+    t.push_str("000235c000020a0035cf0a0079f7ca1a2c81800001000300000000076578616d706c6503636f6d00000f0001c00c000f");
+    t.push_str("000100000e100009000a046d61696cc00cc00c000f000100000e10000b0014066261636b7570c02bc00c001000010000");
+    t.push_str("0e10001c0e763d73706631206d78202d616c6c0c6f776e65723d6f666669636500f15365512502004c0000004c000000");
+    t.push_str("02005e000001021a2b3c4d5e08004500003e006700004011f608c000020ac0000235cf0b0035002a4b3e1a2d01000001");
+    t.push_str("000000000000046e6f7065076578616d706c6503636f6d000001000100f153655a6202007f0000007f000000021a2b3c");
+    t.push_str("4d5e02005e0000010800450000711b5b00004011dae1c0000235c000020a0035cf0b005dfff11a2d8183000100000001");
+    t.push_str("0000046e6f7065076578616d706c6503636f6d0000010001c01100060001000003840027036e7331c0110a686f73746d");
+    t.push_str("6173746572c01178a3f17500001c2000000e10001275000000012c00f15365639f02004a0000004a00000002005e0000");
+    t.push_str("01021a2b3c4d5e08004500003c00c9400040063b98c000020acb007150c0000050000003e800000000a002faf07a7b00");
+    t.push_str("00020405b40402080a00001000000000000103030700f153656cdc02004200000042000000021a2b3c4d5e02005e0000");
+    t.push_str("010800450000340000400040063c69cb007150c000020a0050c00000001388000003e98012fe889a5a0000020405b401");
+    t.push_str("0104020103030800f1536575190300360000003600000002005e000001021a2b3c4d5e08004500002800ca400040063b");
+    t.push_str("abc000020acb007150c0000050000003e9000013895010faf0dec5000000f153657e5603005e0000005e00000002005e");
+    t.push_str("000001021a2b3c4d5e08004500005000cb400040063b82c000020acb007150c0000050000003e9000013895010faf076");
+    t.push_str("880000474554202f646f63732f696e6465782e68746d6c3f6c616e673d656e20485454502f312e310d0a4800f1536587");
+    t.push_str("930300860000008600000002005e000001021a2b3c4d5e08004500007800cc400040063b59c000020acb007150c00000");
+    t.push_str("5000000411000013895018faf0fb8d00006f73743a207777772e6578616d706c652e636f6d0d0a557365722d4167656e");
+    t.push_str("743a206375726c2f382e352e300d0a4163636570743a202a2f2a0d0a4163636570743a20746578742f68746d6c0d0a0d");
+    t.push_str("0a00f1536590d003003600000036000000021a2b3c4d5e02005e0000010800450000280001400040063c74cb007150c0");
+    t.push_str("00020a0050c00000001389000004615010faf0de4d000000f15365990d04009a0000009a000000021a2b3c4d5e02005e");
+    t.push_str("00000108004500008c0002400040063c0fcb007150c000020a0050c00000001389000004615010faf097cb0000485454");
+    t.push_str("502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f68746d6c3b20636861727365743d75");
+    t.push_str("74662d380d0a5472616e736665722d456e636f64696e673a206368756e6b65640d0a5365742d436f6f6b69653a20613d");
+    t.push_str("3100f15365a24a04008800000088000000021a2b3c4d5e02005e00000108004500007a0003400040063c20cb007150c0");
+    t.push_str("00020a0050c000000013ed000004615018faf0c07900000d0a5365742d436f6f6b69653a20623d320d0a536572766572");
+    t.push_str("3a206e67696e780d0a0d0a31370d0a3c68746d6c3e3c626f64793e446f63733c2f626f64793e0d0a370d0a3c2f68746d");
+    t.push_str("6c3e0d0a300d0a0d0a00f15365ab870400360000003600000002005e000001021a2b3c4d5e08004500002800cd400040");
+    t.push_str("063ba8c000020acb007150c0000050000004610000143f5011faf0dd96000000f15365b4c40400360000003600000002");
+    t.push_str("1a2b3c4d5e02005e0000010800450000280004400040063c71cb007150c000020a0050c0000000143f000004625011fa");
+    t.push_str("f0dd95000000f15365bd010500df000000df00000002005e000001021a2b3c4d5e0800450000d100ce400040063afec0");
+    t.push_str("00020acb007150c00101bb00000309000023285018faf0776d000016030100a4010000a0030300010203040506070809");
+    t.push_str("0a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20404142434445464748494a4b4c4d4e4f505152535455565758");
+    t.push_str("595a5b5c5d5e5f00160a0a130113021303c02bc02fc030cca8009c000a56000100004100000014001200000f7777772e");
+    t.push_str("6578616d706c652e636f6d0010000e000c02683208687474702f312e31000a00060004001d0017002b00050403040303");
+    t.push_str("3a3a000000f15365c63e0500b4000000b4000000021a2b3c4d5e02005e0000010800450000a60005400040063bf2cb00");
+    t.push_str("7150c000020a01bbc00100002328000003b25018faf032080000160303005e0200005a03036465666768696a6b6c6d6e");
+    t.push_str("6f707172737475767778797a7b7c7d7e7f8081828320404142434445464748494a4b4c4d4e4f50515253545556575859");
+    t.push_str("5a5b5c5d5e5f1301000012002b0002030400330008001d0004aabbccdd14030300010117030300100001020304050607");
+    t.push_str("08090a0b0c0d0e0f00f15365cf7b05003a0000003a00000002005e000001021a2b3c4d5e08004500002c012d00004001");
+    t.push_str("8d5fc000020ac63364070800a9a80b0b00016162636465666768696a6b6c6d6e6f7000f15365d8b805003a0000003a00");
+    t.push_str("0000021a2b3c4d5e02005e00000108004500002c2329000039017263c6336407c000020a0000b1a80b0b000161626364");
+    t.push_str("65666768696a6b6c6d6e6f7000f15365e1f505004600000046000000021a2b3c4d5e02005e000001080045000038232a");
+    t.push_str("000039017256c6336407c000020a0303e9670000000045000028012e00000111cc52c000020ac63364079c40829a0014");
+    t.push_str("f4a500f15365ea3206005a0000005a00000002005e000001021a2b3c4d5e08004500004c019100004011f48ac000020a");
+    t.push_str("c000027b007b007b003818f2230000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000e90f55000000000000f15365f36f06005a0000005a000000021a2b3c4d5e02005e00000108004500004c0192");
+    t.push_str("00004011f489c000027bc000020a007b007b00383785240203e90000008400003327c633647be90f548011223344e90f");
+    t.push_str("550000000000e90f550040000000e90f55004010000000f15365fcac06006a0000006a000000020000000005021a2b00");
+    t.push_str("00098100606408004500005801f400004011f492c0000209c0000205020202020044b80f3c31343e4e6f762031342032");
+    t.push_str("323a31333a3230206e6173206261636b75703a206a6f62206e696768746c792066696e69736865642c20322e31204742");
+    t.push_str("00f1536505ea0600430000004300000002005e000001021a2b3c4d5e86dd60000000000d3a4020010db8000000000000");
+    t.push_str("00000000001020010db800000000000000000000000180000f5c0007000170696e673600f153650e2707005a0000005a");
+    t.push_str("000000333300000016021a2b3c4d5e86dd6000000000240001fe80000000000000001a2bfffe3c4d5eff020000000000");
+    t.push_str("0000000000000000163a000502000001008f00f75b0000000104000000ff0200000000000000000000000000fb00f153");
+    t.push_str("65176407005f0000005f00000002005e000001021a2b3c4d5e86dd600000000029114020010db8000000000000000000");
+    t.push_str("00001020010db8000000000000000000000053cf120035002943e72b3c0100000100000000000003777777076578616d");
+    t.push_str("706c6503636f6d00001c000100f1536520a107009700000097000000021a2b3c4d5e02005e00000186dd600000000061");
+    t.push_str("114020010db800000000000000000000005320010db80000000000000000000000100035cf12006183142b3c81800001");
+    t.push_str("00020000000003777777076578616d706c6503636f6d00001c0001c00c001c00010000012c001020010db80080000000");
+    t.push_str("00000000000080c00c001c00010000012c001020010db800800000000100000000008100f1536529de07004200000042");
+    t.push_str("00000002005e000001021a2b3c4d5e080045000034777720004011f6fcc000020ac6336407c3502328004455ff00070e");
+    t.push_str("151c232a31383f464d545b626970777e858c939aa100f15365321b0800460000004600000002005e000001021a2b3c4d");
+    t.push_str("5e08004500003877770004401116f5c000020ac6336407a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950");
+    t.push_str("575e656c737a81888f969d00f153653b580800360000003600000002005e000001021a2b3c4d5e08004500002800cf40");
+    t.push_str("004006c4a6c000020acb007150c002005000001092000000005002faf0e4b1000000f153654495080023000000230000");
+    t.push_str("000180c200000e02005e00000188cc02070402005e00000104040567653106020078000000f15365d4650c0028000000");
+    t.push_str("5e00000002005e000001021a2b3c4d5e08004500005000d0400040063b7dc000020acb007150c00301bb0000");
+    DataFile { path: "office.pcap".to_string(), body: t, hex: true }
+}

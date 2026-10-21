@@ -1,0 +1,402 @@
+== info office.pcap
+format: pcap
+datalink: 1
+snaplen: 65535
+frames: 37
+first: 1700000000.015625
+last: 1700000000.812500
+captured bytes: 3796
+== info capture.pcapng
+format: pcapng
+datalink: 1
+snaplen: 262144
+frames: 5
+first: 1700003600.151250
+last: 1700003600.588750
+captured bytes: 698
+== info nano.pcap
+format: pcap
+datalink: 1
+snaplen: 262144
+frames: 2
+first: 1700007200.123456789
+last: 1700007201.500000000
+captured bytes: 134
+== info notes.txt
+error: ValueError: unknown pcap format; libpcap error: invalid tcpdump header, pcapng error: invalid pcapng header: not a SHB
+== list office.pcap
+  1 1700000000.015625 ARP who-has 192.0.2.1 tell 192.0.2.10
+  2 1700000000.031250 ARP 192.0.2.1 is-at 02:00:5e:00:00:01
+  3 1700000000.046875 IP 0.0.0.0:68 > 255.255.255.255:67 UDP len=270
+  4 1700000000.062500 IP 192.0.2.1:67 > 255.255.255.255:68 UDP len=294
+  5 1700000000.078125 IP 192.0.2.10:53001 > 192.0.2.53:53 UDP len=33
+  6 1700000000.093750 IP 192.0.2.53:53 > 192.0.2.10:53001 UDP len=101
+  7 1700000000.109375 IP 192.0.2.10:53002 > 192.0.2.53:53 UDP len=29
+  8 1700000000.125000 IP 192.0.2.53:53 > 192.0.2.10:53002 UDP len=113
+  9 1700000000.140625 IP 192.0.2.10:53003 > 192.0.2.53:53 UDP len=34
+ 10 1700000000.156250 IP 192.0.2.53:53 > 192.0.2.10:53003 UDP len=85
+ 11 1700000000.171875 IP 192.0.2.10:49152 > 203.0.113.80:80 TCP [SYN] seq=1000 ack=0 win=64240 len=0
+ 12 1700000000.187500 IP 203.0.113.80:80 > 192.0.2.10:49152 TCP [SYN,ACK] seq=5000 ack=1001 win=65160 len=0
+ 13 1700000000.203125 IP 192.0.2.10:49152 > 203.0.113.80:80 TCP [ACK] seq=1001 ack=5001 win=64240 len=0
+ 14 1700000000.218750 IP 192.0.2.10:49152 > 203.0.113.80:80 TCP [ACK] seq=1001 ack=5001 win=64240 len=40
+ 15 1700000000.234375 IP 192.0.2.10:49152 > 203.0.113.80:80 TCP [PUSH,ACK] seq=1041 ack=5001 win=64240 len=80
+ 16 1700000000.250000 IP 203.0.113.80:80 > 192.0.2.10:49152 TCP [ACK] seq=5001 ack=1121 win=64240 len=0
+ 17 1700000000.265625 IP 203.0.113.80:80 > 192.0.2.10:49152 TCP [ACK] seq=5001 ack=1121 win=64240 len=100
+ 18 1700000000.281250 IP 203.0.113.80:80 > 192.0.2.10:49152 TCP [PUSH,ACK] seq=5101 ack=1121 win=64240 len=82
+ 19 1700000000.296875 IP 192.0.2.10:49152 > 203.0.113.80:80 TCP [FIN,ACK] seq=1121 ack=5183 win=64240 len=0
+ 20 1700000000.312500 IP 203.0.113.80:80 > 192.0.2.10:49152 TCP [FIN,ACK] seq=5183 ack=1122 win=64240 len=0
+ 21 1700000000.328125 IP 192.0.2.10:49153 > 203.0.113.80:443 TCP [PUSH,ACK] seq=777 ack=9000 win=64240 len=169
+ 22 1700000000.343750 IP 203.0.113.80:443 > 192.0.2.10:49153 TCP [PUSH,ACK] seq=9000 ack=946 win=64240 len=126
+ 23 1700000000.359375 IP 192.0.2.10 > 198.51.100.7 ICMP type=8 code=0 echo id=2827 seq=1
+ 24 1700000000.375000 IP 198.51.100.7 > 192.0.2.10 ICMP type=0 code=0 echo id=2827 seq=1
+ 25 1700000000.390625 IP 198.51.100.7 > 192.0.2.10 ICMP type=3 code=3 about 192.0.2.10 > 198.51.100.7 proto 17
+ 26 1700000000.406250 IP 192.0.2.10:123 > 192.0.2.123:123 UDP len=48
+ 27 1700000000.421875 IP 192.0.2.123:123 > 192.0.2.10:123 UDP len=48
+ 28 1700000000.437500 vlan 100 pri 3: IP 192.0.2.9:514 > 192.0.2.5:514 UDP len=60
+ 29 1700000000.453125 IP6 2001:db8::10 > 2001:db8::1 ICMP6 type=128 code=0 echo id=7 seq=1
+ 30 1700000000.468750 IP6 ext=IP6HopOptsHeader fe80::1a:2bff:fe3c:4d5e > ff02::16 ICMP6 type=143 code=0
+ 31 1700000000.484375 IP6 [2001:db8::10]:53010 > [2001:db8::53]:53 UDP len=33
+ 32 1700000000.500000 IP6 [2001:db8::53]:53 > [2001:db8::10]:53010 UDP len=89
+ 33 1700000000.515625 IP frag id=30583 off=0 mf=1 192.0.2.10:50000 > 198.51.100.7:9000 UDP len=24
+ 34 1700000000.531250 IP frag id=30583 off=32 mf=0 192.0.2.10 > 198.51.100.7 proto 17, 36 bytes not decoded
+ 35 1700000000.546875 IP 192.0.2.10:49154 > 203.0.113.80:80 TCP [SYN] seq=4242 ack=0 win=64240 len=0
+ 36 1700000000.562500 ethertype 0x88cc, 21 bytes not decoded
+ 37 1700000000.812500 IP 192.0.2.10 > 203.0.113.80 proto 6, 6 bytes not decoded
+== list capture.pcapng
+  1 1700003600.151250 IP 192.0.2.10:52000 > 203.0.113.80:8080 TCP [PUSH,ACK] seq=300 ack=70000 win=64240 len=105
+  2 1700003600.213750 IP 203.0.113.80:8080 > 192.0.2.10:52000 TCP [PUSH,ACK] seq=70000 ack=405 win=64240 len=101
+  3 1700003600.307500 IP 192.0.2.10:52000 > 203.0.113.80:8080 TCP [PUSH,ACK] seq=405 ack=70101 win=64240 len=137
+  4 1700003600.432500 IP 203.0.113.80:8080 > 192.0.2.10:52000 TCP [PUSH,ACK] seq=70101 ack=542 win=64240 len=85
+  5 1700003600.588750 IP 192.0.2.10:52000 > 203.0.113.80:8080 TCP [RST,ACK] seq=542 ack=70186 win=64240 len=0
+== list nano.pcap
+  1 1700007200.123456789 IP 192.0.2.1:514 > 192.0.2.9:514 UDP len=26
+  2 1700007201.500000000 IP 192.0.2.1:514 > 192.0.2.9:514 UDP len=24
+== repr office.pcap 1 3 5 6 8 12 14 19 22 24 25 27 28 29 31 33 34 36 37 38
+frame 1: Ethernet(dst=b'\xff\xff\xff\xff\xff\xff', src=b'\x02\x1a+<M^', type=2054, data=ARP(sha=b'\x02\x1a+<M^', spa=b'\xc0\x00\x02\n', tha=b'\x00\x00\x00\x00\x00\x00', tpa=b'\xc0\x00\x02\x01'))
+frame 3: Ethernet(dst=b'\xff\xff\xff\xff\xff\xff', src=b'\x02\x1a+<M^', data=IP(len=298, p=17, sum=31172, dst=b'\xff\xff\xff\xff', opts=b'', data=UDP(sport=68, dport=67, ulen=278, sum=20998, data=b'\x01\x01\x06\x009\x03\xf3&\x00\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x1a+<M^\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00c\x82Sc5\x01\x017\x05\x01\x03\x06\x0f*\x0c\x08laptop-7=\x07\x01\x02\x1a+<M^\xff')))
+frame 5: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=61, id=101, p=17, sum=62987, src=b'\xc0\x00\x02\n', dst=b'\xc0\x00\x025', opts=b'', data=UDP(sport=53001, dport=53, ulen=41, sum=18326, data=b'\x1a+\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01')))
+frame 6: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=129, id=7001, p=17, sum=56019, src=b'\xc0\x00\x025', dst=b'\xc0\x00\x02\n', opts=b'', data=UDP(sport=53, dport=53001, ulen=109, sum=30480, data=b'\x1a+\x81\x80\x00\x01\x00\x02\x00\x01\x00\x01\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x0e\x10\x00\x06\x03web\xc0\x10\xc0-\x00\x01\x00\x01\x00\x00\x01,\x00\x04\xcb\x00qP\xc0\x10\x00\x02\x00\x01\x00\x01Q\x80\x00\x06\x03ns1\xc0\x10\xc0O\x00\x01\x00\x01\x00\x01Q\x80\x00\x04\xc63d5')))
+frame 8: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=141, id=7002, p=17, sum=56006, src=b'\xc0\x00\x025', dst=b'\xc0\x00\x02\n', opts=b'', data=UDP(sport=53, dport=53002, ulen=121, sum=63434, data=b'\x1a,\x81\x80\x00\x01\x00\x03\x00\x00\x00\x00\x07example\x03com\x00\x00\x0f\x00\x01\xc0\x0c\x00\x0f\x00\x01\x00\x00\x0e\x10\x00\t\x00\n\x04mail\xc0\x0c\xc0\x0c\x00\x0f\x00\x01\x00\x00\x0e\x10\x00\x0b\x00\x14\x06backup\xc0+\xc0\x0c\x00\x10\x00\x01\x00\x00\x0e\x10\x00\x1c\x0ev=spf1 mx -all\x0cowner=office')))
+frame 12: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=52, df=1, p=6, sum=15465, src=b'\xcb\x00qP', dst=b'\xc0\x00\x02\n', opts=b'', data=TCP(sport=80, dport=49152, seq=5000, ack=1001, off=8, flags=18, win=65160, sum=39514, opts=b'\x02\x04\x05\xb4\x01\x01\x04\x02\x01\x03\x03\x08')))
+frame 14: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=80, id=203, df=1, p=6, sum=15234, src=b'\xc0\x00\x02\n', dst=b'\xcb\x00qP', opts=b'', data=TCP(sport=49152, dport=80, seq=1001, ack=5001, flags=16, win=64240, sum=30344, opts=b'', data=b'GET /docs/index.html?lang=en HTTP/1.1\r\nH')))
+frame 19: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=40, id=205, df=1, p=6, sum=15272, src=b'\xc0\x00\x02\n', dst=b'\xcb\x00qP', opts=b'', data=TCP(sport=49152, dport=80, seq=1121, ack=5183, flags=17, win=64240, sum=56726, opts=b'')))
+frame 22: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=166, id=5, df=1, p=6, sum=15346, src=b'\xcb\x00qP', dst=b'\xc0\x00\x02\n', opts=b'', data=TCP(sport=443, dport=49153, seq=9000, ack=946, flags=24, win=64240, sum=12808, opts=b'', data=b'\x16\x03\x03\x00^\x02\x00\x00Z\x03\x03defghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83 @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_\x13\x01\x00\x00\x12\x00+\x00\x02\x03\x04\x003\x00\x08\x00\x1d\x00\x04\xaa\xbb\xcc\xdd\x14\x03\x03\x00\x01\x01\x17\x03\x03\x00\x10\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f')))
+frame 24: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=44, id=9001, ttl=57, p=1, sum=29283, src=b'\xc63d\x07', dst=b'\xc0\x00\x02\n', opts=b'', data=ICMP(type=0, sum=45480, data=Echo(id=2827, seq=1, data=b'abcdefghijklmnop'))))
+frame 25: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=56, id=9002, ttl=57, p=1, sum=29270, src=b'\xc63d\x07', dst=b'\xc0\x00\x02\n', opts=b'', data=ICMP(type=3, code=3, sum=59751, data=Unreach(data=IP(len=40, id=302, ttl=1, p=17, sum=52306, src=b'\xc0\x00\x02\n', dst=b'\xc63d\x07', opts=b'', data=UDP(sport=40000, dport=33434, ulen=20, sum=62629))))))
+frame 27: Ethernet(dst=b'\x02\x1a+<M^', src=b'\x02\x00^\x00\x00\x01', data=IP(len=76, id=402, p=17, sum=62601, src=b'\xc0\x00\x02{', dst=b'\xc0\x00\x02\n', opts=b'', data=UDP(sport=123, dport=123, ulen=56, sum=14213, data=b'$\x02\x03\xe9\x00\x00\x00\x84\x00\x003\'\xc63d{\xe9\x0fT\x80\x11"3D\xe9\x0fU\x00\x00\x00\x00\x00\xe9\x0fU\x00@\x00\x00\x00\xe9\x0fU\x00@\x10\x00\x00')))
+frame 28: Ethernet(dst=b'\x02\x00\x00\x00\x00\x05', src=b'\x02\x1a+\x00\x00\t', type=33024, vlan_tags=[VLANtag8021Q(pri=3, id=100)], vlanid=100, priority=3, cfi=0, data=IP(len=88, id=500, p=17, sum=62610, src=b'\xc0\x00\x02\t', dst=b'\xc0\x00\x02\x05', opts=b'', data=UDP(sport=514, dport=514, ulen=68, sum=47119, data=b'<14>Nov 14 22:13:20 nas backup: job nightly finished, 2.1 GB')))
+frame 29: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', type=34525, data=IP6(plen=13, nxt=58, hlim=64, src=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10', dst=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01', extension_hdrs={}, all_extension_headers=[], p=58, data=ICMP6(type=128, sum=3932, data=Echo(id=7, seq=1, data=b'ping6'))))
+frame 31: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', type=34525, data=IP6(plen=41, nxt=17, hlim=64, src=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10', dst=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00S', extension_hdrs={}, all_extension_headers=[], p=17, data=UDP(sport=53010, dport=53, ulen=41, sum=17383, data=b'+<\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x1c\x00\x01')))
+frame 33: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=52, id=30583, mf=1, p=17, sum=63228, src=b'\xc0\x00\x02\n', dst=b'\xc63d\x07', opts=b'', data=UDP(sport=50000, dport=9000, ulen=68, sum=22015, data=b'\x00\x07\x0e\x15\x1c#*18?FMT[bipw~\x85\x8c\x93\x9a\xa1')))
+frame 34: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=56, id=30583, offset=4, p=17, sum=5877, src=b'\xc0\x00\x02\n', dst=b'\xc63d\x07', opts=b'', data=b'\xa8\xaf\xb6\xbd\xc4\xcb\xd2\xd9\xe0\xe7\xee\xf5\xfc\x03\n\x11\x18\x1f&-4;BIPW^elsz\x81\x88\x8f\x96\x9d'))
+frame 36: Ethernet(dst=b'\x01\x80\xc2\x00\x00\x0e', src=b'\x02\x00^\x00\x00\x01', type=35020, data=b'\x02\x07\x04\x02\x00^\x00\x00\x01\x04\x04\x05ge1\x06\x02\x00x\x00\x00')
+frame 37: Ethernet(dst=b'\x02\x00^\x00\x00\x01', src=b'\x02\x1a+<M^', data=IP(len=80, id=208, df=1, p=6, sum=15229, src=b'\xc0\x00\x02\n', dst=b'\xcb\x00qP', opts=b'', data=b'\xc0\x03\x01\xbb\x00\x00'))
+frame 38: no such frame (37 frames)
+== hexdump office.pcap 1 26
+frame 1:
+  0000:  ff ff ff ff ff ff 02 1a 2b 3c 4d 5e 08 06 00 01  ........+<M^....
+  0016:  08 00 06 04 00 01 02 1a 2b 3c 4d 5e c0 00 02 0a  ........+<M^....
+  0032:  00 00 00 00 00 00 c0 00 02 01                    ..........
+frame 26:
+  0000:  02 00 5e 00 00 01 02 1a 2b 3c 4d 5e 08 00 45 00  ..^.....+<M^..E.
+  0016:  00 4c 01 91 00 00 40 11 f4 8a c0 00 02 0a c0 00  .L....@.........
+  0032:  02 7b 00 7b 00 7b 00 38 18 f2 23 00 00 00 00 00  .{.{.{.8..#.....
+  0048:  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+  0064:  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+  0080:  00 00 e9 0f 55 00 00 00 00 00                    ....U.....
+== dns office.pcap
+frame 5: id=0x1a2b qr=0 opcode=0 aa=0 tc=0 rd=1 ra=0 rcode=0
+  question www.example.com A
+  DNS(id=6699, qd=[Q(name='www.example.com')])
+frame 6: id=0x1a2b qr=1 opcode=0 aa=0 tc=0 rd=1 ra=1 rcode=0
+  question www.example.com A
+  an www.example.com 3600 CNAME web.example.com
+  an web.example.com 300 A 203.0.113.80
+  ns example.com 86400 NS ns1.example.com
+  ar ns1.example.com 86400 A 198.51.100.53
+  DNS(id=6699, op=33152, qd=[Q(name='www.example.com')], an=[RR(name='www.example.com', type=5, ttl=3600, rlen=6, rdata=b'\x03web\xc0\x10', cname='web.example.com'), RR(name='web.example.com', ttl=300, rdata=b'\xcb\x00qP', ip=b'\xcb\x00qP')], ns=[RR(name='example.com', type=2, ttl=86400, rlen=6, rdata=b'\x03ns1\xc0\x10', nsname='ns1.example.com')], ar=[RR(name='ns1.example.com', ttl=86400, rdata=b'\xc63d5', ip=b'\xc63d5')])
+frame 7: id=0x1a2c qr=0 opcode=0 aa=0 tc=0 rd=1 ra=0 rcode=0
+  question example.com MX
+  DNS(id=6700, qd=[Q(name='example.com', type=15)])
+frame 8: id=0x1a2c qr=1 opcode=0 aa=0 tc=0 rd=1 ra=1 rcode=0
+  question example.com MX
+  an example.com 3600 MX 10 mail.example.com
+  an example.com 3600 MX 20 backup.mail.example.com
+  an example.com 3600 TXT "v=spf1 mx -all" "owner=office"
+  DNS(id=6700, op=33152, qd=[Q(name='example.com', type=15)], an=[RR(name='example.com', type=15, ttl=3600, rlen=9, rdata=b'\x00\n\x04mail\xc0\x0c', preference=(10,), mxname='mail.example.com'), RR(name='example.com', type=15, ttl=3600, rlen=11, rdata=b'\x00\x14\x06backup\xc0+', preference=(20,), mxname='backup.mail.example.com'), RR(name='example.com', type=16, ttl=3600, rlen=28, rdata=b'\x0ev=spf1 mx -all\x0cowner=office', text=['v=spf1 mx -all', 'owner=office'])])
+frame 9: id=0x1a2d qr=0 opcode=0 aa=0 tc=0 rd=1 ra=0 rcode=0
+  question nope.example.com A
+  DNS(id=6701, qd=[Q(name='nope.example.com')])
+frame 10: id=0x1a2d qr=1 opcode=0 aa=0 tc=0 rd=1 ra=1 rcode=3
+  question nope.example.com A
+  ns example.com 900 SOA ns1.example.com hostmaster.example.com 2024010101 7200 3600 1209600 300
+  DNS(id=6701, op=33155, qd=[Q(name='nope.example.com')], ns=[RR(name='example.com', type=6, ttl=900, rlen=39, rdata=b'\x03ns1\xc0\x11\nhostmaster\xc0\x11x\xa3\xf1u\x00\x00\x1c \x00\x00\x0e\x10\x00\x12u\x00\x00\x00\x01,', mname='ns1.example.com', rname='hostmaster.example.com', serial=2024010101, refresh=7200, retry=3600, expire=1209600, minimum=300)])
+frame 31: id=0x2b3c qr=0 opcode=0 aa=0 tc=0 rd=1 ra=0 rcode=0
+  question www.example.com AAAA
+  DNS(id=11068, qd=[Q(name='www.example.com', type=28)])
+frame 32: id=0x2b3c qr=1 opcode=0 aa=0 tc=0 rd=1 ra=1 rcode=0
+  question www.example.com AAAA
+  an www.example.com 300 AAAA 2001:db8:80::80
+  an www.example.com 300 AAAA 2001:db8:80:0:1::81
+  DNS(id=11068, op=33152, qd=[Q(name='www.example.com', type=28)], an=[RR(name='www.example.com', type=28, ttl=300, rlen=16, rdata=b' \x01\r\xb8\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80', ip6=b' \x01\r\xb8\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80'), RR(name='www.example.com', type=28, ttl=300, rlen=16, rdata=b' \x01\r\xb8\x00\x80\x00\x00\x00\x01\x00\x00\x00\x00\x00\x81', ip6=b' \x01\r\xb8\x00\x80\x00\x00\x00\x01\x00\x00\x00\x00\x00\x81')])
+== dhcp office.pcap
+frame 3: op=1 xid=0x3903f326 client=02:1a:2b:3c:4d:5e yiaddr=0.0.0.0 siaddr=0.0.0.0 flags=0x8000
+  option 53 msgtype: DISCOVER
+  option 55 params: netmask,router,dns,domain,42
+  option 12 hostname: laptop-7
+  option 61 client-id: 01021a2b3c4d5e
+  DHCP(xid=956560166, flags=32768, chaddr=b'\x02\x1a+<M^', opts=[(53, b'\x01'), (55, b'\x01\x03\x06\x0f*'), (12, b'laptop-7'), (61, b'\x01\x02\x1a+<M^')])
+frame 4: op=2 xid=0x3903f326 client=02:1a:2b:3c:4d:5e yiaddr=192.0.2.10 siaddr=192.0.2.1 flags=0x8000
+  option 53 msgtype: OFFER
+  option 1 netmask: 255.255.255.0
+  option 3 router: 192.0.2.1
+  option 6 dns: 192.0.2.53 192.0.2.54
+  option 15 domain: office.example
+  option 51 lease: 86400s
+  option 54 server-id: 192.0.2.1
+  DHCP(op=2, xid=956560166, flags=32768, yiaddr=3221225994, siaddr=3221225985, chaddr=b'\x02\x1a+<M^', opts=[(53, b'\x02'), (1, b'\xff\xff\xff\x00'), (3, b'\xc0\x00\x02\x01'), (6, b'\xc0\x00\x025\xc0\x00\x026'), (15, b'office.example'), (51, b'\x00\x01Q\x80'), (54, b'\xc0\x00\x02\x01')])
+== ntp office.pcap
+frame 26: li=0 v=4 mode=3 stratum=0
+  update_time: unset
+  originate_time: unset
+  receive_time: unset
+  transmit_time: 1701107328.000000
+  NTP(flags=35, id=b'\x00\x00\x00\x00', update_time=b'\x00\x00\x00\x00\x00\x00\x00\x00', originate_time=b'\x00\x00\x00\x00\x00\x00\x00\x00', receive_time=b'\x00\x00\x00\x00\x00\x00\x00\x00', transmit_time=b'\xe9\x0fU\x00\x00\x00\x00\x00')
+frame 27: li=0 v=4 mode=4 stratum=2
+  update_time: 1701107200.066928
+  originate_time: 1701107328.000000
+  receive_time: 1701107328.250000
+  transmit_time: 1701107328.250244
+  NTP(flags=36, stratum=2, interval=3, precision=233, delay=132, dispersion=13095, id=b'\xc63d{', update_time=b'\xe9\x0fT\x80\x11"3D', originate_time=b'\xe9\x0fU\x00\x00\x00\x00\x00', receive_time=b'\xe9\x0fU\x00@\x00\x00\x00', transmit_time=b'\xe9\x0fU\x00@\x10\x00\x00')
+== http office.pcap
+192.0.2.10:49152 > 203.0.113.80:80 requests, 120 bytes from frames 14,15
+  GET /docs/index.html?lang=en HTTP/1.1
+    host: 'www.example.com'
+    user-agent: 'curl/8.5.0'
+    accept: ['*/*', 'text/html']
+    body b''
+    Request(version='1.1', method='GET', uri='/docs/index.html?lang=en', headers=OrderedDict({'host': 'www.example.com', 'user-agent': 'curl/8.5.0', 'accept': ['*/*', 'text/html']}), body=b'', data=b'')
+203.0.113.80:80 > 192.0.2.10:49152 responses, 182 bytes from frames 17,18
+  HTTP/1.1 200 OK
+    content-type: 'text/html; charset=utf-8'
+    transfer-encoding: 'chunked'
+    set-cookie: ['a=1', 'b=2']
+    server: 'nginx'
+    body b'<html><body>Docs</body></html>'
+    Response(version='1.1', status='200', reason='OK', headers=OrderedDict({'content-type': 'text/html; charset=utf-8', 'transfer-encoding': 'chunked', 'set-cookie': ['a=1', 'b=2'], 'server': 'nginx'}), body=b'<html><body>Docs</body></html>', data=b'')
+== http capture.pcapng
+192.0.2.10:52000 > 203.0.113.80:8080 requests, 242 bytes from frames 1,3
+  GET /api/status HTTP/1.1
+    host: 'api.example.com'
+    connection: 'keep-alive'
+    body b''
+    Request(version='1.1', method='GET', uri='/api/status', headers=OrderedDict({'host': 'api.example.com', 'connection': 'keep-alive'}), body=b'', data=b'POST /api/jobs HTTP/1.1\r\nHost: api.example.com\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{"job":"tar"}HEAD /api/jobs/9 HTTP/1.1\r\nHost: api.example.com\r\n\r\n', data=b'POST /api/jobs HTTP/1.1\r\nHost: api.example.com\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{"job":"tar"}HEAD /api/jobs/9 HTTP/1.1\r\nHost: api.example.com\r\n\r\n')
+  POST /api/jobs HTTP/1.1
+    host: 'api.example.com'
+    content-type: 'application/json'
+    content-length: '13'
+    body b'{"job":"tar"}'
+    Request(version='1.1', method='POST', uri='/api/jobs', headers=OrderedDict({'host': 'api.example.com', 'content-type': 'application/json', 'content-length': '13'}), body=b'{"job":"tar"}', data=b'HEAD /api/jobs/9 HTTP/1.1\r\nHost: api.example.com\r\n\r\n', data=b'HEAD /api/jobs/9 HTTP/1.1\r\nHost: api.example.com\r\n\r\n')
+  HEAD /api/jobs/9 HTTP/1.1
+    host: 'api.example.com'
+    body b''
+    Request(version='1.1', method='HEAD', uri='/api/jobs/9', headers=OrderedDict({'host': 'api.example.com'}), body=b'', data=b'')
+203.0.113.80:8080 > 192.0.2.10:52000 responses, 186 bytes from frames 2,4
+  HTTP/1.1 200 OK
+    content-type: 'application/json'
+    content-length: '30'
+    body b'{"status":"ok","uptime":86400}'
+    Response(version='1.1', status='200', reason='OK', headers=OrderedDict({'content-type': 'application/json', 'content-length': '30'}), body=b'{"status":"ok","uptime":86400}', data=b'HTTP/1.1 204 No Content\r\nServer: api\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n', data=b'HTTP/1.1 204 No Content\r\nServer: api\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n')
+  HTTP/1.1 204 No Content
+    server: 'api'
+    body b''
+    Response(version='1.1', status='204', reason='No Content', headers=OrderedDict({'server': 'api'}), body=b'', data=b'HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n', data=b'HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n')
+  error: NeedData: short body (missing 9 bytes)
+== tls office.pcap
+frame 21: 1 records, 169 of 169 bytes
+  record type=22 version=0x0301 length=164
+    handshake ClientHello, 160 bytes
+    TLSClientHello(version=771, random=b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f', session_id=b'@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_', ciphersuites=[CipherSuite(0x0a0a, GREASE), CipherSuite(0x1301, TLS_AES_128_GCM_SHA256), CipherSuite(0x1302, TLS_AES_256_GCM_SHA384), CipherSuite(0x1303, TLS_CHACHA20_POLY1305_SHA256), CipherSuite(0xc02b, TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256), CipherSuite(0xc02f, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256), CipherSuite(0xc030, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384), CipherSuite(0xcca8, TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256), CipherSuite(0x009c, TLS_RSA_WITH_AES_128_GCM_SHA256), CipherSuite(0x000a, TLS_RSA_WITH_3DES_EDE_CBC_SHA), CipherSuite(0x5600, TLS_FALLBACK)], compression_methods=(0,), extensions=[(0, b'\x00\x12\x00\x00\x0fwww.example.com'), (16, b'\x00\x0c\x02h2\x08http/1.1'), (10, b'\x00\x04\x00\x1d\x00\x17'), (43, b'\x04\x03\x04\x03\x03'), (14906, b'')], data=b' @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_\x00\x16\n\n\x13\x01\x13\x02\x13\x03\xc0+\xc0/\xc00\xcc\xa8\x00\x9c\x00\nV\x00\x01\x00\x00A\x00\x00\x00\x14\x00\x12\x00\x00\x0fwww.example.com\x00\x10\x00\x0e\x00\x0c\x02h2\x08http/1.1\x00\n\x00\x06\x00\x04\x00\x1d\x00\x17\x00+\x00\x05\x04\x03\x04\x03\x03::\x00\x00')
+    session id 32 bytes
+    suite 0x0a0a GREASE kx= enc= mac= pfs=False aead=False
+    suite 0x1301 TLS_AES_128_GCM_SHA256 kx= enc=AES_128_GCM mac=SHA256 pfs=False aead=True
+    suite 0x1302 TLS_AES_256_GCM_SHA384 kx= enc=AES_256_GCM mac=SHA384 pfs=False aead=True
+    suite 0x1303 TLS_CHACHA20_POLY1305_SHA256 kx= enc=CHACHA20_POLY1305 mac=SHA256 pfs=False aead=False
+    suite 0xc02b TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 kx=ECDHE enc=AES_128_GCM mac=SHA256 pfs=True aead=True
+    suite 0xc02f TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 kx=ECDHE enc=AES_128_GCM mac=SHA256 pfs=True aead=True
+    suite 0xc030 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 kx=ECDHE enc=AES_256_GCM mac=SHA384 pfs=True aead=True
+    suite 0xcca8 TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 kx=ECDHE enc=CHACHA20_POLY1305 mac=SHA256 pfs=True aead=False
+    suite 0x009c TLS_RSA_WITH_AES_128_GCM_SHA256 kx=RSA enc=AES_128_GCM mac=SHA256 pfs=False aead=True
+    suite 0x000a TLS_RSA_WITH_3DES_EDE_CBC_SHA kx=RSA enc=3DES_EDE_CBC mac=SHA pfs=False aead=False
+    suite 0x5600 TLS_FALLBACK kx= enc= mac= pfs=False aead=False
+    extension server_name www.example.com
+    extension alpn h2,http/1.1
+    extension groups 0x001d,0x0017
+    extension supported_versions 0x0304,0x0303
+    extension type 0x3a3a, 0 bytes
+frame 22: 3 records, 126 of 126 bytes
+  record type=22 version=0x0303 length=94
+    handshake ServerHello, 90 bytes
+    TLSServerHello(version=771, random=b'defghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83', session_id=b'@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_', ciphersuite=CipherSuite(0x1301, TLS_AES_128_GCM_SHA256), compression_method=0, extensions=[(43, b'\x03\x04'), (51, b'\x00\x1d\x00\x04\xaa\xbb\xcc\xdd')], data=b' @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_\x13\x01\x00\x00\x12\x00+\x00\x02\x03\x04\x003\x00\x08\x00\x1d\x00\x04\xaa\xbb\xcc\xdd')
+    session id 32 bytes
+    chosen 0x1301 TLS_AES_128_GCM_SHA256
+    extension supported_versions 0x0304
+    extension key_share group 0x001d, 4 byte key
+  record type=20 version=0x0303 length=1
+    TLSRecord(type=20, version=771, length=1, compressed=True, encrypted=True, data=b'\x01')
+  record type=23 version=0x0303 length=16
+    TLSRecord(type=23, version=771, length=16, compressed=True, encrypted=True, data=b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f')
+== checksums office.pcap
+frame 35: ip header checksum 0xc4a6, should be 0x3ba6
+frame 35: tcp checksum 0xe4b1, should be 0xe5b1
+frame 37: truncated, 6 of 60 bytes captured
+56 checksums correct
+== stats office.pcap
+ethertypes:
+  0x0800 30
+  0x0806 2
+  0x86dd 4
+  0x88cc 1
+ip protocols:
+  1 ICMP 3
+  6 TCP 14
+  17 UDP 15
+  58 ICMP6 2
+services:
+  http 11
+  dns 8
+  dhcp 2
+  https 2
+  ntp 2
+  port 9000 1
+  syslog 1
+talkers by bytes sent:
+  192.0.2.10 1233
+  203.0.113.80 644
+  192.0.2.53 425
+  192.0.2.1 336
+  0.0.0.0 312
+  2001:db8::10 162
+  2001:db8::53 151
+  198.51.100.7 128
+  192.0.2.9 106
+  192.0.2.123 90
+  fe80::1a:2bff:fe3c:4d5e 90
+== ngblocks capture.pcapng
+SHB at 0: version 1.0, 124 bytes
+  comment 'office uplink, after lunch'
+  PcapngOptionLE(code=1, len=26, text='office uplink, after lunch', data=b'office uplink, after lunch')
+  PcapngOptionLE(code=2, len=6, data=b'x86_64')
+  PcapngOptionLE(code=3, len=9, data=b'Linux 6.8')
+  PcapngOptionLE(code=4, len=25, data=b'dumpcap (Wireshark) 4.2.2')
+  PcapngOptionLE(opt_endofopt)
+IDB at 124: linktype 1 snaplen 262144
+  PcapngOptionLE(code=2, len=4, data=b'eth0')
+  PcapngOptionLE(code=9, len=1, data=b'\x06')
+  PcapngOptionLE(opt_endofopt)
+EPB at 164: iface 0 ts 1700003600.151250 caplen 159
+  comment 'first request'
+  PcapngOptionLE(code=1, len=13, text='first request', data=b'first request')
+  PcapngOptionLE(opt_endofopt)
+EPB at 380: iface 0 ts 1700003600.213750 caplen 155
+block type 5 at 568, 12 bytes
+EPB at 580: iface 0 ts 1700003600.307500 caplen 191
+EPB at 804: iface 0 ts 1700003600.432500 caplen 139
+  comment 'two responses in one segment'
+  PcapngOptionLE(code=1, len=28, text='two responses in one segment', data=b'two responses in one segment')
+  PcapngOptionLE(opt_endofopt)
+EPB at 1012: iface 0 ts 1700003600.588750 caplen 54
+  comment 'reset by the client'
+  PcapngOptionLE(code=1, len=19, text='reset by the client', data=b'reset by the client')
+  PcapngOptionLE(opt_endofopt)
+== build
+dns answer, 76 bytes:
+  0000:  01 02 81 80 00 01 00 02 00 00 00 00 07 70 72 69  .............pri
+  0016:  6e 74 65 72 06 6f 66 66 69 63 65 07 65 78 61 6d  nter.office.exam
+  0032:  70 6c 65 00 00 01 00 01 c0 0c 00 05 00 01 00 00  ple.............
+  0048:  00 3c 00 08 05 70 72 6e 2d 32 c0 14 c0 34 00 01  .<...prn-2...4..
+  0064:  00 01 00 00 00 3c 00 04 c0 00 02 1f              .....<......
+  DNS(id=258, op=33152, qd=[Q(name='printer.office.example')], an=[RR(name='printer.office.example', type=5, ttl=60, rlen=8, rdata=b'\x05prn-2\xc0\x14', cname='prn-2.office.example'), RR(name='prn-2.office.example', ttl=60, rdata=b'\xc0\x00\x02\x1f', ip=b'\xc0\x00\x02\x1f')])
+  same names: True
+udp, 118 bytes:
+  0000:  02 00 00 00 00 bb 02 00 00 00 00 aa 08 00 45 00  ..............E.
+  0016:  00 68 00 00 00 00 20 11 16 53 c0 00 02 14 c0 00  .h.... ..S......
+  0032:  02 1e 14 e9 00 35 00 54 16 08 01 02 81 80 00 01  .....5.T........
+  0048:  00 02 00 00 00 00 07 70 72 69 6e 74 65 72 06 6f  .......printer.o
+  0064:  66 66 69 63 65 07 65 78 61 6d 70 6c 65 00 00 01  ffice.example...
+  0080:  00 01 c0 0c 00 05 00 01 00 00 00 3c 00 08 05 70  ...........<...p
+  0096:  72 6e 2d 32 c0 14 c0 34 00 01 00 01 00 00 00 3c  rn-2...4.......<
+  0112:  00 04 c0 00 02 1f                                ......
+  Ethernet(dst=b'\x02\x00\x00\x00\x00\xbb', src=b'\x02\x00\x00\x00\x00\xaa', data=IP(len=104, ttl=32, p=17, sum=5715, src=b'\xc0\x00\x02\x14', dst=b'\xc0\x00\x02\x1e', opts=b'', data=UDP(sport=5353, dport=53, ulen=84, sum=5640, data=b'\x01\x02\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x07printer\x06office\x07example\x00\x00\x01\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x00<\x00\x08\x05prn-2\xc0\x14\xc04\x00\x01\x00\x01\x00\x00\x00<\x00\x04\xc0\x00\x02\x1f')))
+tcp, 65 bytes:
+  0000:  02 00 00 00 00 bb 02 00 00 00 00 aa 08 00 45 00  ..............E.
+  0016:  00 33 00 07 00 00 40 06 f6 8b c0 00 02 14 c0 00  .3....@.........
+  0032:  02 1e 9c 41 00 16 00 00 00 01 00 00 00 02 50 18  ...A..........P.
+  0048:  01 f5 0d 56 00 00 53 53 48 2d 32 2e 30 2d 78 0d  ...V..SSH-2.0-x.
+  0064:  0a                                               .
+  Ethernet(dst=b'\x02\x00\x00\x00\x00\xbb', src=b'\x02\x00\x00\x00\x00\xaa', data=IP(len=51, id=7, p=6, sum=63115, src=b'\xc0\x00\x02\x14', dst=b'\xc0\x00\x02\x1e', opts=b'', data=TCP(sport=40001, dport=22, seq=1, ack=2, flags=24, win=501, sum=3414, opts=b'', data=b'SSH-2.0-x\r\n')))
+icmp, 47 bytes:
+  0000:  02 00 00 00 00 bb 02 00 00 00 00 aa 08 00 45 00  ..............E.
+  0016:  00 21 00 00 00 00 40 01 f6 a9 c0 00 02 14 c0 00  .!....@.........
+  0032:  02 1e 08 00 b4 23 00 01 00 09 68 65 6c 6c 6f     .....#....hello
+  Ethernet(dst=b'\x02\x00\x00\x00\x00\xbb', src=b'\x02\x00\x00\x00\x00\xaa', data=IP(len=33, p=1, sum=63145, src=b'\xc0\x00\x02\x14', dst=b'\xc0\x00\x02\x1e', opts=b'', data=ICMP(sum=46115, data=Echo(id=1, seq=9, data=b'hello'))))
+icmp6, 66 bytes:
+  0000:  02 00 00 00 00 bb 02 00 00 00 00 aa 86 dd 60 00  ..............`.
+  0016:  00 00 00 0c 3a ff 20 01 0d b8 00 00 00 00 00 00  ....:. .........
+  0032:  00 00 00 00 00 01 20 01 0d b8 00 00 00 00 00 00  ...... .........
+  0048:  00 00 00 00 00 02 81 00 44 66 00 03 00 04 70 6f  ........Df....po
+  0064:  6e 67                                            ng
+  Ethernet(dst=b'\x02\x00\x00\x00\x00\xbb', src=b'\x02\x00\x00\x00\x00\xaa', type=34525, data=IP6(plen=12, nxt=58, hlim=255, src=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01', dst=b' \x01\r\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02', extension_hdrs={}, all_extension_headers=[], p=58, data=ICMP6(type=129, sum=17510, data=Echo(id=3, seq=4, data=b'pong'))))
+vlan, 46 bytes:
+  0000:  02 00 00 00 00 bb 02 00 00 00 00 aa 81 00 a0 2a  ...............*
+  0016:  08 00 45 00 00 1c 00 00 00 00 40 11 f6 9e c0 00  ..E.......@.....
+  0032:  02 14 c0 00 02 1e 00 01 00 02 00 08 7b a8        ............{.
+  Ethernet(dst=b'\x02\x00\x00\x00\x00\xbb', src=b'\x02\x00\x00\x00\x00\xaa', type=33024, vlan_tags=[VLANtag8021Q(pri=5, id=42)], vlanid=42, priority=5, cfi=0, data=IP(len=28, p=17, sum=63134, src=b'\xc0\x00\x02\x14', dst=b'\xc0\x00\x02\x1e', opts=b'', data=UDP(sport=1, dport=2, sum=31656)))
+built.pcap, 175 bytes, starts:
+  0000:  d4 c3 b2 a1 02 00 04 00 00 00 00 00 00 00 00 00  ................
+  0016:  00 08 00 00 01 00 00 00 10 18 54 65 90 d0 03 00  ..........Te....
+  0032:  2a 00 00 00 2a 00 00 00 02 00 00 00 00 bb 02 00  *...*...........
+  read back 3 frames, snaplen 2048
+  1700010000.250000 42 bytes same
+  1700010000.500000 47 bytes same
+  1700010001.125000 14 bytes same
+built.pcapng, 252 bytes, starts:
+  0000:  0a 0d 0d 0a 1c 00 00 00 4d 3c 2b 1a 01 00 00 00  ........M<+.....
+  0016:  ff ff ff ff ff ff ff ff 1c 00 00 00 01 00 00 00  ................
+  0032:  14 00 00 00 01 00 00 00 00 08 00 00 14 00 00 00  ................
+  read back 3 frames, snaplen 2048
+  1700010000.250000 42 bytes same
+  1700010000.500000 47 bytes same
+  1700010001.125000 14 bytes same
+== errors
+ethernet from 2 bytes: error: NeedData: got 2, 14 needed at least
+ip header length 16: error: UnpackError: invalid header length
+tcp data offset 4: error: UnpackError: invalid header length
+dns pointer to itself: error: UnpackError: Invalid label compression pointer
+dns label length 0x80: error: UnpackError: Invalid label length 80
+dns name cut short: error: NeedData: 
+dns rr type 99: error: UnpackError: RR type 99 is not supported
+pack dns rr type 99: error: PackError: RR type 99 is not supported
+http method: error: UnpackError: invalid http method: 'FETCH'
+http version: error: UnpackError: invalid http version: 'SPDY/3'
+http header: error: UnpackError: invalid header: 'Bad Header: 1'
+http chunk size: error: UnpackError: invalid chunk size
+http chunked body ends early: error: UnpackError: missing chunk size
+http short body: error: NeedData: short body (missing 7 bytes)
+http status line: error: UnpackError: invalid response: b'HTTP/1.1 OK\r\n'
+tls record cut short: error: NeedData: TLSRecord data was too short.
+tls version bytes: error: SSL3Exception: Bad TLS version in buf: b'\x16\t\t\x00\x01'
+tls partial record: ([TLSRecord(type=23, version=771, length=2, compressed=True, encrypted=True, data=b'ab')], 7)
+tls handshake type 99: error: SSL3Exception: Unknown or invalid handshake type 99
+ip version 16: error: ValueError: value 16 is too large for field v
+ip version 15: 15
+three vlan tags: error: PackError: maximum is 2 VLAN tags per Ethernet frame
+pcapng options without end: error: PackError: options must end with opt_endofopt
+pcapng length fields: error: UnpackError: length fields do not match
+pcap reader on notes.txt: error: ValueError: invalid tcpdump header
+pcapng reader on office.pcap: error: ValueError: invalid pcapng header: not a SHB
+== summary
+jobs: 21
+office.pcap: 37 frames, 3796 bytes
+capture.pcapng: 5 frames, 698 bytes
+nano.pcap: 2 frames, 134 bytes
