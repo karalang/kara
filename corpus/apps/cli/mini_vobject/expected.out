@@ -1,0 +1,390 @@
+== count apple_card.vcf
+  1 component(s)
+    VCARD with 18 line(s)
+== count outlook_batch.vcf
+  3 component(s)
+    VCARD with 7 line(s)
+    VCARD with 5 line(s)
+    VCARD with 4 line(s)
+== count google_card.vcf
+  1 component(s)
+    VCARD with 12 line(s)
+== count folded.vcf
+  1 component(s)
+    VCARD with 5 line(s)
+== count minimal.vcf
+  1 component(s)
+    VCARD with 2 line(s)
+== count v21_singletons.vcf
+  1 component(s)
+    VCARD with 7 line(s)
+== count blank_separated.vcf
+  2 component(s)
+    VCARD with 2 line(s)
+    VCARD with 2 line(s)
+== count meeting.ics
+  1 component(s)
+    VCALENDAR with 4 line(s)
+== count no_version.vcf
+  1 component(s)
+    VCARD with 2 line(s)
+== count unclosed.vcf
+  ParseError: At line 5: Component VCARD was never closed
+== count stray_end.vcf
+  ParseError: At line 1: Attempted to end the VCARD component but it was never opened
+== count mismatched_end.vcf
+  ParseError: At line 7: VCARD component wasn't closed
+== count bad_line.vcf
+  ParseError: At line 5: Failed to parse line: this line has no colon
+== count empty.vcf
+  0 component(s)
+== count just_text.vcf
+  ParseError: At line 1: Failed to parse line: this is not a vcard at all
+== dump apple_card.vcf
+  VCARD
+    VERSION = 3.0
+    PRODID = -//Apple Inc.//macOS 14.4//EN
+    item2.ADR {TYPE=HOME,pref} = Address(box= extended= street=14 Willow Lane city=Bristol region= code=BS1 4ST country=United Kingdom)
+    CATEGORIES = [Choir, Committee, Alto]
+    EMAIL {TYPE=INTERNET,HOME,pref} = adaeze@example.org
+    item1.EMAIL {TYPE=INTERNET} = a.okafor@example.net
+    FN = Dr. Adaeze Okafor, PhD
+    N = Name(family=Okafor given=Adaeze additional=Chidinma prefix=Dr. suffix=PhD)
+    NOTE = Joined 2019. Prefers email.\nCommittee since 2021.
+    ORG = [Harbourview Choral Society, Alto Section]
+    PHOTO {ENCODING=b;TYPE=JPEG} = <60 bytes>
+    REV = 2024-02-11T09:15:22Z
+    TEL {TYPE=CELL,VOICE,pref} = +44 7700 900123
+    TEL {TYPE=HOME,VOICE} = +44 20 7946 0958
+    TITLE = Section Leader
+    item2.X-ABADR = gb
+    item1.X-ABLABEL = _$!<Other>!$_
+    X-ABUID = A1B2C3D4-0000-0000-0000-000000000001
+== dump outlook_batch.vcf
+  VCARD
+    VERSION = 2.1
+    EMAIL = elise@example.fi
+    FN {CHARSET=utf-8} = \u00c9lise Gr\u00f6nholm
+    N {CHARSET=utf-8} = Name(family=Gr\u00f6nholm given=\u00c9lise additional= prefix= suffix=)
+    NOTE = Long line that keeps going and=going past seventy five characters for folding tests.
+    ORG {CHARSET=utf-8} = [Caf\u00e9 Nordic]
+    TEL = +358 40 1234567
+  VCARD
+    VERSION = 2.1
+    FN = John Q. Smith Jr
+    N = Name(family=Smith given=John additional=Q prefix=Mr suffix=Jr)
+    TEL = +1 555 0100
+    URL = http\\://example.com/~jsmith
+  VCARD
+    VERSION = 2.1
+    FN = Front Desk
+    N = Name(family= given=Reception additional= prefix= suffix=)
+    TEL = +1 555 0199
+== dump google_card.vcf
+  VCARD
+    VERSION = 3.0
+    ADR {TYPE=HOME} = Address(box= extended= street=P.O. Box 1234 city=Accra region=Greater Accra code=00233 country=Ghana)
+    ADR {TYPE=WORK} = Address(box= extended=Suite 5 street=8 Independence Ave city=Accra region= code= country=Ghana)
+    BDAY = 1986-07-19
+    CATEGORIES = [myContacts]
+    EMAIL {TYPE=INTERNET} = kwame.mensah@example.com
+    EMAIL {TYPE=INTERNET,WORK} = k.mensah@example.co.uk
+    FN = Kwame Mensah
+    N = Name(family=Mensah given=Kwame additional= prefix= suffix=)
+    ORG = [Mensah & Partners]
+    TEL {TYPE=CELL} = +233 24 123 4567
+    X-GENDER = M
+== dump folded.vcf
+  VCARD
+    VERSION = 3.0
+    FN = Margarethe von Hohenzollern-Sigmaringen
+    N = Name(family=von Hohenzollern-Sigmaringen given=Margarethe additional= prefix= suffix=)
+    NOTE = This note is deliberately long enough that vobject must fold it across several lines, and it contains a comma, a semicolon; and a backslash \\ to exercise the escaping rules on the way back out.
+    ORG = [Deutsche Gesellschaft f\u00fcr Chormusik, Verwaltung, B\u00fcro M\u00fcnchen]
+== dump minimal.vcf
+  VCARD
+    VERSION = 3.0
+    FN = Sam Rivera
+== dump v21_singletons.vcf
+  VCARD
+    VERSION = 2.1
+    ADR = Address(box= extended= street=1-2-3 Shibuya city=Tokyo region= code=150-0002 country=Japan)
+    EMAIL = yuki@example.jp
+    FN = Yuki Tanaka
+    N = Name(family=Tanaka given=Yuki additional= prefix= suffix=)
+    TEL = +81 3 1234 5678
+    TEL = +81 3 1234 5679
+== dump blank_separated.vcf
+  VCARD
+    VERSION = 3.0
+    FN = First Card
+  VCARD
+    VERSION = 3.0
+    FN = Second Card
+== dump meeting.ics
+  VCALENDAR
+    VERSION = 2.0
+    CALSCALE = GREGORIAN
+    METHOD = REQUEST
+    PRODID = -//Harbourview//Scheduler 1.0//EN
+    VEVENT
+      UID = evt-0001@example.org
+      DTSTART = 20240315T190000Z
+      DTEND = 20240315T210000Z
+      ATTENDEE {CN=Alto Section;ROLE=REQ-PARTICIPANT} = mailto:altos@example.org
+      CATEGORIES = [Rehearsal, Choir]
+      DESCRIPTION = Bring scores for Faur\u00e9 and the new commission.\nTea at 20:00.
+      DTSTAMP = 20240210T120000Z
+      LOCATION = St Mary\\'s Hall, Redcliffe
+      ORGANIZER {CN=Adaeze Okafor} = mailto:adaeze@example.org
+      SEQUENCE = 2
+      STATUS = CONFIRMED
+      SUMMARY = Spring concert rehearsal
+    VTODO
+      DTSTAMP = 20240210T120500Z
+      PRIORITY = 1
+      STATUS = NEEDS-ACTION
+      SUMMARY = Book the hall for the summer term
+      UID = todo-0007@example.org
+== fields apple_card.vcf
+  card 0: FN=Dr. Adaeze Okafor, PhD
+    EMAIL = adaeze@example.org
+    EMAIL = a.okafor@example.net
+    TEL = +44 7700 900123
+    TEL = +44 20 7946 0958
+    ADR = Address(box= extended= street=14 Willow Lane city=Bristol region= code=BS1 4ST country=United Kingdom)
+    ORG = [Harbourview Choral Society, Alto Section]
+    CATEGORIES = [Choir, Committee, Alto]
+    TITLE = Section Leader
+== fields outlook_batch.vcf
+  card 0: FN=\u00c9lise Gr\u00f6nholm
+    EMAIL = elise@example.fi
+    TEL = +358 40 1234567
+    ORG = [Caf\u00e9 Nordic]
+  card 1: FN=John Q. Smith Jr
+    TEL = +1 555 0100
+    URL = http\\://example.com/~jsmith
+  card 2: FN=Front Desk
+    TEL = +1 555 0199
+== fields google_card.vcf
+  card 0: FN=Kwame Mensah
+    EMAIL = kwame.mensah@example.com
+    EMAIL = k.mensah@example.co.uk
+    TEL = +233 24 123 4567
+    ADR = Address(box= extended= street=P.O. Box 1234 city=Accra region=Greater Accra code=00233 country=Ghana)
+    ADR = Address(box= extended=Suite 5 street=8 Independence Ave city=Accra region= code= country=Ghana)
+    ORG = [Mensah & Partners]
+    CATEGORIES = [myContacts]
+    BDAY = 1986-07-19
+== fields folded.vcf
+  card 0: FN=Margarethe von Hohenzollern-Sigmaringen
+    ORG = [Deutsche Gesellschaft f\u00fcr Chormusik, Verwaltung, B\u00fcro M\u00fcnchen]
+== fields minimal.vcf
+  card 0: FN=Sam Rivera
+== fields v21_singletons.vcf
+  card 0: FN=Yuki Tanaka
+    EMAIL = yuki@example.jp
+    TEL = +81 3 1234 5678
+    TEL = +81 3 1234 5679
+    ADR = Address(box= extended= street=1-2-3 Shibuya city=Tokyo region= code=150-0002 country=Japan)
+== fields blank_separated.vcf
+  card 0: FN=First Card
+  card 1: FN=Second Card
+== struct apple_card.vcf
+  card 0
+    name given=Adaeze family=Okafor
+    addr 14 Willow Lane / Bristol BS1 4ST / United Kingdom
+    org [Harbourview Choral Society, Alto Section]
+== struct google_card.vcf
+  card 0
+    name given=Kwame family=Mensah
+    addr P.O. Box 1234 / Accra 00233 / Ghana
+    addr 8 Independence Ave / Accra  / Ghana
+    org [Mensah & Partners]
+== struct v21_singletons.vcf
+  card 0
+    name given=Yuki family=Tanaka
+    addr 1-2-3 Shibuya / Tokyo 150-0002 / Japan
+== roundtrip apple_card.vcf
+  card 0 serialized 777 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | PRODID:-//Apple Inc.//macOS 14.4//EN
+  | item2.ADR;TYPE=HOME,pref:;;14 Willow Lane;Bristol;;BS1 4ST;United Kingdom
+  | CATEGORIES:Choir,Committee,Alto
+  | EMAIL;TYPE=INTERNET,HOME,pref:adaeze@example.org
+  | item1.EMAIL;TYPE=INTERNET:a.okafor@example.net
+  | FN:Dr. Adaeze Okafor\\, PhD
+  | N:Okafor;Adaeze;Chidinma;Dr.;PhD
+  | NOTE:Joined 2019. Prefers email.\\nCommittee since 2021.
+  | ORG:Harbourview Choral Society;Alto Section
+  | PHOTO;ENCODING=b;TYPE=JPEG:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7
+  | REV:2024-02-11T09:15:22Z
+  | TEL;TYPE=CELL,VOICE,pref:+44 7700 900123
+  | TEL;TYPE=HOME,VOICE:+44 20 7946 0958
+  | TITLE:Section Leader
+  | item2.X-ABADR:gb
+  | item1.X-ABLABEL:_$!<Other>!$_
+  | X-ABUID:A1B2C3D4-0000-0000-0000-000000000001
+  | END:VCARD
+== roundtrip outlook_batch.vcf
+  card 0 serialized 275 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:2.1
+  | EMAIL:elise@example.fi
+  | FN;CHARSET=utf-8:\u00c9lise Gr\u00f6nholm
+  | N;CHARSET=utf-8:Gr\u00f6nholm;\u00c9lise;;;
+  | NOTE:Long line that keeps going and=going past seventy five characters for 
+  |  folding tests.
+  | ORG;CHARSET=utf-8:Caf\u00e9 Nordic
+  | TEL:+358 40 1234567
+  | END:VCARD
+  card 1 serialized 131 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:2.1
+  | FN:John Q. Smith Jr
+  | N:Smith;John;Q;Mr;Jr
+  | TEL:+1 555 0100
+  | URL:http\\\\://example.com/~jsmith
+  | END:VCARD
+  card 2 serialized 86 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:2.1
+  | FN:Front Desk
+  | N:;Reception;;;
+  | TEL:+1 555 0199
+  | END:VCARD
+== roundtrip google_card.vcf
+  card 0 serialized 395 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | ADR;TYPE=HOME:;;P.O. Box 1234;Accra;Greater Accra;00233;Ghana
+  | ADR;TYPE=WORK:;Suite 5;8 Independence Ave;Accra;;;Ghana
+  | BDAY:1986-07-19
+  | CATEGORIES:myContacts
+  | EMAIL;TYPE=INTERNET:kwame.mensah@example.com
+  | EMAIL;TYPE=INTERNET,WORK:k.mensah@example.co.uk
+  | FN:Kwame Mensah
+  | N:Mensah;Kwame;;;
+  | ORG:Mensah & Partners
+  | TEL;TYPE=CELL:+233 24 123 4567
+  | X-GENDER:M
+  | END:VCARD
+== roundtrip folded.vcf
+  card 0 serialized 402 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | FN:Margarethe von Hohenzollern-Sigmaringen
+  | N:von Hohenzollern-Sigmaringen;Margarethe;;;
+  | NOTE:This note is deliberately long enough that vobject must fold it across
+  |   several lines\\, and it contains a comma\\, a semicolon\\; and a backslash \\
+  |  \\ to exercise the escaping rules on the way back out.
+  | ORG:Deutsche Gesellschaft f\u00fcr Chormusik;Verwaltung;B\u00fcro M\u00fcnchen
+  | END:VCARD
+== roundtrip minimal.vcf
+  card 0 serialized 52 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | FN:Sam Rivera
+  | END:VCARD
+== roundtrip v21_singletons.vcf
+  card 0 serialized 179 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:2.1
+  | ADR:;;1-2-3 Shibuya;Tokyo;;150-0002;Japan
+  | EMAIL:yuki@example.jp
+  | FN:Yuki Tanaka
+  | N:Tanaka;Yuki;;;
+  | TEL:+81 3 1234 5678
+  | TEL:+81 3 1234 5679
+  | END:VCARD
+== roundtrip blank_separated.vcf
+  card 0 serialized 52 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | FN:First Card
+  | END:VCARD
+  card 1 serialized 53 bytes, reparses to 1 component(s)
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | FN:Second Card
+  | END:VCARD
+== roundtrip meeting.ics
+  card 0 serialized 736 bytes, reparses to 1 component(s)
+  | BEGIN:VCALENDAR
+  | VERSION:2.0
+  | CALSCALE:GREGORIAN
+  | METHOD:REQUEST
+  | PRODID:-//Harbourview//Scheduler 1.0//EN
+  | BEGIN:VEVENT
+  | UID:evt-0001@example.org
+  | DTSTART:20240315T190000Z
+  | DTEND:20240315T210000Z
+  | ATTENDEE;CN=Alto Section;ROLE=REQ-PARTICIPANT:mailto:altos@example.org
+  | CATEGORIES:Rehearsal,Choir
+  | DESCRIPTION:Bring scores for Faur\u00e9 and the new commission.\\nTea at 20:00.
+  | DTSTAMP:20240210T120000Z
+  | LOCATION:St Mary\\\\'s Hall\\, Redcliffe
+  | ORGANIZER;CN=Adaeze Okafor:mailto:adaeze@example.org
+  | SEQUENCE:2
+  | STATUS:CONFIRMED
+  | SUMMARY:Spring concert rehearsal
+  | END:VEVENT
+  | BEGIN:VTODO
+  | DTSTAMP:20240210T120500Z
+  | PRIORITY:1
+  | STATUS:NEEDS-ACTION
+  | SUMMARY:Book the hall for the summer term
+  | UID:todo-0007@example.org
+  | END:VTODO
+  | END:VCALENDAR
+== parse no_version.vcf
+  parsed 1 component(s)
+    VCARD
+== parse unclosed.vcf
+  ParseError: At line 5: Component VCARD was never closed
+== parse stray_end.vcf
+  ParseError: At line 1: Attempted to end the VCARD component but it was never opened
+== parse mismatched_end.vcf
+  ParseError: At line 7: VCARD component wasn't closed
+== parse bad_line.vcf
+  ParseError: At line 5: Failed to parse line: this line has no colon
+== parse empty.vcf
+  parsed 0 component(s)
+== parse just_text.vcf
+  ParseError: At line 1: Failed to parse line: this is not a vcard at all
+== qp outlook_batch.vcf
+  decoded note: Long line that keeps going and=going past seventy five characters for folding tests.
+  N value: Name(family=Gr\u00f6nholm given=\u00c9lise additional= prefix= suffix=)
+  N value: Name(family=Smith given=John additional=Q prefix=Mr suffix=Jr)
+  N value: Name(family= given=Reception additional= prefix= suffix=)
+== photo apple_card.vcf
+  photo encoding=b bytes=60
+== build simple
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | EMAIL;TYPE=INTERNET:jordan@example.org
+  | FN:Jordan Pat
+  | END:VCARD
+== build structured
+  | BEGIN:VCARD
+  | VERSION:3.0
+  | ADR:;;2 Garden Road;Singapore;;049908;Singapore
+  | FN:Dr. Lin Wei
+  | N:Lin;Wei;;Dr.;
+  | ORG:Lin Wei Consulting;Advisory
+  | END:VCARD
+== fold 20
+  | FN:xxxxxxxxxxxxxxxxx
+  |  xxxxxxxxxxxxxxxxxxx
+  |  xxxx yyyyyyyyyyyyyy
+  |  yyyyyyyyyyyyyyyyyyy
+  |  yyyyyyy
+== fold 75
+  | FN:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+  |  yyyyyyyyy
+== escape
+  a,b;c -> a\\,b\\;c
+  line\r\none\ntwo -> line\\none\\ntwo
+  back\\slash -> back\\\\slash
+  plain -> plain

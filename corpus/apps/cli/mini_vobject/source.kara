@@ -1,0 +1,1919 @@
+// mini_vobject: vobject 0.9.8, the pure-Python reader and writer of
+// vCard and iCalendar, as the membership secretary of a choral society
+// working through an address-book import:
+// - getLogicalLines unfolding lines and numbering them the way vobject's
+//   regex does (a logical line's number advances by the physical lines it
+//   spans, plus one for the end-of-match anchor);
+// - readComponents driving a BEGIN/END stack, with each ParseError a
+//   malformed file raises (a stray END, a mismatched END, an unclosed
+//   component, a line with no colon) and the line it raises at;
+// - parseLine and parseParams splitting group, name, parameters (merged
+//   by name, the singleton vCard 2.1 ones kept apart) and value;
+// - the quoted-printable decode vCard 2.1 needs, applied after the fold
+//   so a trailing "=" turns literal exactly as vobject's does;
+// - the per-line behaviors: N/ADR as structured Name/Address, ORG and
+//   CATEGORIES as lists, text properties unescaped, a base64 PHOTO;
+// - serialize re-escaping and folding each line at 75 bytes (UTF-8 aware)
+//   and sorting children the way each component's behavior asks;
+// - the jobs in data/jobs.txt: count, dump, fields, struct, roundtrip,
+//   parse, qp, photo, build, fold and escape.
+//
+// The inputs are data/jobs.txt and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through vobject itself (the copy in vobject/).
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        let (name, body) = file;
+        let p = f"data/{name}";
+        if let Err(e) = fs.write_bytes(p.clone(), unhex(body)) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ text
+
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push(x as char);
+    }
+    out
+}
+
+fn to_chars(s: ref String) -> Vec[char] {
+    let mut cs: Vec[char] = Vec.new();
+    for c in s.chars() {
+        cs.push(c);
+    }
+    cs
+}
+
+fn utf8_len(c: char) -> i64 {
+    let n = c as u32;
+    if n < 0x80 {
+        1
+    } else if n < 0x800 {
+        2
+    } else if n < 0x10000 {
+        3
+    } else {
+        4
+    }
+}
+
+fn char_len(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+// repr-ish escaping matching oracle.py's esc().
+fn esc(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as u32;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o >= 32 and o < 127 {
+            out.push(c);
+        } else {
+            out.push_str(f"\\u{(o as i64):04x}");
+        }
+    }
+    out
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' or c == '\t' {
+            if cur.len() > 0 {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut s = String.new();
+    let mut first = true;
+    for p in parts.iter() {
+        if not first {
+            s.push_str(sep);
+        }
+        s.push_str(p);
+        first = false;
+    }
+    s
+}
+
+fn str_from(cs: ref Vec[char], a: i64, e: i64) -> String {
+    let mut s = String.new();
+    let mut i = a;
+    while i < e {
+        s.push(cs[i]);
+        i += 1;
+    }
+    s
+}
+
+// ------------------------------------------------------------ utf-8 decode (errors='replace')
+
+fn utf8_decode(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xbf;
+        let mut cp: u32 = 0;
+        if c >= 0xc2 and c <= 0xdf {
+            need = 1;
+            cp = (c & 0x1f) as u32;
+        } else if c >= 0xe0 and c <= 0xef {
+            need = 2;
+            cp = (c & 0x0f) as u32;
+            if c == 0xe0 {
+                lo = 0xa0;
+            }
+            if c == 0xed {
+                hi = 0x9f;
+            }
+        } else if c >= 0xf0 and c <= 0xf4 {
+            need = 3;
+            cp = (c & 0x07) as u32;
+            if c == 0xf0 {
+                lo = 0x90;
+            }
+            if c == 0xf4 {
+                hi = 0x8f;
+            }
+        } else {
+            out.push('\u{fffd}');
+            i += 1;
+            continue;
+        }
+        let mut ok = true;
+        let mut j = 0;
+        while j < need {
+            if i + 1 + j >= b.len() {
+                ok = false;
+                break;
+            }
+            let cc = b[i + 1 + j];
+            let curlo = if j == 0 { lo } else { 0x80 };
+            let curhi = if j == 0 { hi } else { 0xbf };
+            if cc < curlo or cc > curhi {
+                ok = false;
+                break;
+            }
+            cp = (cp << 6) | ((cc & 0x3f) as u32);
+            j += 1;
+        }
+        if not ok {
+            out.push('\u{fffd}');
+            i += 1;
+            continue;
+        }
+        out.push(char.try_from(cp).unwrap_or('\u{fffd}'));
+        i += 1 + need;
+    }
+    out
+}
+
+// ------------------------------------------------------------ quoted-printable (binascii.a2b_qp)
+
+fn is_hex(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn hexd(c: char) -> u8 {
+    if c >= '0' and c <= '9' {
+        (c as u32 - '0' as u32) as u8
+    } else if c >= 'a' and c <= 'f' {
+        (c as u32 - 'a' as u32 + 10) as u8
+    } else {
+        (c as u32 - 'A' as u32 + 10) as u8
+    }
+}
+
+fn a2b_qp(cs: ref Vec[char]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '=' {
+            if i + 2 < cs.len() and is_hex(cs[i + 1]) and is_hex(cs[i + 2]) {
+                out.push(hexd(cs[i + 1]) * 16 + hexd(cs[i + 2]));
+                i += 3;
+            } else if i + 1 < cs.len() and cs[i + 1] == '\r' and i + 2 < cs.len() and cs[i + 2] == '\n' {
+                i += 3;
+            } else if i + 1 < cs.len() and (cs[i + 1] == '\n' or cs[i + 1] == '\r') {
+                i += 2;
+            } else if i + 1 >= cs.len() {
+                i += 1;
+            } else {
+                out.push(0x3d);
+                i += 1;
+            }
+        } else {
+            let o = c as u32;
+            if o < 0x80 {
+                out.push(o as u8);
+            } else {
+                // non-ascii char in a qp value: re-encode utf-8 bytes
+                let mut buf: Vec[u8] = Vec.new();
+                encode_utf8(o, mut buf);
+                for x in buf.iter() {
+                    out.push(x);
+                }
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+fn encode_utf8(o: u32, buf: mut ref Vec[u8]) {
+    if o < 0x80 {
+        buf.push(o as u8);
+    } else if o < 0x800 {
+        buf.push((0xc0 | (o >> 6)) as u8);
+        buf.push((0x80 | (o & 0x3f)) as u8);
+    } else if o < 0x10000 {
+        buf.push((0xe0 | (o >> 12)) as u8);
+        buf.push((0x80 | ((o >> 6) & 0x3f)) as u8);
+        buf.push((0x80 | (o & 0x3f)) as u8);
+    } else {
+        buf.push((0xf0 | (o >> 18)) as u8);
+        buf.push((0x80 | ((o >> 12) & 0x3f)) as u8);
+        buf.push((0x80 | ((o >> 6) & 0x3f)) as u8);
+        buf.push((0x80 | (o & 0x3f)) as u8);
+    }
+}
+
+// ------------------------------------------------------------ base64
+
+fn b64_char(n: u8) -> char {
+    let tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let cs = to_chars(tbl.to_string());
+    cs[n as i64]
+}
+
+fn b64_val(c: char) -> i64 {
+    if c >= 'A' and c <= 'Z' {
+        c as i64 - 'A' as i64
+    } else if c >= 'a' and c <= 'z' {
+        c as i64 - 'a' as i64 + 26
+    } else if c >= '0' and c <= '9' {
+        c as i64 - '0' as i64 + 52
+    } else if c == '+' {
+        62
+    } else if c == '/' {
+        63
+    } else {
+        -1
+    }
+}
+
+fn b64_decode(cs: ref Vec[char]) -> Vec[u8] {
+    let mut vals: Vec[i64] = Vec.new();
+    for c in cs.iter() {
+        let v = b64_val(c);
+        if v >= 0 {
+            vals.push(v);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < vals.len() {
+        let n0 = vals[i];
+        let n1 = vals[i + 1];
+        out.push(((n0 << 2) | (n1 >> 4)) as u8);
+        if i + 2 < vals.len() {
+            let n2 = vals[i + 2];
+            out.push((((n1 & 0xf) << 4) | (n2 >> 2)) as u8);
+            if i + 3 < vals.len() {
+                let n3 = vals[i + 3];
+                out.push((((n2 & 0x3) << 6) | n3) as u8);
+            }
+        }
+        i += 4;
+    }
+    out
+}
+
+fn b64_encode(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let b0 = b[i] as i64;
+        out.push(b64_char((b0 >> 2) as u8));
+        if i + 1 < b.len() {
+            let b1 = b[i + 1] as i64;
+            out.push(b64_char((((b0 & 0x3) << 4) | (b1 >> 4)) as u8));
+            if i + 2 < b.len() {
+                let b2 = b[i + 2] as i64;
+                out.push(b64_char((((b1 & 0xf) << 2) | (b2 >> 6)) as u8));
+                out.push(b64_char((b2 & 0x3f) as u8));
+            } else {
+                out.push(b64_char(((b1 & 0xf) << 2) as u8));
+                out.push('=');
+            }
+        } else {
+            out.push(b64_char(((b0 & 0x3) << 4) as u8));
+            out.push('=');
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
+// ------------------------------------------------------------ logical lines
+
+// Yields (content, lineNumber) pairs the way vobject's allowQP=False
+// getLogicalLines does. A fold is a line break (CRLF / CR / LF) followed
+// by a single space or tab; it is removed, joining the two physical lines.
+// lineNumber starts at 1 and, after each logical line, advances by the
+// number of line breaks that line spanned plus one.
+fn logical_lines(input: ref String) -> Vec[(String, i64)] {
+    let cs = to_chars(input);
+    let n = cs.len();
+    let mut out: Vec[(String, i64)] = Vec.new();
+    let mut i = 0;
+    let mut lineno = 1;
+    while i < n {
+        let mut content = String.new();
+        let mut breaks = 0;
+        let mut done = false;
+        while not done {
+            if i >= n {
+                done = true;
+            } else if cs[i] == '\r' or cs[i] == '\n' {
+                // determine the line-break token length
+                let mut blen = 1;
+                if cs[i] == '\r' and i + 1 < n and cs[i + 1] == '\n' {
+                    blen = 2;
+                }
+                let after = i + blen;
+                if after < n and (cs[after] == ' ' or cs[after] == '\t') {
+                    // fold: drop the break and the one following space/tab
+                    breaks += 1;
+                    i = after + 1;
+                } else {
+                    // terminating line break
+                    breaks += 1;
+                    i = after;
+                    done = true;
+                }
+            } else {
+                content.push(cs[i]);
+                i += 1;
+            }
+        }
+        let this_n = lineno;
+        lineno += breaks + 1;
+        if char_len(content) > 0 {
+            out.push((content, this_n));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ parse line
+
+struct PErr {
+    msg: String,
+    lineno: i64,
+}
+
+struct Parsed {
+    group: String,
+    name: String,
+    pnames: Vec[String],
+    pvals: Vec[Vec[String]],
+    singletons: Vec[String],
+    value: String,
+}
+
+fn is_name_char(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-' or c == '_'
+}
+
+// Parse one logical line into group/name/params/value, or fail the way
+// vobject's line_re does (no match -> "Failed to parse line: ...").
+fn parse_line(cs: ref Vec[char], lineno: i64) -> Result[Parsed, PErr] {
+    let n = cs.len();
+    let mut i = 0;
+    // first name run
+    let start = i;
+    while i < n and is_name_char(cs[i]) {
+        i += 1;
+    }
+    if i == start {
+        return Err(PErr { msg: f"Failed to parse line: {str_from(cs, 0, n)}", lineno });
+    }
+    let mut group = String.new();
+    let mut name = str_from(cs, start, i);
+    if i < n and cs[i] == '.' {
+        group = name;
+        i += 1;
+        let s2 = i;
+        while i < n and is_name_char(cs[i]) {
+            i += 1;
+        }
+        if i == s2 {
+            return Err(PErr { msg: f"Failed to parse line: {str_from(cs, 0, n)}", lineno });
+        }
+        name = str_from(cs, s2, i);
+    }
+    // params
+    let mut pnames: Vec[String] = Vec.new();
+    let mut pvals: Vec[Vec[String]] = Vec.new();
+    let mut singletons: Vec[String] = Vec.new();
+    while i < n and cs[i] == ';' {
+        i += 1;
+        let ps = i;
+        while i < n and is_name_char(cs[i]) {
+            i += 1;
+        }
+        if i == ps {
+            return Err(PErr { msg: f"Failed to parse line: {str_from(cs, 0, n)}", lineno });
+        }
+        let pname = str_from(cs, ps, i);
+        if i < n and cs[i] == '=' {
+            i += 1;
+            let mut vals: Vec[String] = Vec.new();
+            let mut more = true;
+            while more {
+                let mut v = String.new();
+                if i < n and cs[i] == '"' {
+                    i += 1;
+                    while i < n and cs[i] != '"' {
+                        v.push(cs[i]);
+                        i += 1;
+                    }
+                    if i < n and cs[i] == '"' {
+                        i += 1;
+                    }
+                } else {
+                    while i < n and cs[i] != '"' and cs[i] != ';' and cs[i] != ':' and cs[i] != ',' {
+                        v.push(cs[i]);
+                        i += 1;
+                    }
+                }
+                vals.push(v);
+                if i < n and cs[i] == ',' {
+                    i += 1;
+                } else {
+                    more = false;
+                }
+            }
+            merge_param(mut pnames, mut pvals, mut singletons, upper(pname), vals);
+        } else {
+            // singleton parameter (vCard 2.1 unnamed value)
+            singletons.push(pname);
+        }
+    }
+    if i >= n or cs[i] != ':' {
+        return Err(PErr { msg: f"Failed to parse line: {str_from(cs, 0, n)}", lineno });
+    }
+    i += 1;
+    let value = str_from(cs, i, n);
+    Ok(Parsed { group, name: name_fix(name), pnames, pvals, singletons, value })
+}
+
+// line_re replaces underscores with dashes in the name.
+fn name_fix(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '_' {
+            out.push('-');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn upper(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'a' and c <= 'z' {
+            out.push(char.try_from(c as u32 - 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn merge_param(pnames: mut ref Vec[String], pvals: mut ref Vec[Vec[String]], singletons: mut ref Vec[String], key: own String, vals: own Vec[String]) {
+    if vals.len() == 0 {
+        singletons.push(key);
+        return;
+    }
+    let mut idx = -1;
+    let mut k = 0;
+    while k < pnames.len() {
+        if pnames[k] == key {
+            idx = k;
+        }
+        k += 1;
+    }
+    if idx < 0 {
+        pnames.push(key);
+        pvals.push(vals);
+    } else {
+        let mut cur = pvals[idx].clone();
+        for v in vals.iter() {
+            cur.push(v.clone());
+        }
+        pvals[idx] = cur;
+    }
+}
+
+// ------------------------------------------------------------ string-to-text-values (the escape state machine)
+
+const CL_FULL: i64 = 0;
+const CL_SEMI: i64 = 1;
+
+fn escapable(c: char, cl: i64) -> bool {
+    if cl == CL_SEMI {
+        c == ';'
+    } else {
+        c == '\\' or c == ';' or c == ',' or c == 'N' or c == 'n' or c == '"'
+    }
+}
+
+const ST_NORMAL: i64 = 0;
+const ST_ESC: i64 = 1;
+
+fn stv(s: ref String, sep: char, cl: i64) -> Vec[String] {
+    let cs = to_chars(s);
+    let n = cs.len();
+    let mut results: Vec[String] = Vec.new();
+    let mut current = String.new();
+    let mut state = ST_NORMAL;
+    let mut i = 0;
+    loop {
+        let eof = i >= n;
+        let c = if eof { ' ' } else { cs[i] };
+        i += 1;
+        if state == ST_NORMAL {
+            if not eof and c == '\\' {
+                state = ST_ESC;
+            } else if not eof and c == sep {
+                results.push(current);
+                current = String.new();
+            } else if eof {
+                if current.len() > 0 or results.len() == 0 {
+                    results.push(current);
+                }
+                return results;
+            } else {
+                current.push(c);
+            }
+        } else {
+            // ST_ESC
+            if eof {
+                current.push('\\');
+                if current.len() > 0 or results.len() == 0 {
+                    results.push(current);
+                }
+                return results;
+            }
+            if escapable(c, cl) {
+                if c == 'n' or c == 'N' {
+                    current.push('\n');
+                } else {
+                    current.push(c);
+                }
+            } else {
+                current.push('\\');
+                current.push(c);
+            }
+            state = ST_NORMAL;
+        }
+    }
+}
+
+fn to_list_or_string(s: ref String) -> String {
+    let parts = stv(s, ',', CL_FULL);
+    if parts.len() == 1 {
+        parts[0].clone()
+    } else {
+        join(parts, ",")
+    }
+}
+
+fn split_fields(s: ref String) -> Vec[String] {
+    let parts1 = stv(s, ';', CL_SEMI);
+    let mut out: Vec[String] = Vec.new();
+    for p in parts1.iter() {
+        out.push(to_list_or_string(p));
+    }
+    out
+}
+
+fn field_at(fields: ref Vec[String], idx: i64) -> String {
+    if idx < fields.len() {
+        fields[idx].clone()
+    } else {
+        String.new()
+    }
+}
+
+// ------------------------------------------------------------ backslash escape (serialize)
+
+fn backslash_escape(s: ref String) -> String {
+    let cs = to_chars(s);
+    let n = cs.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let c = cs[i];
+        if c == '\\' {
+            out.push_str("\\\\");
+            i += 1;
+        } else if c == ';' {
+            out.push_str("\\;");
+            i += 1;
+        } else if c == ',' {
+            out.push_str("\\,");
+            i += 1;
+        } else if c == '\r' and i + 1 < n and cs[i + 1] == '\n' {
+            // CRLF collapses to a single \n, matching vobject's replace order
+            out.push_str("\\n");
+            i += 2;
+        } else if c == '\r' or c == '\n' {
+            out.push_str("\\n");
+            i += 1;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn dquote_escape(s: ref String) -> String {
+    let mut needs = false;
+    for c in s.chars() {
+        if c == ',' or c == ';' or c == ':' {
+            needs = true;
+        }
+    }
+    if needs {
+        let mut out = String.new();
+        out.push('"');
+        out.push_str(s);
+        out.push('"');
+        out
+    } else {
+        s.clone()
+    }
+}
+
+// ------------------------------------------------------------ model
+
+#[derive(Clone)]
+struct NameS {
+    family: String,
+    given: String,
+    additional: String,
+    prefix: String,
+    suffix: String,
+}
+
+#[derive(Clone)]
+struct AddrS {
+    pobox: String,
+    extended: String,
+    street: String,
+    city: String,
+    region: String,
+    code: String,
+    country: String,
+}
+
+#[derive(Clone)]
+enum Value {
+    VStr(String),
+    VList(Vec[String]),
+    VName(NameS),
+    VAddr(AddrS),
+    VBytes(Vec[u8]),
+}
+
+const B_NONE: i64 = 0;
+const B_TEXT: i64 = 1;
+const B_MULTI: i64 = 2;
+const B_NAME: i64 = 3;
+const B_ADDR: i64 = 4;
+const B_ORG: i64 = 5;
+
+#[derive(Clone)]
+struct CLine {
+    group: String,
+    name: String,
+    pnames: Vec[String],
+    pvals: Vec[Vec[String]],
+    value: Value,
+    bkind: i64,
+    lineno: i64,
+}
+
+#[derive(Clone)]
+enum VChild {
+    CLineC(CLine),
+    CompC(Comp),
+}
+
+#[derive(Clone)]
+struct Comp {
+    name: String,
+    use_begin: bool,
+    group: String,
+    children: Vec[VChild],
+}
+
+fn get_param(cl: ref CLine, key: ref String) -> Option[Vec[String]] {
+    let mut k = 0;
+    while k < cl.pnames.len() {
+        if cl.pnames[k] == key {
+            return Some(cl.pvals[k].clone());
+        }
+        k += 1;
+    }
+    None
+}
+
+// ------------------------------------------------------------ build a content line (params + quoted-printable)
+
+fn build_cline(p: own Parsed, lineno: i64) -> CLine {
+    let name = upper(p.name);
+    let mut pnames = p.pnames;
+    let mut pvals = p.pvals;
+    let mut singletons = p.singletons;
+    let mut value = p.value;
+
+    // quoted-printable detection and removal
+    let mut qp = false;
+    let mut ei = -1;
+    let mut k = 0;
+    while k < pnames.len() {
+        if pnames[k] == "ENCODING" {
+            ei = k;
+        }
+        k += 1;
+    }
+    if ei >= 0 {
+        let mut has_qp = false;
+        let mut keep: Vec[String] = Vec.new();
+        for v in pvals[ei].iter() {
+            if v == "QUOTED-PRINTABLE" {
+                has_qp = true;
+            } else {
+                keep.push(v.clone());
+            }
+        }
+        if has_qp {
+            qp = true;
+            if keep.len() == 0 {
+                // drop the ENCODING param entirely
+                let mut nn: Vec[String] = Vec.new();
+                let mut nv: Vec[Vec[String]] = Vec.new();
+                let mut j = 0;
+                while j < pnames.len() {
+                    if j != ei {
+                        nn.push(pnames[j].clone());
+                        nv.push(pvals[j].clone());
+                    }
+                    j += 1;
+                }
+                pnames = nn;
+                pvals = nv;
+            } else {
+                pvals[ei] = keep;
+            }
+        }
+    }
+    // singleton QUOTED-PRINTABLE
+    let mut sj = 0;
+    let mut newsing: Vec[String] = Vec.new();
+    while sj < singletons.len() {
+        if upper(singletons[sj]) == "QUOTED-PRINTABLE" {
+            qp = true;
+        } else {
+            newsing.push(singletons[sj].clone());
+        }
+        sj += 1;
+    }
+    singletons = newsing;
+
+    if qp {
+        let vc = to_chars(value);
+        let bytes = a2b_qp(vc);
+        value = utf8_decode(bytes);
+    }
+
+    CLine {
+        group: p.group,
+        name,
+        pnames,
+        pvals,
+        value: Value.VStr(value),
+        bkind: B_NONE,
+        lineno,
+    }
+}
+
+// ------------------------------------------------------------ behaviors
+
+fn is_ical_text(name: ref String) -> bool {
+    name == "CALSCALE" or name == "METHOD" or name == "PRODID" or name == "CLASS"
+        or name == "COMMENT" or name == "DESCRIPTION" or name == "LOCATION" or name == "STATUS"
+        or name == "SUMMARY" or name == "TRANSP" or name == "CONTACT" or name == "RELATED-TO"
+        or name == "UID" or name == "ACTION" or name == "BUSYTYPE"
+}
+
+fn behavior_kind(name: ref String, is_vcard: bool) -> i64 {
+    if is_vcard {
+        if name == "N" {
+            B_NAME
+        } else if name == "ADR" {
+            B_ADDR
+        } else if name == "ORG" {
+            B_ORG
+        } else if name == "CATEGORIES" {
+            B_MULTI
+        } else if name == "VERSION" {
+            B_NONE
+        } else {
+            B_TEXT
+        }
+    } else {
+        if name == "CATEGORIES" or name == "RESOURCES" {
+            B_MULTI
+        } else if is_ical_text(name) {
+            B_TEXT
+        } else {
+            B_NONE
+        }
+    }
+}
+
+// ------------------------------------------------------------ finalize (assign behavior + decode + nativize)
+
+fn finalize(comp: mut ref Comp, is_vcard: bool, transform: bool) {
+    let mut idx = 0;
+    while idx < comp.children.len() {
+        finalize_one(mut comp, idx, is_vcard, transform);
+        idx += 1;
+    }
+}
+
+fn finalize_one(comp: mut ref Comp, idx: i64, is_vcard: bool, transform: bool) {
+    let taken = comp.children[idx].clone();
+    match taken {
+        VChild.CompC(sub) => {
+            let mut s = sub;
+            finalize(mut s, is_vcard, transform);
+            comp.children[idx] = VChild.CompC(s);
+        }
+        VChild.CLineC(cl) => {
+            let mut c = cl;
+            c.bkind = behavior_kind(c.name, is_vcard);
+            decode_value(mut c, transform);
+            comp.children[idx] = VChild.CLineC(c);
+        }
+    }
+}
+
+fn raw_of(v: ref Value) -> String {
+    match v {
+        Value.VStr(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn decode_value(c: mut ref CLine, transform: bool) {
+    let raw = raw_of(c.value);
+    let bk = c.bkind;
+    if bk == B_NONE {
+        c.value = Value.VStr(raw);
+    } else if bk == B_TEXT {
+        // base64 if ENCODING param is b / base64
+        let mut is_b64 = false;
+        match get_param(c, "ENCODING".to_string()) {
+            Some(vs) => {
+                if vs.len() > 0 {
+                    let e = upper(vs[0]);
+                    if e == "B" or e == "BASE64" {
+                        is_b64 = true;
+                    }
+                }
+            }
+            None => {}
+        }
+        if is_b64 {
+            c.value = Value.VBytes(b64_decode(to_chars(raw)));
+        } else {
+            let parts = stv(raw, ',', CL_FULL);
+            c.value = Value.VStr(parts[0].clone());
+        }
+    } else if bk == B_MULTI {
+        c.value = Value.VList(stv(raw, ',', CL_FULL));
+    } else if bk == B_ORG {
+        if transform {
+            c.value = Value.VList(split_fields(raw));
+        } else {
+            c.value = Value.VStr(raw);
+        }
+    } else if bk == B_NAME {
+        if transform {
+            let f = split_fields(raw);
+            c.value = Value.VName(NameS {
+                family: field_at(f, 0),
+                given: field_at(f, 1),
+                additional: field_at(f, 2),
+                prefix: field_at(f, 3),
+                suffix: field_at(f, 4),
+            });
+        } else {
+            c.value = Value.VStr(raw);
+        }
+    } else if bk == B_ADDR {
+        if transform {
+            let f = split_fields(raw);
+            c.value = Value.VAddr(AddrS {
+                pobox: field_at(f, 0),
+                extended: field_at(f, 1),
+                street: field_at(f, 2),
+                city: field_at(f, 3),
+                region: field_at(f, 4),
+                code: field_at(f, 5),
+                country: field_at(f, 6),
+            });
+        } else {
+            c.value = Value.VStr(raw);
+        }
+    }
+}
+
+// ------------------------------------------------------------ readComponents
+
+fn read_components(input: ref String, transform: bool) -> Result[Vec[Comp], PErr] {
+    let lines = logical_lines(input);
+    let mut stack: Vec[Comp] = Vec.new();
+    let mut result: Vec[Comp] = Vec.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let (text, n) = lines[li].clone();
+        li += 1;
+        let cs = to_chars(text);
+        let parsed = match parse_line(cs, n) {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+        let vname = upper(parsed.name);
+        let vvalue = parsed.value.clone();
+        let vgroup = parsed.group.clone();
+        if vname == "BEGIN" {
+            stack.push(Comp {
+                name: upper(vvalue),
+                use_begin: true,
+                group: vgroup,
+                children: Vec.new(),
+            });
+        } else if vname == "END" {
+            if stack.len() == 0 {
+                return Err(PErr { msg: f"Attempted to end the {upper(vvalue)} component but it was never opened", lineno: n });
+            }
+            let topname = stack[stack.len() - 1].name.clone();
+            if upper(vvalue) == topname {
+                if stack.len() == 1 {
+                    let mut done = match stack.pop() {
+                        Some(c) => c,
+                        None => return Err(PErr { msg: "internal".to_string(), lineno: n }),
+                    };
+                    let is_vcard = done.name == "VCARD";
+                    finalize(mut done, is_vcard, transform);
+                    result.push(done);
+                } else {
+                    let done = match stack.pop() {
+                        Some(c) => c,
+                        None => return Err(PErr { msg: "internal".to_string(), lineno: n }),
+                    };
+                    let mut parent = match stack.pop() {
+                        Some(c) => c,
+                        None => return Err(PErr { msg: "internal".to_string(), lineno: n }),
+                    };
+                    parent.children.push(VChild.CompC(done));
+                    stack.push(parent);
+                }
+            } else {
+                return Err(PErr { msg: f"{topname} component wasn't closed", lineno: n });
+            }
+        } else {
+            // a normal content line (VERSION included)
+            if stack.len() > 0 {
+                let cl = build_cline(parsed, n);
+                let mut top = match stack.pop() {
+                    Some(c) => c,
+                    None => return Err(PErr { msg: "internal".to_string(), lineno: n }),
+                };
+                top.children.push(VChild.CLineC(cl));
+                stack.push(top);
+            }
+        }
+    }
+    if stack.len() > 0 {
+        let last_n = if lines.len() > 0 { lines[lines.len() - 1].1 } else { 0 };
+        let top = stack[stack.len() - 1].clone();
+        if top.use_begin {
+            return Err(PErr { msg: f"Component {top.name} was never closed", lineno: last_n });
+        }
+    }
+    Ok(result)
+}
+
+// ------------------------------------------------------------ sorting children
+
+fn sort_first(name: ref String) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    if name == "VCARD" {
+        v.push("version".to_string());
+        v.push("prodid".to_string());
+        v.push("uid".to_string());
+    } else if name == "VCALENDAR" {
+        v.push("version".to_string());
+        v.push("calscale".to_string());
+        v.push("method".to_string());
+        v.push("prodid".to_string());
+        v.push("vtimezone".to_string());
+    } else if name == "VEVENT" {
+        v.push("uid".to_string());
+        v.push("recurrence-id".to_string());
+        v.push("dtstart".to_string());
+        v.push("duration".to_string());
+        v.push("dtend".to_string());
+    }
+    v
+}
+
+fn lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as u32 + 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn child_key(ch: ref VChild) -> String {
+    match ch {
+        VChild.CLineC(cl) => lower(cl.name),
+        VChild.CompC(co) => lower(co.name),
+    }
+}
+
+// Return indices of comp.children in getSortedChildren order.
+fn sorted_indices(comp: ref Comp) -> Vec[i64] {
+    // distinct keys in insertion order
+    let mut keys: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < comp.children.len() {
+        let k = child_key(comp.children[i]);
+        let mut seen = false;
+        for kk in keys.iter() {
+            if kk == k {
+                seen = true;
+            }
+        }
+        if not seen {
+            keys.push(k);
+        }
+        i += 1;
+    }
+    let first = sort_first(comp.name);
+    // order = [first keys present] + sorted(rest)
+    let mut order: Vec[String] = Vec.new();
+    for f in first.iter() {
+        let mut present = false;
+        for k in keys.iter() {
+            if k == f {
+                present = true;
+            }
+        }
+        if present {
+            order.push(f.clone());
+        }
+    }
+    // rest = keys not in first, sorted
+    let mut rest: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        let mut infirst = false;
+        for f in first.iter() {
+            if f == k {
+                infirst = true;
+            }
+        }
+        if not infirst {
+            rest.push(k.clone());
+        }
+    }
+    sort_strings(mut rest);
+    for r in rest.iter() {
+        order.push(r.clone());
+    }
+    // emit indices per key in insertion order
+    let mut out: Vec[i64] = Vec.new();
+    for k in order.iter() {
+        let mut j = 0;
+        while j < comp.children.len() {
+            if child_key(comp.children[j]) == k {
+                out.push(j);
+            }
+            j += 1;
+        }
+    }
+    out
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i + 1;
+        while j < v.len() {
+            if str_lt(v[j], v[i]) {
+                let tmp = v[i].clone();
+                v[i] = v[j].clone();
+                v[j] = tmp;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+fn str_lt(a: ref String, b: ref String) -> bool {
+    let ca = to_chars(a);
+    let cb = to_chars(b);
+    let mut i = 0;
+    while i < ca.len() and i < cb.len() {
+        let x = ca[i] as u32;
+        let y = cb[i] as u32;
+        if x < y {
+            return true;
+        }
+        if x > y {
+            return false;
+        }
+        i += 1;
+    }
+    ca.len() < cb.len()
+}
+
+// ------------------------------------------------------------ value repr (dump / fields / struct)
+
+fn name_repr(nm: ref NameS) -> String {
+    f"Name(family={esc(nm.family)} given={esc(nm.given)} additional={esc(nm.additional)} prefix={esc(nm.prefix)} suffix={esc(nm.suffix)})"
+}
+
+fn addr_repr(ad: ref AddrS) -> String {
+    f"Address(box={esc(ad.pobox)} extended={esc(ad.extended)} street={esc(ad.street)} city={esc(ad.city)} region={esc(ad.region)} code={esc(ad.code)} country={esc(ad.country)})"
+}
+
+fn list_repr(xs: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs.iter() {
+        parts.push(esc(x));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn value_repr(v: ref Value) -> String {
+    match v {
+        Value.VBytes(b) => f"<{b.len()} bytes>",
+        Value.VName(nm) => name_repr(nm),
+        Value.VAddr(ad) => addr_repr(ad),
+        Value.VList(xs) => list_repr(xs),
+        Value.VStr(s) => esc(s),
+    }
+}
+
+// ------------------------------------------------------------ serialize
+
+fn serialize_value(cl: ref CLine) -> String {
+    let bk = cl.bkind;
+    if bk == B_NONE {
+        raw_of(cl.value)
+    } else if bk == B_TEXT {
+        match cl.value.clone() {
+            Value.VBytes(b) => b64_encode(b),
+            Value.VStr(s) => backslash_escape(s),
+            _ => String.new(),
+        }
+    } else if bk == B_MULTI or bk == B_ORG {
+        match cl.value.clone() {
+            Value.VList(xs) => {
+                let mut parts: Vec[String] = Vec.new();
+                for x in xs.iter() {
+                    parts.push(backslash_escape(x));
+                }
+                let sep = if bk == B_ORG { ";" } else { "," };
+                join(parts, sep)
+            }
+            Value.VStr(s) => backslash_escape(s),
+            _ => String.new(),
+        }
+    } else if bk == B_NAME {
+        match cl.value.clone() {
+            Value.VName(nm) => {
+                let mut parts: Vec[String] = Vec.new();
+                parts.push(backslash_escape(nm.family));
+                parts.push(backslash_escape(nm.given));
+                parts.push(backslash_escape(nm.additional));
+                parts.push(backslash_escape(nm.prefix));
+                parts.push(backslash_escape(nm.suffix));
+                join(parts, ";")
+            }
+            Value.VStr(s) => s.clone(),
+            _ => String.new(),
+        }
+    } else if bk == B_ADDR {
+        match cl.value.clone() {
+            Value.VAddr(ad) => {
+                let mut parts: Vec[String] = Vec.new();
+                parts.push(backslash_escape(ad.pobox));
+                parts.push(backslash_escape(ad.extended));
+                parts.push(backslash_escape(ad.street));
+                parts.push(backslash_escape(ad.city));
+                parts.push(backslash_escape(ad.region));
+                parts.push(backslash_escape(ad.code));
+                parts.push(backslash_escape(ad.country));
+                join(parts, ";")
+            }
+            Value.VStr(s) => s.clone(),
+            _ => String.new(),
+        }
+    } else {
+        raw_of(cl.value)
+    }
+}
+
+fn serialize_line_text(cl: ref CLine) -> String {
+    let mut s = String.new();
+    if cl.group.len() > 0 {
+        s.push_str(cl.group);
+        s.push('.');
+    }
+    s.push_str(cl.name);
+    // sorted param keys
+    let mut keys: Vec[String] = Vec.new();
+    for k in cl.pnames.iter() {
+        keys.push(k.clone());
+    }
+    sort_strings(mut keys);
+    for key in keys.iter() {
+        let vals = match get_param(cl, key) {
+            Some(v) => v,
+            None => Vec.new(),
+        };
+        let mut parts: Vec[String] = Vec.new();
+        for v in vals.iter() {
+            parts.push(dquote_escape(v));
+        }
+        s.push(';');
+        s.push_str(key);
+        s.push('=');
+        s.push_str(join(parts, ","));
+    }
+    s.push(':');
+    s.push_str(serialize_value(cl));
+    s
+}
+
+// foldOneLine: fold at lineLength (byte-counted), UTF-8 aware, but take
+// the fast path (no fold) when the CHARACTER length is below lineLength.
+fn fold_one_line(input: ref String, line_length: i64) -> String {
+    let mut out = String.new();
+    if char_len(input) < line_length {
+        out.push_str(input);
+    } else {
+        let cs = to_chars(input);
+        let mut counter = 0;
+        let mut k = 0;
+        while k < cs.len() {
+            let sz = utf8_len(cs[k]);
+            if counter + sz > line_length {
+                out.push_str("\r\n ");
+                counter = 1;
+            }
+            out.push(cs[k]);
+            counter += sz;
+            k += 1;
+        }
+    }
+    out.push_str("\r\n");
+    out
+}
+
+fn serialize_comp(comp: ref Comp, out: mut ref String) {
+    let group = if comp.group.len() > 0 {
+        f"{comp.group}."
+    } else {
+        String.new()
+    };
+    if comp.use_begin {
+        out.push_str(fold_one_line(f"{group}BEGIN:{comp.name}", 75));
+    }
+    for idx in sorted_indices(comp).iter() {
+        match comp.children[idx] {
+            VChild.CompC(sub) => serialize_comp(sub, mut out),
+            VChild.CLineC(cl) => {
+                let ll = if cl.name == "PHOTO" { 1000000000 } else { 75 };
+                out.push_str(fold_one_line(serialize_line_text(cl), ll));
+            }
+        }
+    }
+    if comp.use_begin {
+        out.push_str(fold_one_line(f"{group}END:{comp.name}", 75));
+    }
+}
+
+// ------------------------------------------------------------ child lookups
+
+fn lines_named(comp: ref Comp, name: ref String) -> Vec[CLine] {
+    let mut out: Vec[CLine] = Vec.new();
+    for ch in comp.children.iter() {
+        match ch {
+            VChild.CLineC(cl) => {
+                if cl.name == name {
+                    out.push(cl.clone());
+                }
+            }
+            VChild.CompC(_c) => {}
+        }
+    }
+    out
+}
+
+fn child_value_str(comp: ref Comp, name: ref String) -> Option[String] {
+    for ch in comp.children.iter() {
+        match ch {
+            VChild.CLineC(cl) => {
+                if cl.name == name {
+                    return Some(raw_or_repr_value(cl.value));
+                }
+            }
+            VChild.CompC(_c) => {}
+        }
+    }
+    None
+}
+
+fn raw_or_repr_value(v: ref Value) -> String {
+    match v {
+        Value.VStr(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn count_lines(comp: ref Comp) -> i64 {
+    let mut n = 0;
+    for ch in comp.children.iter() {
+        match ch {
+            VChild.CLineC(_cl) => {
+                n += 1;
+            }
+            VChild.CompC(_c) => {}
+        }
+    }
+    n
+}
+
+// ------------------------------------------------------------ dump
+
+fn param_str(cl: ref CLine) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    for k in cl.pnames.iter() {
+        keys.push(k.clone());
+    }
+    sort_strings(mut keys);
+    let mut bits: Vec[String] = Vec.new();
+    for key in keys.iter() {
+        let vals = match get_param(cl, key) {
+            Some(v) => v,
+            None => Vec.new(),
+        };
+        let mut vparts: Vec[String] = Vec.new();
+        for v in vals.iter() {
+            vparts.push(esc(v));
+        }
+        bits.push(f"{key}={join(vparts, ",")}");
+    }
+    join(bits, ";")
+}
+
+fn dump_component(comp: ref Comp, level: i64) {
+    let mut pre = String.new();
+    let mut i = 0;
+    while i < level + 1 {
+        pre.push_str("  ");
+        i += 1;
+    }
+    println(f"{pre}{comp.name}");
+    for idx in sorted_indices(comp).iter() {
+        match comp.children[idx] {
+            VChild.CompC(sub) => dump_component(sub, level + 1),
+            VChild.CLineC(cl) => {
+                let ps = param_str(cl);
+                let group = if cl.group.len() > 0 {
+                    f"{cl.group}."
+                } else {
+                    String.new()
+                };
+                let tail = if ps.len() > 0 {
+                    f" {{{ps}}}"
+                } else {
+                    String.new()
+                };
+                println(f"{pre}  {group}{cl.name}{tail} = {value_repr(cl.value)}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn read_text(name: ref String) -> String {
+    match fs.read_bytes(f"data/{name}") {
+        Ok(b) => utf8_decode(b),
+        Err(_) => String.new(),
+    }
+}
+
+fn job_count(name: ref String) {
+    let transform = not ends_ics(name);
+    let text = read_text(name);
+    match read_components(text, transform) {
+        Ok(comps) => {
+            println(f"  {comps.len()} component(s)");
+            for c in comps.iter() {
+                let nm = if c.name.len() > 0 { c.name.clone() } else { "(unnamed)".to_string() };
+                println(f"    {nm} with {count_lines(c)} line(s)");
+            }
+        }
+        Err(e) => println(f"  ParseError: {esc(parse_err_text(e))}"),
+    }
+}
+
+fn parse_err_text(e: ref PErr) -> String {
+    f"At line {e.lineno}: {e.msg}"
+}
+
+fn ends_ics(name: ref String) -> bool {
+    name.ends_with(".ics")
+}
+
+fn job_dump(name: ref String) {
+    let transform = not ends_ics(name);
+    let text = read_text(name);
+    match read_components(text, transform) {
+        Ok(comps) => {
+            for c in comps.iter() {
+                dump_component(c, 0);
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn job_fields(name: ref String) {
+    let text = read_text(name);
+    match read_components(text, true) {
+        Ok(comps) => {
+            let mut i = 0;
+            while i < comps.len() {
+                let c = comps[i].clone();
+                let fn_v = child_value_str(c, "FN".to_string());
+                let fns = match fn_v {
+                    Some(s) => {
+                        if s.len() > 0 { esc(s) } else { "-".to_string() }
+                    }
+                    None => "-".to_string(),
+                };
+                println(f"  card {i}: FN={fns}");
+                for key in field_keys().iter() {
+                    for cl in lines_named(c, key).iter() {
+                        println(f"    {cl.name} = {value_repr(cl.value)}");
+                    }
+                }
+                i += 1;
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn field_keys() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("EMAIL".to_string());
+    v.push("TEL".to_string());
+    v.push("ADR".to_string());
+    v.push("ORG".to_string());
+    v.push("CATEGORIES".to_string());
+    v.push("TITLE".to_string());
+    v.push("URL".to_string());
+    v.push("BDAY".to_string());
+    v
+}
+
+fn job_struct(name: ref String) {
+    let text = read_text(name);
+    match read_components(text, true) {
+        Ok(comps) => {
+            let mut i = 0;
+            while i < comps.len() {
+                let c = comps[i].clone();
+                println(f"  card {i}");
+                for cl in lines_named(c, "N".to_string()).iter() {
+                    match cl.value.clone() {
+                        Value.VName(nm) => println(f"    name given={esc(nm.given)} family={esc(nm.family)}"),
+                        _ => {}
+                    }
+                }
+                for cl in lines_named(c, "ADR".to_string()).iter() {
+                    match cl.value.clone() {
+                        Value.VAddr(ad) => println(f"    addr {esc(ad.street)} / {esc(ad.city)} {esc(ad.code)} / {esc(ad.country)}"),
+                        _ => {}
+                    }
+                }
+                for cl in lines_named(c, "ORG".to_string()).iter() {
+                    println(f"    org {value_repr(cl.value)}");
+                }
+                i += 1;
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn job_roundtrip(name: ref String) {
+    let transform = not ends_ics(name);
+    let text = read_text(name);
+    match read_components(text, transform) {
+        Ok(comps) => {
+            let mut i = 0;
+            while i < comps.len() {
+                let c = comps[i].clone();
+                let mut out = String.new();
+                serialize_comp(c, mut out);
+                let reparsed = match read_components(out, transform) {
+                    Ok(r) => r.len(),
+                    Err(_) => 0,
+                };
+                println(f"  card {i} serialized {char_len(out)} bytes, reparses to {reparsed} component(s)");
+                for line in split_on(out, '\n').iter() {
+                    let trimmed = rstrip_cr(line);
+                    if trimmed.len() > 0 {
+                        println(f"  | {esc(trimmed)}");
+                    }
+                }
+                i += 1;
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn rstrip_cr(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut e = cs.len();
+    if e > 0 and cs[e - 1] == '\r' {
+        e -= 1;
+    }
+    str_from(cs, 0, e)
+}
+
+fn job_parse(name: ref String) {
+    let transform = not ends_ics(name);
+    let text = read_text(name);
+    match read_components(text, transform) {
+        Ok(comps) => {
+            println(f"  parsed {comps.len()} component(s)");
+            for c in comps.iter() {
+                let nm = if c.name.len() > 0 { c.name.clone() } else { "(unnamed)".to_string() };
+                println(f"    {nm}");
+            }
+        }
+        Err(e) => println(f"  ParseError: {esc(parse_err_text(e))}"),
+    }
+}
+
+fn job_qp(name: ref String) {
+    let text = read_text(name);
+    match read_components(text, true) {
+        Ok(comps) => {
+            if comps.len() > 0 {
+                match child_value_str(comps[0], "NOTE".to_string()) {
+                    Some(nv) => println(f"  decoded note: {esc(nv)}"),
+                    None => {}
+                }
+            }
+            for c in comps.iter() {
+                for cl in lines_named(c, "N".to_string()).iter() {
+                    println(f"  N value: {value_repr(cl.value)}");
+                }
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn job_photo(name: ref String) {
+    let text = read_text(name);
+    match read_components(text, true) {
+        Ok(comps) => {
+            if comps.len() > 0 {
+                for cl in lines_named(comps[0], "PHOTO".to_string()).iter() {
+                    let enc = match get_param(cl, "ENCODING".to_string()) {
+                        Some(vs) => {
+                            if vs.len() > 0 { vs[0].clone() } else { "-".to_string() }
+                        }
+                        None => "-".to_string(),
+                    };
+                    let nbytes = match cl.value.clone() {
+                        Value.VBytes(b) => b.len(),
+                        _ => 0,
+                    };
+                    println(f"  photo encoding={esc(enc)} bytes={nbytes}");
+                }
+            }
+        }
+        Err(_e) => {}
+    }
+}
+
+fn job_build(kind: ref String) {
+    let mut comp = Comp {
+        name: "VCARD".to_string(),
+        use_begin: true,
+        group: String.new(),
+        children: Vec.new(),
+    };
+    comp.children.push(VChild.CLineC(simple_line("VERSION", B_NONE, Value.VStr("3.0".to_string()))));
+    if kind == "simple" {
+        comp.children.push(VChild.CLineC(text_line_param("EMAIL", "jordan@example.org", "TYPE", "INTERNET")));
+        comp.children.push(VChild.CLineC(simple_line("FN", B_TEXT, Value.VStr("Jordan Pat".to_string()))));
+    } else {
+        comp.children.push(VChild.CLineC(simple_line("FN", B_TEXT, Value.VStr("Dr. Lin Wei".to_string()))));
+        comp.children.push(VChild.CLineC(simple_line("N", B_NAME, Value.VName(NameS {
+            family: "Lin".to_string(),
+            given: "Wei".to_string(),
+            additional: String.new(),
+            prefix: "Dr.".to_string(),
+            suffix: String.new(),
+        }))));
+        comp.children.push(VChild.CLineC(simple_line("ADR", B_ADDR, Value.VAddr(AddrS {
+            pobox: String.new(),
+            extended: String.new(),
+            street: "2 Garden Road".to_string(),
+            city: "Singapore".to_string(),
+            region: String.new(),
+            code: "049908".to_string(),
+            country: "Singapore".to_string(),
+        }))));
+        let mut orgv: Vec[String] = Vec.new();
+        orgv.push("Lin Wei Consulting".to_string());
+        orgv.push("Advisory".to_string());
+        comp.children.push(VChild.CLineC(simple_line("ORG", B_ORG, Value.VList(orgv))));
+    }
+    let mut out = String.new();
+    serialize_comp(comp, mut out);
+    for line in split_on(out, '\n').iter() {
+        let trimmed = rstrip_cr(line);
+        if trimmed.len() > 0 {
+            println(f"  | {esc(trimmed)}");
+        }
+    }
+}
+
+fn simple_line(name: Str, bkind: i64, v: own Value) -> CLine {
+    CLine {
+        group: String.new(),
+        name: name.to_string(),
+        pnames: Vec.new(),
+        pvals: Vec.new(),
+        value: v,
+        bkind,
+        lineno: 0,
+    }
+}
+
+fn text_line_param(name: Str, value: Str, pkey: Str, pval: Str) -> CLine {
+    let mut pnames: Vec[String] = Vec.new();
+    let mut pvals: Vec[Vec[String]] = Vec.new();
+    pnames.push(pkey.to_string());
+    let mut vv: Vec[String] = Vec.new();
+    vv.push(pval.to_string());
+    pvals.push(vv);
+    CLine {
+        group: String.new(),
+        name: name.to_string(),
+        pnames,
+        pvals,
+        value: Value.VStr(value.to_string()),
+        bkind: B_TEXT,
+        lineno: 0,
+    }
+}
+
+fn job_fold(width: ref String) {
+    let w = parse_int(width);
+    let mut text = "FN:".to_string();
+    let mut i = 0;
+    while i < 40 {
+        text.push('x');
+        i += 1;
+    }
+    text.push(' ');
+    i = 0;
+    while i < 40 {
+        text.push('y');
+        i += 1;
+    }
+    let folded = fold_one_line(text, w);
+    for line in split_on(folded, '\n').iter() {
+        let trimmed = rstrip_cr(line);
+        if trimmed.len() > 0 {
+            println(f"  | {esc(trimmed)}");
+        }
+    }
+}
+
+fn parse_int(s: ref String) -> i64 {
+    let mut n = 0;
+    for c in s.chars() {
+        if c >= '0' and c <= '9' {
+            n = n * 10 + (c as i64 - '0' as i64);
+        }
+    }
+    n
+}
+
+fn job_escape() {
+    let mut inputs: Vec[String] = Vec.new();
+    inputs.push("a,b;c".to_string());
+    let mut s2 = "line".to_string();
+    s2.push('\r');
+    s2.push('\n');
+    s2.push_str("one");
+    s2.push('\n');
+    s2.push_str("two");
+    inputs.push(s2);
+    inputs.push("back\\slash".to_string());
+    inputs.push("plain".to_string());
+    for s in inputs.iter() {
+        println(f"  {esc(s)} -> {esc(backslash_escape(s))}");
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let text = match fs.read_bytes("data/jobs.txt".to_string()) {
+        Ok(b) => latin1(b),
+        Err(_) => String.new(),
+    };
+    for line in split_on(text, '\n').iter() {
+        let words = split_ws(line);
+        if words.len() == 0 {
+            continue;
+        }
+        println(f"== {line}");
+        let cmd = words[0].clone();
+        let arg = if words.len() > 1 { words[1].clone() } else { String.new() };
+        if cmd == "count" {
+            job_count(arg);
+        } else if cmd == "dump" {
+            job_dump(arg);
+        } else if cmd == "fields" {
+            job_fields(arg);
+        } else if cmd == "struct" {
+            job_struct(arg);
+        } else if cmd == "roundtrip" {
+            job_roundtrip(arg);
+        } else if cmd == "parse" {
+            job_parse(arg);
+        } else if cmd == "qp" {
+            job_qp(arg);
+        } else if cmd == "photo" {
+            job_photo(arg);
+        } else if cmd == "build" {
+            job_build(arg);
+        } else if cmd == "fold" {
+            job_fold(arg);
+        } else if cmd == "escape" {
+            job_escape();
+        }
+    }
+}
+
+// ------------------------------------------------------------ data (gen_kara.py)
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("apple_card.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a50524f4449443a2d2f2f4170706c6520496e632e2f2f6d61634f532031342e342f2f454e0d0a4e3a4f6b61666f723b416461657a653b43686964696e6d613b44722e3b5068440d0a464e3a44722e20416461657a65204f6b61666f725c2c205068440d0a4f52473a486172626f7572766965772043686f72616c20536f63696574793b416c746f2053656374696f6e0d0a5449544c453a53656374696f6e204c65616465720d0a454d41494c3b747970653d494e5445524e45543b747970653d484f4d453b747970653d707265663a616461657a65406578616d706c652e6f72670d0a6974656d312e454d41494c3b747970653d494e5445524e45543a612e6f6b61666f72406578616d706c652e6e65740d0a6974656d312e582d41424c6162656c3a5f24213c4f746865723e21245f0d0a54454c3b747970653d43454c4c3b747970653d564f4943453b747970653d707265663a2b34342037373030203930303132330d0a54454c3b747970653d484f4d453b747970653d564f4943453a2b3434203230203739343620303935380d0a6974656d322e4144523b747970653d484f4d453b747970653d707265663a3b3b31342057696c6c6f77204c616e653b42726973746f6c3b3b425331203453543b556e69746564204b696e67646f6d0d0a6974656d322e582d41424144523a67620d0a43415445474f524945533a43686f69722c436f6d6d69747465652c416c746f0d0a4e4f54453a4a6f696e656420323031392e205072656665727320656d61696c2e5c6e436f6d6d69747465652073696e636520323032312e0d0a50484f544f3b454e434f44494e473d623b545950453d4a5045473a41414543417751464267634943516f4c4441304f4478415245684d554652595847426b6147787764486838674953496a4a43556d4a7967704b6973734c5334764d4445794d7a51314e6a63344f546f370d0a582d41425549443a41314232433344342d303030302d303030302d303030302d3030303030303030303030310d0a5245563a323032342d30322d31315430393a31353a32325a0d0a454e443a56434152440d0a".to_string()));
+    v.push(("bad_line.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a74686973206c696e6520686173206e6f20636f6c6f6e0d0a464e3a486173204120426164204c696e650d0a454e443a56434152440d0a".to_string()));
+    v.push(("blank_separated.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a466972737420436172640d0a454e443a56434152440d0a0d0a0d0a424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a5365636f6e6420436172640d0a454e443a56434152440d0a".to_string()));
+    v.push(("empty.vcf".to_string(), "".to_string()));
+    v.push(("folded.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a4d61726761726574686520766f6e20486f68656e7a6f6c6c65726e2d5369676d6172696e67656e0d0a4e3a766f6e20486f68656e7a6f6c6c65726e2d5369676d6172696e67656e3b4d6172676172657468653b3b3b0d0a4e4f54453a54686973206e6f74652069732064656c696265726174656c79206c6f6e6720656e6f756768207468617420766f626a656374206d75737420666f6c642069742061630d0a20726f7373207365766572616c206c696e65735c2c20616e6420697420636f6e7461696e73206120636f6d6d615c2c20612073656d69636f6c6f6e5c3b20616e642061206261636b736c0d0a20617368205c5c20746f20657865726369736520746865206573636170696e672072756c6573206f6e2074686520776179206261636b206f75742e0d0a4f52473a446575747363686520476573656c6c7363686166742066c3bc722043686f726d7573696b3b56657277616c74756e673b42c3bc726f204dc3bc6e6368656e0d0a454e443a56434152440d0a".to_string()));
+    v.push(("google_card.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a4b77616d65204d656e7361680d0a4e3a4d656e7361683b4b77616d653b3b3b0d0a454d41494c3b545950453d494e5445524e45543a6b77616d652e6d656e736168406578616d706c652e636f6d0d0a454d41494c3b545950453d494e5445524e45543b545950453d574f524b3a6b2e6d656e736168406578616d706c652e636f2e756b0d0a54454c3b545950453d43454c4c3a2b3233332032342031323320343536370d0a4144523b545950453d484f4d453a3b3b502e4f2e20426f7820313233343b41636372613b477265617465722041636372613b30303233333b4768616e610d0a4144523b545950453d574f524b3a3b537569746520353b3820496e646570656e64656e6365204176653b41636372613b3b3b4768616e610d0a4f52473a4d656e736168202620506172746e6572730d0a424441593a313938362d30372d31390d0a582d47454e4445523a4d0d0a43415445474f524945533a6d79436f6e74616374730d0a454e443a56434152440d0a".to_string()));
+    v.push(("jobs.txt".to_string(), "636f756e74206170706c655f636172642e7663660a636f756e74206f75746c6f6f6b5f62617463682e7663660a636f756e7420676f6f676c655f636172642e7663660a636f756e7420666f6c6465642e7663660a636f756e74206d696e696d616c2e7663660a636f756e74207632315f73696e676c65746f6e732e7663660a636f756e7420626c616e6b5f7365706172617465642e7663660a636f756e74206d656574696e672e6963730a636f756e74206e6f5f76657273696f6e2e7663660a636f756e7420756e636c6f7365642e7663660a636f756e742073747261795f656e642e7663660a636f756e74206d69736d6174636865645f656e642e7663660a636f756e74206261645f6c696e652e7663660a636f756e7420656d7074792e7663660a636f756e74206a7573745f746578742e7663660a64756d70206170706c655f636172642e7663660a64756d70206f75746c6f6f6b5f62617463682e7663660a64756d7020676f6f676c655f636172642e7663660a64756d7020666f6c6465642e7663660a64756d70206d696e696d616c2e7663660a64756d70207632315f73696e676c65746f6e732e7663660a64756d7020626c616e6b5f7365706172617465642e7663660a64756d70206d656574696e672e6963730a6669656c6473206170706c655f636172642e7663660a6669656c6473206f75746c6f6f6b5f62617463682e7663660a6669656c647320676f6f676c655f636172642e7663660a6669656c647320666f6c6465642e7663660a6669656c6473206d696e696d616c2e7663660a6669656c6473207632315f73696e676c65746f6e732e7663660a6669656c647320626c616e6b5f7365706172617465642e7663660a737472756374206170706c655f636172642e7663660a73747275637420676f6f676c655f636172642e7663660a737472756374207632315f73696e676c65746f6e732e7663660a726f756e6474726970206170706c655f636172642e7663660a726f756e6474726970206f75746c6f6f6b5f62617463682e7663660a726f756e647472697020676f6f676c655f636172642e7663660a726f756e647472697020666f6c6465642e7663660a726f756e6474726970206d696e696d616c2e7663660a726f756e6474726970207632315f73696e676c65746f6e732e7663660a726f756e647472697020626c616e6b5f7365706172617465642e7663660a726f756e6474726970206d656574696e672e6963730a7061727365206e6f5f76657273696f6e2e7663660a706172736520756e636c6f7365642e7663660a70617273652073747261795f656e642e7663660a7061727365206d69736d6174636865645f656e642e7663660a7061727365206261645f6c696e652e7663660a706172736520656d7074792e7663660a7061727365206a7573745f746578742e7663660a7170206f75746c6f6f6b5f62617463682e7663660a70686f746f206170706c655f636172642e7663660a6275696c642073696d706c650a6275696c6420737472756374757265640a666f6c642032300a666f6c642037350a6573636170650a".to_string()));
+    v.push(("just_text.vcf".to_string(), "74686973206973206e6f74206120766361726420617420616c6c0d0a6e6f20626567696e206c696e650d0a".to_string()));
+    v.push(("meeting.ics".to_string(), "424547494e3a5643414c454e4441520d0a56455253494f4e3a322e300d0a50524f4449443a2d2f2f486172626f7572766965772f2f5363686564756c657220312e302f2f454e0d0a43414c5343414c453a475245474f5249414e0d0a4d4554484f443a524551554553540d0a424547494e3a564556454e540d0a5549443a6576742d30303031406578616d706c652e6f72670d0a44545354414d503a3230323430323130543132303030305a0d0a445453544152543a3230323430333135543139303030305a0d0a4454454e443a3230323430333135543231303030305a0d0a53554d4d4152593a537072696e6720636f6e636572742072656865617273616c0d0a4c4f434154494f4e3a5374204d6172795c27732048616c6c5c2c20526564636c696666650d0a4445534352495054494f4e3a4272696e672073636f72657320666f722046617572c3a920616e6420746865206e657720636f6d6d697373696f6e2e5c6e5465612061742032303a30302e0d0a4f5247414e495a45523b434e3d416461657a65204f6b61666f723a6d61696c746f3a616461657a65406578616d706c652e6f72670d0a415454454e4445453b524f4c453d5245512d5041525449434950414e543b434e3d416c746f2053656374696f6e3a6d61696c746f3a616c746f73406578616d706c652e6f72670d0a43415445474f524945533a52656865617273616c2c43686f69720d0a5354415455533a434f4e4649524d45440d0a53455155454e43453a320d0a454e443a564556454e540d0a424547494e3a56544f444f0d0a5549443a746f646f2d30303037406578616d706c652e6f72670d0a44545354414d503a3230323430323130543132303530305a0d0a53554d4d4152593a426f6f6b207468652068616c6c20666f72207468652073756d6d6572207465726d0d0a5354415455533a4e454544532d414354494f4e0d0a5052494f524954593a310d0a454e443a56544f444f0d0a454e443a5643414c454e4441520d0a".to_string()));
+    v.push(("minimal.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a53616d205269766572610d0a454e443a56434152440d0a".to_string()));
+    v.push(("mismatched_end.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a4d69736d6174636865640d0a454e443a5643414c454e4441520d0a".to_string()));
+    v.push(("no_version.vcf".to_string(), "424547494e3a56434152440d0a464e3a4e6f2056657273696f6e20486572650d0a4e3a4e656d6f3b3b3b3b0d0a454e443a56434152440d0a".to_string()));
+    v.push(("outlook_batch.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a322e310d0a4e3b434841525345543d7574662d383b454e434f44494e473d51554f5445442d5052494e5441424c453a47723d43333d42366e686f6c6d3b3d43333d38396c6973653b3b3b0d0a464e3b434841525345543d7574662d383b454e434f44494e473d51554f5445442d5052494e5441424c453a3d43333d38396c6973652047723d43333d42366e686f6c6d0d0a4f52473b434841525345543d7574662d383b454e434f44494e473d51554f5445442d5052494e5441424c453a4361663d43333d4139204e6f726469630d0a54454c3b43454c4c3a2b33353820343020313233343536370d0a454d41494c3b494e5445524e45543a656c697365406578616d706c652e66690d0a4e4f54453b454e434f44494e473d51554f5445442d5052494e5441424c453a4c6f6e673d32306c696e653d3230746861743d32306b656570733d3230676f696e673d3230616e643d0d0a20676f696e673d3230706173743d3230736576656e74793d3230666976653d3230636861726163746572733d3230666f723d3230666f6c64696e673d323074657374732e0d0a454e443a56434152440d0a424547494e3a56434152440d0a56455253494f4e3a322e310d0a4e3a536d6974683b4a6f686e3b513b4d723b4a720d0a464e3a4a6f686e20512e20536d697468204a720d0a54454c3b574f524b3b564f4943453a2b312035353520303130300d0a55524c3a687474705c3a2f2f6578616d706c652e636f6d2f7e6a736d6974680d0a454e443a56434152440d0a424547494e3a56434152440d0a56455253494f4e3a322e310d0a4e3a3b526563657074696f6e3b3b3b0d0a464e3a46726f6e74204465736b0d0a54454c3b574f524b3a2b312035353520303139390d0a454e443a56434152440d0a".to_string()));
+    v.push(("stray_end.vcf".to_string(), "454e443a56434152440d0a424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a416674657220537472617920456e640d0a454e443a56434152440d0a".to_string()));
+    v.push(("unclosed.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a332e300d0a464e3a44616e676c696e6720436172640d0a".to_string()));
+    v.push(("v21_singletons.vcf".to_string(), "424547494e3a56434152440d0a56455253494f4e3a322e310d0a4e3a54616e616b613b59756b690d0a464e3a59756b692054616e616b610d0a54454c3b484f4d453b564f4943453a2b38312033203132333420353637380d0a54454c3b574f524b3b4641583a2b38312033203132333420353637390d0a454d41494c3b494e5445524e45543b505245463a79756b69406578616d706c652e6a700d0a4144523b484f4d453a3b3b312d322d3320536869627579613b546f6b796f3b3b3135302d303030323b4a6170616e0d0a454e443a56434152440d0a".to_string()));
+    v
+}
