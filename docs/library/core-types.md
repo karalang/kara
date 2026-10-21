@@ -105,6 +105,8 @@ match i64.parse(line.trim()) {
 
 `.ok()` turns the result into an `Option` when the error is not needed.
 
+`parse` ignores whitespace before and after the number, so `i64.parse(" 5\n")` is `Ok(5)` and a line read with its newline parses as it is. A sign may come only first: `"+5"` parses, `"-"` and `"1-2"` fail with `InvalidDigit`, and a negative number for an unsigned type fails with `Underflow`.
+
 Every `parse` returns the one error type, a prelude enum:
 
 ```kara
@@ -113,7 +115,7 @@ enum ParseError {
     InvalidDigit,   // the input holds a character that cannot appear in a number of this type
     Overflow,       // the value is above the type's maximum
     Underflow,      // the value is below the type's minimum
-    Invalid,        // any other malformed input
+    Invalid,        // any other malformed input (a float's answer; an integer reports InvalidDigit)
 }
 ```
 
