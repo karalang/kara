@@ -7204,3 +7204,41 @@ fn main() {
         r.outcome
     );
 }
+
+#[test]
+fn mir_default_method_generic_named_like_the_impls() {
+    // B-2026-10-21-34: a trait default method's own `K`, copied into an
+    // `impl[K] .. for W[K]`, merged with the impl's `K` (types are matched
+    // by name), so the instance took the method's argument for both: a use
+    // after free on `__mir-run`, a double free compiled.
+    let src = r#"
+struct W[K] { x: K }
+trait Tr {
+    type Item;
+    fn get(self) -> Self.Item;
+    fn pair[K](self, k: own K) -> (Self.Item, K) { (self.get(), k) }
+    fn both[K: Clone](self, k: ref K) -> Vec[K] { [k.clone(), k.clone()] }
+}
+impl[K: Clone] Tr for W[K] {
+    type Item = K;
+    fn get(self) -> K { self.x.clone() }
+}
+fn main() {
+    let w: W[String] = W { x: "hello".to_string() };
+    let p = w.pair(42);
+    println(f"{p.0} {p.1}");
+    let q = w.pair("there".to_string());
+    println(f"{q.0} {q.1}");
+    let v = w.both(7);
+    println(f"{v}");
+}
+"#;
+    let want = "hello 42\nhello there\n[7, 7]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

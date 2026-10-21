@@ -584,8 +584,56 @@ fn synthesize_trait_default_methods(program: &mut Program) {
             if !subst.is_empty() {
                 substitute_trait_params_in_function(&mut copy, &subst);
             }
+            rename_generics_shadowing_the_impls(&mut copy, imp.generic_params.as_ref());
             imp.items.push(ImplItem::Method(Box::new(copy)));
         }
+    }
+}
+
+/// A copied default method's own generic that shares a name with the impl's
+/// (`fn pair[K]` in the trait, `impl[K: Clone] Tr for W[K]`) is renamed in
+/// the copy, signature and body: downstream, type parameters are matched by
+/// name, so the method's `K` and the impl's would merge (B-2026-10-21-34).
+fn rename_generics_shadowing_the_impls(f: &mut Function, outer: Option<&GenericParams>) {
+    let Some(outer) = outer else { return };
+    let taken: std::collections::HashSet<String> = outer
+        .params
+        .iter()
+        .map(|p| p.name.clone())
+        .chain(
+            f.generic_params
+                .iter()
+                .flat_map(|g| g.params.iter().map(|p| p.name.clone())),
+        )
+        .collect();
+    let mut subst = std::collections::HashMap::new();
+    for p in f
+        .generic_params
+        .iter_mut()
+        .flat_map(|g| g.params.iter_mut())
+    {
+        if p.is_const || !outer.params.iter().any(|o| o.name == p.name) {
+            continue;
+        }
+        let fresh = (1..)
+            .map(|i| format!("{}{i}", p.name))
+            .find(|n| !taken.contains(n))
+            .expect("an unused name");
+        let span = f.span;
+        subst.insert(
+            std::mem::replace(&mut p.name, fresh.clone()),
+            TypeExpr {
+                kind: TypeKind::Path(PathExpr {
+                    segments: vec![fresh],
+                    generic_args: None,
+                    span,
+                }),
+                span,
+            },
+        );
+    }
+    if !subst.is_empty() {
+        substitute_trait_params_in_function(f, &subst);
     }
 }
 
