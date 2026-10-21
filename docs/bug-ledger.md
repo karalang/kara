@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 755 |
-| run-vs-build | 610 |
+| run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 325 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 275 |
 | other | 194 |
 | diagnostics | 184 |
-| perf | 181 |
+| perf | 182 |
 | soundness | 133 |
 | crash | 129 |
 | use-after-free | 92 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3020 |
+| codegen | 3021 |
 | interp | 1033 |
-| typecheck | 553 |
+| typecheck | 554 |
 | ownership | 130 |
 | other | 123 |
 | runtime | 86 |
@@ -196,6 +196,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-74 | 2026-10-21 | typecheck+codegen | low | `Atomic[bool].fetch_add(true)` passes `karac check` (concurrency.md: `fetch_add` is for integer `T` only); `__mir-run` refuses "call of unknown function Atomic[bool].fetch_add" and `__mir-llvm-run` runs it and prints `true` | — |
 | B-2026-10-21-75 | 2026-10-21 | typecheck | low | `c.swap(v)` on a borrowed `Atomic[i64]` parameter is refused "`c` is a `ref` parameter, so `c.swap` (a method that writes its receiver) cannot ...", while `store`, `compare_exchange`, `fetch_add` and `fetch_sub` on the same borrowed parameter are accepted | — |
 | B-2026-10-21-76 | 2026-10-21 | typecheck | medium | `for x in s` over a value that is not iterable passes `karac check` and binds the value itself: `for msg in rx {}` over a `Receiver[i64]` types `msg` as `Receiver[i64]`, and `for x in s { x.a }` over a plain struct is accepted | — |
+| B-2026-10-21-77 | 2026-10-21 | typecheck | low | `karac __mir-run` and `__mir-llvm-run` run a program whose forwarded `mut ref` argument has no call-site `mut` marker, which `karac check` and `karac build --mir` refuse | — |
+| B-2026-10-21-78 | 2026-10-21 | codegen | medium | `karac __mir-llvm-run` takes worse-than-quadratic time in the length of one function: 2000 `push_str` statements take 8.8 s and 4000 take 43 s, while `karac build --mir` takes 2.3 s and 4.3 s | — |
 
 ### Relocated
 
