@@ -134,13 +134,16 @@ impl<'a> super::TypeChecker<'a> {
 
         // `Regex` method dispatch. A program the v2 pipeline appends
         // `std.regex` to (runtime/stdlib/source/regex.kara, B-2026-10-14-63)
-        // has the whole surface in the impl table, `captures` among it, and
-        // dispatches there like any library type.
+        // has the surface in the impl table and dispatches there like any
+        // library type. Library pruning keeps only the methods a program
+        // names, so the probe is the called method itself: probing a fixed
+        // one (`captures`) sent every program that never wrote that word
+        // to the legacy four-method surface (B-2026-10-21-52).
         if let Type::Named { name, args: targs } = obj_ty_for_named {
             if name == "Regex"
                 && self
                     .env
-                    .find_methods_with_args(name, targs, "captures")
+                    .find_methods_with_args(name, targs, method)
                     .is_empty()
             {
                 return Some(self.infer_regex_method(method, args, span));

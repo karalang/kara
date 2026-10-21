@@ -252,3 +252,32 @@ z 1..1
 z 3..3
 -a-é-
 "###;
+
+/// B-2026-10-21-52: library pruning keeps only the methods a program names,
+/// and check used to probe for `captures` to tell the v2 surface from the
+/// legacy one, so a program that never wrote that word got the legacy
+/// four methods: `replace` and `split` were "no method", and `is_match` of
+/// a `Str` was a type error.
+#[test]
+fn regex_v2_surface_checks_without_captures() {
+    let dir = Scratch::new();
+    let src = dir.path().join("check.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n    let s: Str = \"a1b22\";\n    match Regex.compile(\"[0-9]+\") {\n        \
+         Ok(re) => {\n            println(re.replace(s, \"#\"));\n            \
+         println(f\"{re.split(s).len()} {re.is_match(s)}\");\n        }\n        \
+         Err(e) => println(e.message),\n    }\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("check")
+        .arg(&src)
+        .output()
+        .expect("karac");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
