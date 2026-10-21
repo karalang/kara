@@ -1,0 +1,259 @@
+// LeetCode #820: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random word lists,
+// against the statement read letter by letter off the words.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn minimum_length_encoding_star(words: Vec[String]) -> i64 {
+    let mut kept: Set[String] = Set.new();
+    for word in words.iter() {
+        kept.insert(word.clone());
+    }
+    for word in words.iter() {
+        for k in 1..word.len() {
+            kept.remove(word[k..]);
+        }
+    }
+    let mut total = 0;
+    for word in kept.iter() {
+        total += word.len() + 1;
+    }
+    total
+}
+
+// ---- trie arm -------------------------------------------------------
+
+fn minimum_length_encoding_trie(words: Vec[String]) -> i64 {
+    // 26 child slots a node, -1 for none; node 0 is the root.
+    let mut children: Vec[i64] = Vec.filled(26, -1);
+    let mut child_count: Vec[i64] = [0];
+    let mut ends: Vec[(i64, i64)] = Vec.new();
+    for word in words.iter() {
+        let mut node = 0;
+        for b in word.bytes().iter().rev() {
+            let slot = node * 26 + (*b - b'a') as i64;
+            if children[slot] < 0 {
+                children[slot] = child_count.len();
+                child_count[node] += 1;
+                child_count.push(0);
+                for _ in 0..26 {
+                    children.push(-1);
+                }
+            }
+            node = children[slot];
+        }
+        ends.push((node, word.len()));
+    }
+    let mut counted: Vec[bool] = Vec.filled(child_count.len(), false);
+    let mut total = 0;
+    for (node, length) in ends.iter() {
+        if child_count[*node] == 0 and not counted[*node] {
+            counted[*node] = true;
+            total += *length + 1;
+        }
+    }
+    total
+}
+
+// ---- sort arm -------------------------------------------------------
+
+fn minimum_length_encoding_sort(words: Vec[String]) -> i64 {
+    let mut reversed: Vec[String] = Vec.new();
+    for word in words.iter() {
+        let mut backwards = String.new();
+        for c in word.chars().rev() {
+            backwards.push(c);
+        }
+        reversed.push(backwards);
+    }
+    reversed.sort();
+    let mut total = 0;
+    for i in 0..reversed.len() {
+        if i + 1 < reversed.len() and reversed[i + 1].starts_with(reversed[i]) {
+            continue;
+        }
+        total += reversed[i].len() + 1;
+    }
+    total
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn minimum_length_encoding_iter(words: Vec[String]) -> i64 {
+    let distinct: Set[String] = words.iter().cloned().collect();
+    distinct
+        .iter()
+        .filter(|w| not distinct.iter().any(|other| other.len() > w.len() and other.ends_with(w)))
+        .map(|w| w.len() + 1)
+        .sum()
+}
+
+// ---- the statement, word by word ------------------------------------------
+
+// The reference string needs a place for a word unless the word's letters
+// are the last letters of another word, read off letter by letter from
+// the back, or the word is written out earlier in the list. Each place is
+// the word and a '#'.
+fn statement(words: Vec[String]) -> i64 {
+    let mut total = 0;
+    for i in 0..words.len() {
+        let a = words[i].bytes();
+        let mut needed = true;
+        for j in 0..words.len() {
+            let b = words[j].bytes();
+            if j != i and (b.len() > a.len() or (b.len() == a.len() and j < i)) {
+                let mut inside = true;
+                for k in 0..a.len() {
+                    if a[a.len() - 1 - k] != b[b.len() - 1 - k] {
+                        inside = false;
+                        break;
+                    }
+                }
+                if inside {
+                    needed = false;
+                    break;
+                }
+            }
+        }
+        if needed {
+            total += words[i].len() + 1;
+        }
+    }
+    total
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, first: u8, letters: i64, longest: i64) -> String {
+    let mut word = String.new();
+    let length = 1 + next_random(mut seed) % longest;
+    for _ in 0..length {
+        word.push((first + (next_random(mut seed) % letters) as u8) as char);
+    }
+    word
+}
+
+fn answer(arm: i64, words: Vec[String]) -> i64 {
+    if arm == 0 {
+        minimum_length_encoding_star(words)
+    } else if arm == 1 {
+        minimum_length_encoding_trie(words)
+    } else if arm == 2 {
+        minimum_length_encoding_sort(words)
+    } else {
+        minimum_length_encoding_iter(words)
+    }
+}
+
+fn main() {
+    let names = ["star", "trie", "sort", "iter"];
+    let properties = ["answer", "reversed", "suffix added", "disjoint union"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut nested = 0;
+    let mut seed = 820;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut words: Vec[String] = Vec.new();
+        if kind == 0 {
+            // two letters: words often end each other or repeat
+            let count = 1 + next_random(mut seed) % 30;
+            for _ in 0..count {
+                words.push(random_word(mut seed, b'a', 2, 7));
+            }
+        } else if kind == 1 {
+            // fifteen letters: words seldom end each other
+            let count = 1 + next_random(mut seed) % 30;
+            for _ in 0..count {
+                words.push(random_word(mut seed, b'a', 15, 7));
+            }
+        } else if kind == 2 {
+            // a few long words, then their endings, in any order
+            let base = 1 + next_random(mut seed) % 3;
+            let mut long: Vec[String] = Vec.new();
+            for _ in 0..base {
+                long.push(random_word(mut seed, b'a', 3, 7));
+            }
+            let count = 1 + next_random(mut seed) % 20;
+            for _ in 0..count {
+                let w = long[next_random(mut seed) % base].clone();
+                let cut = next_random(mut seed) % w.len();
+                if next_random(mut seed) % 3 == 0 {
+                    words.push(random_word(mut seed, b'a', 3, 4));
+                } else {
+                    words.push(w[cut..].to_string());
+                }
+            }
+            for w in long.iter() {
+                let at = next_random(mut seed) % (words.len() + 1);
+                words.insert(at, w.clone());
+            }
+        } else {
+            // more words, of four letters
+            let count = 1 + next_random(mut seed) % 60;
+            for _ in 0..count {
+                words.push(random_word(mut seed, b'a', 4, 7));
+            }
+        }
+        let want = statement(words.clone());
+        let mut total_length = 0;
+        for w in words.iter() {
+            total_length += w.len() + 1;
+        }
+        if want < total_length {
+            nested += 1;
+        }
+        let mut reversed: Vec[String] = words.clone();
+        reversed.reverse();
+        let source = words[next_random(mut seed) % words.len()].clone();
+        let cut = next_random(mut seed) % source.len();
+        let mut with_suffix: Vec[String] = words.clone();
+        with_suffix.insert(next_random(mut seed) % (words.len() + 1), source[cut..].to_string());
+        // a second list over the letters 'p' to 's', which no word above uses,
+        // so no word of one list ends a word of the other
+        let mut other: Vec[String] = Vec.new();
+        let others = 1 + next_random(mut seed) % 10;
+        for _ in 0..others {
+            other.push(random_word(mut seed, b'p', 4, 7));
+        }
+        let mut union: Vec[String] = Vec.new();
+        for w in words.iter() {
+            union.push(w.clone());
+        }
+        for w in other.iter() {
+            union.insert(next_random(mut seed) % (union.len() + 1), w.clone());
+        }
+        let other_want = statement(other.clone());
+        for arm in 0..4 {
+            let got = answer(arm, words.clone());
+            let oks = [
+                got == want,
+                answer(arm, reversed.clone()) == got,
+                answer(arm, with_suffix.clone()) == got,
+                answer(arm, union.clone()) == got + other_want,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {words} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases ({nested} with a word that needs no place), {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, trie {by_arm[1]}, sort {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, suffix added {by_property[2]}, disjoint union {by_property[3]}");
+}

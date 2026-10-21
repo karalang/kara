@@ -1,0 +1,99 @@
+// LeetCode #820: Short Encoding of Words -- a trie of the reversed words.
+//
+// Insert each word back to front into a trie, so that a word and every
+// word it ends are on one path from the root. A word whose last node has
+// no children is not the end of a longer word and needs a place of its
+// own; equal words end at one node, which is counted once. O(n L).
+
+fn minimum_length_encoding(words: Vec[String]) -> i64 {
+    // 26 child slots a node, -1 for none; node 0 is the root.
+    let mut children: Vec[i64] = Vec.filled(26, -1);
+    let mut child_count: Vec[i64] = [0];
+    let mut ends: Vec[(i64, i64)] = Vec.new();
+    for word in words.iter() {
+        let mut node = 0;
+        for b in word.bytes().iter().rev() {
+            let slot = node * 26 + (*b - b'a') as i64;
+            if children[slot] < 0 {
+                children[slot] = child_count.len();
+                child_count[node] += 1;
+                child_count.push(0);
+                for _ in 0..26 {
+                    children.push(-1);
+                }
+            }
+            node = children[slot];
+        }
+        ends.push((node, word.len()));
+    }
+    let mut counted: Vec[bool] = Vec.filled(child_count.len(), false);
+    let mut total = 0;
+    for (node, length) in ends.iter() {
+        if child_count[*node] == 0 and not counted[*node] {
+            counted[*node] = true;
+            total += *length + 1;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, letters: i64, longest: i64) -> String {
+    let mut word = String.new();
+    let length = 1 + next_random(mut seed) % longest;
+    for _ in 0..length {
+        word.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    word
+}
+
+fn show(list: Vec[Str]) {
+    let mut words: Vec[String] = Vec.new();
+    for w in list.iter() {
+        words.push(w.to_string());
+    }
+    println(f"{list} -> {minimum_length_encoding(words)}");
+}
+
+fn main() {
+    show(["time", "me", "bell"]);
+    show(["t"]);
+    show(["me", "me"]);
+    show(["time", "time", "me", "ime"]);
+    show(["a", "b", "c"]);
+    show(["abc", "bc", "c", "xbc"]);
+    show(["me", "time", "emit"]);
+    show(["ab", "ba", "aba", "bab"]);
+    // LeetCode's largest: 2,000 words of up to 7 letters, of three letters
+    // so that many end others, and 2,000 of all 26.
+    let mut seed = 820;
+    let mut few: Vec[String] = Vec.new();
+    for _ in 0..2000 {
+        few.push(random_word(mut seed, 3, 7));
+    }
+    let mut many: Vec[String] = Vec.new();
+    for _ in 0..2000 {
+        many.push(random_word(mut seed, 26, 7));
+    }
+    println(f"2000 words of 3 letters -> {minimum_length_encoding(few)}");
+    println(f"2000 words of 26 letters -> {minimum_length_encoding(many)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let mut words: Vec[String] = Vec.new();
+        let count = 1 + next_random(mut seed) % 20;
+        for _ in 0..count {
+            words.push(random_word(mut seed, 2, 5));
+        }
+        let answer = minimum_length_encoding(words);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random lists: total {total}, checksum {check}");
+}

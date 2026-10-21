@@ -1,0 +1,11 @@
+[time, me, bell] -> 10
+[t] -> 2
+[me, me] -> 3
+[time, time, me, ime] -> 5
+[a, b, c] -> 6
+[abc, bc, c, xbc] -> 8
+[me, time, emit] -> 10
+[ab, ba, aba, bab] -> 8
+2000 words of 3 letters -> 3377
+2000 words of 26 letters -> 8704
+300 random lists: total 7835, checksum 445343957

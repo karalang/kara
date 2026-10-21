@@ -1,0 +1,88 @@
+// LeetCode #820: Short Encoding of Words -- the reversed words, sorted.
+//
+// A word ends another exactly when, both reversed, it begins it, and a
+// sorted list puts every word a reversed word begins right after it. So
+// a reversed word that the next one starts with needs no place; every
+// other costs its length and a '#'. Equal words sit together, and only
+// the last of them is counted. O(n L log n).
+
+fn minimum_length_encoding(words: Vec[String]) -> i64 {
+    let mut reversed: Vec[String] = Vec.new();
+    for word in words.iter() {
+        let mut backwards = String.new();
+        for c in word.chars().rev() {
+            backwards.push(c);
+        }
+        reversed.push(backwards);
+    }
+    reversed.sort();
+    let mut total = 0;
+    for i in 0..reversed.len() {
+        if i + 1 < reversed.len() and reversed[i + 1].starts_with(reversed[i]) {
+            continue;
+        }
+        total += reversed[i].len() + 1;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, letters: i64, longest: i64) -> String {
+    let mut word = String.new();
+    let length = 1 + next_random(mut seed) % longest;
+    for _ in 0..length {
+        word.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    word
+}
+
+fn show(list: Vec[Str]) {
+    let mut words: Vec[String] = Vec.new();
+    for w in list.iter() {
+        words.push(w.to_string());
+    }
+    println(f"{list} -> {minimum_length_encoding(words)}");
+}
+
+fn main() {
+    show(["time", "me", "bell"]);
+    show(["t"]);
+    show(["me", "me"]);
+    show(["time", "time", "me", "ime"]);
+    show(["a", "b", "c"]);
+    show(["abc", "bc", "c", "xbc"]);
+    show(["me", "time", "emit"]);
+    show(["ab", "ba", "aba", "bab"]);
+    // LeetCode's largest: 2,000 words of up to 7 letters, of three letters
+    // so that many end others, and 2,000 of all 26.
+    let mut seed = 820;
+    let mut few: Vec[String] = Vec.new();
+    for _ in 0..2000 {
+        few.push(random_word(mut seed, 3, 7));
+    }
+    let mut many: Vec[String] = Vec.new();
+    for _ in 0..2000 {
+        many.push(random_word(mut seed, 26, 7));
+    }
+    println(f"2000 words of 3 letters -> {minimum_length_encoding(few)}");
+    println(f"2000 words of 26 letters -> {minimum_length_encoding(many)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let mut words: Vec[String] = Vec.new();
+        let count = 1 + next_random(mut seed) % 20;
+        for _ in 0..count {
+            words.push(random_word(mut seed, 2, 5));
+        }
+        let answer = minimum_length_encoding(words);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random lists: total {total}, checksum {check}");
+}
