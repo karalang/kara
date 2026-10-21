@@ -63,3 +63,12 @@ struct User {
 ## Not in the prelude
 
 `Secret`, `ConstantTimeEq` and `Zeroize` live in `std.secret` and are not imported automatically. Each file that uses them starts with `import std.secret.{Secret};`, so the import line itself tells a reviewer that the file handles secrets.
+
+## Not yet implemented
+
+- `Clone` on `Secret[T]`.
+- The `#[derive(Serialize)]` error: `karac check` accepts a derive over a type that contains a `Secret`, and the MIR backends then refuse it for lack of `Secret.serialize`.
+- The library's `Zeroize` impls for `String`, `Vec[u8]`, `Array[u8, N]` and the integers. A user `impl Zeroize` works.
+- `serialize_expose` and `deserialize_wrap`.
+
+These are tracked as the `std.secret` items of [phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md).

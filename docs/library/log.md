@@ -58,3 +58,8 @@ The `Backend` trait has one method, `fn emit(mut ref self, record: log.Record)`.
 ## `dbg` and `log`
 
 `dbg()` is for temporary instrumentation: it prints an expression's source text and value, and it is removed from release builds ([design.md §12](../design.md#observability)). `log` is for production observability: always present, with structured fields, filtered by severity and routed to a backend. Both are transparent.
+
+## Not yet implemented
+
+- All of `std.log`. `karac check` refuses each item with "`std.log.<name>` is in the library spec but not implemented yet" (B-2026-10-15-10).
+- `import std.log;` as the Backends example writes it: a whole-module import of `std.log` is refused today ("`std.log` is imported item by item"; B-2026-10-15-10).
