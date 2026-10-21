@@ -1,0 +1,97 @@
+// LeetCode #824: Goat Latin -- one scan over the characters, no split.
+//
+// A space or the end of the sentence closes a word. A word's letters go
+// out as they are read, except a first consonant, which is held back and
+// written when the word closes. O(n + w^2).
+
+fn to_goat_latin(sentence: Str) -> String {
+    let mut answer = String.new();
+    let mut held: Option[char] = None;
+    let mut start = true;
+    let mut words = 0;
+    for c in sentence.chars() {
+        if c == ' ' {
+            words += 1;
+            close_word(mut answer, held, words);
+            held = None;
+            answer.push(' ');
+            start = true;
+        } else if start {
+            start = false;
+            match c {
+                'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U' => answer.push(c),
+                _ => held = Some(c),
+            }
+        } else {
+            answer.push(c);
+        }
+    }
+    words += 1;
+    close_word(mut answer, held, words);
+    answer
+}
+
+fn close_word(answer: mut ref String, held: Option[char], words: i64) {
+    if let Some(c) = held {
+        answer.push(c);
+    }
+    answer.push_str("ma");
+    for _ in 0..words {
+        answer.push('a');
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\" -> \"{to_goat_latin(s)}\"");
+}
+
+fn random_sentence(seed: mut ref i64, words: i64, longest: i64) -> String {
+    let letters = "aeiouAEIOUbcdfgBCDFGxyzXYZ";
+    let mut s = String.new();
+    for w in 0..words {
+        if w > 0 {
+            s.push(' ');
+        }
+        let length = 1 + next_random(mut seed) % longest;
+        for _ in 0..length {
+            let k = next_random(mut seed) % 26;
+            s.push_str(letters[k..k + 1]);
+        }
+    }
+    s
+}
+
+fn main() {
+    show("I speak Goat Latin");
+    show("The quick brown fox jumped over the lazy dog");
+    show("a");
+    show("b");
+    show("A B");
+    show("Each word consists of lowercase and uppercase letters only");
+    show("aaa bbb ccc");
+    show("U I O E A");
+    // LeetCode's largest, 150 characters: 75 one-letter words.
+    let mut seed = 824;
+    let largest = random_sentence(mut seed, 75, 1);
+    let goat = to_goat_latin(largest.as_str());
+    println(f"75 one-letter words: {largest.len()} characters -> {goat.len()}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let words = 1 + next_random(mut seed) % 12;
+        let s = random_sentence(mut seed, words, 8);
+        let out = to_goat_latin(s.as_str());
+        total += out.len();
+        for b in out.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random sentences: total {total}, checksum {check}");
+}

@@ -1,0 +1,82 @@
+// LeetCode #824: Goat Latin -- each word built on its own, then joined.
+//
+// The words are rewritten into a Vec[String] and joined with single
+// spaces at the end. O(n + w^2).
+
+fn to_goat_latin(sentence: Str) -> String {
+    let mut words: Vec[String] = Vec.new();
+    let mut index = 0;
+    for word in sentence.split(" ") {
+        index += 1;
+        let lower = word.to_lowercase();
+        let mut goat = if lower.starts_with("a") or lower.starts_with("e") or lower.starts_with("i")
+            or lower.starts_with("o") or lower.starts_with("u") {
+            word.to_string()
+        } else {
+            let mut moved = word[1..].to_string();
+            moved.push_str(word[0..1]);
+            moved
+        };
+        goat.push_str("ma");
+        for _ in 0..index {
+            goat.push('a');
+        }
+        words.push(goat);
+    }
+    words.join(" ")
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\" -> \"{to_goat_latin(s)}\"");
+}
+
+fn random_sentence(seed: mut ref i64, words: i64, longest: i64) -> String {
+    let letters = "aeiouAEIOUbcdfgBCDFGxyzXYZ";
+    let mut s = String.new();
+    for w in 0..words {
+        if w > 0 {
+            s.push(' ');
+        }
+        let length = 1 + next_random(mut seed) % longest;
+        for _ in 0..length {
+            let k = next_random(mut seed) % 26;
+            s.push_str(letters[k..k + 1]);
+        }
+    }
+    s
+}
+
+fn main() {
+    show("I speak Goat Latin");
+    show("The quick brown fox jumped over the lazy dog");
+    show("a");
+    show("b");
+    show("A B");
+    show("Each word consists of lowercase and uppercase letters only");
+    show("aaa bbb ccc");
+    show("U I O E A");
+    // LeetCode's largest, 150 characters: 75 one-letter words.
+    let mut seed = 824;
+    let largest = random_sentence(mut seed, 75, 1);
+    let goat = to_goat_latin(largest.as_str());
+    println(f"75 one-letter words: {largest.len()} characters -> {goat.len()}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let words = 1 + next_random(mut seed) % 12;
+        let s = random_sentence(mut seed, words, 8);
+        let out = to_goat_latin(s.as_str());
+        total += out.len();
+        for b in out.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random sentences: total {total}, checksum {check}");
+}

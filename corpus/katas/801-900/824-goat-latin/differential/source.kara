@@ -1,0 +1,253 @@
+// LeetCode #824: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random sentences,
+// against the statement read letter by letter.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_vowel_star(c: char) -> bool {
+    "aeiouAEIOU".contains(c.to_string().as_str())
+}
+
+fn to_goat_latin_star(sentence: Str) -> String {
+    let mut answer = String.new();
+    let mut tail = String.new();
+    for word in sentence.split(" ") {
+        tail.push('a');
+        if not answer.is_empty() {
+            answer.push(' ');
+        }
+        let first = word.chars().next().unwrap();
+        if is_vowel_star(first) {
+            answer.push_str(word);
+        } else {
+            answer.push_str(word[1..]);
+            answer.push(first);
+        }
+        answer.push_str("ma");
+        answer.push_str(tail.as_str());
+    }
+    answer
+}
+
+// ---- scan arm -------------------------------------------------------
+
+fn to_goat_latin_scan(sentence: Str) -> String {
+    let mut answer = String.new();
+    let mut held: Option[char] = None;
+    let mut start = true;
+    let mut words = 0;
+    for c in sentence.chars() {
+        if c == ' ' {
+            words += 1;
+            close_word_scan(mut answer, held, words);
+            held = None;
+            answer.push(' ');
+            start = true;
+        } else if start {
+            start = false;
+            match c {
+                'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U' => answer.push(c),
+                _ => held = Some(c),
+            }
+        } else {
+            answer.push(c);
+        }
+    }
+    words += 1;
+    close_word_scan(mut answer, held, words);
+    answer
+}
+
+fn close_word_scan(answer: mut ref String, held: Option[char], words: i64) {
+    if let Some(c) = held {
+        answer.push(c);
+    }
+    answer.push_str("ma");
+    for _ in 0..words {
+        answer.push('a');
+    }
+}
+
+// ---- join arm -------------------------------------------------------
+
+fn to_goat_latin_join(sentence: Str) -> String {
+    let mut words: Vec[String] = Vec.new();
+    let mut index = 0;
+    for word in sentence.split(" ") {
+        index += 1;
+        let lower = word.to_lowercase();
+        let mut goat = if lower.starts_with("a") or lower.starts_with("e") or lower.starts_with("i")
+            or lower.starts_with("o") or lower.starts_with("u") {
+            word.to_string()
+        } else {
+            let mut moved = word[1..].to_string();
+            moved.push_str(word[0..1]);
+            moved
+        };
+        goat.push_str("ma");
+        for _ in 0..index {
+            goat.push('a');
+        }
+        words.push(goat);
+    }
+    words.join(" ")
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn to_goat_latin_iter(sentence: Str) -> String {
+    let words: Vec[String] = sentence.split(" ").enumerate().map(|(i, word)| {
+        let first = word.chars().next().unwrap();
+        let body = if "aeiouAEIOU".contains(first.to_string().as_str()) {
+            word.to_string()
+        } else {
+            f"{word[1..]}{first}"
+        };
+        let tail: String = (0..i + 1).map(|_| 'a').collect();
+        f"{body}ma{tail}"
+    }).collect();
+    words.join(" ")
+}
+
+// ---- the statement, letter by letter --------------------------------------
+
+// The statement read literally: the sentence as characters, a word as the
+// run of characters between spaces, a vowel as one of ten listed letters,
+// and the 'a's counted out from the word's place, starting at 1.
+fn statement(sentence: Str) -> String {
+    let chars: Vec[char] = sentence.chars().collect();
+    let vowels = ['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U'];
+    let mut out: Vec[char] = Vec.new();
+    let mut place = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let mut j = i;
+        while j < chars.len() and chars[j] != ' ' {
+            j += 1;
+        }
+        place += 1;
+        if place > 1 {
+            out.push(' ');
+        }
+        if vowels.contains(chars[i]) {
+            for k in i..j {
+                out.push(chars[k]);
+            }
+        } else {
+            for k in i + 1..j {
+                out.push(chars[k]);
+            }
+            out.push(chars[i]);
+        }
+        out.push('m');
+        for _ in 0..place + 1 {
+            out.push('a');
+        }
+        i = j + 1;
+    }
+    let mut s = String.new();
+    for c in out.iter() {
+        s.push(c);
+    }
+    s
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, sentence: Str) -> String {
+    if arm == 0 {
+        to_goat_latin_star(sentence)
+    } else if arm == 1 {
+        to_goat_latin_scan(sentence)
+    } else if arm == 2 {
+        to_goat_latin_join(sentence)
+    } else {
+        to_goat_latin_iter(sentence)
+    }
+}
+
+fn spaces(s: Str) -> i64 {
+    let mut count = 0;
+    for c in s.chars() {
+        if c == ' ' {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn random_sentence(seed: mut ref i64, kind: i64) -> String {
+    let letters = if kind == 1 {
+        "aeiouAEIOU"
+    } else if kind == 2 {
+        "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ"
+    } else {
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    };
+    let size = letters.len();
+    let words = 1 + next_random(mut seed) % 15;
+    let longest = if kind == 3 { 1 + next_random(mut seed) % 2 } else { 9 };
+    let mut s = String.new();
+    for w in 0..words {
+        if w > 0 {
+            s.push(' ');
+        }
+        let length = 1 + next_random(mut seed) % longest;
+        for _ in 0..length {
+            let k = next_random(mut seed) % size;
+            s.push_str(letters[k..k + 1]);
+        }
+    }
+    s
+}
+
+fn main() {
+    let names = ["star", "scan", "join", "iter"];
+    let properties = ["answer", "words kept", "length", "a word appended"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 824;
+    for case in 0..1600 {
+        // mixed letters, vowels only, consonants only, one- and two-letter words
+        let kind = case / 400;
+        let s = random_sentence(mut seed, kind);
+        let want = statement(s.as_str());
+        let w = spaces(s.as_str()) + 1;
+        let mut longer = s.clone();
+        longer.push(' ');
+        longer.push_str(random_sentence(mut seed, kind).as_str());
+        for arm in 0..4 {
+            let got = answer(arm, s.as_str());
+            // each word gains "m" and one 'a' more than its place, and a
+            // first consonant only moves
+            let oks = [
+                got == want,
+                spaces(got.as_str()) == w - 1,
+                got.len() == s.len() + 2 * w + w * (w + 1) / 2,
+                answer(arm, longer.as_str()).starts_with(f"{got} "),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: \"{s}\" -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, scan {by_arm[1]}, join {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, words kept {by_property[1]}, length {by_property[2]}, a word appended {by_property[3]}");
+}

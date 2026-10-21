@@ -1,0 +1,75 @@
+// Benchmark for #824: Goat Latin -- the ★ arm (split, growing suffix).
+//
+// Each word keeps its first letter if it is a vowel and otherwise moves it
+// to the end, then gets "ma" and one more 'a' than the word before it, the
+// run of 'a's kept in a string that grows by one letter per word.
+
+fn is_vowel(c: char) -> bool {
+    "aeiouAEIOU".contains(c.to_string().as_str())
+}
+
+fn to_goat_latin(sentence: Str) -> String {
+    let mut answer = String.new();
+    let mut tail = String.new();
+    for word in sentence.split(" ") {
+        tail.push('a');
+        if not answer.is_empty() {
+            answer.push(' ');
+        }
+        let first = word.chars().next().unwrap();
+        if is_vowel(first) {
+            answer.push_str(word);
+        } else {
+            answer.push_str(word[1..]);
+            answer.push(first);
+        }
+        answer.push_str("ma");
+        answer.push_str(tail.as_str());
+    }
+    answer
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 sentences of up to 150 characters, LeetCode's largest, of words
+    // of 1 to 9 random letters of either case, drawn once. Each round
+    // answers the next one.
+    let count = 64;
+    let rounds = 2000000;
+    let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut seed: i64 = 824;
+    let mut sentences: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut s = String.new();
+        loop {
+            let length = 1 + next_random(mut seed) % 9;
+            let extra = if s.is_empty() { length } else { length + 1 };
+            if s.len() + extra > 150 {
+                break;
+            }
+            if not s.is_empty() {
+                s.push(' ');
+            }
+            for _ in 0..length {
+                let k = next_random(mut seed) % 52;
+                s.push_str(letters[k..k + 1]);
+            }
+        }
+        sentences.push(s);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let answer = to_goat_latin(sentences[round % count].as_str());
+        total += answer.len();
+        let bytes = answer.bytes();
+        checksum = (checksum * 131 + bytes[round % bytes.len()] as i64) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} sentences: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,10 @@
+"I speak Goat Latin" -> "Imaa peaksmaaa oatGmaaaa atinLmaaaaa"
+"The quick brown fox jumped over the lazy dog" -> "heTmaa uickqmaaa rownbmaaaa oxfmaaaaa umpedjmaaaaaa overmaaaaaaa hetmaaaaaaaa azylmaaaaaaaaa ogdmaaaaaaaaaa"
+"a" -> "amaa"
+"b" -> "bmaa"
+"A B" -> "Amaa Bmaaa"
+"Each word consists of lowercase and uppercase letters only" -> "Eachmaa ordwmaaa onsistscmaaaa ofmaaaaa owercaselmaaaaaa andmaaaaaaa uppercasemaaaaaaaa etterslmaaaaaaaaa onlymaaaaaaaaaa"
+"aaa bbb ccc" -> "aaamaa bbbmaaa cccmaaaa"
+"U I O E A" -> "Umaa Imaaa Omaaaa Emaaaaa Amaaaaaa"
+75 one-letter words: 149 characters -> 3149
+300 random sentences: total 22313, checksum 709181517

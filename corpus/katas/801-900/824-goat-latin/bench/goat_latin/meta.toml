@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/824-goat-latin/bench/goat_latin.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "ee1abb618"
+extracted_src = "f4ee9c86"
+model_rev = "583cfb0d"
+model_src = "f4ee9c86"
