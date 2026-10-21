@@ -1,0 +1,163 @@
+// `std.crypto.hmac`: HMAC (RFC 2104) over SHA-256, SHA-384 and SHA-512
+// (docs/library/crypto.md; B-2026-10-15-17). `ring`'s on both backends, as
+// std.crypto.sha2 is.
+
+// The engine natives. Not part of the documented surface. `alg` is the
+// hash's output width in bits; a handle names a running MAC, and `finish`
+// and `free` both end it.
+struct CryptoHmac { }
+
+impl CryptoHmac {
+    #[compiler_builtin]
+    fn mac(alg: i64, key: Slice[u8], data: Slice[u8], out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn start(alg: i64, key: Slice[u8]) -> i64 { 0 }
+
+    #[compiler_builtin]
+    fn update(h: i64, data: Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn finish(h: i64, out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn free(h: i64) { }
+}
+
+/// The HMAC-SHA-256 of `data` under `key` (RFC 2104). A key of any length
+/// is accepted.
+pub fn hmac_sha256(key: Slice[u8], data: Slice[u8]) -> Array[u8, 32] {
+    let mut out = [0u8; 32];
+    CryptoHmac.mac(256, key, data, mut out);
+    out
+}
+
+/// The HMAC-SHA-384 of `data` under `key` (RFC 2104). A key of any length
+/// is accepted.
+pub fn hmac_sha384(key: Slice[u8], data: Slice[u8]) -> Array[u8, 48] {
+    let mut out = [0u8; 48];
+    CryptoHmac.mac(384, key, data, mut out);
+    out
+}
+
+/// The HMAC-SHA-512 of `data` under `key` (RFC 2104). A key of any length
+/// is accepted.
+pub fn hmac_sha512(key: Slice[u8], data: Slice[u8]) -> Array[u8, 64] {
+    let mut out = [0u8; 64];
+    CryptoHmac.mac(512, key, data, mut out);
+    out
+}
+
+/// An HMAC-SHA-256 computed over data given in parts.
+pub struct HmacSha256 {
+    h: i64,
+}
+
+impl HmacSha256 {
+    pub fn new(key: Slice[u8]) -> HmacSha256 {
+        HmacSha256 { h: CryptoHmac.start(256, key) }
+    }
+
+    /// Adds `data` to what the MAC covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoHmac.update(self.h, data);
+    }
+
+    /// The MAC of everything added.
+    pub fn finish(own self) -> Array[u8, 32] {
+        let mut s = self;
+        let mut out = [0u8; 32];
+        CryptoHmac.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for HmacSha256 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoHmac.free(self.h);
+        }
+    }
+}
+
+/// An HMAC-SHA-384 computed over data given in parts.
+pub struct HmacSha384 {
+    h: i64,
+}
+
+impl HmacSha384 {
+    pub fn new(key: Slice[u8]) -> HmacSha384 {
+        HmacSha384 { h: CryptoHmac.start(384, key) }
+    }
+
+    /// Adds `data` to what the MAC covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoHmac.update(self.h, data);
+    }
+
+    /// The MAC of everything added.
+    pub fn finish(own self) -> Array[u8, 48] {
+        let mut s = self;
+        let mut out = [0u8; 48];
+        CryptoHmac.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for HmacSha384 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoHmac.free(self.h);
+        }
+    }
+}
+
+/// An HMAC-SHA-512 computed over data given in parts.
+pub struct HmacSha512 {
+    h: i64,
+}
+
+impl HmacSha512 {
+    pub fn new(key: Slice[u8]) -> HmacSha512 {
+        HmacSha512 { h: CryptoHmac.start(512, key) }
+    }
+
+    /// Adds `data` to what the MAC covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoHmac.update(self.h, data);
+    }
+
+    /// The MAC of everything added.
+    pub fn finish(own self) -> Array[u8, 64] {
+        let mut s = self;
+        let mut out = [0u8; 64];
+        CryptoHmac.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for HmacSha512 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoHmac.free(self.h);
+        }
+    }
+}

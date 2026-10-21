@@ -1,0 +1,18 @@
+// `std.crypto`: the comparison a MAC is verified with
+// (docs/library/crypto.md; B-2026-10-15-17). The digests are in
+// std.crypto.sha2, std.crypto.hmac and std.crypto.legacy.
+
+// The engine native. Not part of the documented surface.
+struct CryptoCt { }
+
+impl CryptoCt {
+    #[compiler_builtin]
+    fn eq(a: Slice[u8], b: Slice[u8]) -> bool { false }
+}
+
+/// Whether `a` and `b` hold the same bytes, in a time that depends only on
+/// their lengths: false when the lengths differ. Verify a MAC with it,
+/// never with `==`.
+pub fn constant_time_eq(a: Slice[u8], b: Slice[u8]) -> bool {
+    CryptoCt.eq(a, b)
+}

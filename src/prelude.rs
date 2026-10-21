@@ -1242,6 +1242,24 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "encoding"],
         include_str!("../runtime/stdlib/std_encoding.kara"),
     ),
+    // `std.crypto`'s interoperability digests over `ring` natives
+    // (docs/library/crypto.md); the rest of `std.crypto` is deferred.
+    (
+        &["std", "crypto"],
+        include_str!("../runtime/stdlib/std_crypto.kara"),
+    ),
+    (
+        &["std", "crypto", "sha2"],
+        include_str!("../runtime/stdlib/std_crypto_sha2.kara"),
+    ),
+    (
+        &["std", "crypto", "hmac"],
+        include_str!("../runtime/stdlib/std_crypto_hmac.kara"),
+    ),
+    (
+        &["std", "crypto", "legacy"],
+        include_str!("../runtime/stdlib/std_crypto_legacy.kara"),
+    ),
     // `std.time` is also a module of globals (`Clock`, `sleep_ms`); its
     // Kāra items are spliced beside them.
     (
@@ -3487,10 +3505,17 @@ mod tests {
         const AUDITED: &[&str] = &[
             "BoundedChannel",
             "CriticalSectionGuard",
+            "HmacSha256",
+            "HmacSha384",
+            "HmacSha512",
             "Pool",
             "PooledConnection",
             "RateLimiter",
             "Semaphore",
+            "Sha1",
+            "Sha256",
+            "Sha384",
+            "Sha512",
             "TaskGroup",
             "TcpListener",
             "TcpStream",

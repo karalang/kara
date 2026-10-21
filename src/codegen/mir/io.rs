@@ -87,6 +87,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.http_native(base, method, args, dest)
             }
             ("RegexEngine", _) => self.regex_native(method, args, dest),
+            ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
+                self.crypto_native(base, method, args, dest)
+            }
             ("Server", "serve") => self.serve_native(args, dest).map(Some),
             ("Server", "serve_static") => self.serve_static_native(args, dest).map(Some),
             ("Request", _) => self.request_native(method, args, dest),
@@ -1643,6 +1646,100 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, found.into())?;
             }
             _ => self.copy(d, out, string)?,
+        }
+        Ok(Some(()))
+    }
+
+    /// `std.crypto`'s engine natives (runtime/stdlib/std_crypto*.kara,
+    /// B-2026-10-15-17) through `karac_crypto_mir(op, alg, a, a_len, b,
+    /// b_len, h, out, out_len)`, which lives in the full archive; the
+    /// interpreter's `crypto_method` makes the same calls.
+    fn crypto_native(
+        &mut self,
+        engine: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let hmac = engine == "CryptoHmac";
+        let op: u64 = match method {
+            "digest" => 0,
+            "mac" => 1,
+            "start" if hmac => 3,
+            "start" => 2,
+            "update" => 4,
+            "finish" => 5,
+            "free" => 6,
+            "eq" => 7,
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let zero = self.i64(0);
+        let (mut alg, mut h) = (zero, zero);
+        let (mut a, mut a_len, mut b, mut b_len) = (null, zero, null, zero);
+        let (mut out, mut out_len) = (null, zero);
+        let int = |me: &mut Self, i: usize| -> R<IntValue<'ctx>> {
+            Ok(me.operand_scalar(&args[i])?.into_int_value())
+        };
+        match op {
+            0 => {
+                alg = int(self, 0)?;
+                (a, a_len) = self.view_of(&args[1])?;
+                (out, out_len) = self.view_of(&args[2])?;
+            }
+            1 => {
+                alg = int(self, 0)?;
+                (a, a_len) = self.view_of(&args[1])?;
+                (b, b_len) = self.view_of(&args[2])?;
+                (out, out_len) = self.view_of(&args[3])?;
+            }
+            2 => alg = int(self, 0)?,
+            3 => {
+                alg = int(self, 0)?;
+                (a, a_len) = self.view_of(&args[1])?;
+            }
+            4 => {
+                h = int(self, 0)?;
+                (a, a_len) = self.view_of(&args[1])?;
+            }
+            5 => {
+                h = int(self, 0)?;
+                (out, out_len) = self.view_of(&args[1])?;
+            }
+            6 => h = int(self, 0)?,
+            _ => {
+                (a, a_len) = self.view_of(&args[0])?;
+                (b, b_len) = self.view_of(&args[1])?;
+            }
+        }
+        let i32t = self.llcx.i32_type();
+        let v = self.rt_named(
+            "karac_crypto_mir",
+            &[
+                i32t.const_int(op, false).into(),
+                alg.into(),
+                a.into(),
+                a_len.into(),
+                b.into(),
+                b_len.into(),
+                h.into(),
+                out.into(),
+                out_len.into(),
+            ],
+            64,
+        )?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        match op {
+            2 | 3 => self.store(d, v.into())?,
+            7 => {
+                let eq = self
+                    .builder
+                    .build_int_truncate(v, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.store(d, eq.into())?;
+            }
+            _ => {}
         }
         Ok(Some(()))
     }

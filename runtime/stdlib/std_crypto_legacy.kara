@@ -1,0 +1,69 @@
+// `std.crypto.legacy`: SHA-1, for the protocols that fix it (the WebSocket
+// handshake, Git object ids). SHA-1 is broken for collision resistance; new
+// designs use std.crypto.sha2 (docs/library/crypto.md; B-2026-10-15-17).
+// `ring`'s on both backends, as std.crypto.sha2 is.
+
+// The engine natives. Not part of the documented surface.
+struct CryptoLegacy { }
+
+impl CryptoLegacy {
+    #[compiler_builtin]
+    fn digest(alg: i64, data: Slice[u8], out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn start(alg: i64) -> i64 { 0 }
+
+    #[compiler_builtin]
+    fn update(h: i64, data: Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn finish(h: i64, out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn free(h: i64) { }
+}
+
+/// The SHA-1 digest of `data` (FIPS 180-4).
+pub fn sha1(data: Slice[u8]) -> Array[u8, 20] {
+    let mut out = [0u8; 20];
+    CryptoLegacy.digest(160, data, mut out);
+    out
+}
+
+/// A SHA-1 digest computed over data given in parts.
+pub struct Sha1 {
+    h: i64,
+}
+
+impl Sha1 {
+    pub fn new() -> Sha1 {
+        Sha1 { h: CryptoLegacy.start(160) }
+    }
+
+    /// Adds `data` to what the digest covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoLegacy.update(self.h, data);
+    }
+
+    /// The digest of everything added.
+    pub fn finish(own self) -> Array[u8, 20] {
+        let mut s = self;
+        let mut out = [0u8; 20];
+        CryptoLegacy.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for Sha1 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoLegacy.free(self.h);
+        }
+    }
+}

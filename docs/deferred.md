@@ -928,6 +928,8 @@ Whether Kāra grows a language-level query mechanism — either an embedded quer
 
 ### std.crypto
 
+**Shipped so far:** the interoperability digests that existing protocols require, SHA-256/384/512, HMAC over each, and `constant_time_eq`, with SHA-1 in `std.crypto.legacy` ([library/crypto.md](library/crypto.md)). They are backed by `ring`, not libsodium. Everything in the table below is still to come, and BLAKE3 remains the default general hash for new designs.
+
 Constant-time cryptographic primitives. Cryptography is one of the few domains where a wrong stdlib choice causes real-world security incidents — algorithm agility, side-channel-safe implementations, and a narrow default-secure API surface matter more than flexibility.
 
 The implementation delegates to a vetted C library (libsodium or similar) for the primitives themselves, rather than implementing raw cryptographic algorithms in Kāra.
@@ -1124,7 +1126,7 @@ Security-related conventions that are not language features but are design choic
 
 **`std.regex` after v1.** v1 ([library/regex.md](library/regex.md)) is the non-backtracking engine above, over text. Left for later: regexes over bytes (`Slice[u8]`), matching a set of patterns at once (`RegexSet`), streaming matches over a reader, a flag API beyond the inline `(?i)` flags, and a builder for size and nesting limits. The opt-in backtracking engine is in the same position: no program has needed one yet.
 
-**Cryptographic primitive choices.** When `std.crypto` ships, default primitives are chosen from modern, widely-reviewed designs: ChaCha20Poly1305 for AEAD, X25519 for ECDH, Ed25519 for signatures, Argon2id for password hashing, BLAKE3 for non-cryptographic hashing where performance matters. Legacy-compatible defaults (RC4, MD5 for anything, 3DES, SHA-1 for anything) are not shipped. Users needing legacy compatibility import an explicit `crypto.legacy` module — present, but always a visible choice in code review.
+**Cryptographic primitive choices.** When `std.crypto` ships, default primitives are chosen from modern, widely-reviewed designs: ChaCha20Poly1305 for AEAD, X25519 for ECDH, Ed25519 for signatures, Argon2id for password hashing, BLAKE3 for non-cryptographic hashing where performance matters. Legacy-compatible defaults (RC4, MD5 for anything, 3DES, SHA-1 for anything) are not shipped. Users needing legacy compatibility import the explicit `std.crypto.legacy` module, present but always a visible choice in code review. SHA-1 ships only there, for protocols that fix it, such as the WebSocket handshake and Git object ids ([library/crypto.md](library/crypto.md)).
 
 **`#[must_use]` on security-sensitive stdlib return types.** Stdlib functions whose return value encodes a security decision — `authenticate(...) -> Result[Session, AuthError]`, `verify(...) -> Result[(), VerifyError]`, `check_csrf_token(...) -> Result[(), CsrfError]` — carry `#[must_use]` in their signatures. Ignoring these results is almost always a bug; `#[must_use]` (a v1 attribute, [design.md §11](design.md#must_use)) makes the mistake a warning. The convention applies to stdlib design going forward; library authors are encouraged to follow.
 

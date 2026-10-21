@@ -1,0 +1,161 @@
+// `std.crypto.sha2`: SHA-256, SHA-384 and SHA-512 (docs/library/crypto.md;
+// B-2026-10-15-17). The hashing is `ring`'s on both backends: the
+// interpreter calls it directly (`crypto_method` in src/mir/interp.rs), the
+// compiled backend through `karac_crypto_mir` (runtime/src/mir_crypto.rs).
+
+// The engine natives. Not part of the documented surface. `alg` is the
+// digest's output width in bits; a handle names a running hash, and
+// `finish` and `free` both end it.
+struct CryptoSha2 { }
+
+impl CryptoSha2 {
+    #[compiler_builtin]
+    fn digest(alg: i64, data: Slice[u8], out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn start(alg: i64) -> i64 { 0 }
+
+    #[compiler_builtin]
+    fn update(h: i64, data: Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn finish(h: i64, out: mut Slice[u8]) { }
+
+    #[compiler_builtin]
+    fn free(h: i64) { }
+}
+
+/// The SHA-256 digest of `data` (FIPS 180-4).
+pub fn sha256(data: Slice[u8]) -> Array[u8, 32] {
+    let mut out = [0u8; 32];
+    CryptoSha2.digest(256, data, mut out);
+    out
+}
+
+/// The SHA-384 digest of `data` (FIPS 180-4).
+pub fn sha384(data: Slice[u8]) -> Array[u8, 48] {
+    let mut out = [0u8; 48];
+    CryptoSha2.digest(384, data, mut out);
+    out
+}
+
+/// The SHA-512 digest of `data` (FIPS 180-4).
+pub fn sha512(data: Slice[u8]) -> Array[u8, 64] {
+    let mut out = [0u8; 64];
+    CryptoSha2.digest(512, data, mut out);
+    out
+}
+
+/// A SHA-256 digest computed over data given in parts.
+pub struct Sha256 {
+    h: i64,
+}
+
+impl Sha256 {
+    pub fn new() -> Sha256 {
+        Sha256 { h: CryptoSha2.start(256) }
+    }
+
+    /// Adds `data` to what the digest covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoSha2.update(self.h, data);
+    }
+
+    /// The digest of everything added.
+    pub fn finish(own self) -> Array[u8, 32] {
+        let mut s = self;
+        let mut out = [0u8; 32];
+        CryptoSha2.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for Sha256 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoSha2.free(self.h);
+        }
+    }
+}
+
+/// A SHA-384 digest computed over data given in parts.
+pub struct Sha384 {
+    h: i64,
+}
+
+impl Sha384 {
+    pub fn new() -> Sha384 {
+        Sha384 { h: CryptoSha2.start(384) }
+    }
+
+    /// Adds `data` to what the digest covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoSha2.update(self.h, data);
+    }
+
+    /// The digest of everything added.
+    pub fn finish(own self) -> Array[u8, 48] {
+        let mut s = self;
+        let mut out = [0u8; 48];
+        CryptoSha2.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for Sha384 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoSha2.free(self.h);
+        }
+    }
+}
+
+/// A SHA-512 digest computed over data given in parts.
+pub struct Sha512 {
+    h: i64,
+}
+
+impl Sha512 {
+    pub fn new() -> Sha512 {
+        Sha512 { h: CryptoSha2.start(512) }
+    }
+
+    /// Adds `data` to what the digest covers.
+    pub fn update(mut ref self, data: Slice[u8]) {
+        CryptoSha2.update(self.h, data);
+    }
+
+    /// The digest of everything added.
+    pub fn finish(own self) -> Array[u8, 64] {
+        let mut s = self;
+        let mut out = [0u8; 64];
+        CryptoSha2.finish(s.h, mut out);
+        s.h = 0;
+        out
+    }
+}
+
+// Drop-skip-sound: if this Drop never runs, the running hash's state (a
+// few hundred bytes the native side allocated) leaks, and nothing else:
+// the handle is a plain integer that no other value shares, and the
+// state holds no OS resource. An HMAC's keyed state is not wiped when
+// it is freed either, so a leak exposes nothing a free would hide.
+impl Drop for Sha512 {
+    fn drop(mut ref self) {
+        if self.h != 0 {
+            CryptoSha2.free(self.h);
+        }
+    }
+}

@@ -98,6 +98,7 @@ net = [
 # TCP, plain WebSocket, and JSON.
 tls = [
     "net",
+    "dep:ring",
     "dep:rustls",
     "dep:rustls-pemfile",
     "dep:tokio-rustls",
@@ -264,6 +265,9 @@ libc = { version = "0.2", optional = true }
 # rustls's `CertificateDer` / `PrivateKeyDer` types.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
+# `std.crypto`'s digests and HMAC on the MIR backend (`karac_crypto_mir`,
+# runtime/src/mir_crypto.rs): the `ring` rustls already pulls in, under `tls`.
+ring = { version = "0.17", optional = true }
 # Phase-8 std.http HTTPS serving (`Server.serve_tls` / `karac_runtime_serve_https`):
 # tokio-rustls terminates TLS in front of hyper, wrapping each accepted
 # `TcpStream` in a `TlsStream` whose AsyncRead/AsyncWrite halves feed

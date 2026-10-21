@@ -10,6 +10,7 @@ This directory specifies the standard library's public API: its types, functions
 | [strings.md](strings.md) | `String` and `Str` methods, normalization, UTF-8 conversion, `CStr` and `CString` |
 | [path.md](path.md) | `std.path`: lexical path functions on `Str` |
 | [encoding.md](encoding.md) | `std.encoding`: Base64 and hex |
+| [crypto.md](crypto.md) | `std.crypto`: SHA-2, HMAC, constant-time comparison, legacy SHA-1 |
 | [json.md](json.md) | `Json` values: `parse` and `stringify` |
 | [io.md](io.md) | Standard streams, files, buffered I/O, TCP, process exit |
 | [regex.md](regex.md) | Regular expressions: `Regex`, `Match`, `Captures` |
@@ -76,6 +77,10 @@ Everything else is imported from a `std.*` module:
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
 | `std.path` | `parent`, `file_name`, `extension`, `stem`, `join`, `normalize`, `is_absolute`, `components` |
 | `std.encoding` | `base64_encode`, `base64_decode`, `base64url_encode`, `base64url_decode`, `hex_encode`, `hex_decode`, `DecodeError` |
+| `std.crypto` | `constant_time_eq` |
+| `std.crypto.sha2` | `sha256`, `sha384`, `sha512`, `Sha256`, `Sha384`, `Sha512` |
+| `std.crypto.hmac` | `hmac_sha256`, `hmac_sha384`, `hmac_sha512`, `HmacSha256`, `HmacSha384`, `HmacSha512` |
+| `std.crypto.legacy` | `sha1`, `Sha1` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Backend`, `Record`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
 

@@ -137,6 +137,10 @@ pub mod hashing;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
 pub mod regex;
+// The MIR backend's `std.crypto` digests (`karac_crypto_mir`) over `ring`,
+// which comes with `tls`: full archive only.
+#[cfg(feature = "tls")]
+pub mod mir_crypto;
 // The MIR backend's `std.regex` engine (`karac_regex_mir`), same feature.
 #[cfg(feature = "regex")]
 pub mod mir_regex;
@@ -563,6 +567,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_http_respond,
         mir_io::karac_mir_http_request,
     );
+    // `std.crypto`'s digests on the MIR backend (full archive only).
+    #[cfg(feature = "tls")]
+    keep!(mir_crypto::karac_crypto_mir);
     // `std.http`'s client on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(

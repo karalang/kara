@@ -328,6 +328,10 @@ ureq = "2"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
 rustls-pemfile = "2"
 webpki-roots = "0.26"
+# `std.crypto`'s digests and HMAC in the MIR interpreter: the same `ring` the
+# runtime's `karac_crypto_mir` calls, already in this graph under `rustls`,
+# so the two backends hash with one implementation.
+ring = "0.17"
 # Unicode normalization for the interpreter's `String.normalize(form)`
 # (B-2026-08-20-41). NOT a new crate in this graph: `icu_normalizer` is already
 # here transitively via `ureq -> url -> idna -> idna_adapter`, so naming it

@@ -10926,6 +10926,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                             || declared_own
                             || self.is_fn_typed(a.value.id)
                             || matches!(a.value.kind, ExprKind::Closure { .. });
+                        if a.mut_marker && self.is_place(&a.value) {
+                            // `CryptoSha2.digest(256, data, mut out)`: a
+                            // `mut Slice[T]` parameter lends the place
+                            // mutably, even a `Copy` array, as a method
+                            // native's does.
+                            let p = self.expr_place(&a.value, true)?;
+                            let rt = self.tys().tcx().reference(t, true);
+                            let r = self.temp(rt);
+                            self.assign(r, Rvalue::Ref(BorrowKind::Mut, p));
+                            ops.push(Operand::Move(Place::local(r)));
+                            continue;
+                        }
                         let by_ref = !moves && !self.is_copy(t);
                         ops.push(self.lib_arg(&a.value, by_ref)?);
                     }

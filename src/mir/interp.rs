@@ -601,6 +601,7 @@ fn run_with(
         procs: Procs::default(),
         sockets: Sockets::default(),
         regexes: std::collections::HashMap::new(),
+        crypto: Default::default(),
         pools: Vec::new(),
         semaphores: Vec::new(),
         limiters: Vec::new(),
@@ -930,6 +931,9 @@ struct Interp<'a> {
     /// The compiled patterns behind `RegexEngine`, by pattern
     /// (B-2026-10-14-63): each is compiled once per run.
     regexes: std::collections::HashMap<String, Option<regex::Regex>>,
+    /// The running hashes and MACs behind `std.crypto`'s `Sha256` and the
+    /// rest, by handle.
+    crypto: CryptoStates,
     /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
     /// does: `Pool` values are handles, and copies share it.
     pools: Vec<PoolEntry>,
@@ -1768,6 +1772,9 @@ impl<'a> Interp<'a> {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
             }
             ("RegexEngine", _) => self.regex_method(name, method, args, arg_tys),
+            ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
+                self.crypto_method(name, method, args)
+            }
             ("Server", "serve" | "serve_static") | ("Request", _) => {
                 self.http_server_method(name, base, method, args, arg_tys, ret)
             }
@@ -5713,6 +5720,106 @@ impl<'a> Interp<'a> {
             }
         }
         Ok(bytes)
+    }
+
+    /// The `std.crypto` engine natives (runtime/stdlib/std_crypto*.kara),
+    /// `ring` as runtime/src/mir_crypto.rs calls it for the compiled
+    /// backend. `alg` is the output width in bits (160 for SHA-1).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn crypto_method(&mut self, name: &str, method: &str, args: Vec<Value>) -> R<Value> {
+        let int = |i: usize| -> R<i64> {
+            match args.get(i) {
+                Some(Value::Int(n)) => Ok(*n as i64),
+                other => err(format!("{name}: argument {i} is {other:?}")),
+            }
+        };
+        let arg = |i: usize| -> R<&Value> {
+            args.get(i)
+                .ok_or_else(|| Stop::Error(format!("{name} takes {} arguments", i + 1)))
+        };
+        let unit = Value::Agg(Vec::new());
+        match method {
+            "eq" => {
+                let a = self.bytes_of_view(arg(0)?, name)?;
+                let b = self.bytes_of_view(arg(1)?, name)?;
+                Ok(Value::Bool(crypto_ct_eq(&a, &b)))
+            }
+            "digest" | "mac" => {
+                let alg = int(0)?;
+                let (key, data, out) = if method == "mac" {
+                    (Some(self.bytes_of_view(arg(1)?, name)?), arg(2)?, arg(3)?)
+                } else {
+                    (None, arg(1)?, arg(2)?)
+                };
+                let data = self.bytes_of_view(data, name)?;
+                let mut st = CryptoState::start(alg, key.as_deref())
+                    .ok_or_else(|| Stop::Error(format!("{name}: no algorithm {alg}")))?;
+                st.update(&data);
+                let out = out.clone();
+                self.crypto_write(&out, &st.finish())?;
+                Ok(unit)
+            }
+            "start" => {
+                let alg = int(0)?;
+                let key = if name.starts_with("CryptoHmac") {
+                    Some(self.bytes_of_view(arg(1)?, name)?)
+                } else {
+                    None
+                };
+                let st = CryptoState::start(alg, key.as_deref())
+                    .ok_or_else(|| Stop::Error(format!("{name}: no algorithm {alg}")))?;
+                self.crypto.next += 1;
+                let h = self.crypto.next;
+                self.crypto.live.insert(h, st);
+                Ok(Value::Int(i128::from(h)))
+            }
+            "update" => {
+                let h = int(0)?;
+                let data = self.bytes_of_view(arg(1)?, name)?;
+                match self.crypto.live.get_mut(&h) {
+                    Some(st) => st.update(&data),
+                    None => return err(format!("{name}: no running hash {h}")),
+                }
+                Ok(unit)
+            }
+            "finish" => {
+                let h = int(0)?;
+                let Some(st) = self.crypto.live.remove(&h) else {
+                    return err(format!("{name}: no running hash {h}"));
+                };
+                let out = arg(1)?.clone();
+                self.crypto_write(&out, &st.finish())?;
+                Ok(unit)
+            }
+            "free" => {
+                self.crypto.live.remove(&int(0)?);
+                Ok(unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn crypto_method(&mut self, name: &str, _method: &str, _args: Vec<Value>) -> R<Value> {
+        err(format!(
+            "{name}: std.crypto is not available in the browser"
+        ))
+    }
+
+    /// Stores `bytes` into the `u8` view `out`, which is exactly as long.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn crypto_write(&mut self, out: &Value, bytes: &[u8]) -> R<()> {
+        let (place, lo, len) = self.view_of(out)?;
+        if len as usize != bytes.len() {
+            return err(format!(
+                "std.crypto: a {len}-byte result for a {}-byte digest",
+                bytes.len()
+            ));
+        }
+        for (i, b) in bytes.iter().enumerate() {
+            *self.slot_mut(&place.child(lo + i as u64))? = Value::Int(i128::from(*b));
+        }
+        Ok(())
     }
 
     /// The `std.regex` engine natives (runtime/stdlib/source/regex.kara,
@@ -12883,6 +12990,76 @@ fn total_form(v: Value) -> Value {
 /// offsets of the first `n / 2` groups (-1 for a group that did not take
 /// part). An empty match ending at `last_end` is skipped and the search
 /// moves on one character, as the crate's iterators skip it
+/// The running hashes and MACs of `std.crypto`, by handle (0 is none).
+#[derive(Default)]
+struct CryptoStates {
+    next: i64,
+    #[cfg(not(target_arch = "wasm32"))]
+    live: std::collections::HashMap<i64, CryptoState>,
+}
+
+/// One running hash or MAC. runtime/src/mir_crypto.rs has the same type.
+#[cfg(not(target_arch = "wasm32"))]
+enum CryptoState {
+    Digest(ring::digest::Context),
+    Mac(ring::hmac::Context),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CryptoState {
+    /// A hash of `alg` bits (160 is SHA-1), or with `key` its HMAC.
+    fn start(alg: i64, key: Option<&[u8]>) -> Option<CryptoState> {
+        use ring::{digest, hmac};
+        Some(match (alg, key) {
+            (160, None) => {
+                CryptoState::Digest(digest::Context::new(&digest::SHA1_FOR_LEGACY_USE_ONLY))
+            }
+            (256, None) => CryptoState::Digest(digest::Context::new(&digest::SHA256)),
+            (384, None) => CryptoState::Digest(digest::Context::new(&digest::SHA384)),
+            (512, None) => CryptoState::Digest(digest::Context::new(&digest::SHA512)),
+            (256, Some(k)) => CryptoState::Mac(hmac::Context::with_key(&hmac::Key::new(
+                hmac::HMAC_SHA256,
+                k,
+            ))),
+            (384, Some(k)) => CryptoState::Mac(hmac::Context::with_key(&hmac::Key::new(
+                hmac::HMAC_SHA384,
+                k,
+            ))),
+            (512, Some(k)) => CryptoState::Mac(hmac::Context::with_key(&hmac::Key::new(
+                hmac::HMAC_SHA512,
+                k,
+            ))),
+            _ => return None,
+        })
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            CryptoState::Digest(c) => c.update(data),
+            CryptoState::Mac(c) => c.update(data),
+        }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        match self {
+            CryptoState::Digest(c) => c.finish().as_ref().to_vec(),
+            CryptoState::Mac(c) => c.sign().as_ref().to_vec(),
+        }
+    }
+}
+
+/// `std.crypto.constant_time_eq`: false on unequal lengths, else every byte
+/// pair is compared, with no early exit, so the time depends only on the
+/// length. runtime/src/mir_crypto.rs has the same function.
+#[cfg(not(target_arch = "wasm32"))]
+fn crypto_ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
 /// (B-2026-10-14-63). runtime/src/mir_regex.rs has the same function.
 fn regex_find_from(
     re: &regex::Regex,
