@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 610 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 319 |
+| missing-feature | 322 |
 | codegen-gap | 281 |
 | false-positive | 266 |
 | other | 191 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3004 |
-| interp | 1024 |
-| typecheck | 539 |
+| codegen | 3005 |
+| interp | 1025 |
+| typecheck | 540 |
 | ownership | 128 |
 | other | 123 |
 | runtime | 85 |
 | cli | 82 |
-| parser | 76 |
+| parser | 77 |
 | autopar | 59 |
 | resolver | 50 |
 | effect | 40 |
@@ -185,6 +185,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-43 | 2026-10-21 | typecheck+interp+codegen | low | Connection pool `with_health_check` takes `ref self` and returns a second `Pool` value where docs/library/pool.md specifies a builder taking `own self` | — |
 | B-2026-10-21-44 | 2026-10-21 | runtime+codegen+interp | medium | Connection pool `acquire` never waits and has no `Busy`: at capacity it returns `Timeout` at once whatever the timeout, and `max_waiters` limits nothing, where docs/library/pool.md specifies waiting up to the timeout for a value to come back and `PoolError.Busy` at once when `max_waiters` callers are already waiting | — |
 | B-2026-10-21-45 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool has no `close`: docs/library/pool.md specifies `close(ref self)`, after which idle values drop at once, each loan's value drops when it comes back, and every later `acquire` fails with `PoolClosed`; without it `PoolClosed` is produced only by a hand-built `Pool { handle_id: 0 }` | — |
+| B-2026-10-21-46 | 2026-10-21 | typecheck | medium | An open range `(lo..)` takes no iterator adaptor: `(1..).take(3)` and `(1..).take_while(..)` are refused as "no method on type 'RangeFrom'", while `(1..).into_iter()` and `.iter()` are refused as "already an iterator: drop `.into_iter()`" | — |
+| B-2026-10-21-47 | 2026-10-21 | parser | low | `for i in 1.. { .. }` does not parse: the loop body's `{` is taken as the range's end, "Expected LeftBrace, found RightBrace" | — |
+| B-2026-10-21-48 | 2026-10-21 | interp+codegen | low | `for i in (1..) { .. }` is refused by the MIR builder: "a `for` loop over a collection is not lowered yet" | — |
 
 ### Relocated
 
