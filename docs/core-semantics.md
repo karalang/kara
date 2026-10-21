@@ -586,6 +586,7 @@ A `main` that returns `Err(e)` is an ordinary error exit: `main`'s drops, `defer
 - `TaskGroup` runs tasks that join when the group drops (§9.5).
 - There is no free `spawn`.
 - v1 has no automatic parallelisation of statements; it returns in M4 under §11.5's rule (redesign amendment, 2026-10-07).
+- **Progress between tasks.** "Concurrently" means interleaved, not necessarily in parallel. A task is guaranteed to let its siblings run only at a suspension point: a channel `send` or `recv`, a `Mutex` lock that waits, a join, I/O, a sleep, or any other call with `blocks` or `suspends`. A target may also run tasks on separate workers (native M4 may), but no program may rely on that. So a loop that waits for a sibling without suspending, such as `while not flag.load() {}`, is not guaranteed to terminate on any target. Wait on a channel or a join instead. This is the same rule `wasm_wasi` has always had (design.md §16), now stated for every target (review-thread ruling on B-2026-10-21-69).
 
 **11.2 `par {}` branches must not conflict.**
 - Two branches conflict when one writes, moves, mutably borrows or drops a place or resource that another reads or writes.

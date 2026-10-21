@@ -226,10 +226,12 @@ fn publish(ready: Atomic[bool]) {
     ready.store(true);
 }
 
-fn wait_ready(ready: Atomic[bool]) {
-    while not ready.load() {}
+fn is_ready(ready: Atomic[bool]) -> bool {
+    ready.load()
 }
 ```
+
+A flag is for checking, not for waiting. A loop such as `while not ready.load() {}` never suspends, so its siblings are not guaranteed to run and it may never end ([core-semantics.md §11.1](../core-semantics.md#11-concurrency-c9)). To wait for another task, receive on a channel or join it.
 
 **Atomics are effect-free.** Atomic operations contribute nothing to a function's effects. A function's effects come from the data the atomic guards, not from the atomic. Which task's operation comes first is not fixed ([design.md §13](../design.md#determinism-contract)); to order two updates across tasks, use a `Mutex` or a channel.
 
