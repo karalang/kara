@@ -1656,6 +1656,58 @@ impl<'ctx> Cx<'ctx, '_> {
                 let code = self.load_i64(code)?;
                 self.store_alloc_result(dest, code)?;
             }
+            ("try_resize", [k, val]) if is_vec => {
+                // Growing reserves the difference first: a capacity that
+                // cannot be represented, or one the allocator refuses, is
+                // an `Err`, the vector unchanged and the fill value
+                // dropped (B-2026-10-21-35).
+                let k = self.int_arg(k)?;
+                let more = self.builder.build_int_sub(k, n, "").map_err(e)?;
+                let grows = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, more, self.i64(0), "")
+                    .map_err(e)?;
+                let v = self.ref_arg(recv)?;
+                let code = self.entry_slot(8, "try.code")?;
+                self.store(code, self.i64(u64::MAX).into())?;
+                self.if_then(grows, |cx| {
+                    let c = cx.try_reserve_header(v, more, cx.i64(size))?;
+                    cx.store(code, c.into())
+                })?;
+                let code = self.load_i64(code)?;
+                let failed = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, code, self.i64(u64::MAX), "")
+                    .map_err(e)?;
+                let f = self.cur_fn()?;
+                let (fail, go, done) = (
+                    self.llcx.append_basic_block(f, "resize.fail"),
+                    self.llcx.append_basic_block(f, "resize.go"),
+                    self.llcx.append_basic_block(f, "resize.done"),
+                );
+                self.builder
+                    .build_conditional_branch(failed, fail, go)
+                    .map_err(e)?;
+                self.builder.position_at_end(fail);
+                if matches!(val, Operand::Move(_)) && self.tys.needs_drop(el) {
+                    let vp = self.operand_ptr(val)?;
+                    self.call_glue(vp, el)?;
+                }
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(go);
+                let ok = self.variant_of(dty, "Ok")?;
+                let pt = self
+                    .tys
+                    .field_ty(dty, Some(ok), 0)
+                    .ok_or("a try_resize result without an Ok payload")?;
+                let payload = dest
+                    .project(crate::mir::ProjElem::Downcast(crate::mir::VariantIdx(ok)))
+                    .field(0, pt);
+                self.seq_native(base, "resize", args, &payload)?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+                self.store_alloc_result(dest, code)?;
+            }
             ("capacity", []) if is_vec => {
                 // At least the length: a borrowed literal has capacity 0.
                 let v = self.ref_arg(recv)?;

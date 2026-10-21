@@ -583,7 +583,8 @@ impl<'ctx> Cx<'ctx, '_> {
             && matches!(
                 method,
                 "try_with_capacity" | "try_reserve" | "try_reserve_exact"
-            );
+            )
+            || (base, method) == ("Vec", "try_resize");
         if matches!(
             base,
             "Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet"

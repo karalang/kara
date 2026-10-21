@@ -2010,6 +2010,12 @@ impl<'a> Interp<'a> {
                 // or one the allocator refuses, is an `Err` (B-2026-10-21-28).
                 let ok_ty = self.payload_ty(ret, "Ok")?;
                 if let Some(failure) = self.alloc_failure(base, m, &args, arg_tys, ok_ty)? {
+                    // `try_resize`'s fill value is not used: it drops.
+                    if m == "try_resize" {
+                        if let (Some(v), Some(&t)) = (args.get(2), arg_tys.get(2)) {
+                            self.drop_value(v.clone(), t)?;
+                        }
+                    }
                     let err_ty = self.payload_ty(ret, "Err")?;
                     let e = match failure {
                         None => self.variant_named(err_ty, None, "CapacityOverflow", vec![])?,
@@ -6823,7 +6829,8 @@ impl<'a> Interp<'a> {
     }
 
     /// Whether the fallible twin `method` of the `Vec`, `String` or
-    /// `VecDeque` `base` fails: `Some(None)` when the capacity it asks for
+    /// `VecDeque` `base` fails (`try_resize` growing a `Vec` is a reserve
+    /// of the difference): `Some(None)` when the capacity it asks for
     /// cannot be represented, `Some(Some(bytes))` when the allocator
     /// refuses that many bytes, `None` when it succeeds. The bound and the
     /// growth are the compiled backend's (`karac_mir_vec_try_reserve` and
@@ -6865,6 +6872,23 @@ impl<'a> Interp<'a> {
                 };
                 let cap = self.caps.get(&id).copied().unwrap_or(0).max(len);
                 (*n as u128, len as u128, cap as u128, elem_size(self, t))
+            }
+            // Growing to `k` elements reserves the difference
+            // (B-2026-10-21-35).
+            ("Vec", "try_resize", [recv, Value::Int(k), _]) => {
+                let t = self.deref_ty(arg_tys.first().copied(), method)?;
+                let id = self.box_behind(recv)?;
+                let len = self.vec_elems(id)?.len();
+                if *k <= len as i128 {
+                    return Ok(None);
+                }
+                let cap = self.caps.get(&id).copied().unwrap_or(0).max(len);
+                (
+                    (*k - len as i128) as u128,
+                    len as u128,
+                    cap as u128,
+                    elem_size(self, t),
+                )
             }
             _ => return Ok(None),
         };

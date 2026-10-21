@@ -329,3 +329,47 @@ fn pool_drop_is_clean_under_asan() {
         assert_eq!(out, WANT_POOL_DROP);
     }
 }
+
+/// B-2026-10-21-35: `try_resize` growing past what can be represented is an
+/// `Err`, the vector unchanged and the fill value dropped; shrinking, a
+/// negative length and a representable growth are `Ok`.
+const TRY_RESIZE: &str = r#"fn show(r: Result[(), AllocError]) -> String {
+    match r {
+        Ok(_) => "ok".to_string(),
+        Err(AllocError.CapacityOverflow) => "overflow".to_string(),
+        Err(AllocError.OutOfMemory { requested_bytes }) => f"oom {requested_bytes}",
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    println(show(v.try_resize(i64.MAX, 0)));
+    println(f"{v.len()}");
+    println(show(v.try_resize(3, 7)));
+    println(f"{v}");
+    println(show(v.try_resize(1, 0)));
+    println(f"{v}");
+    println(show(v.try_resize(-2, 0)));
+    println(f"{v.len()}");
+    let mut w: Vec[String] = Vec.new();
+    println(show(w.try_resize(i64.MAX, "x".to_string())));
+    println(show(w.try_resize(2, "y".to_string())));
+    println(f"{w}");
+    println(show(w.try_resize(1 << 57, "z".to_string())));
+    println(f"{w.len()}");
+}
+"#;
+
+const WANT_TRY_RESIZE: &str =
+    "overflow\n0\nok\n[7, 7, 7]\nok\n[7]\nok\n0\noverflow\nok\n[y, y]\noverflow\n2\n";
+
+#[test]
+fn try_resize_returns_capacity_overflow_on_both_backends() {
+    agrees(TRY_RESIZE, WANT_TRY_RESIZE, 0);
+}
+
+#[test]
+fn try_resize_is_clean_under_asan() {
+    if let Some(out) = under_asan(TRY_RESIZE) {
+        assert_eq!(out, WANT_TRY_RESIZE);
+    }
+}
