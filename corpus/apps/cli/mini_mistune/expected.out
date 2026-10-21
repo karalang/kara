@@ -1,0 +1,3217 @@
+== atx headings [html]
+<h1>one</h1>
+<h2>two</h2>
+<h3>three</h3>
+<p>####### seven
+#hash</p>
+<h1></h1>
+<h3></h3>
+== atx closing [html]
+<h1>foo#</h1>
+<h2>foo #</h2>
+<h3>b ##</h3>
+== setext [html]
+<h1>Title</h1>
+<h2>Sub <em>title</em></h2>
+<h1>Indented</h1>
+== setext no paragraph [html]
+<hr />
+<p>===</p>
+== thematic breaks [html]
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<p>**</p>
+== indented code [html]
+<pre><code>a simple
+  indented code block
+
+chunk2
+
+
+
+chunk3</code></pre>
+== indented code in paragraph [html]
+<p>Foo
+bar</p>
+== tab code [html]
+<pre><code>foo	baz		bim
+bar</code></pre>
+== fenced code [html]
+<pre><code class="language-python">def f(x):
+    return x * 2
+</code></pre>
+<pre><code>&lt;tag&gt; &amp; more
+</code></pre>
+== fenced info with backtick [html]
+<p>``` aa `
+foo</p>
+<pre><code></code></pre>
+== fenced indented [html]
+<pre><code>aaa
+ aaa
+aaa
+</code></pre>
+== fenced unclosed [html]
+<pre><code>aaa
+```
+</code></pre>
+== fenced escaped info [html]
+<pre><code class="language-{x}">body
+</code></pre>
+== block quote [html]
+<blockquote>
+<h1>Foo</h1>
+<p>bar
+baz</p>
+</blockquote>
+== block quote lazy [html]
+<blockquote>
+<p>bar
+baz
+foo</p>
+</blockquote>
+<p>after</p>
+== block quote nested [html]
+<blockquote>
+<blockquote>
+<blockquote>
+<p>deep
+two
+one</p>
+</blockquote>
+</blockquote>
+</blockquote>
+== block quote code [html]
+<blockquote>
+<pre><code>code
+
+more</code></pre>
+</blockquote>
+== block quote break [html]
+<blockquote>
+<p>a</p>
+</blockquote>
+<hr />
+<blockquote>
+<p>b</p>
+</blockquote>
+<ul>
+<li>list</li>
+</ul>
+== lists simple [html]
+<ul>
+<li>one</li>
+<li>two</li>
+<li>three</li>
+</ul>
+== lists loose [html]
+<ul>
+<li><p>a</p>
+</li>
+<li><p>b</p>
+</li>
+<li><p>c</p>
+</li>
+</ul>
+== lists ordered [html]
+<ol start="3">
+<li>three</li>
+<li>four</li>
+</ol>
+<ol>
+<li>paren</li>
+<li>next</li>
+</ol>
+== lists nested [html]
+<ul>
+<li>a<ul>
+<li>b<ul>
+<li>c<ul>
+<li>d</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>e</li>
+</ul>
+== lists with code [html]
+<ol>
+<li><p>item</p>
+<pre><code>code</code></pre>
+</li>
+<li><p>next</p>
+</li>
+</ol>
+== lists marker change [html]
+<ul>
+<li>a</li>
+</ul>
+<ul>
+<li>b</li>
+</ul>
+<ul>
+<li>c</li>
+</ul>
+== lists interrupt [html]
+<p>para
+para</p>
+<ul>
+<li>item</li>
+</ul>
+<ol start="2">
+<li>no</li>
+</ol>
+<p>para</p>
+<ol>
+<li>yes</li>
+</ol>
+== lists empty item [html]
+<ul>
+<li>foo</li>
+<li></li>
+<li>bar</li>
+</ul>
+== lists blank start [html]
+<ul>
+<li></li>
+</ul>
+<p>foo</p>
+== lists continuation [html]
+<ul>
+<li><p>first line
+continued lazily</p>
+<p>second paragraph</p>
+</li>
+<li><p>next</p>
+</li>
+</ul>
+== lists with quote [html]
+<ul>
+<li><blockquote>
+<p>quoted
+more</p>
+</blockquote>
+</li>
+<li>plain</li>
+</ul>
+== lists deep [html]
+<ol>
+<li>a<ol>
+<li>b<ol>
+<li>c<ol>
+<li>d<ol>
+<li>e<ol>
+<li>f
+1. g</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+== html blocks [html]
+<div>
+*not md*
+</div>
+
+<!-- a comment
+still -->
+
+<p>after</p>
+<?php echo 1; ?>
+
+<!DOCTYPE html>
+
+<![CDATA[
+x < y
+]]>
+
+== html pre [html]
+<pre>
+**raw**
+
+</pre>
+
+<p>after</p>
+== html rule 7 [html]
+<custom-tag a="1">
+*md*
+
+</custom-tag>
+
+<p>para <span>
+<span></p>
+== html close [html]
+</div>
+ok
+
+</section>
+
+== ref links [html]
+<p><a href="/url" title="title">foo</a> <a href="my%20url" title="other">bar</a> <a href="my%20url" title="other">Baz</a> [missing]</p>
+== ref link titles [html]
+<p>[b]: /b &quot;broken</p>
+<p><a href="/a" title="title on next line">a</a> [b]</p>
+== ref link first wins [html]
+<p><a href="/first">x</a></p>
+== ref link inside paragraph [html]
+<p>para
+[x]: /u</p>
+<p>[x]</p>
+== paragraphs [html]
+<p>aaa</p>
+<p>bbb
+ccc</p>
+<p>ddd</p>
+== blank lines [html]
+<p>aaa</p>
+<h1>heading</h1>
+== escapes [html]
+<p>*not emph* _x_ ` # \ \a [link]</p>
+== code spans [html]
+<p><code>code</code> <code>a`b</code> <code>x</code> <code>  </code> ``unterminated
+multi
+line<code> </code>a
+b`</p>
+== emphasis [html]
+<p><em>a</em> <em>b</em> <strong>c</strong> <strong>d</strong> <em><strong>e</strong></em> <em><strong>f</strong></em> <em>nested <strong>strong</strong> inside</em></p>
+== emphasis edge [html]
+<p>a * b * c
+snake_case_word
+<em>foo</em>bar
+**unclosed
+<em>a_b</em></p>
+== emphasis escaped [html]
+<p><em>a\</em>b* <strong>c**d</strong></p>
+== links [html]
+<p><a href="/url" title="title">text</a> <a href="">empty</a> <a href="a%20b">angle</a> <img src="/i.png" alt="img" title="T" /> <a href="/a)b">esc</a></p>
+== links nested [html]
+<p><a href="/u">outer [inner] text</a> <a href="/y">a [b](/x) c</a> <img src="/i" alt="img x" /></p>
+== links titles [html]
+<p><a href="/u" title="t &quot;q&quot;">a</a> <a href="/u" title="single">b</a> [c](/u (paren))</p>
+== links precedence [html]
+<p>[not a <code>link](/u)</code> here] *a <code>*</code> b* <a href="/c">x &lt;http://a.b/&gt;</a></p>
+== autolinks [html]
+<p><a href="https://example.com/path?q=1&amp;r=2">https://example.com/path?q=1&amp;r=2</a> <a href="mailto:me@x.org">mailto:me@x.org</a> <a href="mailto:me@example.com">me@example.com</a> <not auto> <a href="a+b:c">a+b:c</a></p>
+== inline html [html]
+<p>a <span class="x">b</span> <!-- c --> <?pi?> <![CDATA[d]]> <a href="/q">[in](/link)</a></p>
+== entities [html]
+<p>&amp; © # &quot;  x &amp;bogus; &amp;xyz; � � � &amp;Auml</p>
+== line breaks [html]
+<p>hard<br />
+break
+soft
+back<br />
+slash</p>
+== urls in text [html]
+<p>visit https://example.com/a_b. or http://x.y/(z) now</p>
+== unicode [html]
+<p><em>ünïcödé</em> — “quotes” <a href="/%D0%BF%D1%83%D1%82%D1%8C">ссылка</a> <code>код</code></p>
+== strikethrough [html]
+<p><del>gone</del> <del>not closed ~ ~~a\</del>b~~</p>
+== mark insert [html]
+<p>==marked== ^^inserted^^ ==a==b==</p>
+== sup sub [html]
+<p>2^10^ is 1024, H~2~O, a^b\ c^</p>
+== table [html]
+<table>
+<thead>
+<tr>
+  <th style="text-align:left">a</th>
+  <th style="text-align:center">b</th>
+  <th style="text-align:right">c</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left">1</td>
+  <td style="text-align:center">2</td>
+  <td style="text-align:right">3</td>
+</tr>
+<tr>
+  <td style="text-align:left">x | y</td>
+  <td style="text-align:center"><code>z</code></td>
+  <td style="text-align:right"><strong>w</strong></td>
+</tr>
+</tbody>
+</table>
+== table mismatch [html]
+<p>| a | b |
+|---|
+| 1 | 2 |</p>
+== nptable [html]
+<table>
+<thead>
+<tr>
+  <th>a</th>
+  <th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>1</td>
+  <td>2</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td>4</td>
+</tr>
+</tbody>
+</table>
+== footnotes [html]
+<p>Text<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup> and more<sup class="footnote-ref" id="fnref-2"><a href="#fn-2">2</a></sup> and <sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup> again, [^missing].</p>
+<pre><code>with a second line.
+
+And a paragraph.</code></pre>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>First note.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+<li id="fn-2"><p>A longer note<a href="#fnref-2" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+== task lists [html]
+<ul>
+<li>[ ] todo</li>
+<li>[x] done</li>
+<li>[X] also</li>
+<li>[y] not a task</li>
+</ul>
+<ol>
+<li>[ ] ordered</li>
+</ol>
+== def list [html]
+<p>Apple
+:   A fruit.</p>
+<p>Orange
+:   Citrus.
+:   Second definition
+continued.</p>
+<p>Term</p>
+<p>: loose</p>
+== abbr [html]
+<p>The HTML spec is by the W3C.</p>
+<p>*[HTML]: Hyper Text Markup Language
+*[W3C]:  World Wide Web Consortium</p>
+== math [html]
+<p>Inline $a^2 + b^2$ and $ not$.</p>
+<p>$$
+\int_0^1 x,dx
+$$</p>
+== ruby [html]
+<p>[漢字(かんじ)] <a href="/tokyo">東(ひがし)京(きょう)</a> <a href="/ref">語(ご)</a></p>
+== spoiler [html]
+<blockquote>
+<p>! hidden
+! more</p>
+</blockquote>
+<p>inline &gt;! secret !&lt; text</p>
+<blockquote>
+<p>normal</p>
+</blockquote>
+== url plugin [html]
+<p>see https://example.com/x, or <a href="https://a.b">https://a.b</a> and <a href="/u">https://in.link</a></p>
+== admonitions [html]
+<p>.. note:: Read this
+:class: wide</p>
+<p>Body <strong>text</strong>.</p>
+<p>.. warning::</p>
+<p>No title.</p>
+<p>.. unknown:: thing</p>
+== fenced directives [html]
+<pre><code class="language-{tip}">:class: small
+
+Inside the tip.
+</code></pre>
+<pre><code class="language-{danger}">Careful.
+</code></pre>
+<pre><code class="language-{nope}">x
+</code></pre>
+== image directive [html]
+<p>.. image:: /img/a.png
+:alt: An image
+:width: 100
+:height: 50%
+:align: center
+:target: /big.png</p>
+<p>.. image:: /b.png
+:align: sideways
+:width: wide</p>
+== figure directive [html]
+<p>.. figure:: /fig.png
+:figwidth: 80%
+:figclass: framed
+:align: left</p>
+<p>The caption.</p>
+<p>A legend paragraph.</p>
+== toc errors [html]
+<p>.. toc::
+:min-level: 0</p>
+<p>.. toc::
+:max-level: x</p>
+<p>.. toc::
+:min-level: 3
+:max-level: 2</p>
+<h1>heading</h1>
+== toc [html]
+<h1>Intro</h1>
+<p>.. toc:: Contents
+:max-level: 2</p>
+<h2>Part <em>one</em></h2>
+<h3>Deep</h3>
+<h2>Part two</h2>
+<h1>End</h1>
+== atx headings [safe]
+<h1>one</h1>
+<h2>two</h2>
+<h3>three</h3>
+<p>####### seven
+#hash</p>
+<h1></h1>
+<h3></h3>
+== atx closing [safe]
+<h1>foo#</h1>
+<h2>foo #</h2>
+<h3>b ##</h3>
+== setext [safe]
+<h1>Title</h1>
+<h2>Sub <em>title</em></h2>
+<h1>Indented</h1>
+== setext no paragraph [safe]
+<hr />
+<p>===</p>
+== thematic breaks [safe]
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<p>**</p>
+== indented code [safe]
+<pre><code>a simple
+  indented code block
+
+chunk2
+
+
+
+chunk3</code></pre>
+== indented code in paragraph [safe]
+<p>Foo
+bar</p>
+== tab code [safe]
+<pre><code>foo	baz		bim
+bar</code></pre>
+== fenced code [safe]
+<pre><code class="language-python">def f(x):
+    return x * 2
+</code></pre>
+<pre><code>&lt;tag&gt; &amp; more
+</code></pre>
+== fenced info with backtick [safe]
+<p>``` aa `
+foo</p>
+<pre><code></code></pre>
+== fenced indented [safe]
+<pre><code>aaa
+ aaa
+aaa
+</code></pre>
+== fenced unclosed [safe]
+<pre><code>aaa
+```
+</code></pre>
+== fenced escaped info [safe]
+<pre><code class="language-{x}">body
+</code></pre>
+== block quote [safe]
+<blockquote>
+<h1>Foo</h1>
+<p>bar
+baz</p>
+</blockquote>
+== block quote lazy [safe]
+<blockquote>
+<p>bar
+baz
+foo</p>
+</blockquote>
+<p>after</p>
+== block quote nested [safe]
+<blockquote>
+<blockquote>
+<blockquote>
+<p>deep
+two
+one</p>
+</blockquote>
+</blockquote>
+</blockquote>
+== block quote code [safe]
+<blockquote>
+<pre><code>code
+
+more</code></pre>
+</blockquote>
+== block quote break [safe]
+<blockquote>
+<p>a</p>
+</blockquote>
+<hr />
+<blockquote>
+<p>b</p>
+</blockquote>
+<ul>
+<li>list</li>
+</ul>
+== lists simple [safe]
+<ul>
+<li>one</li>
+<li>two</li>
+<li>three</li>
+</ul>
+== lists loose [safe]
+<ul>
+<li><p>a</p>
+</li>
+<li><p>b</p>
+</li>
+<li><p>c</p>
+</li>
+</ul>
+== lists ordered [safe]
+<ol start="3">
+<li>three</li>
+<li>four</li>
+</ol>
+<ol>
+<li>paren</li>
+<li>next</li>
+</ol>
+== lists nested [safe]
+<ul>
+<li>a<ul>
+<li>b<ul>
+<li>c<ul>
+<li>d</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>e</li>
+</ul>
+== lists with code [safe]
+<ol>
+<li><p>item</p>
+<pre><code>code</code></pre>
+</li>
+<li><p>next</p>
+</li>
+</ol>
+== lists marker change [safe]
+<ul>
+<li>a</li>
+</ul>
+<ul>
+<li>b</li>
+</ul>
+<ul>
+<li>c</li>
+</ul>
+== lists interrupt [safe]
+<p>para
+para</p>
+<ul>
+<li>item</li>
+</ul>
+<ol start="2">
+<li>no</li>
+</ol>
+<p>para</p>
+<ol>
+<li>yes</li>
+</ol>
+== lists empty item [safe]
+<ul>
+<li>foo</li>
+<li></li>
+<li>bar</li>
+</ul>
+== lists blank start [safe]
+<ul>
+<li></li>
+</ul>
+<p>foo</p>
+== lists continuation [safe]
+<ul>
+<li><p>first line
+continued lazily</p>
+<p>second paragraph</p>
+</li>
+<li><p>next</p>
+</li>
+</ul>
+== lists with quote [safe]
+<ul>
+<li><blockquote>
+<p>quoted
+more</p>
+</blockquote>
+</li>
+<li>plain</li>
+</ul>
+== lists deep [safe]
+<ol>
+<li>a<ol>
+<li>b<ol>
+<li>c<ol>
+<li>d<ol>
+<li>e<ol>
+<li>f
+1. g</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+== html blocks [safe]
+<p>&lt;div&gt;
+*not md*
+&lt;/div&gt;</p>
+<p>&lt;!-- a comment
+still --&gt;</p>
+<p>after</p>
+<p>&lt;?php echo 1; ?&gt;</p>
+<p>&lt;!DOCTYPE html&gt;</p>
+<p>&lt;![CDATA[
+x &lt; y
+]]&gt;</p>
+== html pre [safe]
+<p>&lt;pre&gt;
+**raw**
+
+&lt;/pre&gt;</p>
+<p>after</p>
+== html rule 7 [safe]
+<p>&lt;custom-tag a=&quot;1&quot;&gt;
+*md*</p>
+<p>&lt;/custom-tag&gt;</p>
+<p>para &lt;span&gt;
+&lt;span&gt;</p>
+== html close [safe]
+<p>&lt;/div&gt;
+ok</p>
+<p>&lt;/section&gt;</p>
+== ref links [safe]
+<p><a href="/url" title="title">foo</a> <a href="my%20url" title="other">bar</a> <a href="my%20url" title="other">Baz</a> [missing]</p>
+== ref link titles [safe]
+<p>[b]: /b &quot;broken</p>
+<p><a href="/a" title="title on next line">a</a> [b]</p>
+== ref link first wins [safe]
+<p><a href="/first">x</a></p>
+== ref link inside paragraph [safe]
+<p>para
+[x]: /u</p>
+<p>[x]</p>
+== paragraphs [safe]
+<p>aaa</p>
+<p>bbb
+ccc</p>
+<p>ddd</p>
+== blank lines [safe]
+<p>aaa</p>
+<h1>heading</h1>
+== escapes [safe]
+<p>*not emph* _x_ ` # \ \a [link]</p>
+== code spans [safe]
+<p><code>code</code> <code>a`b</code> <code>x</code> <code>  </code> ``unterminated
+multi
+line<code> </code>a
+b`</p>
+== emphasis [safe]
+<p><em>a</em> <em>b</em> <strong>c</strong> <strong>d</strong> <em><strong>e</strong></em> <em><strong>f</strong></em> <em>nested <strong>strong</strong> inside</em></p>
+== emphasis edge [safe]
+<p>a * b * c
+snake_case_word
+<em>foo</em>bar
+**unclosed
+<em>a_b</em></p>
+== emphasis escaped [safe]
+<p><em>a\</em>b* <strong>c**d</strong></p>
+== links [safe]
+<p><a href="/url" title="title">text</a> <a href="">empty</a> <a href="a%20b">angle</a> <img src="/i.png" alt="img" title="T" /> <a href="/a)b">esc</a></p>
+== links nested [safe]
+<p><a href="/u">outer [inner] text</a> <a href="/y">a [b](/x) c</a> <img src="/i" alt="img x" /></p>
+== links titles [safe]
+<p><a href="/u" title="t &quot;q&quot;">a</a> <a href="/u" title="single">b</a> [c](/u (paren))</p>
+== links precedence [safe]
+<p>[not a <code>link](/u)</code> here] *a <code>*</code> b* <a href="/c">x &lt;http://a.b/&gt;</a></p>
+== autolinks [safe]
+<p><a href="https://example.com/path?q=1&amp;r=2">https://example.com/path?q=1&amp;r=2</a> <a href="mailto:me@x.org">mailto:me@x.org</a> <a href="mailto:me@example.com">me@example.com</a> &lt;not auto&gt; <a href="a+b:c">a+b:c</a></p>
+== inline html [safe]
+<p>a &lt;span class=&quot;x&quot;&gt;b&lt;/span&gt; &lt;!-- c --&gt; &lt;?pi?&gt; &lt;![CDATA[d]]&gt; &lt;a href=&quot;/q&quot;&gt;[in](/link)&lt;/a&gt;</p>
+== entities [safe]
+<p>&amp;amp; &amp;copy; &amp;#35; &amp;#x22; &amp;nbsp;x &amp;bogus; &amp;ampxyz; &amp;#0; &amp;#xD800; &amp;#1114112; &amp;Auml</p>
+== line breaks [safe]
+<p>hard<br />
+break
+soft
+back<br />
+slash</p>
+== urls in text [safe]
+<p>visit https://example.com/a_b. or http://x.y/(z) now</p>
+== unicode [safe]
+<p><em>ünïcödé</em> — “quotes” <a href="/%D0%BF%D1%83%D1%82%D1%8C">ссылка</a> <code>код</code></p>
+== strikethrough [safe]
+<p>~~gone~~ ~~not closed ~ ~~a~~b~~</p>
+== mark insert [safe]
+<p>==marked== ^^inserted^^ ==a==b==</p>
+== sup sub [safe]
+<p>2^10^ is 1024, H~2~O, a^b\ c^</p>
+== table [safe]
+<p>| a | b | c |
+|:--|:-:|--:|
+| 1 | 2 | 3 |
+| x | y | <code>z</code> | <strong>w</strong> |</p>
+== table mismatch [safe]
+<p>| a | b |
+|---|
+| 1 | 2 |</p>
+== nptable [safe]
+<p>a | b
+--|--
+1 | 2
+3 | 4</p>
+== footnotes [safe]
+<p>Text[^1] and more[^note] and [^1] again, [^missing].</p>
+<p>[^1]: First note.
+[^note]: A longer note
+with a second line.</p>
+<pre><code>And a paragraph.</code></pre>
+== task lists [safe]
+<ul>
+<li>[ ] todo</li>
+<li>[x] done</li>
+<li>[X] also</li>
+<li>[y] not a task</li>
+</ul>
+<ol>
+<li>[ ] ordered</li>
+</ol>
+== def list [safe]
+<p>Apple
+:   A fruit.</p>
+<p>Orange
+:   Citrus.
+:   Second definition
+continued.</p>
+<p>Term</p>
+<p>: loose</p>
+== abbr [safe]
+<p>The HTML spec is by the W3C.</p>
+<p>*[HTML]: Hyper Text Markup Language
+*[W3C]:  World Wide Web Consortium</p>
+== math [safe]
+<p>Inline $a^2 + b^2$ and $ not$.</p>
+<p>$$
+\int_0^1 x,dx
+$$</p>
+== ruby [safe]
+<p>[漢字(かんじ)] <a href="/tokyo">東(ひがし)京(きょう)</a> <a href="/ref">語(ご)</a></p>
+== spoiler [safe]
+<blockquote>
+<p>! hidden
+! more</p>
+</blockquote>
+<p>inline &gt;! secret !&lt; text</p>
+<blockquote>
+<p>normal</p>
+</blockquote>
+== url plugin [safe]
+<p>see https://example.com/x, or <a href="https://a.b">https://a.b</a> and <a href="/u">https://in.link</a></p>
+== admonitions [safe]
+<p>.. note:: Read this
+:class: wide</p>
+<p>Body <strong>text</strong>.</p>
+<p>.. warning::</p>
+<p>No title.</p>
+<p>.. unknown:: thing</p>
+== fenced directives [safe]
+<pre><code class="language-{tip}">:class: small
+
+Inside the tip.
+</code></pre>
+<pre><code class="language-{danger}">Careful.
+</code></pre>
+<pre><code class="language-{nope}">x
+</code></pre>
+== image directive [safe]
+<p>.. image:: /img/a.png
+:alt: An image
+:width: 100
+:height: 50%
+:align: center
+:target: /big.png</p>
+<p>.. image:: /b.png
+:align: sideways
+:width: wide</p>
+== figure directive [safe]
+<p>.. figure:: /fig.png
+:figwidth: 80%
+:figclass: framed
+:align: left</p>
+<p>The caption.</p>
+<p>A legend paragraph.</p>
+== toc errors [safe]
+<p>.. toc::
+:min-level: 0</p>
+<p>.. toc::
+:max-level: x</p>
+<p>.. toc::
+:min-level: 3
+:max-level: 2</p>
+<h1>heading</h1>
+== toc [safe]
+<h1>Intro</h1>
+<p>.. toc:: Contents
+:max-level: 2</p>
+<h2>Part <em>one</em></h2>
+<h3>Deep</h3>
+<h2>Part two</h2>
+<h1>End</h1>
+== atx headings [wrap]
+<h1>one</h1>
+<h2>two</h2>
+<h3>three</h3>
+<p>####### seven<br />
+#hash</p>
+<h1></h1>
+<h3></h3>
+== atx closing [wrap]
+<h1>foo#</h1>
+<h2>foo #</h2>
+<h3>b ##</h3>
+== setext [wrap]
+<h1>Title</h1>
+<h2>Sub <em>title</em></h2>
+<h1>Indented</h1>
+== setext no paragraph [wrap]
+<hr />
+<p>===</p>
+== thematic breaks [wrap]
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<p>**</p>
+== indented code [wrap]
+<pre><code>a simple
+  indented code block
+
+chunk2
+
+
+
+chunk3</code></pre>
+== indented code in paragraph [wrap]
+<p>Foo<br />
+bar</p>
+== tab code [wrap]
+<pre><code>foo	baz		bim
+bar</code></pre>
+== fenced code [wrap]
+<pre><code class="language-python">def f(x):
+    return x * 2
+</code></pre>
+<pre><code>&lt;tag&gt; &amp; more
+</code></pre>
+== fenced info with backtick [wrap]
+<p>``` aa `<br />
+foo</p>
+<pre><code></code></pre>
+== fenced indented [wrap]
+<pre><code>aaa
+ aaa
+aaa
+</code></pre>
+== fenced unclosed [wrap]
+<pre><code>aaa
+```
+</code></pre>
+== fenced escaped info [wrap]
+<pre><code class="language-{x}">body
+</code></pre>
+== block quote [wrap]
+<blockquote>
+<h1>Foo</h1>
+<p>bar<br />
+baz</p>
+</blockquote>
+== block quote lazy [wrap]
+<blockquote>
+<p>bar<br />
+baz<br />
+foo</p>
+</blockquote>
+<p>after</p>
+== block quote nested [wrap]
+<blockquote>
+<blockquote>
+<blockquote>
+<p>deep<br />
+two<br />
+one</p>
+</blockquote>
+</blockquote>
+</blockquote>
+== block quote code [wrap]
+<blockquote>
+<pre><code>code
+
+more</code></pre>
+</blockquote>
+== block quote break [wrap]
+<blockquote>
+<p>a</p>
+</blockquote>
+<hr />
+<blockquote>
+<p>b</p>
+</blockquote>
+<ul>
+<li>list</li>
+</ul>
+== lists simple [wrap]
+<ul>
+<li>one</li>
+<li>two</li>
+<li>three</li>
+</ul>
+== lists loose [wrap]
+<ul>
+<li><p>a</p>
+</li>
+<li><p>b</p>
+</li>
+<li><p>c</p>
+</li>
+</ul>
+== lists ordered [wrap]
+<ol start="3">
+<li>three</li>
+<li>four</li>
+</ol>
+<ol>
+<li>paren</li>
+<li>next</li>
+</ol>
+== lists nested [wrap]
+<ul>
+<li>a<ul>
+<li>b<ul>
+<li>c<ul>
+<li>d</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>e</li>
+</ul>
+== lists with code [wrap]
+<ol>
+<li><p>item</p>
+<pre><code>code</code></pre>
+</li>
+<li><p>next</p>
+</li>
+</ol>
+== lists marker change [wrap]
+<ul>
+<li>a</li>
+</ul>
+<ul>
+<li>b</li>
+</ul>
+<ul>
+<li>c</li>
+</ul>
+== lists interrupt [wrap]
+<p>para<br />
+para</p>
+<ul>
+<li>item</li>
+</ul>
+<ol start="2">
+<li>no</li>
+</ol>
+<p>para</p>
+<ol>
+<li>yes</li>
+</ol>
+== lists empty item [wrap]
+<ul>
+<li>foo</li>
+<li></li>
+<li>bar</li>
+</ul>
+== lists blank start [wrap]
+<ul>
+<li></li>
+</ul>
+<p>foo</p>
+== lists continuation [wrap]
+<ul>
+<li><p>first line<br />
+continued lazily</p>
+<p>second paragraph</p>
+</li>
+<li><p>next</p>
+</li>
+</ul>
+== lists with quote [wrap]
+<ul>
+<li><blockquote>
+<p>quoted<br />
+more</p>
+</blockquote>
+</li>
+<li>plain</li>
+</ul>
+== lists deep [wrap]
+<ol>
+<li>a<ol>
+<li>b<ol>
+<li>c<ol>
+<li>d<ol>
+<li>e<ol>
+<li>f<br />
+1. g</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+== html blocks [wrap]
+<div>
+*not md*
+</div>
+
+<!-- a comment
+still -->
+
+<p>after</p>
+<?php echo 1; ?>
+
+<!DOCTYPE html>
+
+<![CDATA[
+x < y
+]]>
+
+== html pre [wrap]
+<pre>
+**raw**
+
+</pre>
+
+<p>after</p>
+== html rule 7 [wrap]
+<custom-tag a="1">
+*md*
+
+</custom-tag>
+
+<p>para <span><br />
+<span></p>
+== html close [wrap]
+</div>
+ok
+
+</section>
+
+== ref links [wrap]
+<p><a href="/url" title="title">foo</a> <a href="my%20url" title="other">bar</a> <a href="my%20url" title="other">Baz</a> [missing]</p>
+== ref link titles [wrap]
+<p>[b]: /b &quot;broken</p>
+<p><a href="/a" title="title on next line">a</a> [b]</p>
+== ref link first wins [wrap]
+<p><a href="/first">x</a></p>
+== ref link inside paragraph [wrap]
+<p>para<br />
+[x]: /u</p>
+<p>[x]</p>
+== paragraphs [wrap]
+<p>aaa</p>
+<p>bbb<br />
+ccc</p>
+<p>ddd</p>
+== blank lines [wrap]
+<p>aaa</p>
+<h1>heading</h1>
+== escapes [wrap]
+<p>*not emph* _x_ ` # \ \a [link]</p>
+== code spans [wrap]
+<p><code>code</code> <code>a`b</code> <code>x</code> <code>  </code> ``unterminated<br />
+multi<br />
+line<code> </code>a<br />
+b`</p>
+== emphasis [wrap]
+<p><em>a</em> <em>b</em> <strong>c</strong> <strong>d</strong> <em><strong>e</strong></em> <em><strong>f</strong></em> <em>nested <strong>strong</strong> inside</em></p>
+== emphasis edge [wrap]
+<p>a * b * c<br />
+snake_case_word<br />
+<em>foo</em>bar<br />
+**unclosed<br />
+<em>a_b</em></p>
+== emphasis escaped [wrap]
+<p><em>a\</em>b* <strong>c**d</strong></p>
+== links [wrap]
+<p><a href="/url" title="title">text</a> <a href="">empty</a> <a href="a%20b">angle</a> <img src="/i.png" alt="img" title="T" /> <a href="/a)b">esc</a></p>
+== links nested [wrap]
+<p><a href="/u">outer [inner] text</a> <a href="/y">a [b](/x) c</a> <img src="/i" alt="img x" /></p>
+== links titles [wrap]
+<p><a href="/u" title="t &quot;q&quot;">a</a> <a href="/u" title="single">b</a> [c](/u (paren))</p>
+== links precedence [wrap]
+<p>[not a <code>link](/u)</code> here] *a <code>*</code> b* <a href="/c">x &lt;http://a.b/&gt;</a></p>
+== autolinks [wrap]
+<p><a href="https://example.com/path?q=1&amp;r=2">https://example.com/path?q=1&amp;r=2</a> <a href="mailto:me@x.org">mailto:me@x.org</a> <a href="mailto:me@example.com">me@example.com</a> <not auto> <a href="a+b:c">a+b:c</a></p>
+== inline html [wrap]
+<p>a <span class="x">b</span> <!-- c --> <?pi?> <![CDATA[d]]> <a href="/q">[in](/link)</a></p>
+== entities [wrap]
+<p>&amp; © # &quot;  x &amp;bogus; &amp;xyz; � � � &amp;Auml</p>
+== line breaks [wrap]
+<p>hard<br />
+break<br />
+soft<br />
+back\<br />
+slash</p>
+== urls in text [wrap]
+<p>visit https://example.com/a_b. or http://x.y/(z) now</p>
+== unicode [wrap]
+<p><em>ünïcödé</em> — “quotes” <a href="/%D0%BF%D1%83%D1%82%D1%8C">ссылка</a> <code>код</code></p>
+== strikethrough [wrap]
+<p>~~gone~~ ~~not closed ~ ~~a~~b~~</p>
+== mark insert [wrap]
+<p>==marked== ^^inserted^^ ==a==b==</p>
+== sup sub [wrap]
+<p>2^10^ is 1024, H~2~O, a^b\ c^</p>
+== table [wrap]
+<p>| a | b | c |<br />
+|:--|:-:|--:|<br />
+| 1 | 2 | 3 |<br />
+| x | y | <code>z</code> | <strong>w</strong> |</p>
+== table mismatch [wrap]
+<p>| a | b |<br />
+|---|<br />
+| 1 | 2 |</p>
+== nptable [wrap]
+<p>a | b<br />
+--|--<br />
+1 | 2<br />
+3 | 4</p>
+== footnotes [wrap]
+<p>Text[^1] and more[^note] and [^1] again, [^missing].</p>
+<p>[^1]: First note.<br />
+[^note]: A longer note<br />
+with a second line.</p>
+<pre><code>And a paragraph.</code></pre>
+== task lists [wrap]
+<ul>
+<li>[ ] todo</li>
+<li>[x] done</li>
+<li>[X] also</li>
+<li>[y] not a task</li>
+</ul>
+<ol>
+<li>[ ] ordered</li>
+</ol>
+== def list [wrap]
+<p>Apple<br />
+:   A fruit.</p>
+<p>Orange<br />
+:   Citrus.<br />
+:   Second definition<br />
+continued.</p>
+<p>Term</p>
+<p>: loose</p>
+== abbr [wrap]
+<p>The HTML spec is by the W3C.</p>
+<p>*[HTML]: Hyper Text Markup Language<br />
+*[W3C]:  World Wide Web Consortium</p>
+== math [wrap]
+<p>Inline $a^2 + b^2$ and $ not$.</p>
+<p>$$<br />
+\int_0^1 x,dx<br />
+$$</p>
+== ruby [wrap]
+<p>[漢字(かんじ)] <a href="/tokyo">東(ひがし)京(きょう)</a> <a href="/ref">語(ご)</a></p>
+== spoiler [wrap]
+<blockquote>
+<p>! hidden<br />
+! more</p>
+</blockquote>
+<p>inline &gt;! secret !&lt; text</p>
+<blockquote>
+<p>normal</p>
+</blockquote>
+== url plugin [wrap]
+<p>see https://example.com/x, or <a href="https://a.b">https://a.b</a> and <a href="/u">https://in.link</a></p>
+== admonitions [wrap]
+<p>.. note:: Read this<br />
+:class: wide</p>
+<p>Body <strong>text</strong>.</p>
+<p>.. warning::</p>
+<p>No title.</p>
+<p>.. unknown:: thing</p>
+== fenced directives [wrap]
+<pre><code class="language-{tip}">:class: small
+
+Inside the tip.
+</code></pre>
+<pre><code class="language-{danger}">Careful.
+</code></pre>
+<pre><code class="language-{nope}">x
+</code></pre>
+== image directive [wrap]
+<p>.. image:: /img/a.png<br />
+:alt: An image<br />
+:width: 100<br />
+:height: 50%<br />
+:align: center<br />
+:target: /big.png</p>
+<p>.. image:: /b.png<br />
+:align: sideways<br />
+:width: wide</p>
+== figure directive [wrap]
+<p>.. figure:: /fig.png<br />
+:figwidth: 80%<br />
+:figclass: framed<br />
+:align: left</p>
+<p>The caption.</p>
+<p>A legend paragraph.</p>
+== toc errors [wrap]
+<p>.. toc::<br />
+:min-level: 0</p>
+<p>.. toc::<br />
+:max-level: x</p>
+<p>.. toc::<br />
+:min-level: 3<br />
+:max-level: 2</p>
+<h1>heading</h1>
+== toc [wrap]
+<h1>Intro</h1>
+<p>.. toc:: Contents<br />
+:max-level: 2</p>
+<h2>Part <em>one</em></h2>
+<h3>Deep</h3>
+<h2>Part two</h2>
+<h1>End</h1>
+== atx headings [full]
+<h1>one</h1>
+<h2>two</h2>
+<h3>three</h3>
+<p>####### seven
+#hash</p>
+<h1></h1>
+<h3></h3>
+== atx closing [full]
+<h1>foo#</h1>
+<h2>foo #</h2>
+<h3>b ##</h3>
+== setext [full]
+<h1>Title</h1>
+<h2>Sub <em>title</em></h2>
+<h1>Indented</h1>
+== setext no paragraph [full]
+<hr />
+<p>===</p>
+== thematic breaks [full]
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<hr />
+<p>**</p>
+== indented code [full]
+<pre><code>a simple
+  indented code block
+
+chunk2
+
+
+
+chunk3</code></pre>
+== indented code in paragraph [full]
+<p>Foo
+bar</p>
+== tab code [full]
+<pre><code>foo	baz		bim
+bar</code></pre>
+== fenced code [full]
+<pre><code class="language-python">def f(x):
+    return x * 2
+</code></pre>
+<pre><code>&lt;tag&gt; &amp; more
+</code></pre>
+== fenced info with backtick [full]
+<p>``` aa `
+foo</p>
+<pre><code></code></pre>
+== fenced indented [full]
+<pre><code>aaa
+ aaa
+aaa
+</code></pre>
+== fenced unclosed [full]
+<pre><code>aaa
+```
+</code></pre>
+== fenced escaped info [full]
+<pre><code class="language-{x}">body
+</code></pre>
+== block quote [full]
+<blockquote>
+<h1>Foo</h1>
+<p>bar
+baz</p>
+</blockquote>
+== block quote lazy [full]
+<blockquote>
+<p>bar
+baz
+foo</p>
+</blockquote>
+<p>after</p>
+== block quote nested [full]
+<blockquote>
+<blockquote>
+<blockquote>
+<p>deep
+two
+one</p>
+</blockquote>
+</blockquote>
+</blockquote>
+== block quote code [full]
+<blockquote>
+<pre><code>code
+
+more</code></pre>
+</blockquote>
+== block quote break [full]
+<blockquote>
+<p>a</p>
+</blockquote>
+<hr />
+<blockquote>
+<p>b</p>
+</blockquote>
+<ul>
+<li>list</li>
+</ul>
+== lists simple [full]
+<ul>
+<li>one</li>
+<li>two</li>
+<li>three</li>
+</ul>
+== lists loose [full]
+<ul>
+<li><p>a</p>
+</li>
+<li><p>b</p>
+</li>
+<li><p>c</p>
+</li>
+</ul>
+== lists ordered [full]
+<ol start="3">
+<li>three</li>
+<li>four</li>
+</ol>
+<ol>
+<li>paren</li>
+<li>next</li>
+</ol>
+== lists nested [full]
+<ul>
+<li>a<ul>
+<li>b<ul>
+<li>c<ul>
+<li>d</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>e</li>
+</ul>
+== lists with code [full]
+<ol>
+<li><p>item</p>
+<pre><code>code</code></pre>
+</li>
+<li><p>next</p>
+</li>
+</ol>
+== lists marker change [full]
+<ul>
+<li>a</li>
+</ul>
+<ul>
+<li>b</li>
+</ul>
+<ul>
+<li>c</li>
+</ul>
+== lists interrupt [full]
+<p>para
+para</p>
+<ul>
+<li>item</li>
+</ul>
+<ol start="2">
+<li>no</li>
+</ol>
+<p>para</p>
+<ol>
+<li>yes</li>
+</ol>
+== lists empty item [full]
+<ul>
+<li>foo</li>
+<li></li>
+<li>bar</li>
+</ul>
+== lists blank start [full]
+<ul>
+<li></li>
+</ul>
+<p>foo</p>
+== lists continuation [full]
+<ul>
+<li><p>first line
+continued lazily</p>
+<p>second paragraph</p>
+</li>
+<li><p>next</p>
+</li>
+</ul>
+== lists with quote [full]
+<ul>
+<li><blockquote>
+<p>quoted
+more</p>
+</blockquote>
+</li>
+<li>plain</li>
+</ul>
+== lists deep [full]
+<ol>
+<li>a<ol>
+<li>b<ol>
+<li>c<ol>
+<li>d<ol>
+<li>e<ol>
+<li>f
+1. g</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+</li>
+</ol>
+== html blocks [full]
+<div>
+*not md*
+</div>
+
+<!-- a comment
+still -->
+
+<p>after</p>
+<?php echo 1; ?>
+
+<!DOCTYPE html>
+
+<![CDATA[
+x < y
+]]>
+
+== html pre [full]
+<pre>
+**raw**
+
+</pre>
+
+<p>after</p>
+== html rule 7 [full]
+<custom-tag a="1">
+*md*
+
+</custom-tag>
+
+<p>para <span>
+<span></p>
+== html close [full]
+</div>
+ok
+
+</section>
+
+== ref links [full]
+<p><a href="/url" title="title">foo</a> <a href="my%20url" title="other">bar</a> <a href="my%20url" title="other">Baz</a> [missing]</p>
+== ref link titles [full]
+<p>[b]: /b &quot;broken</p>
+<p><a href="/a" title="title on next line">a</a> [b]</p>
+== ref link first wins [full]
+<p><a href="/first">x</a></p>
+== ref link inside paragraph [full]
+<p>para
+[x]: /u</p>
+<p>[x]</p>
+== paragraphs [full]
+<p>aaa</p>
+<p>bbb
+ccc</p>
+<p>ddd</p>
+== blank lines [full]
+<p>aaa</p>
+<h1>heading</h1>
+== escapes [full]
+<p>*not emph* _x_ ` # \ \a [link]</p>
+== code spans [full]
+<p><code>code</code> <code>a`b</code> <code>x</code> <code>  </code> ``unterminated
+multi
+line<code> </code>a
+b`</p>
+== emphasis [full]
+<p><em>a</em> <em>b</em> <strong>c</strong> <strong>d</strong> <em><strong>e</strong></em> <em><strong>f</strong></em> <em>nested <strong>strong</strong> inside</em></p>
+== emphasis edge [full]
+<p>a * b * c
+snake_case_word
+<em>foo</em>bar
+**unclosed
+<em>a_b</em></p>
+== emphasis escaped [full]
+<p><em>a\</em>b* <strong>c**d</strong></p>
+== links [full]
+<p><a href="/url" title="title">text</a> <a href="">empty</a> <a href="a%20b">angle</a> <img src="/i.png" alt="img" title="T" /> <a href="/a)b">esc</a></p>
+== links nested [full]
+<p><a href="/u">outer [inner] text</a> <a href="/y">a [b](/x) c</a> <img src="/i" alt="img x" /></p>
+== links titles [full]
+<p><a href="/u" title="t &quot;q&quot;">a</a> <a href="/u" title="single">b</a> [c](/u (paren))</p>
+== links precedence [full]
+<p>[not a <code>link](/u)</code> here] *a <code>*</code> b* <a href="/c">x &lt;http://a.b/&gt;</a></p>
+== autolinks [full]
+<p><a href="https://example.com/path?q=1&amp;r=2">https://example.com/path?q=1&amp;r=2</a> <a href="mailto:me@x.org">mailto:me@x.org</a> <a href="mailto:me@example.com">me@example.com</a> <not auto> <a href="a+b:c">a+b:c</a></p>
+== inline html [full]
+<p>a <span class="x">b</span> <!-- c --> <?pi?> <![CDATA[d]]> <a href="/q">[in](/link)</a></p>
+== entities [full]
+<p>&amp; © # &quot;  x &amp;bogus; &amp;xyz; � � � &amp;Auml</p>
+== line breaks [full]
+<p>hard<br />
+break
+soft
+back<br />
+slash</p>
+== urls in text [full]
+<p>visit <a href="https://example.com/a_b">https://example.com/a_b</a>. or <a href="http://x.y/(z">http://x.y/(z</a>) now</p>
+== unicode [full]
+<p><em>ünïcödé</em> — “quotes” <a href="/%D0%BF%D1%83%D1%82%D1%8C">ссылка</a> <code>код</code></p>
+== strikethrough [full]
+<p><del>gone</del> <del>not closed ~ ~~a\</del>b~~</p>
+== mark insert [full]
+<p><mark>marked</mark> <ins>inserted</ins> <mark>a\</mark>b==</p>
+== sup sub [full]
+<p>2<sup>10</sup> is 1024, H<sub>2</sub>O, a<sup>b c</sup></p>
+== table [full]
+<table>
+<thead>
+<tr>
+  <th style="text-align:left">a</th>
+  <th style="text-align:center">b</th>
+  <th style="text-align:right">c</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left">1</td>
+  <td style="text-align:center">2</td>
+  <td style="text-align:right">3</td>
+</tr>
+<tr>
+  <td style="text-align:left">x | y</td>
+  <td style="text-align:center"><code>z</code></td>
+  <td style="text-align:right"><strong>w</strong></td>
+</tr>
+</tbody>
+</table>
+== table mismatch [full]
+<p>| a | b |
+|---|
+| 1 | 2 |</p>
+== nptable [full]
+<table>
+<thead>
+<tr>
+  <th>a</th>
+  <th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>1</td>
+  <td>2</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td>4</td>
+</tr>
+</tbody>
+</table>
+== footnotes [full]
+<p>Text<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup> and more<sup class="footnote-ref" id="fnref-2"><a href="#fn-2">2</a></sup> and <sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup> again, [^missing].</p>
+<pre><code>with a second line.
+
+And a paragraph.</code></pre>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>First note.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+<li id="fn-2"><p>A longer note<a href="#fnref-2" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+== task lists [full]
+<ul>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled/>todo</li>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled checked/>done</li>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled checked/>also</li>
+<li>[y] not a task</li>
+</ul>
+<ol>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled/>ordered</li>
+</ol>
+== def list [full]
+<dl>
+<dt>Apple</dt>
+<dd>A fruit.</dd>
+<dt>Orange</dt>
+<dd>Citrus.</dd>
+<dd>Second definition
+continued.</dd>
+<dt>Term</dt>
+<dd><p>loose</p>
+</dd>
+</dl>
+== abbr [full]
+<p>The <abbr title="Hyper Text Markup Language">HTML</abbr> spec is by the <abbr title="World Wide Web Consortium">W3C</abbr>.</p>
+== math [full]
+<p>Inline <span class="math">\(a^2 + b^2\)</span> and $ not$.</p>
+<div class="math">$$
+\int_0^1 x\,dx
+$$</div>
+== ruby [full]
+<p><ruby><rb>漢字</rb><rt>かんじ</rt></ruby> <a href="/tokyo"><ruby><rb>東</rb><rt>ひがし</rt></ruby><ruby><rb>京</rb><rt>きょう</rt></ruby></a> <a href="/ref"><ruby><rb>語</rb><rt>ご</rt></ruby></a></p>
+== spoiler [full]
+<div class="spoiler">
+<p>hidden
+more</p>
+</div>
+<p>inline <span class="spoiler">secret</span> text</p>
+<blockquote>
+<p>normal</p>
+</blockquote>
+== url plugin [full]
+<p>see <a href="https://example.com/x">https://example.com/x</a>, or <a href="https://a.b">https://a.b</a> and <a href="/u">https://in.link</a></p>
+== admonitions [full]
+<section class="admonition note wide">
+<p class="admonition-title">Read this</p>
+<p>Body <strong>text</strong>.</p>
+</section>
+<section class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>No title.</p>
+</section>
+<div class="error"><pre>.. unknown:: thing
+</pre></div>
+== fenced directives [full]
+<section class="admonition tip small">
+<p class="admonition-title">A tip</p>
+<p>Inside the tip.</p>
+</section>
+<section class="admonition danger">
+<p class="admonition-title">Danger</p>
+<p>Careful.</p>
+</section>
+<div class="error"><pre>{nope}
+x
+</pre></div>
+== image directive [full]
+<a class="block-image align-center" href="/big.png"><img src="/img/a.png" alt="An image" width="100" style="height:50%;" /></a>
+<div class="block-image"><img src="/b.png" /></div>
+== figure directive [full]
+<figure class="figure align-left framed" style="width:80%">
+<div class="block-image"><img src="/fig.png" /></div>
+<figcaption>The caption.</figcaption>
+<div class="legend">
+<p>A legend paragraph.</p>
+</div>
+</figure>
+== toc errors [full]
+<div class="error"><pre>"min-level" option MUST be >= 1</pre></div>
+<div class="error"><pre>"max-level" option MUST be integer</pre></div>
+<div class="error"><pre>"min-level" option MUST be less than "max-level" option</pre></div>
+<h1>heading</h1>
+== toc [full]
+<h1 id="toc_1">Intro</h1>
+<details class="toc" open>
+<summary>Contents</summary>
+<ul>
+<li><a href="#toc_1">Intro</a>
+<ul>
+<li><a href="#toc_2">Part one</a></li>
+<li><a href="#toc_4">Part two</a></li>
+</ul>
+</li>
+<li><a href="#toc_5">End</a></li>
+</ul>
+</details>
+<h2 id="toc_2">Part <em>one</em></h2>
+<h3 id="toc_3">Deep</h3>
+<h2 id="toc_4">Part two</h2>
+<h1 id="toc_5">End</h1>
+== atx headings [md]
+# one
+
+## two
+
+### three
+
+####### seven
+#hash
+
+# 
+
+### 
+== atx closing [md]
+# foo#
+
+## foo #
+
+### b ##
+== setext [md]
+# Title
+
+## Sub *title*
+
+# Indented
+== setext no paragraph [md]
+***
+
+===
+== thematic breaks [md]
+***
+
+***
+
+***
+
+***
+
+***
+
+***
+
+**
+== indented code [md]
+```
+a simple
+  indented code block
+
+chunk2
+
+
+
+chunk3
+```
+== indented code in paragraph [md]
+Foo
+bar
+== tab code [md]
+```
+foo	baz		bim
+bar
+```
+== fenced code [md]
+```python
+def f(x):
+    return x * 2
+```
+
+~~~
+<tag> & more
+~~~
+== fenced info with backtick [md]
+``` aa `
+foo
+
+```
+```
+== fenced indented [md]
+```
+aaa
+ aaa
+aaa
+```
+== fenced unclosed [md]
+````
+aaa
+```
+````
+== fenced escaped info [md]
+```{x} attrs
+body
+```
+== block quote [md]
+> # Foo
+
+> bar
+> baz
+== block quote lazy [md]
+> bar
+> baz
+> foo
+
+
+
+after
+== block quote nested [md]
+> > > deep
+> > > two
+> > > one
+== block quote code [md]
+> ```
+> code
+
+> more
+> ```
+== block quote break [md]
+> a
+
+
+
+***
+
+> b
+
+
+
+- list
+== lists simple [md]
+- one
+- two
+- three
+== lists loose [md]
+- a
+
+- b
+
+- c
+== lists ordered [md]
+3. three
+4. four
+
+1) paren
+2) next
+== lists nested [md]
+- a
+  - b
+    - c
+      - d
+- e
+== lists with code [md]
+1. item
+
+   ```
+   code
+   ```
+
+2. next
+== lists marker change [md]
+- a
+
++ b
+
+* c
+== lists interrupt [md]
+para
+para
+
+- item
+
+2. no
+
+para
+
+1. yes
+== lists empty item [md]
+- foo
+- 
+- bar
+== lists blank start [md]
+- 
+
+foo
+== lists continuation [md]
+- first line
+  continued lazily
+
+  second paragraph
+
+- next
+== lists with quote [md]
+- > quoted
+  > more
+
+
+
+- plain
+== lists deep [md]
+1. a
+   1. b
+      1. c
+         1. d
+            1. e
+               1. f
+                  1. g
+== html blocks [md]
+<div>
+*not md*
+</div>
+
+
+<!-- a comment
+still -->
+
+
+after
+
+<?php echo 1; ?>
+
+
+<!DOCTYPE html>
+
+
+<![CDATA[
+x < y
+]]>
+== html pre [md]
+<pre>
+**raw**
+
+</pre>
+
+
+after
+== html rule 7 [md]
+<custom-tag a="1">
+*md*
+
+
+</custom-tag>
+
+
+para <span>
+<span>
+== html close [md]
+</div>
+ok
+
+
+</section>
+== ref links [md]
+[foo][foo] [bar][bar] [Baz][bar] [missing]
+
+[foo]: /url "title"
+
+[Bar]: my%20url "other"
+
+[baz]: /next
+== ref link titles [md]
+[b]: /b "broken
+
+[a][a] [b]
+
+[a]: /a "title on next line"
+== ref link first wins [md]
+[x][x]
+
+[x]: /first
+== ref link inside paragraph [md]
+para
+[x]: /u
+
+[x]
+== paragraphs [md]
+aaa
+
+bbb
+ccc
+
+ddd
+== blank lines [md]
+aaa
+
+# heading
+== escapes [md]
+*not emph* _x_ ` # \ \a [link]
+== code spans [md]
+`code` `a`b` `x` `  ` ``unterminated
+multi
+line` `a
+b`
+== emphasis [md]
+*a* *b* **c** **d** ***e*** ***f*** *nested **strong** inside*
+== emphasis edge [md]
+a * b * c
+snake_case_word
+*foo*bar
+**unclosed
+*a_b*
+== emphasis escaped [md]
+*a\*b* **c**d**
+== links [md]
+[text](/url "title") [empty]() [angle](a%20b) ![img](/i.png "T") [esc](</a)b>)
+== links nested [md]
+[outer [inner] text](/u) [a [b](/x) c](/y) ![img [x](/l)](/i)
+== links titles [md]
+[a](/u "t "q"") [b](/u "single") [c](/u (paren))
+== links precedence [md]
+[not a `link](/u)` here] *a `*` b* [x <http://a.b/>](/c)
+== autolinks [md]
+[https://example.com/path?q=1&r=2](https://example.com/path?q=1&amp;r=2) <mailto:me@x.org> <me@example.com> <not auto> <a+b:c>
+== inline html [md]
+a <span class="x">b</span> <!-- c --> <?pi?> <![CDATA[d]]> <a href="/q">[in](/link)</a>
+== entities [md]
+&amp; &copy; &#35; &#x22; &nbsp;x &bogus; &ampxyz; &#0; &#xD800; &#1114112; &Auml
+== line breaks [md]
+hard  
+break
+soft
+back  
+slash
+== urls in text [md]
+visit https://example.com/a_b. or http://x.y/(z) now
+== unicode [md]
+*ünïcödé* — “quotes” [ссылка](/%D0%BF%D1%83%D1%82%D1%8C) `код`
+== strikethrough [md]
+~~gone~~ ~~not closed ~ ~~a~~b~~
+== mark insert [md]
+==marked== ^^inserted^^ ==a==b==
+== sup sub [md]
+2^10^ is 1024, H~2~O, a^b\ c^
+== table [md]
+| a | b | c |
+|:--|:-:|--:|
+| 1 | 2 | 3 |
+| x | y | `z` | **w** |
+== table mismatch [md]
+| a | b |
+|---|
+| 1 | 2 |
+== nptable [md]
+a | b
+--|--
+1 | 2
+3 | 4
+== footnotes [md]
+Text[^1] and more[^note] and [^1] again, [^missing].
+
+[^1]: First note.
+[^note]: A longer note
+with a second line.
+
+```
+And a paragraph.
+```
+== task lists [md]
+- [ ] todo
+- [x] done
+- [X] also
+- [y] not a task
+
+1. [ ] ordered
+== def list [md]
+Apple
+:   A fruit.
+
+Orange
+:   Citrus.
+:   Second definition
+continued.
+
+Term
+
+: loose
+== abbr [md]
+The HTML spec is by the W3C.
+
+*[HTML]: Hyper Text Markup Language
+*[W3C]:  World Wide Web Consortium
+== math [md]
+Inline $a^2 + b^2$ and $ not$.
+
+$$
+\int_0^1 x,dx
+$$
+== ruby [md]
+[漢字(かんじ)] [東(ひがし)京(きょう)](/tokyo) [語(ご)][ref]
+
+[ref]: /ref
+== spoiler [md]
+> ! hidden
+> ! more
+
+
+
+inline >! secret !< text
+
+> normal
+== url plugin [md]
+see https://example.com/x, or <https://a.b> and [https://in.link](/u)
+== admonitions [md]
+.. note:: Read this
+:class: wide
+
+Body **text**.
+
+.. warning::
+
+No title.
+
+.. unknown:: thing
+== fenced directives [md]
+```{tip} A tip
+:class: small
+
+Inside the tip.
+```
+
+~~~{danger}
+Careful.
+~~~
+
+```{nope}
+x
+```
+== image directive [md]
+.. image:: /img/a.png
+:alt: An image
+:width: 100
+:height: 50%
+:align: center
+:target: /big.png
+
+.. image:: /b.png
+:align: sideways
+:width: wide
+== figure directive [md]
+.. figure:: /fig.png
+:figwidth: 80%
+:figclass: framed
+:align: left
+
+The caption.
+
+A legend paragraph.
+== toc errors [md]
+.. toc::
+:min-level: 0
+
+.. toc::
+:max-level: x
+
+.. toc::
+:min-level: 3
+:max-level: 2
+
+# heading
+== toc [md]
+# Intro
+
+.. toc:: Contents
+:max-level: 2
+
+## Part *one*
+
+### Deep
+
+## Part two
+
+# End
+== atx headings [rst]
+one
+===
+
+two
+---
+
+three
+~~~~~
+
+####### seven #hash
+== atx closing [rst]
+foo#
+====
+
+foo #
+-----
+
+b ##
+~~~~
+== setext [rst]
+Title
+=====
+
+Sub *title*
+-----------
+
+Indented
+========
+== setext no paragraph [rst]
+--------------
+
+===
+== thematic breaks [rst]
+--------------
+
+--------------
+
+--------------
+
+--------------
+
+--------------
+
+--------------
+
+**
+== indented code [rst]
+::
+
+   a simple
+     indented code block
+
+   chunk2
+
+
+
+   chunk3
+== indented code in paragraph [rst]
+Foo bar
+== tab code [rst]
+::
+
+   foo	baz		bim
+   bar
+== fenced code [rst]
+.. code:: python
+
+   def f(x):
+       return x * 2
+
+::
+
+   <tag> & more
+== fenced info with backtick [rst]
+``` aa ` foo
+
+::
+== fenced indented [rst]
+::
+
+   aaa
+    aaa
+   aaa
+== fenced unclosed [rst]
+::
+
+   aaa
+   ```
+== fenced escaped info [rst]
+.. code:: {x}
+
+   body
+== block quote [rst]
+   Foo
+   ===
+
+   bar baz
+== block quote lazy [rst]
+   bar baz foo
+
+after
+== block quote nested [rst]
+         deep two one
+== block quote code [rst]
+   ::
+
+      code
+
+      more
+== block quote break [rst]
+   a
+
+--------------
+
+   b
+
+- list
+== lists simple [rst]
+- one
+- two
+- three
+== lists loose [rst]
+- a
+
+- b
+
+- c
+== lists ordered [rst]
+3. three
+4. four
+
+1) paren
+2) next
+== lists nested [rst]
+- a
+  - b
+    - c
+      - d
+- e
+== lists with code [rst]
+1. item
+
+   ::
+
+      code
+
+2. next
+== lists marker change [rst]
+- a
+
++ b
+
+* c
+== lists interrupt [rst]
+para para
+
+- item
+
+2. no
+
+para
+
+1. yes
+== lists empty item [rst]
+- foo
+- 
+- bar
+== lists blank start [rst]
+- 
+
+foo
+== lists continuation [rst]
+- first line continued lazily
+
+  second paragraph
+
+- next
+== lists with quote [rst]
+error: KeyError: 'prev'
+== lists deep [rst]
+1. a
+   1. b
+      1. c
+         1. d
+            1. e
+               1. f 1. g
+== html blocks [rst]
+.. raw:: html
+
+   <div>
+   *not md*
+   </div>
+
+
+.. raw:: html
+
+   <!-- a comment
+   still -->
+
+
+after
+
+.. raw:: html
+
+   <?php echo 1; ?>
+
+
+.. raw:: html
+
+   <!DOCTYPE html>
+
+
+.. raw:: html
+
+   <![CDATA[
+   x < y
+   ]]>
+== html pre [rst]
+.. raw:: html
+
+   <pre>
+   **raw**
+
+   </pre>
+
+
+after
+== html rule 7 [rst]
+.. raw:: html
+
+   <custom-tag a="1">
+   *md*
+
+
+.. raw:: html
+
+   </custom-tag>
+
+
+para  
+== html close [rst]
+.. raw:: html
+
+   </div>
+   ok
+
+
+.. raw:: html
+
+   </section>
+== ref links [rst]
+`foo </url>`__ `bar <my%20url>`__ `Baz <my%20url>`__ [missing]
+== ref link titles [rst]
+[b]: /b "broken
+
+`a </a>`__ [b]
+== ref link first wins [rst]
+`x </first>`__
+== ref link inside paragraph [rst]
+para [x]: /u
+
+[x]
+== paragraphs [rst]
+aaa
+
+bbb ccc
+
+ddd
+== blank lines [rst]
+aaa
+
+heading
+=======
+== escapes [rst]
+*not emph* _x_ ` # \ \a [link]
+== code spans [rst]
+``code`` ``a`b`` ``x`` ``  `` ``unterminated multi line`` ``a b`
+== emphasis [rst]
+*a* *b* **c** **d** ***e*** ***f*** *nested **strong** inside*
+== emphasis edge [rst]
+a * b * c snake_case_word *foo*bar **unclosed *a_b*
+== emphasis escaped [rst]
+*a\*b* **c**d**
+== links [rst]
+`text </url>`__ `empty <>`__ `angle <a%20b>`__ |img-0| `esc </a)b>`__
+
+.. |img-0| image:: /i.png
+   :alt: img
+== links nested [rst]
+`outer [inner] text </u>`__ `a [b](/x) c </y>`__ |img-0|
+
+.. |img-0| image:: /i
+   :alt: img `x </l>`__
+== links titles [rst]
+`a </u>`__ `b </u>`__ [c](/u (paren))
+== links precedence [rst]
+[not a ``link](/u)`` here] *a ``*`` b* `x <http://a.b/> </c>`__
+== autolinks [rst]
+`https://example.com/path?q=1&r=2 <https://example.com/path?q=1&amp;r=2>`__ `mailto:me@x.org <mailto:me@x.org>`__ `me@example.com <mailto:me@example.com>`__  `a+b:c <a+b:c>`__
+== inline html [rst]
+a b    [in](/link)
+== entities [rst]
+&amp; &copy; &#35; &#x22; &nbsp;x &bogus; &ampxyz; &#0; &#xD800; &#1114112; &Auml
+== line breaks [rst]
+| hard
+| break soft back
+| slash
+== urls in text [rst]
+visit https://example.com/a_b. or http://x.y/(z) now
+== unicode [rst]
+*ünïcödé* — “quotes” `ссылка </%D0%BF%D1%83%D1%82%D1%8C>`__ ``код``
+== strikethrough [rst]
+~~gone~~ ~~not closed ~ ~~a~~b~~
+== mark insert [rst]
+==marked== ^^inserted^^ ==a==b==
+== sup sub [rst]
+2^10^ is 1024, H~2~O, a^b\ c^
+== table [rst]
+\| a \| b \| c \| \|:--\|:-:\|--:\| \| 1 \| 2 \| 3 \| \| x \| y \| ``z`` \| **w** \|
+== table mismatch [rst]
+\| a \| b \| \|---\| \| 1 \| 2 \|
+== nptable [rst]
+a \| b --\|-- 1 \| 2 3 \| 4
+== footnotes [rst]
+Text[^1] and more[^note] and [^1] again, [^missing].
+
+[^1]: First note. [^note]: A longer note with a second line.
+
+::
+
+   And a paragraph.
+== task lists [rst]
+- [ ] todo
+- [x] done
+- [X] also
+- [y] not a task
+
+1. [ ] ordered
+== def list [rst]
+Apple :   A fruit.
+
+Orange :   Citrus. :   Second definition continued.
+
+Term
+
+: loose
+== abbr [rst]
+The HTML spec is by the W3C.
+
+*[HTML]: Hyper Text Markup Language *[W3C]:  World Wide Web Consortium
+== math [rst]
+Inline $a^2 + b^2$ and $ not$.
+
+$$ \int_0^1 x,dx $$
+== ruby [rst]
+[漢字(かんじ)] `東(ひがし)京(きょう) </tokyo>`__ `語(ご) </ref>`__
+== spoiler [rst]
+   ! hidden ! more
+
+inline >! secret !< text
+
+   normal
+== url plugin [rst]
+see https://example.com/x, or `https://a.b <https://a.b>`__ and `https://in.link </u>`__
+== admonitions [rst]
+.. note:: Read this :class: wide
+
+Body **text**.
+
+.. warning::
+
+No title.
+
+.. unknown:: thing
+== fenced directives [rst]
+.. code:: {tip}
+
+   :class: small
+
+   Inside the tip.
+
+.. code:: {danger}
+
+   Careful.
+
+.. code:: {nope}
+
+   x
+== image directive [rst]
+.. image:: /img/a.png :alt: An image :width: 100 :height: 50% :align: center :target: /big.png
+
+.. image:: /b.png :align: sideways :width: wide
+== figure directive [rst]
+.. figure:: /fig.png :figwidth: 80% :figclass: framed :align: left
+
+The caption.
+
+A legend paragraph.
+== toc errors [rst]
+.. toc:: :min-level: 0
+
+.. toc:: :max-level: x
+
+.. toc:: :min-level: 3 :max-level: 2
+
+heading
+=======
+== toc [rst]
+Intro
+=====
+
+.. toc:: Contents :max-level: 2
+
+Part *one*
+----------
+
+Deep
+~~~~
+
+Part two
+--------
+
+End
+===
+== atx headings [ast]
+[{"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "one"}]}, {"type": "heading", "attrs": {"level": 2}, "style": "axt", "children": [{"type": "text", "raw": "two"}]}, {"type": "heading", "attrs": {"level": 3}, "style": "axt", "children": [{"type": "text", "raw": "three"}]}, {"type": "paragraph", "children": [{"type": "text", "raw": "####### seven"}, {"type": "softbreak"}, {"type": "text", "raw": "#hash"}]}, {"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": ""}]}, {"type": "heading", "attrs": {"level": 3}, "style": "axt", "children": [{"type": "text", "raw": ""}]}]
+== atx closing [ast]
+[{"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "foo#"}]}, {"type": "heading", "attrs": {"level": 2}, "style": "axt", "children": [{"type": "text", "raw": "foo "}, {"type": "text", "raw": "#"}]}, {"type": "heading", "attrs": {"level": 3}, "style": "axt", "children": [{"type": "text", "raw": "b ##"}]}]
+== setext [ast]
+[{"type": "heading", "style": "setext", "attrs": {"level": 1}, "children": [{"type": "text", "raw": "Title"}]}, {"type": "blank_line"}, {"type": "heading", "style": "setext", "attrs": {"level": 2}, "children": [{"type": "text", "raw": "Sub "}, {"type": "emphasis", "children": [{"type": "text", "raw": "title"}]}]}, {"type": "blank_line"}, {"type": "heading", "style": "setext", "attrs": {"level": 1}, "children": [{"type": "text", "raw": "Indented"}]}]
+== setext no paragraph [ast]
+[{"type": "thematic_break"}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "==="}]}]
+== thematic breaks [ast]
+[{"type": "thematic_break"}, {"type": "thematic_break"}, {"type": "thematic_break"}, {"type": "thematic_break"}, {"type": "thematic_break"}, {"type": "thematic_break"}, {"type": "paragraph", "children": [{"type": "text", "raw": "**"}]}]
+== indented code [ast]
+[{"type": "block_code", "raw": "a simple\n  indented code block\n\nchunk2\n\n\n\nchunk3", "style": "indent"}]
+== indented code in paragraph [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "Foo"}, {"type": "softbreak"}, {"type": "text", "raw": "bar"}]}]
+== tab code [ast]
+[{"type": "block_code", "raw": "foo\tbaz\t\tbim\nbar", "style": "indent"}]
+== fenced code [ast]
+[{"type": "block_code", "raw": "def f(x):\n    return x * 2\n", "style": "fenced", "marker": "```", "attrs": {"info": "python"}}, {"type": "blank_line"}, {"type": "block_code", "raw": "<tag> & more\n", "style": "fenced", "marker": "~~~"}]
+== fenced info with backtick [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "```"}, {"type": "text", "raw": " aa "}, {"type": "text", "raw": "`"}, {"type": "softbreak"}, {"type": "text", "raw": "foo"}]}, {"type": "block_code", "raw": "", "style": "fenced", "marker": "```"}]
+== fenced indented [ast]
+[{"type": "block_code", "raw": "aaa\n aaa\naaa\n", "style": "fenced", "marker": "```"}]
+== fenced unclosed [ast]
+[{"type": "block_code", "raw": "aaa\n```\n", "style": "fenced", "marker": "````"}]
+== fenced escaped info [ast]
+[{"type": "block_code", "raw": "body\n", "style": "fenced", "marker": "```", "attrs": {"info": "{x} attrs"}}]
+== block quote [ast]
+[{"type": "block_quote", "children": [{"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "Foo"}]}, {"type": "paragraph", "children": [{"type": "text", "raw": "bar"}, {"type": "softbreak"}, {"type": "text", "raw": "baz"}]}]}]
+== block quote lazy [ast]
+[{"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "bar"}, {"type": "softbreak"}, {"type": "text", "raw": "baz"}, {"type": "softbreak"}, {"type": "text", "raw": "foo"}]}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "after"}]}]
+== block quote nested [ast]
+[{"type": "block_quote", "children": [{"type": "block_quote", "children": [{"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "deep"}, {"type": "softbreak"}, {"type": "text", "raw": "two"}, {"type": "softbreak"}, {"type": "text", "raw": "one"}]}]}]}]}]
+== block quote code [ast]
+[{"type": "block_quote", "children": [{"type": "block_code", "raw": "code\n\nmore", "style": "indent"}]}]
+== block quote break [ast]
+[{"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "a"}]}]}, {"type": "thematic_break"}, {"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "b"}]}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "list"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists simple [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "one"}]}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "two"}]}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "three"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists loose [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "a"}]}]}, {"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "b"}]}]}, {"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "c"}]}]}], "tight": false, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists ordered [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "three"}]}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "four"}]}]}], "tight": true, "bullet": ".", "attrs": {"depth": 0, "ordered": true, "start": 3}}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "paren"}]}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "next"}]}]}], "tight": true, "bullet": ")", "attrs": {"depth": 0, "ordered": true}}]
+== lists nested [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "a"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "b"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "c"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "d"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 3, "ordered": false}}]}], "tight": true, "bullet": "-", "attrs": {"depth": 2, "ordered": false}}]}], "tight": true, "bullet": "-", "attrs": {"depth": 1, "ordered": false}}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "e"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists with code [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "item"}]}, {"type": "blank_line"}, {"type": "block_code", "raw": "code", "style": "indent"}]}, {"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "next"}]}]}], "tight": false, "bullet": ".", "attrs": {"depth": 0, "ordered": true}}]
+== lists marker change [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "a"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "b"}]}]}], "tight": true, "bullet": "+", "attrs": {"depth": 0, "ordered": false}}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "c"}]}]}], "tight": true, "bullet": "*", "attrs": {"depth": 0, "ordered": false}}]
+== lists interrupt [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "para"}, {"type": "softbreak"}, {"type": "text", "raw": "para"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "item"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "no"}]}]}], "tight": true, "bullet": ".", "attrs": {"depth": 0, "ordered": true, "start": 2}}, {"type": "paragraph", "children": [{"type": "text", "raw": "para"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "yes"}]}]}], "tight": true, "bullet": ".", "attrs": {"depth": 0, "ordered": true}}]
+== lists empty item [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "foo"}]}]}, {"type": "list_item", "children": []}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "bar"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists blank start [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "blank_line"}]}], "tight": false, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}, {"type": "paragraph", "children": [{"type": "text", "raw": "foo"}]}]
+== lists continuation [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "first line"}, {"type": "softbreak"}, {"type": "text", "raw": "continued lazily"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "second paragraph"}]}]}, {"type": "list_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "next"}]}]}], "tight": false, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists with quote [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "quoted"}, {"type": "softbreak"}, {"type": "text", "raw": "more"}]}]}]}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "plain"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}]
+== lists deep [ast]
+[{"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "a"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "b"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "c"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "d"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "e"}]}, {"type": "list", "children": [{"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "f"}, {"type": "softbreak"}, {"type": "text", "raw": "1. g"}]}]}], "tight": true, "bullet": ".", "attrs": {"depth": 5, "ordered": true}}]}], "tight": true, "bullet": ".", "attrs": {"depth": 4, "ordered": true}}]}], "tight": true, "bullet": ".", "attrs": {"depth": 3, "ordered": true}}]}], "tight": true, "bullet": ".", "attrs": {"depth": 2, "ordered": true}}]}], "tight": true, "bullet": ".", "attrs": {"depth": 1, "ordered": true}}]}], "tight": true, "bullet": ".", "attrs": {"depth": 0, "ordered": true}}]
+== html blocks [ast]
+[{"type": "block_html", "raw": "<div>\n*not md*\n</div>\n"}, {"type": "blank_line"}, {"type": "block_html", "raw": "<!-- a comment\nstill -->\n"}, {"type": "paragraph", "children": [{"type": "text", "raw": "after"}]}, {"type": "blank_line"}, {"type": "block_html", "raw": "<?php echo 1; ?>\n"}, {"type": "blank_line"}, {"type": "block_html", "raw": "<!DOCTYPE html>\n"}, {"type": "blank_line"}, {"type": "block_html", "raw": "<![CDATA[\nx < y\n]]>\n"}]
+== html pre [ast]
+[{"type": "block_html", "raw": "<pre>\n**raw**\n\n</pre>\n"}, {"type": "paragraph", "children": [{"type": "text", "raw": "after"}]}]
+== html rule 7 [ast]
+[{"type": "block_html", "raw": "<custom-tag a=\"1\">\n*md*\n"}, {"type": "blank_line"}, {"type": "block_html", "raw": "</custom-tag>\n"}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "para "}, {"type": "inline_html", "raw": "<span>"}, {"type": "softbreak"}, {"type": "inline_html", "raw": "<span>"}]}]
+== html close [ast]
+[{"type": "block_html", "raw": "</div>\nok\n"}, {"type": "blank_line"}, {"type": "block_html", "raw": "</section>\n"}]
+== ref links [ast]
+[{"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "foo"}], "attrs": {"url": "/url", "title": "title"}, "ref": "FOO", "label": "foo"}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "bar"}], "attrs": {"url": "my%20url", "title": "other"}, "ref": "BAR", "label": "bar"}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "Baz"}], "attrs": {"url": "my%20url", "title": "other"}, "ref": "BAR", "label": "bar"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "missing]"}]}]
+== ref link titles [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "["}, {"type": "text", "raw": "b]: /b \"broken"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "a"}], "attrs": {"url": "/a", "title": "title on next line"}, "ref": "A", "label": "a"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "b]"}]}]
+== ref link first wins [ast]
+[{"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "x"}], "attrs": {"url": "/first", "title": null}, "ref": "X", "label": "x"}]}]
+== ref link inside paragraph [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "para"}, {"type": "softbreak"}, {"type": "text", "raw": "["}, {"type": "text", "raw": "x]: /u"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "["}, {"type": "text", "raw": "x]"}]}]
+== paragraphs [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "aaa"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "bbb"}, {"type": "softbreak"}, {"type": "text", "raw": "ccc"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "ddd"}]}]
+== blank lines [ast]
+[{"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "aaa"}]}, {"type": "blank_line"}, {"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "heading"}]}, {"type": "blank_line"}]
+== escapes [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "*"}, {"type": "text", "raw": "not emph"}, {"type": "text", "raw": "*"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "_"}, {"type": "text", "raw": "x"}, {"type": "text", "raw": "_"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "`"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "#"}, {"type": "text", "raw": " "}, {"type": "text", "raw": "\\"}, {"type": "text", "raw": " \\a "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "link"}, {"type": "text", "raw": "]"}]}]
+== code spans [ast]
+[{"type": "paragraph", "children": [{"type": "codespan", "raw": "code"}, {"type": "text", "raw": " "}, {"type": "codespan", "raw": "a`b"}, {"type": "text", "raw": " "}, {"type": "codespan", "raw": "x"}, {"type": "text", "raw": " "}, {"type": "codespan", "raw": "  "}, {"type": "text", "raw": " "}, {"type": "text", "raw": "``"}, {"type": "text", "raw": "unterminated"}, {"type": "softbreak"}, {"type": "text", "raw": "multi"}, {"type": "softbreak"}, {"type": "text", "raw": "line"}, {"type": "codespan", "raw": " "}, {"type": "text", "raw": "a"}, {"type": "softbreak"}, {"type": "text", "raw": "b"}, {"type": "text", "raw": "`"}]}]
+== emphasis [ast]
+[{"type": "paragraph", "children": [{"type": "emphasis", "children": [{"type": "text", "raw": "a"}]}, {"type": "text", "raw": " "}, {"type": "emphasis", "children": [{"type": "text", "raw": "b"}]}, {"type": "text", "raw": " "}, {"type": "strong", "children": [{"type": "text", "raw": "c"}]}, {"type": "text", "raw": " "}, {"type": "strong", "children": [{"type": "text", "raw": "d"}]}, {"type": "text", "raw": " "}, {"type": "emphasis", "children": [{"type": "strong", "children": [{"type": "text", "raw": "e"}]}]}, {"type": "text", "raw": " "}, {"type": "emphasis", "children": [{"type": "strong", "children": [{"type": "text", "raw": "f"}]}]}, {"type": "text", "raw": " "}, {"type": "emphasis", "children": [{"type": "text", "raw": "nested "}, {"type": "strong", "children": [{"type": "text", "raw": "strong"}]}, {"type": "text", "raw": " inside"}]}]}]
+== emphasis edge [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "a * b * c"}, {"type": "softbreak"}, {"type": "text", "raw": "snake_case_word"}, {"type": "softbreak"}, {"type": "emphasis", "children": [{"type": "text", "raw": "foo"}]}, {"type": "text", "raw": "bar"}, {"type": "softbreak"}, {"type": "text", "raw": "**"}, {"type": "text", "raw": "unclosed"}, {"type": "softbreak"}, {"type": "emphasis", "children": [{"type": "text", "raw": "a_b"}]}]}]
+== emphasis escaped [ast]
+[{"type": "paragraph", "children": [{"type": "emphasis", "children": [{"type": "text", "raw": "a\\"}]}, {"type": "text", "raw": "b* "}, {"type": "strong", "children": [{"type": "text", "raw": "c"}, {"type": "text", "raw": "**"}, {"type": "text", "raw": "d"}]}]}]
+== links [ast]
+[{"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "text"}], "attrs": {"url": "/url", "title": "title"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "empty"}], "attrs": {"url": ""}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "angle"}], "attrs": {"url": "a%20b"}}, {"type": "text", "raw": " "}, {"type": "image", "children": [{"type": "text", "raw": "img"}], "attrs": {"url": "/i.png", "title": "T"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "esc"}], "attrs": {"url": "/a)b"}}]}]
+== links nested [ast]
+[{"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "outer "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "inner] text"}], "attrs": {"url": "/u"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "a "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "b](/x) c"}], "attrs": {"url": "/y"}}, {"type": "text", "raw": " "}, {"type": "image", "children": [{"type": "text", "raw": "img "}, {"type": "link", "children": [{"type": "text", "raw": "x"}], "attrs": {"url": "/l"}}], "attrs": {"url": "/i"}}]}]
+== links titles [ast]
+[{"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "a"}], "attrs": {"url": "/u", "title": "t \"q\""}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "b"}], "attrs": {"url": "/u", "title": "single"}}, {"type": "text", "raw": " "}, {"type": "text", "raw": "["}, {"type": "text", "raw": "c](/u (paren))"}]}]
+== links precedence [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "[not a "}, {"type": "codespan", "raw": "link](/u)"}, {"type": "text", "raw": " here] "}, {"type": "text", "raw": "*a "}, {"type": "codespan", "raw": "*"}, {"type": "text", "raw": " b* "}, {"type": "link", "children": [{"type": "text", "raw": "x "}, {"type": "text", "raw": "<http://a.b/>"}], "attrs": {"url": "/c"}}]}]
+== autolinks [ast]
+[{"type": "paragraph", "children": [{"type": "link", "children": [{"type": "text", "raw": "https://example.com/path?q=1&r=2"}], "attrs": {"url": "https://example.com/path?q=1&amp;r=2"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "mailto:me@x.org"}], "attrs": {"url": "mailto:me@x.org"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "me@example.com"}], "attrs": {"url": "mailto:me@example.com"}}, {"type": "text", "raw": " "}, {"type": "inline_html", "raw": "<not auto>"}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "a+b:c"}], "attrs": {"url": "a+b:c"}}]}]
+== inline html [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "a "}, {"type": "inline_html", "raw": "<span class=\"x\">"}, {"type": "text", "raw": "b"}, {"type": "inline_html", "raw": "</span>"}, {"type": "text", "raw": " "}, {"type": "inline_html", "raw": "<!-- c -->"}, {"type": "text", "raw": " "}, {"type": "inline_html", "raw": "<?pi?>"}, {"type": "text", "raw": " "}, {"type": "inline_html", "raw": "<![CDATA[d]]>"}, {"type": "text", "raw": " "}, {"type": "inline_html", "raw": "<a href=\"/q\">"}, {"type": "text", "raw": "["}, {"type": "text", "raw": "in](/link)"}, {"type": "inline_html", "raw": "</a>"}]}]
+== entities [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "&amp; &copy; &#35; &#x22; &nbsp;x &bogus; &ampxyz; &#0; &#xD800; &#1114112; &Auml"}]}]
+== line breaks [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "hard"}, {"type": "linebreak"}, {"type": "text", "raw": "break"}, {"type": "softbreak"}, {"type": "text", "raw": "soft"}, {"type": "softbreak"}, {"type": "text", "raw": "back"}, {"type": "linebreak"}, {"type": "text", "raw": "slash"}]}]
+== urls in text [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "visit https://example.com/a_b. or http://x.y/(z) now"}]}]
+== unicode [ast]
+[{"type": "paragraph", "children": [{"type": "emphasis", "children": [{"type": "text", "raw": "\u00fcn\u00efc\u00f6d\u00e9"}]}, {"type": "text", "raw": " \u2014 \u201cquotes\u201d "}, {"type": "link", "children": [{"type": "text", "raw": "\u0441\u0441\u044b\u043b\u043a\u0430"}], "attrs": {"url": "/%D0%BF%D1%83%D1%82%D1%8C"}}, {"type": "text", "raw": " "}, {"type": "codespan", "raw": "\u043a\u043e\u0434"}]}]
+== strikethrough [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "~~gone~~ ~~not closed ~ ~~a"}, {"type": "text", "raw": "~"}, {"type": "text", "raw": "~b~~"}]}]
+== mark insert [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "==marked== ^^inserted^^ ==a"}, {"type": "text", "raw": "="}, {"type": "text", "raw": "=b=="}]}]
+== sup sub [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "2^10^ is 1024, H~2~O, a^b\\ c^"}]}]
+== table [ast]
+[{"type": "table", "children": [{"type": "table_head", "children": [{"type": "table_cell", "attrs": {"align": "left", "head": true}, "children": [{"type": "text", "raw": "a"}]}, {"type": "table_cell", "attrs": {"align": "center", "head": true}, "children": [{"type": "text", "raw": "b"}]}, {"type": "table_cell", "attrs": {"align": "right", "head": true}, "children": [{"type": "text", "raw": "c"}]}]}, {"type": "table_body", "children": [{"type": "table_row", "children": [{"type": "table_cell", "attrs": {"align": "left", "head": false}, "children": [{"type": "text", "raw": "1"}]}, {"type": "table_cell", "attrs": {"align": "center", "head": false}, "children": [{"type": "text", "raw": "2"}]}, {"type": "table_cell", "attrs": {"align": "right", "head": false}, "children": [{"type": "text", "raw": "3"}]}]}, {"type": "table_row", "children": [{"type": "table_cell", "attrs": {"align": "left", "head": false}, "children": [{"type": "text", "raw": "x "}, {"type": "text", "raw": "|"}, {"type": "text", "raw": " y"}]}, {"type": "table_cell", "attrs": {"align": "center", "head": false}, "children": [{"type": "codespan", "raw": "z"}]}, {"type": "table_cell", "attrs": {"align": "right", "head": false}, "children": [{"type": "strong", "children": [{"type": "text", "raw": "w"}]}]}]}]}]}]
+== table mismatch [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "| a | b |"}, {"type": "softbreak"}, {"type": "text", "raw": "|---|"}, {"type": "softbreak"}, {"type": "text", "raw": "| 1 | 2 |"}]}]
+== nptable [ast]
+[{"type": "table", "children": [{"type": "table_head", "children": [{"type": "table_cell", "attrs": {"align": null, "head": true}, "children": [{"type": "text", "raw": "a"}]}, {"type": "table_cell", "attrs": {"align": null, "head": true}, "children": [{"type": "text", "raw": "b"}]}]}, {"type": "table_body", "children": [{"type": "table_row", "children": [{"type": "table_cell", "attrs": {"align": null, "head": false}, "children": [{"type": "text", "raw": "1"}]}, {"type": "table_cell", "attrs": {"align": null, "head": false}, "children": [{"type": "text", "raw": "2"}]}]}, {"type": "table_row", "children": [{"type": "table_cell", "attrs": {"align": null, "head": false}, "children": [{"type": "text", "raw": "3"}]}, {"type": "table_cell", "attrs": {"align": null, "head": false}, "children": [{"type": "text", "raw": "4"}]}]}]}]}]
+== footnotes [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "Text"}, {"type": "footnote_ref", "raw": "1", "attrs": {"index": 1}}, {"type": "text", "raw": " and more"}, {"type": "footnote_ref", "raw": "NOTE", "attrs": {"index": 2}}, {"type": "text", "raw": " and "}, {"type": "footnote_ref", "raw": "1", "attrs": {"index": 1}}, {"type": "text", "raw": " again, "}, {"type": "text", "raw": "[^missing]"}, {"type": "text", "raw": "."}]}, {"type": "blank_line"}, {"type": "block_code", "raw": "with a second line.\n\nAnd a paragraph.", "style": "indent"}, {"type": "footnotes", "children": [{"type": "footnote_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "First note."}]}], "attrs": {"key": "1", "index": 1}}, {"type": "footnote_item", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "A longer note"}]}], "attrs": {"key": "NOTE", "index": 2}}]}]
+== task lists [ast]
+[{"type": "list", "children": [{"type": "task_list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "todo"}]}], "attrs": {"checked": false}}, {"type": "task_list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "done"}]}], "attrs": {"checked": true}}, {"type": "task_list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "also"}]}], "attrs": {"checked": true}}, {"type": "list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "["}, {"type": "text", "raw": "y] not a task"}]}]}], "tight": true, "bullet": "-", "attrs": {"depth": 0, "ordered": false}}, {"type": "list", "children": [{"type": "task_list_item", "children": [{"type": "block_text", "children": [{"type": "text", "raw": "ordered"}]}], "attrs": {"checked": false}}], "tight": true, "bullet": ".", "attrs": {"depth": 0, "ordered": true}}]
+== def list [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "Apple"}, {"type": "softbreak"}, {"type": "text", "raw": ":   A fruit."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "Orange"}, {"type": "softbreak"}, {"type": "text", "raw": ":   Citrus."}, {"type": "softbreak"}, {"type": "text", "raw": ":   Second definition"}, {"type": "softbreak"}, {"type": "text", "raw": "continued."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "Term"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ": loose"}]}]
+== abbr [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "The HTML spec is by the W3C."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "*"}, {"type": "text", "raw": "["}, {"type": "text", "raw": "HTML]: Hyper Text Markup Language"}, {"type": "softbreak"}, {"type": "text", "raw": "*"}, {"type": "text", "raw": "["}, {"type": "text", "raw": "W3C]:  World Wide Web Consortium"}]}]
+== math [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "Inline $a^2 + b^2$ and $ not$."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "$$"}, {"type": "softbreak"}, {"type": "text", "raw": "\\int_0^1 x"}, {"type": "text", "raw": ","}, {"type": "text", "raw": "dx"}, {"type": "softbreak"}, {"type": "text", "raw": "$$"}]}]
+== ruby [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "["}, {"type": "text", "raw": "\u6f22\u5b57(\u304b\u3093\u3058)] "}, {"type": "link", "children": [{"type": "text", "raw": "\u6771(\u3072\u304c\u3057)\u4eac(\u304d\u3087\u3046)"}], "attrs": {"url": "/tokyo"}}, {"type": "text", "raw": " "}, {"type": "link", "children": [{"type": "text", "raw": "\u8a9e(\u3054)"}], "attrs": {"url": "/ref", "title": null}, "ref": "REF", "label": "ref"}]}, {"type": "blank_line"}]
+== spoiler [ast]
+[{"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "! hidden"}, {"type": "softbreak"}, {"type": "text", "raw": "! more"}]}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "inline >! secret !< text"}]}, {"type": "blank_line"}, {"type": "block_quote", "children": [{"type": "paragraph", "children": [{"type": "text", "raw": "normal"}]}]}]
+== url plugin [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": "see https://example.com/x, or "}, {"type": "link", "children": [{"type": "text", "raw": "https://a.b"}], "attrs": {"url": "https://a.b"}}, {"type": "text", "raw": " and "}, {"type": "link", "children": [{"type": "text", "raw": "https://in.link"}], "attrs": {"url": "/u"}}]}]
+== admonitions [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": ".. note:: Read this"}, {"type": "softbreak"}, {"type": "text", "raw": ":class: wide"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "Body "}, {"type": "strong", "children": [{"type": "text", "raw": "text"}]}, {"type": "text", "raw": "."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. warning::"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "No title."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. unknown:: thing"}]}]
+== fenced directives [ast]
+[{"type": "block_code", "raw": ":class: small\n\nInside the tip.\n", "style": "fenced", "marker": "```", "attrs": {"info": "{tip} A tip"}}, {"type": "blank_line"}, {"type": "block_code", "raw": "Careful.\n", "style": "fenced", "marker": "~~~", "attrs": {"info": "{danger}"}}, {"type": "blank_line"}, {"type": "block_code", "raw": "x\n", "style": "fenced", "marker": "```", "attrs": {"info": "{nope}"}}]
+== image directive [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": ".. image:: /img/a.png"}, {"type": "softbreak"}, {"type": "text", "raw": ":alt: An image"}, {"type": "softbreak"}, {"type": "text", "raw": ":width: 100"}, {"type": "softbreak"}, {"type": "text", "raw": ":height: 50%"}, {"type": "softbreak"}, {"type": "text", "raw": ":align: center"}, {"type": "softbreak"}, {"type": "text", "raw": ":target: /big.png"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. image:: /b.png"}, {"type": "softbreak"}, {"type": "text", "raw": ":align: sideways"}, {"type": "softbreak"}, {"type": "text", "raw": ":width: wide"}]}]
+== figure directive [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": ".. figure:: /fig.png"}, {"type": "softbreak"}, {"type": "text", "raw": ":figwidth: 80%"}, {"type": "softbreak"}, {"type": "text", "raw": ":figclass: framed"}, {"type": "softbreak"}, {"type": "text", "raw": ":align: left"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "The caption."}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": "A legend paragraph."}]}]
+== toc errors [ast]
+[{"type": "paragraph", "children": [{"type": "text", "raw": ".. toc::"}, {"type": "softbreak"}, {"type": "text", "raw": ":min-level: 0"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. toc::"}, {"type": "softbreak"}, {"type": "text", "raw": ":max-level: x"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. toc::"}, {"type": "softbreak"}, {"type": "text", "raw": ":min-level: 3"}, {"type": "softbreak"}, {"type": "text", "raw": ":max-level: 2"}]}, {"type": "blank_line"}, {"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "heading"}]}]
+== toc [ast]
+[{"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "Intro"}]}, {"type": "blank_line"}, {"type": "paragraph", "children": [{"type": "text", "raw": ".. toc:: Contents"}, {"type": "softbreak"}, {"type": "text", "raw": ":max-level: 2"}]}, {"type": "blank_line"}, {"type": "heading", "attrs": {"level": 2}, "style": "axt", "children": [{"type": "text", "raw": "Part "}, {"type": "emphasis", "children": [{"type": "text", "raw": "one"}]}]}, {"type": "heading", "attrs": {"level": 3}, "style": "axt", "children": [{"type": "text", "raw": "Deep"}]}, {"type": "heading", "attrs": {"level": 2}, "style": "axt", "children": [{"type": "text", "raw": "Part two"}]}, {"type": "heading", "attrs": {"level": 1}, "style": "axt", "children": [{"type": "text", "raw": "End"}]}]
+== page api.md -> data/out/api.html (1140 bytes, 4 headings)
+<!doctype html>
+<title>API reference</title>
+<nav>
+<ul>
+<li><a href="#toc_1">API reference
+</a>
+<ul>
+<li><a href="#toc_2">Build
+</a></li>
+<li><a href="#toc_3">Serve
+</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+<main>
+<h1 id="toc_1">API reference</h1>
+<details class="toc" open>
+<summary>Table of Contents</summary>
+<ul>
+<li><a href="#toc_2">Build
+</a>
+<ul>
+<li><a href="#toc_3">Arguments</a></li>
+</ul>
+</li>
+<li><a href="#toc_4">Serve
+</a></li>
+</ul>
+</details>
+<h2 id="toc_2">Build</h2>
+<p><code>build(src, out, *, theme=None)</code> renders every page under <code>src</code>.</p>
+<h3 id="toc_3">Arguments</h3>
+<ul>
+<li><strong>src</strong>: the source folder</li>
+<li><strong>out</strong>: the output folder</li>
+</ul>
+<h2 id="toc_3">Serve</h2>
+<p><code>serve(out, port=8000)</code> serves <code>out</code> over <abbr title="Hypertext Transfer Protocol">HTTP</abbr>.</p>
+<blockquote>
+<p><strong>Note</strong>: the server is for previews only.
+Use a real web server in production.</p>
+</blockquote>
+<p>Math: <span class="math">\(O(n \log n)\)</span> for <em>n</em> pages, with the bound</p>
+<div class="math">$$
+T(n) = 2T(n/2) + n
+$$</div>
+</main>
+== page changelog.md -> data/out/changelog.html (850 bytes, 3 headings)
+<!doctype html>
+<title>Changelog</title>
+<nav>
+<ul>
+<li><a href="#toc_1">Changelog</a>
+<ul>
+<li><a href="#toc_2">2.1.0</a></li>
+<li><a href="#toc_3">2.0.0</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+<main>
+<h1 id="toc_1">Changelog</h1>
+<h2 id="toc_2">2.1.0</h2>
+<ul>
+<li>Added <del>themes</del> <mark>theme packs</mark>.</li>
+<li>Fixed H<sub>2</sub>O rendering, 2<sup>10</sup> pages.</li>
+<li>Faster builds <sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup>.</li>
+</ul>
+<h2 id="toc_3">2.0.0</h2>
+<ol>
+<li>Rewrote the core.</li>
+<li>Dropped Python 3.7.</li>
+</ol>
+<hr />
+<p>Older releases: see <a href="https://example.com/lumen/history">https://example.com/lumen/history</a>.</p>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>About 40% faster on large sites.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+</main>
+== page guide/install.md -> data/out/guide/install.html (254 bytes, 0 headings)
+<!doctype html>
+<title>install.md</title>
+<nav>
+</nav>
+<main>
+<p>Install Lumen with pip:</p>
+<pre><code>pip install lumen</code></pre>
+<p>Then check the version:</p>
+<pre><code class="language-console">$ lumen --version
+lumen 2.1.0
+</code></pre>
+</main>
+== page guide/usage.md -> data/out/guide/usage.html (1261 bytes, 4 headings)
+<!doctype html>
+<title>Usage</title>
+<nav>
+<ul>
+<li><a href="#toc_1">Usage</a>
+<ul>
+<li><a href="#toc_2">Build</a></li>
+<li><a href="#toc_3">Serve</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+<main>
+<h1 id="toc_1">Usage</h1>
+<details class="toc" open>
+<summary>Table of Contents</summary>
+<ul>
+<li><a href="#toc_1">Usage</a>
+<ul>
+<li><a href="#toc_2">Build</a></li>
+<li><a href="#toc_3">Serve</a>
+<ul>
+<li><a href="#toc_4">Options</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</details>
+<h2 id="toc_2">Build</h2>
+<p>Run <code>lumen build</code>. The output goes to <code>site/</code> by default; change it with
+<code>--out</code>.</p>
+<section class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Building overwrites the output folder.</p>
+</section>
+<h2 id="toc_3">Serve</h2>
+<p>Run <code>lumen serve</code> and open <a href="http://localhost:8000/">http://localhost:8000/</a>.
+Back to the <a href="../index.md">index</a>.</p>
+<h3 id="toc_4">Options</h3>
+<dl>
+<dt>Term</dt>
+<dd>Meaning of the term.</dd>
+<dt>Port</dt>
+<dd>The port to listen on, <em>8000</em> by default.</dd>
+</dl>
+<blockquote>
+<p>Included note: <em>see also</em> the <a href="../api.md">api</a>.</p>
+</blockquote>
+<div class="error"><pre>Could not include self: usage.md</pre></div>
+</main>
+== page index.md -> data/out/index.html (2995 bytes, 5 headings)
+<!doctype html>
+<title>Lumen documentation</title>
+<nav>
+<ul>
+<li><a href="#toc_1">Lumen documentation</a>
+<ul>
+<li><a href="#toc_2">Getting started</a></li>
+<li><a href="#toc_3">Configuration</a></li>
+<li><a href="#toc_4">Examples</a></li>
+<li><a href="#toc_5">Checklist</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+<main>
+<h1 id="toc_1">Lumen documentation</h1>
+<p>Lumen is a static site toolkit. This page is the entry point.</p>
+<details class="toc" open>
+<summary>On this page</summary>
+<ul>
+<li><a href="#toc_1">Lumen documentation</a>
+<ul>
+<li><a href="#toc_2">Getting started</a></li>
+<li><a href="#toc_3">Configuration</a></li>
+<li><a href="#toc_4">Examples</a></li>
+<li><a href="#toc_5">Checklist</a></li>
+</ul>
+</li>
+</ul>
+</details>
+<h2 id="toc_2">Getting started</h2>
+<p>Install Lumen with pip:</p>
+<pre><code>pip install lumen</code></pre>
+<p>Then check the version:</p>
+<pre><code class="language-console">$ lumen --version
+lumen 2.1.0
+</code></pre>
+<section class="admonition note tip-box">
+<p class="admonition-title">Before you begin</p>
+<p>You need Python 3.8 or later. See <a href="guide/usage.md">usage</a>.</p>
+</section>
+<h2 id="toc_3">Configuration</h2>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left">Key</th>
+  <th style="text-align:center">Default</th>
+  <th style="text-align:right">Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left"><code>title</code></td>
+  <td style="text-align:center"><em>none</em></td>
+  <td style="text-align:right">Site title</td>
+</tr>
+<tr>
+  <td style="text-align:left"><code>theme</code></td>
+  <td style="text-align:center"><code>plain</code></td>
+  <td style="text-align:right">Theme name</td>
+</tr>
+<tr>
+  <td style="text-align:left"><code>out</code></td>
+  <td style="text-align:center"><code>site/</code></td>
+  <td style="text-align:right">Output folder</td>
+</tr>
+</tbody>
+</table>
+<p>The defaults are fine for most sites.<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup></p>
+<h2 id="toc_4">Examples</h2>
+<pre class="directive-include">
+from lumen import build
+
+build("docs", "site")
+</pre>
+<div class="banner">Lumen <b>2.1</b></div>
+
+<figure class="figure align-center" style="width:60%">
+<div class="block-image"><img src="/images/arch.png" /></div>
+<figcaption>The build pipeline.</figcaption>
+</figure>
+<h2 id="toc_5">Checklist</h2>
+<ul>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled checked/>write pages</li>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled/>add search</li>
+<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled/>publish</li>
+</ul>
+<p>See the <a href="api.md">API reference</a>, the <a href="changelog.md">changelog</a> and the
+<a href="guide/missing.md">missing page</a>.</p>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>They follow the conventions of other generators.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+</main>
+== page snippets/note.md -> data/out/snippets/note.html (167 bytes, 0 headings)
+<!doctype html>
+<title>note.md</title>
+<nav>
+</nav>
+<main>
+<blockquote>
+<p>Included note: <em>see also</em> the <a href="../api.md">api</a>.</p>
+</blockquote>
+</main>
+== links api.md: 0
+== links changelog.md: 1
+  link https://example.com/lumen/history external
+== links guide/install.md: 0
+== links guide/usage.md: 3
+  link http://localhost:8000/ external
+  link ../index.md ok
+  link ../api.md ok
+== links index.md: 4
+  link guide/usage.md ok
+  link api.md ok
+  link changelog.md ok
+  link guide/missing.md MISSING data/site/guide/missing.md
+== links snippets/note.md: 1
+  link ../api.md ok
+== cli -m Hi **Markdown**
+<p>Hi <strong>Markdown</strong></p>
+
+[exit 0]
+== cli -m # Title
+
+Text with <b>html</b> --escape
+<h1>Title</h1>
+<p>Text with &lt;b&gt;html&lt;/b&gt;</p>
+
+[exit 0]
+== cli -f data/cli/README.md
+<h1>Project <strong>Kite</strong></h1>
+<p>A <em>tiny</em> tool. Install: <code>pip install kite</code>.</p>
+<table>
+<thead>
+<tr>
+  <th>a</th>
+  <th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>1</td>
+  <td>2</td>
+</tr>
+</tbody>
+</table>
+<p><del>old</del> new<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup></p>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>A note.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+
+[exit 0]
+== cli -f data/cli/README.md -r rst
+error: AttributeError: No renderer "'table'"
+[exit 1]
+== cli -f data/cli/README.md -r markdown -p table
+error: AttributeError: No renderer "'table'"
+[exit 1]
+== cli -f data/cli/notes.txt --hardwrap -o data/out/notes.html
+[exit 0]
+-- data/out/notes.html
+<p>line one<br />
+line two</p>
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+== cli -f data/cli/README.md -p strikethrough footnotes -p table -o data/out/readme.html
+[exit 0]
+-- data/out/readme.html
+<h1>Project <strong>Kite</strong></h1>
+<p>A <em>tiny</em> tool. Install: <code>pip install kite</code>.</p>
+<table>
+<thead>
+<tr>
+  <th>a</th>
+  <th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>1</td>
+  <td>2</td>
+</tr>
+</tbody>
+</table>
+<p><del>old</del> new<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup></p>
+<section class="footnotes">
+<ol>
+<li id="fn-1"><p>A note.<a href="#fnref-1" class="footnote">&#8617;</a></p></li>
+</ol>
+</section>
+== cli -m - [ ] a
+- [x] b -p task_lists -r ast
+[{'type': 'list', 'children': [{'type': 'task_list_item', 'children': [{'type': 'block_text', 'children': [{'type': 'text', 'raw': 'a'}]}], 'attrs': {'checked': False}}, {'type': 'task_list_item', 'children': [{'type': 'block_text', 'children': [{'type': 'text', 'raw': 'b'}]}], 'attrs': {'checked': True}}], 'tight': True, 'bullet': '-', 'attrs': {'depth': 0, 'ordered': False}}]
+[exit 0]
+== cli --version
+mistune 3.0.2
+[exit 0]
+== cli -r html
+You MUST specify a message or file
+[exit 1]
