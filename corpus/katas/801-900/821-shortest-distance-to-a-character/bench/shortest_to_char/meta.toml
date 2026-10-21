@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/821-shortest-distance-to-a-character/bench/shortest_to_char.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "9f6ca835d"
+extracted_src = "606105ab"
+model_rev = "583cfb0d"
+model_src = "606105ab"

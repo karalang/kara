@@ -1,0 +1,105 @@
+// LeetCode #821: Shortest Distance to a Character -- the places of `c`.
+//
+// List the places of `c` in order, then walk the string with a pointer
+// into that list that stays on the last place at or before the current
+// one; the nearest `c` is that place or the next. O(n).
+
+fn shortest_to_char(s: Str, c: char) -> Vec[i64] {
+    let mut places: Vec[i64] = Vec.new();
+    let mut n = 0;
+    for ch in s.chars() {
+        if ch == c {
+            places.push(n);
+        }
+        n += 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut k = 0;
+    for i in 0..n {
+        while k + 1 < places.len() and places[k + 1] <= i {
+            k += 1;
+        }
+        let mut nearest = (places[k] - i).abs();
+        if k + 1 < places.len() {
+            nearest = nearest.min(places[k + 1] - i);
+        }
+        answer.push(nearest);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, c: char) {
+    println(f"{s} {c} -> {shortest_to_char(s, c)}");
+}
+
+fn summary(label: Str, s: Str, c: char) {
+    let answer = shortest_to_char(s, c);
+    let mut total = 0;
+    let mut most = 0;
+    for d in answer.iter() {
+        total += d;
+        most = most.max(d);
+    }
+    println(f"{label}: {answer.len()} places, total {total}, farthest {most}");
+}
+
+fn main() {
+    show("loveleetcode", 'e');
+    show("aaab", 'b');
+    show("a", 'a');
+    show("ab", 'a');
+    show("baaab", 'b');
+    show("abcde", 'c');
+    show("eeee", 'e');
+    show("xaaaaaaxaax", 'x');
+    // LeetCode's largest, 10,000 characters: random letters looking for
+    // 'q', one 'z' at the end, and one 'z' in the middle.
+    let mut seed = 821;
+    let mut letters = String.new();
+    for _ in 0..10000 {
+        letters.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+    }
+    summary("random letters, q", letters.as_str(), 'q');
+    let mut last = String.new();
+    for _ in 0..9999 {
+        last.push('a');
+    }
+    last.push('z');
+    summary("one z at the end", last.as_str(), 'z');
+    let mut middle = String.new();
+    for i in 0..10000 {
+        if i == 5000 {
+            middle.push('z');
+        } else {
+            middle.push('a');
+        }
+    }
+    summary("one z in the middle", middle.as_str(), 'z');
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let length = 1 + next_random(mut seed) % 40;
+        let mut s = String.new();
+        for _ in 0..length {
+            s.push((b'a' + (next_random(mut seed) % 3) as u8) as char);
+        }
+        let c = (b'a' + (next_random(mut seed) % 3) as u8) as char;
+        // c occurs at least once
+        let at = next_random(mut seed) % (length + 1);
+        let mut with_c = s[0..at].to_string();
+        with_c.push(c);
+        with_c.push_str(s[at..]);
+        for d in shortest_to_char(with_c.as_str(), c).iter() {
+            total += d;
+            check = (check * 131 + d) % 1000000007;
+        }
+    }
+    println(f"300 random strings: total {total}, checksum {check}");
+}

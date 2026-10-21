@@ -1,0 +1,12 @@
+loveleetcode e -> [3, 2, 1, 0, 1, 0, 0, 1, 2, 2, 1, 0]
+aaab b -> [3, 2, 1, 0]
+a a -> [0]
+ab a -> [0, 1]
+baaab b -> [0, 1, 2, 1, 0]
+abcde c -> [2, 1, 0, 1, 2]
+eeee e -> [0, 0, 0, 0]
+xaaaaaaxaax x -> [0, 1, 2, 3, 3, 2, 1, 0, 1, 1, 0]
+random letters, q: 10000 places, total 121397, farthest 70
+one z at the end: 10000 places, total 49995000, farthest 9999
+one z in the middle: 10000 places, total 25000000, farthest 5000
+300 random strings: total 7516, checksum 109219777

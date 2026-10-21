@@ -1,0 +1,231 @@
+// LeetCode #821: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random strings,
+// against the statement read place by place.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn shortest_to_char_star(s: Str, c: char) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut answer: Vec[i64] = Vec.filled(n, 0);
+    // A place no `c` has been seen from yet is n or more away.
+    let mut last = -n;
+    for i in 0..n {
+        if chars[i] == c {
+            last = i;
+        }
+        answer[i] = i - last;
+    }
+    last = 2 * n;
+    for i in (0..n).rev() {
+        if chars[i] == c {
+            last = i;
+        }
+        answer[i] = answer[i].min(last - i);
+    }
+    answer
+}
+
+// ---- positions arm --------------------------------------------------
+
+fn shortest_to_char_positions(s: Str, c: char) -> Vec[i64] {
+    let mut places: Vec[i64] = Vec.new();
+    let mut n = 0;
+    for ch in s.chars() {
+        if ch == c {
+            places.push(n);
+        }
+        n += 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut k = 0;
+    for i in 0..n {
+        while k + 1 < places.len() and places[k + 1] <= i {
+            k += 1;
+        }
+        let mut nearest = (places[k] - i).abs();
+        if k + 1 < places.len() {
+            nearest = nearest.min(places[k + 1] - i);
+        }
+        answer.push(nearest);
+    }
+    answer
+}
+
+// ---- search arm -----------------------------------------------------
+
+fn shortest_to_char_bfs(s: Str, c: char) -> Vec[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut answer: Vec[i64] = Vec.filled(n, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for i in 0..n {
+        if chars[i] == c {
+            answer[i] = 0;
+            queue.push_back(i);
+        }
+    }
+    while let Some(i) = queue.pop_front() {
+        for j in [i - 1, i + 1] {
+            if j >= 0 and j < n and answer[j] < 0 {
+                answer[j] = answer[i] + 1;
+                queue.push_back(j);
+            }
+        }
+    }
+    answer
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn shortest_to_char_iter(s: Str, c: char) -> Vec[i64] {
+    let places: Vec[i64] = s.chars().enumerate().filter(|(_, ch)| ch == c).map(|(i, _)| i).collect();
+    (0..s.chars().count()).map(|i| places.iter().map(|p| (p - i).abs()).min() ?? 0).collect()
+}
+
+// ---- the statement, place by place ----------------------------------------
+
+// Each place's answer is the smallest distance to any place holding `c`,
+// every place compared.
+fn statement(chars: Vec[char], c: char) -> Vec[i64] {
+    let n = chars.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut best = n;
+        for j in 0..n {
+            if chars[j] == c {
+                let d = if j > i { j - i } else { i - j };
+                if d < best {
+                    best = d;
+                }
+            }
+        }
+        answer.push(best);
+    }
+    answer
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, s: Str, c: char) -> Vec[i64] {
+    if arm == 0 {
+        shortest_to_char_star(s, c)
+    } else if arm == 1 {
+        shortest_to_char_positions(s, c)
+    } else if arm == 2 {
+        shortest_to_char_bfs(s, c)
+    } else {
+        shortest_to_char_iter(s, c)
+    }
+}
+
+fn letter(k: i64) -> char {
+    (b'a' + k as u8) as char
+}
+
+fn main() {
+    let names = ["star", "positions", "bfs", "iter"];
+    let properties = ["answer", "reversed", "shape", "others replaced"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut farthest = 0;
+    let mut seed = 821;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut chars: Vec[char] = Vec.new();
+        let mut c = 'a';
+        if kind == 0 {
+            // up to 40 characters of three letters
+            let length = 1 + next_random(mut seed) % 40;
+            for _ in 0..length {
+                chars.push(letter(next_random(mut seed) % 3));
+            }
+            c = letter(next_random(mut seed) % 3);
+        } else if kind == 1 {
+            // up to 200 characters of all 26 letters
+            let length = 1 + next_random(mut seed) % 200;
+            for _ in 0..length {
+                chars.push(letter(next_random(mut seed) % 26));
+            }
+            c = letter(next_random(mut seed) % 26);
+        } else if kind == 2 {
+            // a run of up to 300 'a's: the one 'b' is added below
+            let length = next_random(mut seed) % 300;
+            for _ in 0..length {
+                chars.push('a');
+            }
+            c = 'b';
+        } else {
+            // up to 60 characters, about half of them `c`
+            let length = 1 + next_random(mut seed) % 60;
+            c = letter(next_random(mut seed) % 26);
+            for _ in 0..length {
+                if next_random(mut seed) % 2 == 0 {
+                    chars.push(c);
+                } else {
+                    chars.push(letter(next_random(mut seed) % 26));
+                }
+            }
+        }
+        // `c` occurs at least once
+        let at = next_random(mut seed) % (chars.len() + 1);
+        chars.insert(at, c);
+        let s: String = chars.iter().collect();
+        let want = statement(chars.clone(), c);
+        for d in want.iter() {
+            farthest = farthest.max(d);
+        }
+        let mut backwards = chars.clone();
+        backwards.reverse();
+        let reversed: String = backwards.iter().collect();
+        // every letter other than `c` replaced by one other letter
+        let other = if c == 'z' { 'y' } else { 'z' };
+        let mut replaced = String.new();
+        for ch in chars.iter() {
+            if ch == c {
+                replaced.push(c);
+            } else {
+                replaced.push(other);
+            }
+        }
+        for arm in 0..4 {
+            let got = answer(arm, s.as_str(), c);
+            let mut back = answer(arm, reversed.as_str(), c);
+            back.reverse();
+            let mut shape = got.len() == chars.len();
+            if shape {
+                for i in 0..got.len() {
+                    if (got[i] == 0) != (chars[i] == c) {
+                        shape = false;
+                    }
+                    if i + 1 < got.len() and (got[i] - got[i + 1]).abs() > 1 {
+                        shape = false;
+                    }
+                }
+            }
+            let oks = [got == want, back == got, shape, answer(arm, replaced.as_str(), c) == got];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {s} {c} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases (the farthest place {farthest} from its c), {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, positions {by_arm[1]}, bfs {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, shape {by_property[2]}, others replaced {by_property[3]}");
+}
