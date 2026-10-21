@@ -1,0 +1,1129 @@
+== parse: the base grammar
+-- parse base $.store.book[0].title
+tree Child(Child(Child(Child(Root(), Fields('store')), Fields('book')), Index(index=0)), Fields('title'))
+-- parse base store.book[*].author
+tree Child(Child(Child(Fields('store'), Fields('book')), Slice(start=None,end=None,step=None)), Fields('author'))
+-- parse base $..author
+tree Descendants(Root(), Fields('author'))
+-- parse base $.store.*
+tree Child(Child(Root(), Fields('store')), Fields('*'))
+-- parse base $.store..price
+tree Descendants(Child(Root(), Fields('store')), Fields('price'))
+-- parse base $..book[2]
+tree Child(Descendants(Root(), Fields('book')), Index(index=2))
+-- parse base $..book[-1:]
+tree Child(Descendants(Root(), Fields('book')), Slice(start=-1,end=None,step=None))
+-- parse base $..book[0,1]
+! JsonPathParserError: Parse error at 1:9 near token , (,)
+-- parse base $..book[:2]
+tree Child(Descendants(Root(), Fields('book')), Slice(start=None,end=2,step=None))
+-- parse base $.store.book[1:3]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), Slice(start=1,end=3,step=None))
+-- parse base $.store.book[::2]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), Slice(start=None,end=None,step=2))
+-- parse base $['store']['bicycle']
+tree Child(Child(Root(), Fields('store')), Fields('bicycle'))
+-- parse base $.store.book[?(@.isbn)]
+! JsonPathLexerError: Error on line 1, col 13: Unexpected character: ? 
+-- parse base foo.bar | foo.baz
+tree Child(Child(Fields('foo'), Union(Fields('bar'), Fields('foo'))), Fields('baz'))
+-- parse base a where b
+tree Where(Fields('a'), Fields('b'))
+-- parse base a wherenot b
+tree WhereNot(Fields('a'), Fields('b'))
+-- parse base (a.b).c
+tree Child(Child(Fields('a'), Fields('b')), Fields('c'))
+-- parse base a.`this`.b
+tree Child(Child(Fields('a'), This()), Fields('b'))
+-- parse base a.`parent`
+tree Child(Fields('a'), Parent())
+-- parse base a & b
+tree Intersect(Fields('a'), Fields('b'))
+-- parse base 'quoted.key'.x
+tree Child(Fields('quoted.key'), Fields('x'))
+-- parse base "dq key"[3]
+tree Child(Fields('dq key'), Index(index=3))
+-- parse base items[*].metadata.labels.'app.kubernetes.io/name'
+tree Child(Child(Child(Child(Fields('items'), Slice(start=None,end=None,step=None)), Fields('metadata')), Fields('labels')), Fields('app.kubernetes.io/name'))
+-- parse base a.b,c.d
+tree Child(Child(Fields('a'), Fields('b','c')), Fields('d'))
+-- parse base 1.2
+tree Child(Fields('1'), Fields('2'))
+-- parse base @
+tree Fields('@')
+-- parse base $.store.book[
+! JsonPathParserError: Parse error near the end of string!
+-- parse base $..
+! JsonPathParserError: Parse error near the end of string!
+-- parse base a.`len`
+! JsonPathParserError: Unknown named operator `len` at 1:6
+-- parse base `foo`
+! JsonPathParserError: Unknown named operator `foo` at 1:4
+-- parse base a.'unterminated
+! JsonPathLexerError: Unexpected EOF in string literal or identifier
+-- parse base $.store.book[0]]
+! JsonPathParserError: Parse error at 1:15 near token ] (])
+-- parse base a\n.b \t. c
+tree Child(Child(Fields('a'), Fields('b')), Fields('c'))
+-- parse base a\n.]
+! JsonPathParserError: Parse error at 2:2 near token ] (])
+-- parse base a.b#c
+! JsonPathLexerError: Error on line 1, col 3: Unexpected character: # 
+-- parse base $[*]
+tree Child(Root(), Slice(start=None,end=None,step=None))
+-- parse base [*]
+tree Slice(start=None,end=None,step=None)
+-- parse base [1:]
+tree Slice(start=1,end=None,step=None)
+-- parse base *.x
+tree Child(Fields('*'), Fields('x'))
+-- parse base a..b..c
+tree Descendants(Descendants(Fields('a'), Fields('b')), Fields('c'))
+== parse: the extended grammar
+-- parse ext $.store.book[?(@.price < 10)].title
+tree Child(Child(Child(Child(Root(), Fields('store')), Fields('book')), Filter([Expression(Child(This(), Fields('price')) < 10)])), Fields('title'))
+-- parse ext $.store.book[?price > 10]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), Filter([Expression(Fields('price') > 10)]))
+-- parse ext $.store.book[?(@.category == 'fiction' & @.price > 10)]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), Filter([Expression(Child(This(), Fields('category')) == 'fiction'), Expression(Child(This(), Fields('price')) > 10)]))
+-- parse ext $.items[?status.phase = Running]
+tree Child(Child(Root(), Fields('items')), Filter([Expression(Child(Fields('status'), Fields('phase')) = 'Running')]))
+-- parse ext $.store.book[\\price]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), SortedThis([(Fields('price'), True)]))
+-- parse ext $.store.book[/price,\\title]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), SortedThis([(Fields('price'), False), (Fields('title'), True)]))
+-- parse ext $.store.book[\\category, /price]
+tree Child(Child(Child(Root(), Fields('store')), Fields('book')), SortedThis([(Fields('category'), True), (Fields('price'), False)]))
+-- parse ext $.orders[*].lines[*].qty * $.orders[*].lines[*].price
+tree Operation(Child(Child(Child(Child(Child(Root(), Fields('orders')), Slice(start=None,end=None,step=None)), Fields('lines')), Slice(start=None,end=None,step=None)), Fields('qty')) mul Child(Child(Child(Child(Child(Root(), Fields('orders')), Slice(start=None,end=None,step=None)), Fields('lines')), Slice(start=None,end=None,step=None)), Fields('price')))
+-- parse ext $.a + 2
+tree Operation(Child(Root(), Fields('a')) add 2)
+-- parse ext 3 - 1
+tree Operation(3 sub 1)
+-- parse ext 1.5 * 2.0
+tree Operation(1.5 mul 2.0)
+-- parse ext $.a / 2
+! JsonPathParserError: Parse error at 1:4 near token / (SORT_DIRECTION)
+-- parse ext a.`len`
+tree Child(Fields('a'), Len())
+-- parse ext a.`keys`
+tree Child(Fields('a'), Keys())
+-- parse ext a.`path`
+tree Child(Fields('a'), Path())
+-- parse ext a.`sorted`
+tree Child(Fields('a'), SortedThis(None))
+-- parse ext a.`split(-, 0, -1)`
+tree Child(Fields('a'), Split('split(-, 0, -1)'))
+-- parse ext a.`sub(/(\\d+)ms/, \\1 ms)`
+tree Child(Fields('a'), Sub('sub(/(d+)ms/, 1 ms)'))
+-- parse ext a.`str()`
+tree Child(Fields('a'), Str('str()'))
+-- parse ext a.`split(x)`
+! DefintionInvalid: split(x) is not valid
+-- parse ext a.`nope`
+! JsonPathParserError: Unknown named operator `nope` at 1:7
+-- parse ext $.trueValue
+! JsonPathParserError: Parse error at 1:2 near token True (BOOL)
+-- parse ext $.falseStart
+! JsonPathParserError: Parse error at 1:2 near token False (BOOL)
+-- parse ext $[?(@.x =~ 'ab+c')]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('x')) =~ 'ab+c')]))
+-- parse ext $[?(@.a == true)]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('a')) == True)]))
+-- parse ext $[?(@.a != 1.5)]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('a')) != 1.5)]))
+-- parse ext $[?(@.a >= -3)]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('a')) >= -3)]))
+-- parse ext $[?(@.a <= b)]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('a')) <= 'b')]))
+-- parse ext $[?(@.a)]
+tree Child(Root(), Filter([Expression(Child(This(), Fields('a')))]))
+-- parse ext $[?((@.a) & (@.b))]
+tree Child(Root(), Filter([Expression(Intersect(Child(This(), Fields('a')), Child(This(), Fields('b'))))]))
+-- parse ext $[?@.a > ]
+! JsonPathParserError: Parse error at 1:9 near token ] (])
+-- parse ext $..[?(@.name)]
+! JsonPathParserError: Parse error at 1:4 near token ? (?)
+-- parse ext $.a.@b
+tree Child(Child(Root(), Fields('a')), Fields('@b'))
+-- parse ext $.a-b
+tree Child(Root(), Fields('a-b'))
+-- parse ext $.a - b
+tree Operation(Child(Root(), Fields('a')) sub 'b')
+-- parse ext x - y
+tree Operation('x' sub 'y')
+-- parse ext $.a[?(@.b == "q")]
+tree Child(Child(Root(), Fields('a')), Filter([Expression(Child(This(), Fields('b')) == 'q')]))
+-- parse ext $.a[?]
+! JsonPathParserError: Parse error at 1:5 near token ] (])
+-- parse ext $[?(@ > 1)]
+tree Child(Root(), Filter([Expression(This() > 1)]))
+-- parse ext a | b + 1
+tree Operation(Union(Fields('a'), Fields('b')) add 1)
+-- parse ext a + b . c
+tree Operation('a' add Child(Fields('b'), Fields('c')))
+-- parse ext $.a[?(@.b > 1)].c[\\d]
+tree Child(Child(Child(Child(Root(), Fields('a')), Filter([Expression(Child(This(), Fields('b')) > 1)])), Fields('c')), SortedThis([(Fields('d'), True)]))
+== find: the bookstore
+-- find base $.store.book[*].author store
+store.book.[0].author = 'Nigel Rees'
+store.book.[1].author = 'Evelyn Waugh'
+store.book.[2].author = 'Herman Melville'
+store.book.[3].author = 'J. R. R. Tolkien'
+-- find base $..author store
+store.book.[0].author = 'Nigel Rees'
+store.book.[1].author = 'Evelyn Waugh'
+store.book.[2].author = 'Herman Melville'
+store.book.[3].author = 'J. R. R. Tolkien'
+-- find base $.store.* store
+store.book = [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}]
+store.bicycle = {'color': 'red', 'price': 19.95}
+-- find base $.store..price store
+store.book.[0].price = 8.95
+store.book.[1].price = 12.99
+store.book.[2].price = 8.99
+store.book.[3].price = 22.99
+store.bicycle.price = 19.95
+-- find base $..book[2] store
+store.book.[2] = {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}
+-- find base $..book[-1:] store
+store.book.[3] = {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}
+-- find base $..book[0,1] store
+! JsonPathParserError: Parse error at 1:9 near token , (,)
+-- find base $..book[:2] store
+store.book.[0] = {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}
+store.book.[1] = {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}
+-- find base $..book[1:] store
+store.book.[1] = {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}
+store.book.[2] = {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}
+store.book.[3] = {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}
+-- find base $.store.book[::2].title store
+store.book.[0].title = 'Sayings of the Century'
+store.book.[2].title = 'Moby Dick'
+-- find base $.store.book[::-1].title store
+store.book.[3].title = 'The Lord of the Rings'
+store.book.[2].title = 'Moby Dick'
+store.book.[1].title = 'Sword of Honour'
+store.book.[0].title = 'Sayings of the Century'
+-- find base $..book[?(@.isbn)].title store
+! JsonPathLexerError: Error on line 1, col 8: Unexpected character: ? 
+-- find base $..* store
+store = {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}
+expensive = 10
+store.book = [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}]
+store.bicycle = {'color': 'red', 'price': 19.95}
+store.book.[0].category = 'reference'
+store.book.[0].author = 'Nigel Rees'
+store.book.[0].title = 'Sayings of the Century'
+store.book.[0].price = 8.95
+store.book.[1].category = 'fiction'
+store.book.[1].author = 'Evelyn Waugh'
+store.book.[1].title = 'Sword of Honour'
+store.book.[1].price = 12.99
+store.book.[2].category = 'fiction'
+store.book.[2].author = 'Herman Melville'
+store.book.[2].title = 'Moby Dick'
+store.book.[2].isbn = '0-553-21311-3'
+store.book.[2].price = 8.99
+store.book.[3].category = 'fiction'
+store.book.[3].author = 'J. R. R. Tolkien'
+store.book.[3].title = 'The Lord of the Rings'
+store.book.[3].isbn = '0-395-19395-8'
+store.book.[3].price = 22.99
+store.bicycle.color = 'red'
+store.bicycle.price = 19.95
+-- find base $.store.book[10] store
+(none)
+-- find base $.store.bicycle[0] store
+! KeyError: 0
+-- find base $.store.bicycle[*] store
+store.bicycle.[0] = {'color': 'red', 'price': 19.95}
+-- find base $.expensive[*] store
+expensive.[0] = 10
+-- find base $.store.book[0].title[*] store
+store.book.[0].title.[0] = 'Sayings of the Century'
+-- find base $.store.book[*].category | $.store.bicycle.color store
+store.bicycle.color = 'red'
+store.bicycle.color = 'red'
+store.bicycle.color = 'red'
+store.bicycle.color = 'red'
+-- find base $.store.book[*] where isbn store
+store.book.[2] = {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}
+store.book.[3] = {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}
+-- find base $.store.book[*] wherenot isbn store
+store.book.[0] = {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}
+store.book.[1] = {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}
+-- find base $.store.book[0].`this`.title store
+store.book.[0].title = 'Sayings of the Century'
+-- find base $.store.book[0].title.`parent`.author store
+store.book.[0].author = 'Nigel Rees'
+-- find base $.store.book[0].title.`parent`.`parent`[1].title store
+store.book.[1].title = 'Sword of Honour'
+-- find base $.store.book[0] & $.store.book[1] store
+! NotImplementedError: 
+-- find base $.store.book.author store
+(none)
+-- find base $.store.book[0]..price store
+store.book.[0].price = 8.95
+-- find base $..price..price store
+(none)
+-- find base store.book[3].isbn store
+store.book.[3].isbn = '0-395-19395-8'
+-- find base $.store['bicycle','book'][0] store
+! KeyError: 0
+-- find base $.store.book[0]['title','price','nope'] store
+store.book.[0].title = 'Sayings of the Century'
+store.book.[0].price = 8.95
+-- find base $.store.book[-1] store
+store.book.[-1] = {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}
+-- find ext $.store.book[?(@.price < 10)].title store
+store.book.[0].title = 'Sayings of the Century'
+store.book.[2].title = 'Moby Dick'
+-- find ext $.store.book[?price > 10].title store
+store.book.[1].title = 'Sword of Honour'
+store.book.[3].title = 'The Lord of the Rings'
+-- find ext $.store.book[?(@.category == 'fiction' & @.price > 10)].title store
+store.book.[1].title = 'Sword of Honour'
+store.book.[3].title = 'The Lord of the Rings'
+-- find ext $.store.book[?(@.category = fiction)].author store
+store.book.[1].author = 'Evelyn Waugh'
+store.book.[2].author = 'Herman Melville'
+store.book.[3].author = 'J. R. R. Tolkien'
+-- find ext $.store.book[?(@.price == 8)].title store
+store.book.[0].title = 'Sayings of the Century'
+store.book.[2].title = 'Moby Dick'
+-- find ext $.store.book[?(@.isbn =~ '^0-3')].isbn store
+store.book.[3].isbn = '0-395-19395-8'
+-- find ext $.store.book[?(@.author =~ 'M.l+')].author store
+store.book.[2].author = 'Herman Melville'
+-- find ext $.store.book[\\price] store
+`this` = [{'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}]
+-- find ext $.store.book[/category,\\price] store
+`this` = [{'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}]
+-- find ext $.store.book[\\author] store
+`this` = [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}]
+-- find ext $.store.book[\\price] store
+`this` = [{'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}]
+-- find ext $.store.book[/category,\\price] store
+`this` = [{'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}]
+-- find ext $.store.book[\\author] store
+`this` = [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}]
+-- find ext $.store.book[\\price].title store
+(none)
+-- find ext $.store.book[/price].price store
+(none)
+-- find ext $.store.book[/category,\\price].title store
+(none)
+-- find ext $.store.book[\\category, /title].title store
+(none)
+-- find ext $.store.book.`len` store
+`len` = 4
+-- find ext $.store.`keys` store
+`keys` = 'book'
+`keys` = 'bicycle'
+-- find ext $.store.book[*].`keys` store
+`keys` = 'category'
+`keys` = 'author'
+`keys` = 'title'
+`keys` = 'price'
+`keys` = 'category'
+`keys` = 'author'
+`keys` = 'title'
+`keys` = 'price'
+`keys` = 'category'
+`keys` = 'author'
+`keys` = 'title'
+`keys` = 'isbn'
+`keys` = 'price'
+`keys` = 'category'
+`keys` = 'author'
+`keys` = 'title'
+`keys` = 'isbn'
+`keys` = 'price'
+-- find ext $.store.book[0].price * 2 store
+`this` = 17.9
+-- find ext $.store.book[*].price + 1 store
+`this` = 9.95
+`this` = 13.99
+`this` = 9.99
+`this` = 23.99
+-- find ext $.store.bicycle.price - $.store.book[0].price store
+`this` = 11.0
+-- find ext $.store.book[*].price * $.store.book[*].price store
+`this` = 80.10249999999999
+`this` = 168.7401
+`this` = 80.82010000000001
+`this` = 528.5400999999999
+-- find ext $.store.book[*].price * $.store.bicycle.price store
+(none)
+-- find ext $.store.book[*].title + ' (2nd ed.)' store
+`this` = 'Sayings of the Century (2nd ed.)'
+`this` = 'Sword of Honour (2nd ed.)'
+`this` = 'Moby Dick (2nd ed.)'
+`this` = 'The Lord of the Rings (2nd ed.)'
+-- find ext $.store.book[*].author.`split( , -1, -1)` store
+`this` = 'Rees'
+`this` = 'Waugh'
+`this` = 'Melville'
+`this` = 'Tolkien'
+-- find ext $.store.book[*].isbn.`split(-, 1, 2)` store
+`this` = '553'
+`this` = '395'
+-- find ext $.store.book[*].isbn.`split(-, *, 1)` store
+`this` = ['0', '553-21311-3']
+`this` = ['0', '395-19395-8']
+-- find ext $.store.book[*].title.`sub(/^The /, A )` store
+`this` = 'A Lord of the Rings'
+-- find ext $.store.book[*].price.`str()` store
+`this` = '8.95'
+`this` = '12.99'
+`this` = '8.99'
+`this` = '22.99'
+-- find ext $.expensive.`str()` store
+`this` = '10'
+-- find ext $.store.book[*].title.`path` store
+store.book.[0].title.`path` = 'title'
+store.book.[1].title.`path` = 'title'
+store.book.[2].title.`path` = 'title'
+store.book.[3].title.`path` = 'title'
+-- find ext $.store.book[0].`path` store
+store.book.[0].`path` = '[0]'
+-- find ext $.store.`sorted` store
+`this` = ['bicycle', 'book']
+-- find ext $.store.book[*].category.`sorted` store
+! TypeError: 'DatumInContext' object is not iterable
+-- find ext $.store.book[?(@.price > $.expensive)].title store
+! JsonPathParserError: Parse error at 1:25 near token $ ($)
+-- find ext $.store.book[?(@.price > 10.5)].title store
+store.book.[1].title = 'Sword of Honour'
+store.book.[3].title = 'The Lord of the Rings'
+-- find ext $.store.book[?(@.isbn)].isbn store
+store.book.[2].isbn = '0-553-21311-3'
+store.book.[3].isbn = '0-395-19395-8'
+-- find ext $.store[?(@.color)] store
+store.[1] = {'color': 'red', 'price': 19.95}
+-- find ext $.store.bicycle[?(@ == red)] store
+store.bicycle.[0] = 'red'
+-- find ext $.store.book[?(@.price > 10)].`len` store
+`len` = 4
+`len` = 5
+-- find ext $..book[?(@.price < 9)].`path` store
+store.book.[0].`path` = '[0]'
+store.book.[2].`path` = '[2]'
+== find: kubernetes pods
+-- find base $.items[*].metadata.name pods
+items.[0].metadata.name = 'web-7d4b9c-x2kfp'
+items.[1].metadata.name = 'api-5f6c8d-qq9zt'
+items.[2].metadata.name = 'worker-0'
+-- find base items[*].metadata.labels.'app.kubernetes.io/name' pods
+items.[0].metadata.labels.'app.kubernetes.io/name' = 'web'
+items.[1].metadata.labels.'app.kubernetes.io/name' = 'api'
+-- find base $.items[*].spec.containers[*].image pods
+items.[0].spec.containers.[0].image = 'nginx:1.27'
+items.[0].spec.containers.[1].image = 'fluent-bit:3.1'
+items.[1].spec.containers.[0].image = 'shop-api:2.4.0'
+items.[2].spec.containers.[0].image = 'shop-worker:2.4.0'
+-- find base $..containerPort pods
+items.[0].spec.containers.[0].ports.[0].containerPort = 80
+items.[0].spec.containers.[0].ports.[1].containerPort = 443
+items.[1].spec.containers.[0].ports.[0].containerPort = 8080
+-- find base $.items[*].status.podIP pods
+items.[0].status.podIP = '10.1.4.17'
+items.[1].status.podIP = None
+-- find base $..ports[*].containerPort pods
+items.[0].spec.containers.[0].ports.[0].containerPort = 80
+items.[0].spec.containers.[0].ports.[1].containerPort = 443
+items.[1].spec.containers.[0].ports.[0].containerPort = 8080
+-- find base $.items[1:].metadata.namespace pods
+items.[1].metadata.namespace = 'shop'
+items.[2].metadata.namespace = 'batch'
+-- find base $..labels.tier pods
+items.[0].metadata.labels.tier = 'frontend'
+items.[1].metadata.labels.tier = 'backend'
+items.[2].metadata.labels.tier = 'backend'
+-- find base $.items[*].spec.containers[*] where ports pods
+items.[0].spec.containers.[0] = {'name': 'nginx', 'image': 'nginx:1.27', 'ports': [{'containerPort': 80}, {'containerPort': 443}]}
+items.[0].spec.containers.[1] = {'name': 'log-shipper', 'image': 'fluent-bit:3.1', 'ports': []}
+items.[1].spec.containers.[0] = {'name': 'api', 'image': 'shop-api:2.4.0', 'ports': [{'containerPort': 8080}]}
+items.[2].spec.containers.[0] = {'name': 'worker', 'image': 'shop-worker:2.4.0', 'ports': []}
+-- find base $..containers[*].ports[0] pods
+items.[0].spec.containers.[0].ports.[0] = {'containerPort': 80}
+items.[1].spec.containers.[0].ports.[0] = {'containerPort': 8080}
+-- find ext $.items[?(@.status.phase != 'Running')].metadata.name pods
+items.[1].metadata.name = 'api-5f6c8d-qq9zt'
+items.[2].metadata.name = 'worker-0'
+-- find ext $.items[?(@.status.restartCount > 1)].metadata.name pods
+items.[1].metadata.name = 'api-5f6c8d-qq9zt'
+items.[2].metadata.name = 'worker-0'
+-- find ext $.items[?(@.spec.nodeName == 'node-b' & @.metadata.namespace == 'shop')].metadata.name pods
+items.[1].metadata.name = 'api-5f6c8d-qq9zt'
+-- find ext $.items[*].spec.containers.`len` pods
+`len` = 2
+`len` = 1
+`len` = 1
+-- find ext $.items[*].spec.containers[*].ports.`len` pods
+`len` = 2
+`len` = 0
+`len` = 1
+`len` = 0
+-- find ext $.items[?(@.metadata.labels.tier == backend)].status.restartCount pods
+items.[1].status.restartCount = 7
+items.[2].status.restartCount = 2
+-- find ext $.items[\\status.restartCount].metadata.name pods
+(none)
+-- find ext $.items[*].metadata.labels.`keys` pods
+`keys` = 'app.kubernetes.io/name'
+`keys` = 'tier'
+`keys` = 'app.kubernetes.io/name'
+`keys` = 'tier'
+`keys` = 'tier'
+-- find ext $.items[*].spec.containers[*].image.`split(:, 1, -1)` pods
+`this` = '1.27'
+`this` = '3.1'
+`this` = '2.4.0'
+`this` = '2.4.0'
+-- find ext $.items[?(@.status.podIP =~ '^10\\.1\\.')].metadata.name pods
+items.[0].metadata.name = 'web-7d4b9c-x2kfp'
+-- find ext $.items[?(@.status.podIP)].metadata.name pods
+items.[0].metadata.name = 'web-7d4b9c-x2kfp'
+items.[1].metadata.name = 'api-5f6c8d-qq9zt'
+-- find ext $..[?(@.containerPort > 100)].containerPort pods
+! JsonPathParserError: Parse error at 1:4 near token ? (?)
+-- find ext $.items[*].status.restartCount + 1 pods
+`this` = 1
+`this` = 8
+`this` = 3
+-- find ext $.items[?(@.status.podIP == None)].metadata.name pods
+(none)
+== find: issues
+-- find ext $[*].title issues
+[0].title = 'Crash when config file is empty'
+[1].title = 'Add --json flag to status'
+[2].title = 'Docs: fix typo in install guide'
+[3].title = 'Timeout talking to registry'
+-- find ext [*].number issues
+[0].number = 1412
+[1].number = 1415
+[2].number = 1398
+[3].number = 1420
+-- find ext $[?(@.state == 'open')].number issues
+[0].number = 1412
+[1].number = 1415
+[3].number = 1420
+-- find ext $[?(@.assignee)].assignee.login issues
+[0].assignee.login = 'mira'
+[2].assignee.login = 'kofi'
+-- find ext $[?(@.comments > 2)].title issues
+[0].title = 'Crash when config file is empty'
+[1].title = 'Add --json flag to status'
+-- find ext $[*].labels[*].name issues
+[0].labels.[0].name = 'bug'
+[0].labels.[1].name = 'p1'
+[1].labels.[0].name = 'enhancement'
+[2].labels.[0].name = 'docs'
+[2].labels.[1].name = 'good first issue'
+-- find ext $[?(@.labels[*].name == 'bug')].number issues
+[0].number = 1412
+-- find ext $[\\comments].number issues
+(none)
+-- find ext $[/user.login,\\number].number issues
+(none)
+-- find ext $[*].labels.`len` issues
+`len` = 2
+`len` = 1
+`len` = 2
+`len` = 0
+-- find ext $[?(@.state == open & @.assignee)].number issues
+[0].number = 1412
+[1].number = 1415
+[3].number = 1420
+-- find ext $.`len` issues
+`len` = 4
+-- find ext $[0].`keys` issues
+`keys` = 'number'
+`keys` = 'title'
+`keys` = 'state'
+`keys` = 'labels'
+`keys` = 'assignee'
+`keys` = 'comments'
+`keys` = 'user'
+-- find ext $[?(@.user.login == 'mira')].title.`sub(/ /, _)` issues
+`this` = '_T_i_m_e_o_u_t_ _t_a_l_k_i_n_g_ _t_o_ _r_e_g_i_s_t_r_y_'
+-- find base $[*].user.login issues
+[0].user.login = 'tdavis'
+[1].user.login = 'kofi'
+[2].user.login = 'lena'
+[3].user.login = 'mira'
+-- find base $[0:2].number issues
+[0].number = 1412
+[1].number = 1415
+-- find base $..login issues
+[0].assignee.login = 'mira'
+[0].user.login = 'tdavis'
+[1].user.login = 'kofi'
+[2].assignee.login = 'kofi'
+[2].user.login = 'lena'
+[3].user.login = 'mira'
+-- find base $[*].assignee.login issues
+[0].assignee.login = 'mira'
+[2].assignee.login = 'kofi'
+-- find base $[*] wherenot assignee issues
+(none)
+== find: orders
+-- find ext $.orders[*].lines[*].qty * $.orders[*].lines[*].price orders
+`this` = 9.0
+`this` = 12.0
+`this` = 45.0
+`this` = 30.25
+`this` = 18.0
+`this` = 5.0
+-- find ext $.orders[0].lines[*].qty * $.orders[0].lines[*].price orders
+`this` = 9.0
+`this` = 12.0
+-- find ext $.orders[?(@.customer.tier == gold)].id orders
+orders.[0].id = 'A-1001'
+orders.[2].id = 'A-1003'
+-- find ext $.orders[?(@.discount > 0)].id orders
+! TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+-- find ext $.orders[?(@.discount)].discount orders
+orders.[0].discount = 0.1
+orders.[1].discount = 0
+orders.[2].discount = None
+orders.[3].discount = 0.05
+-- find ext $.orders[*].lines.`len` orders
+`len` = 2
+`len` = 1
+`len` = 0
+`len` = 3
+-- find ext $.orders[\\lines[0].qty].id orders
+(none)
+-- find ext $.orders[?(@.status == 'paid')].lines[*].sku orders
+orders.[0].lines.[0].sku = 'TEA-01'
+orders.[0].lines.[1].sku = 'MUG-02'
+orders.[3].lines.[0].sku = 'POT-07'
+orders.[3].lines.[1].sku = 'TEA-03'
+orders.[3].lines.[2].sku = 'SPOON'
+-- find ext $..lines[?(@.qty >= 3)].sku orders
+orders.[1].lines.[0].sku = 'TEA-01'
+orders.[3].lines.[1].sku = 'TEA-03'
+orders.[3].lines.[2].sku = 'SPOON'
+-- find ext $.orders[*].customer.name.`split( , 0, -1)` orders
+`this` = 'Ana'
+`this` = 'Ben'
+`this` = 'Chen'
+`this` = 'Dara'
+-- find ext $.orders[*].customer.name.`split( , 1, -1)` orders
+`this` = 'Lima'
+`this` = 'Ode'
+`this` = 'Wu'
+`this` = 'Kim'
+-- find ext $.orders[*].id.`sub(/A-(\\d+)/, order-\\1)` orders
+(none)
+-- find ext $.orders[?(@.lines[*].sku == 'TEA-01')].id orders
+orders.[0].id = 'A-1001'
+orders.[1].id = 'A-1002'
+-- find ext $.orders[*].discount * 100 orders
+(none)
+-- find ext $.currency.`len` orders
+`len` = 3
+-- find ext $.orders[?(@.discount < 0.1)].id orders
+! TypeError: '<' not supported between instances of 'NoneType' and 'float'
+== find: package.json
+-- find ext $.dependencies.`keys` package
+`keys` = 'react'
+`keys` = 'react-dom'
+`keys` = 'zod'
+-- find ext $.devDependencies.* package
+devDependencies.vite = '^5.4.0'
+devDependencies.vitest = '^2.0.5'
+devDependencies.eslint = '^9.9.0'
+-- find ext $.scripts.test package
+scripts.test = 'vitest run'
+-- find ext $.keywords[*] package
+keywords.[0] = 'dashboard'
+keywords.[1] = 'charts'
+keywords.[2] = 'admin'
+-- find ext $['dependencies','devDependencies'].react package
+dependencies.react = '^18.3.1'
+-- find ext $.name package
+name = '@acme/dashboard'
+-- find ext $.engines.node package
+engines.node = '>=20'
+-- find ext $..vite package
+devDependencies.vite = '^5.4.0'
+-- find ext $.keywords.`sorted` package
+`this` = ['admin', 'charts', 'dashboard']
+-- find ext $.private package
+private = True
+-- find ext $.dependencies.react-dom package
+dependencies.react-dom = '^18.3.1'
+-- find ext $.dependencies.`len` package
+`len` = 3
+-- find ext $.version.`split(., 0, -1)` package
+`this` = '3'
+-- find ext $.version.`split(., *, -1)` package
+`this` = ['3', '2', '1']
+-- find ext $.version.`split(., 2, 1)` package
+(none)
+-- find ext $.version.`split(".", 1, -1)` package
+`this` = '2'
+-- find ext $.name.`sub(/^@[^/]+\\//, )` package
+`this` = 'dashboard'
+-- find ext $.scripts[?(@ =~ 'vite')] package
+scripts.[0] = 'vite build'
+scripts.[1] = 'vitest run'
+-- find ext $.keywords[?(@ > c)] package
+keywords.[0] = 'dashboard'
+keywords.[1] = 'charts'
+== find: geojson
+-- find base $.features[*].id geo
+features.[0].id = 'trail-1'
+features.[1].id = 'cafe-9'
+features.[2].id = 'park-3'
+-- find base $.features[*].geometry.type geo
+features.[0].geometry.type = 'LineString'
+features.[1].geometry.type = 'Point'
+features.[2].geometry.type = 'Polygon'
+-- find base $.features[0].geometry.coordinates[*][0] geo
+features.[0].geometry.coordinates.[0].[0] = -122.48
+features.[0].geometry.coordinates.[1].[0] = -122.47
+features.[0].geometry.coordinates.[2].[0] = -122.45
+-- find base $.features[1].geometry.coordinates[1] geo
+features.[1].geometry.coordinates.[1] = 37.77
+-- find base $..coordinates geo
+features.[0].geometry.coordinates = [[-122.48, 37.83], [-122.47, 37.81], [-122.45, 37.8]]
+features.[1].geometry.coordinates = [-122.42, 37.77]
+features.[2].geometry.coordinates = [[[-122.51, 37.77], [-122.45, 37.77], [-122.45, 37.76], [-122.51, 37.77]]]
+-- find base $.features[*].properties.name geo
+features.[0].properties.name = 'Coastal Trail'
+features.[1].properties.name = 'Blue Door Cafe'
+features.[2].properties.name = 'Golden Gate Park'
+-- find base $.features[2].geometry.coordinates[0][1:3] geo
+features.[2].geometry.coordinates.[0].[1] = [-122.45, 37.77]
+features.[2].geometry.coordinates.[0].[2] = [-122.45, 37.76]
+-- find ext $.features[?(@.geometry.type == Point)].properties.name geo
+features.[1].properties.name = 'Blue Door Cafe'
+-- find ext $.features[?(@.properties.rating > 4)].id geo
+(none)
+-- find ext $.features[?(@.properties.open == true)].id geo
+features.[1].id = 'cafe-9'
+-- find ext $.features[*].geometry.coordinates.`len` geo
+`len` = 3
+`len` = 2
+`len` = 1
+-- find ext $.features[*].properties.`keys` geo
+`keys` = 'name'
+`keys` = 'length_km'
+`keys` = 'surface'
+`keys` = 'name'
+`keys` = 'rating'
+`keys` = 'open'
+`keys` = 'name'
+`keys` = 'area_ha'
+-- find ext $.features[\\properties.name].id geo
+(none)
+-- find ext $.features[?(@.properties.length_km)].properties.length_km * 1000 geo
+`this` = 4200.0
+== find: the org chart
+-- find base $..name org
+name = 'Ruth Okafor'
+reports.[0].name = 'Sam Patel'
+reports.[0].reports.[0].name = 'Ivy Chen'
+reports.[0].reports.[1].name = 'Omar Haddad'
+reports.[0].reports.[1].reports.[0].name = 'Lea Rossi'
+reports.[1].name = 'Grace Mwangi'
+reports.[1].reports.[0].name = 'Tom Berg'
+-- find base $.reports[*].name org
+reports.[0].name = 'Sam Patel'
+reports.[1].name = 'Grace Mwangi'
+-- find base $..reports[*].title org
+reports.[0].title = 'CTO'
+reports.[1].title = 'CFO'
+reports.[0].reports.[0].title = 'Engineer'
+reports.[0].reports.[1].title = 'Engineer'
+reports.[0].reports.[1].reports.[0].title = 'Intern'
+reports.[1].reports.[0].title = 'Accountant'
+-- find base $.reports[0].reports[1].reports[0].name org
+reports.[0].reports.[1].reports.[0].name = 'Lea Rossi'
+-- find base $..reports[0].name org
+reports.[0].name = 'Sam Patel'
+reports.[0].reports.[0].name = 'Ivy Chen'
+reports.[0].reports.[1].reports.[0].name = 'Lea Rossi'
+reports.[1].reports.[0].name = 'Tom Berg'
+-- find base $.reports..salary org
+reports.[0].salary = 210000
+reports.[0].reports.[0].salary = 140000
+reports.[0].reports.[1].salary = 135000
+reports.[0].reports.[1].reports.[0].salary = 40000
+reports.[1].salary = 205000
+reports.[1].reports.[0].salary = 90000
+-- find base name org
+name = 'Ruth Okafor'
+-- find base $..reports[*] where reports[0] org
+! KeyError: 0
+-- find ext $..reports[?(@.salary > 150000)].name org
+reports.[0].name = 'Sam Patel'
+reports.[1].name = 'Grace Mwangi'
+-- find ext $..reports[?(@.title == Engineer)].name org
+reports.[0].reports.[0].name = 'Ivy Chen'
+reports.[0].reports.[1].name = 'Omar Haddad'
+-- find ext $..reports[?(@.reports.`len` > 0)].name org
+reports.[0].name = 'Sam Patel'
+reports.[1].name = 'Grace Mwangi'
+reports.[0].reports.[1].name = 'Omar Haddad'
+-- find ext $..[?(@.title =~ '^C')].name org
+! JsonPathParserError: Parse error at 1:4 near token ? (?)
+-- find ext $.reports[\\salary].name org
+(none)
+-- find ext $..reports[?(@.salary < 100000)].`path` org
+reports.[0].reports.[1].reports.[0].`path` = '[0]'
+reports.[1].reports.[0].`path` = '[0]'
+-- find ext $..salary.`sorted` org
+! TypeError: 'DatumInContext' object is not iterable
+== find: metrics
+-- find ext $.samples[?(@.cpu > $.thresholds.cpu)].ts metrics
+! JsonPathParserError: Parse error at 1:20 near token $ ($)
+-- find ext $.samples[?(@.cpu > 0.85)].ts metrics
+samples.[1].ts = 1700000060
+samples.[3].ts = 1700000180
+-- find ext $.samples[?(@.disk > 71)].ts metrics
+samples.[1].ts = 1700000060
+samples.[3].ts = 1700000180
+-- find ext $.samples[?(@.disk == 72)].disk metrics
+samples.[1].disk = '72'
+-- find ext $.samples[?(@.mem >= 7000)].ts metrics
+samples.[3].ts = 1700000180
+-- find ext $.samples[?(@.cpu == 0)].ts metrics
+samples.[0].ts = 1700000000
+samples.[1].ts = 1700000060
+samples.[2].ts = 1700000120
+samples.[3].ts = 1700000180
+-- find ext $.samples[*].cpu * 100 metrics
+`this` = 42.0
+`this` = 91.0
+`this` = 37.0
+`this` = 88.0
+-- find ext $.samples[*].mem / 1024 metrics
+! JsonPathParserError: Parse error at 1:17 near token / (SORT_DIRECTION)
+-- find ext $.samples[*].mem - $.samples[*].mem metrics
+`this` = 0
+`this` = 0
+`this` = 0
+`this` = 0
+-- find ext $.samples[\\cpu].ts metrics
+(none)
+-- find ext $.samples[/disk].disk metrics
+(none)
+-- find ext $.samples[*].ts - 1700000000 metrics
+`this` = 0
+`this` = 60
+`this` = 120
+`this` = 180
+-- find ext $.samples.`len` metrics
+`len` = 4
+-- find ext $.thresholds.`keys` metrics
+`keys` = 'cpu'
+`keys` = 'mem'
+-- find ext $.samples[?(@.cpu > 0.5 & @.mem > 6200)].ts metrics
+samples.[1].ts = 1700000060
+samples.[3].ts = 1700000180
+-- find ext $.samples[*].disk.`str()` metrics
+`this` = '71'
+`this` = '72'
+`this` = 'n/a'
+`this` = ' 74 '
+-- find ext $.host + '.internal' metrics
+`this` = 'db-01.internal'
+-- find ext $.samples[?(@.ts == true)].ts metrics
+(none)
+== find: service config
+-- find base $.'@type' config
+@type = 'deployment'
+-- find base $.max-connections config
+max-connections = 512
+-- find base $.features.'beta.pricing' config
+features.'beta.pricing' = False
+-- find base $.environments.*.url config
+environments.staging.url = 'https://staging.example.test'
+environments.production.url = 'https://shop.example.test'
+-- find base $.environments.*.db.host config
+environments.staging.db.host = 'db-stg'
+environments.production.db.host = 'db-prd'
+-- find base $..port config
+environments.staging.db.port = 5432
+environments.production.db.port = 5432
+-- find base $.retry.backoff[1:] config
+retry.backoff.[1] = 200
+retry.backoff.[2] = 400
+-- find base $.environments['staging','production'].replicas config
+environments.staging.replicas = 2
+environments.production.replicas = 6
+-- find base $.features.* config
+features.new_ui = True
+features.'beta.pricing' = False
+features.dark_mode = True
+-- find base $.allowed_origins[0] config
+allowed_origins.[0] = 'https://shop.example.test'
+-- find base $..db config
+environments.staging.db = {'host': 'db-stg', 'port': 5432}
+environments.production.db = {'host': 'db-prd', 'port': 5432}
+-- find ext $.environments[?(@.replicas > 3)].url config
+environments.[1].url = 'https://shop.example.test'
+-- find ext $.environments.`keys` config
+`keys` = 'staging'
+`keys` = 'production'
+-- find ext $.features[?(@ == true)] config
+features.[0] = True
+features.[2] = True
+-- find ext $.features[?(@ == false)] config
+features.[1] = False
+-- find ext $.retry.backoff[?(@ > 150)] config
+retry.backoff.[1] = 200
+retry.backoff.[2] = 400
+-- find ext $.retry.backoff.`sorted` config
+`this` = [100, 200, 400]
+-- find ext $.environments.*.replicas * 2 config
+`this` = 4
+`this` = 12
+-- find ext $.@type config
+@type = 'deployment'
+-- find ext $[?(@.replicas)] config
+(none)
+-- find ext $.allowed_origins[*].`sub(/https:\\/\\//, )` config
+`this` = 'shop.example.test'
+`this` = 'admin.example.test'
+-- find ext $.allowed_origins[*].`split(., 0, -1)` config
+`this` = 'https://shop'
+`this` = 'https://admin'
+-- find ext $.retry.attempts * $.retry.backoff[0] config
+`this` = 300
+-- find ext $.environments.*.db.port.`str()` config
+`this` = '5432'
+`this` = '5432'
+-- find ext $.service.`sorted` config
+! TypeError: 'DatumInContext' object is not iterable
+== find: log lines
+-- find ext $.lines[?(@.level == ERROR)].msg log
+lines.[2].msg = 'POST /api/pay 502 30001ms'
+-- find ext $.lines[?(@.msg =~ '[0-9]{3,}ms')].msg log
+lines.[1].msg = 'GET /api/cart 200 812ms'
+lines.[2].msg = 'POST /api/pay 502 30001ms'
+-- find ext $.lines[*].msg.`sub(/(\\d+)ms/, \\1 ms)` log
+(none)
+-- find ext $.lines[*].msg.`sub(/^(\\w+) (\\S+).*/, \\2 via \\1)` log
+(none)
+-- find ext $.lines[*].tags.`split(",", *, -1)` log
+`this` = ['http', 'cart']
+`this` = ['http', 'cart', 'slow']
+`this` = ['http', 'pay']
+`this` = ['cache']
+-- find ext $.lines[*].tags.`split(',', 0, -1)` log
+`this` = 'http'
+`this` = 'http'
+`this` = 'http'
+`this` = 'cache'
+-- find ext $.lines[*].tags.`split(",", -1, -1)` log
+`this` = 'cart'
+`this` = 'slow'
+`this` = 'pay'
+`this` = 'cache'
+-- find ext $.lines[*].msg.`split( , 2, -1)` log
+`this` = '200'
+`this` = '200'
+`this` = '502'
+`this` = '1532'
+-- find ext $.lines[?(@.level != INFO)].level log
+lines.[1].level = 'WARN'
+lines.[2].level = 'ERROR'
+-- find ext $.lines[/level].level log
+(none)
+-- find ext $.lines[*].level.`sorted` log
+! TypeError: 'DatumInContext' object is not iterable
+-- find ext $.lines[?(@.tags =~ 'slow')].msg log
+lines.[1].msg = 'GET /api/cart 200 812ms'
+-- find ext $.lines[*].msg.`sub(/\\d+ keys/, many keys)` log
+(none)
+-- find ext $.lines[*].msg.`sub(/x/, y)` log
+(none)
+-- find ext $.lines[*].msg.`sub(/(\\\\d+)ms/, \\\\1 ms)` log
+`this` = 'GET /api/cart 200 12 ms'
+`this` = 'GET /api/cart 200 812 ms'
+`this` = 'POST /api/pay 502 30001 ms'
+-- find ext $.lines[*].msg.`sub(/^(\\\\w+) (\\\\S+).*/, \\\\2 via \\\\1)` log
+`this` = '/api/cart via GET'
+`this` = '/api/cart via GET'
+`this` = '/api/pay via POST'
+`this` = 'warm via cache'
+-- find ext $.lines[0].msg.`sub(/(?P<verb>[A-Z]+) /, \\\\g<verb>: )` log
+`this` = 'GET: /api/cart 200 12ms'
+-- find ext $.lines[*].level.`sub(/^(.)(.*)$/, \\\\1)` log
+`this` = 'I'
+`this` = 'W'
+`this` = 'E'
+`this` = 'I'
+-- find ext $.lines[*].msg.`sub(/[aeiou]/, *)` log
+`this` = 'GET /*p*/c*rt 200 12ms'
+`this` = 'GET /*p*/c*rt 200 812ms'
+`this` = 'POST /*p*/p*y 502 30001ms'
+`this` = 'c*ch* w*rm 1532 k*ys'
+-- find ext $.lines[*].tags.`sub(/,/, ;)` log
+`this` = 'http;cart'
+`this` = 'http;cart;slow'
+`this` = 'http;pay'
+-- find ext $.lines[0].msg.`sub(/(?P<verb>GET)/, \\g<verb>!)` log
+`this` = 'g<verb>! /api/cart 200 12ms'
+== update
+-- update base $.store.book[*].price store 10
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 10}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 10}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 10}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 10}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $.store.bicycle.color store "blue"
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'blue', 'price': 19.95}}, 'expensive': 10}
+-- update base $..price store 0
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 0}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 0}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 0}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 0}], 'bicycle': {'color': 'red', 'price': 0}}, 'expensive': 10}
+-- update base $.store.book[0] store {"title": "Replaced"}
+{'store': {'book': [{'title': 'Replaced'}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $.store.book[1:3].title store "(checked out)"
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': '(checked out)', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': '(checked out)', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $.store.nope store 1
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $.store.book[9] store 1
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $ store "everything"
+'everything'
+-- update base $.store.book[*] where isbn store "has isbn"
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update base $.store.* store null
+{'store': {'book': None, 'bicycle': None}, 'expensive': 10}
+-- update base $.items[*].status.phase pods "Unknown"
+{'apiVersion': 'v1', 'kind': 'PodList', 'items': [{'metadata': {'name': 'web-7d4b9c-x2kfp', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'web', 'tier': 'frontend'}}, 'spec': {'nodeName': 'node-a', 'containers': [{'name': 'nginx', 'image': 'nginx:1.27', 'ports': [{'containerPort': 80}, {'containerPort': 443}]}, {'name': 'log-shipper', 'image': 'fluent-bit:3.1', 'ports': []}]}, 'status': {'phase': 'Unknown', 'restartCount': 0, 'podIP': '10.1.4.17'}}, {'metadata': {'name': 'api-5f6c8d-qq9zt', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'api', 'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'api', 'image': 'shop-api:2.4.0', 'ports': [{'containerPort': 8080}]}]}, 'status': {'phase': 'Unknown', 'restartCount': 7, 'podIP': None}}, {'metadata': {'name': 'worker-0', 'namespace': 'batch', 'labels': {'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'worker', 'image': 'shop-worker:2.4.0', 'ports': []}]}, 'status': {'phase': 'Unknown', 'restartCount': 2}}]}
+-- update base $.environments.*.replicas config 1
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 1, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 1, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400]}}
+-- update base $.retry.backoff[0] config 50
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [50, 200, 400]}}
+-- update base $..reports[*].salary org 1
+{'name': 'Ruth Okafor', 'title': 'CEO', 'salary': 250000, 'reports': [{'name': 'Sam Patel', 'title': 'CTO', 'salary': 1, 'reports': [{'name': 'Ivy Chen', 'title': 'Engineer', 'salary': 1, 'reports': []}, {'name': 'Omar Haddad', 'title': 'Engineer', 'salary': 1, 'reports': [{'name': 'Lea Rossi', 'title': 'Intern', 'salary': 1, 'reports': []}]}]}, {'name': 'Grace Mwangi', 'title': 'CFO', 'salary': 1, 'reports': [{'name': 'Tom Berg', 'title': 'Accountant', 'salary': 1, 'reports': []}]}]}
+-- update ext $.store.book[?(@.price > 10)].price store 9.99
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 9.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 9.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update ext $.store.book[?(@.category == reference)] store "gone"
+{'store': {'book': ['gone', {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- update ext $.orders[?(@.status == 'cancelled')].status orders "archived"
+{'orders': [{'id': 'A-1001', 'customer': {'name': 'Ana Lima', 'tier': 'gold'}, 'status': 'paid', 'lines': [{'sku': 'TEA-01', 'qty': 2, 'price': 4.5}, {'sku': 'MUG-02', 'qty': 1, 'price': 12.0}], 'discount': 0.1}, {'id': 'A-1002', 'customer': {'name': 'Ben Ode', 'tier': 'silver'}, 'status': 'shipped', 'lines': [{'sku': 'TEA-01', 'qty': 10, 'price': 4.5}], 'discount': 0}, {'id': 'A-1003', 'customer': {'name': 'Chen Wu', 'tier': 'gold'}, 'status': 'archived', 'lines': [], 'discount': None}, {'id': 'A-1004', 'customer': {'name': 'Dara Kim', 'tier': 'bronze'}, 'status': 'paid', 'lines': [{'sku': 'POT-07', 'qty': 1, 'price': 30.25}, {'sku': 'TEA-03', 'qty': 3, 'price': 6.0}, {'sku': 'SPOON', 'qty': 4, 'price': 1.25}], 'discount': 0.05}], 'currency': 'EUR'}
+-- update ext $.features[?(@ == true)] config false
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400]}}
+-- update ext $.samples[*].disk metrics "0"
+{'host': 'db-01', 'samples': [{'ts': 1700000000, 'cpu': 0.42, 'mem': 6144, 'disk': '0'}, {'ts': 1700000060, 'cpu': 0.91, 'mem': 6400, 'disk': '0'}, {'ts': 1700000120, 'cpu': 0.37, 'mem': 6016, 'disk': '0'}, {'ts': 1700000180, 'cpu': 0.88, 'mem': 7168, 'disk': '0'}], 'thresholds': {'cpu': 0.85, 'mem': 7000}}
+== update with a function
+-- updatefn base $.store.book[*].price store double
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 17.9}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 25.98}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 17.98}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 45.98}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- updatefn base $.store.book[*].title store upper
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'SAYINGS OF THE CENTURY', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'SWORD OF HONOUR', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'MOBY DICK', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'THE LORD OF THE RINGS', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- updatefn base $.items[*].status.restartCount pods inc
+{'apiVersion': 'v1', 'kind': 'PodList', 'items': [{'metadata': {'name': 'web-7d4b9c-x2kfp', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'web', 'tier': 'frontend'}}, 'spec': {'nodeName': 'node-a', 'containers': [{'name': 'nginx', 'image': 'nginx:1.27', 'ports': [{'containerPort': 80}, {'containerPort': 443}]}, {'name': 'log-shipper', 'image': 'fluent-bit:3.1', 'ports': []}]}, 'status': {'phase': 'Running', 'restartCount': 1, 'podIP': '10.1.4.17'}}, {'metadata': {'name': 'api-5f6c8d-qq9zt', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'api', 'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'api', 'image': 'shop-api:2.4.0', 'ports': [{'containerPort': 8080}]}]}, 'status': {'phase': 'CrashLoopBackOff', 'restartCount': 8, 'podIP': None}}, {'metadata': {'name': 'worker-0', 'namespace': 'batch', 'labels': {'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'worker', 'image': 'shop-worker:2.4.0', 'ports': []}]}, 'status': {'phase': 'Pending', 'restartCount': 3}}]}
+-- updatefn base $.retry.backoff[2] config double
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 800]}}
+-- updatefn base $.retry.backoff[*] config double
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [200, 400, 800]}}
+-- updatefn base $..salary org inc
+{'name': 'Ruth Okafor', 'title': 'CEO', 'salary': 250001, 'reports': [{'name': 'Sam Patel', 'title': 'CTO', 'salary': 210001, 'reports': [{'name': 'Ivy Chen', 'title': 'Engineer', 'salary': 140001, 'reports': []}, {'name': 'Omar Haddad', 'title': 'Engineer', 'salary': 135001, 'reports': [{'name': 'Lea Rossi', 'title': 'Intern', 'salary': 40001, 'reports': []}]}]}, {'name': 'Grace Mwangi', 'title': 'CFO', 'salary': 205001, 'reports': [{'name': 'Tom Berg', 'title': 'Accountant', 'salary': 90001, 'reports': []}]}]}
+-- updatefn ext $.orders[*].lines[?(@.qty > 2)] orders mark
+{'orders': [{'id': 'A-1001', 'customer': {'name': 'Ana Lima', 'tier': 'gold'}, 'status': 'paid', 'lines': [{'sku': 'TEA-01', 'qty': 2, 'price': 4.5}, {'sku': 'MUG-02', 'qty': 1, 'price': 12.0}], 'discount': 0.1}, {'id': 'A-1002', 'customer': {'name': 'Ben Ode', 'tier': 'silver'}, 'status': 'shipped', 'lines': [{'sku': 'TEA-01', 'qty': 10, 'price': 4.5, 'bulk': True}], 'discount': 0}, {'id': 'A-1003', 'customer': {'name': 'Chen Wu', 'tier': 'gold'}, 'status': 'cancelled', 'lines': [], 'discount': None}, {'id': 'A-1004', 'customer': {'name': 'Dara Kim', 'tier': 'bronze'}, 'status': 'paid', 'lines': [{'sku': 'POT-07', 'qty': 1, 'price': 30.25}, {'sku': 'TEA-03', 'qty': 3, 'price': 6.0, 'bulk': True}, {'sku': 'SPOON', 'qty': 4, 'price': 1.25, 'bulk': True}], 'discount': 0.05}], 'currency': 'EUR'}
+-- updatefn base $.keywords[1] package upper
+{'name': '@acme/dashboard', 'version': '3.2.1', 'private': True, 'scripts': {'build': 'vite build', 'test': 'vitest run', 'lint': 'eslint src'}, 'dependencies': {'react': '^18.3.1', 'react-dom': '^18.3.1', 'zod': '^3.23.8'}, 'devDependencies': {'vite': '^5.4.0', 'vitest': '^2.0.5', 'eslint': '^9.9.0'}, 'keywords': ['dashboard', 'CHARTS', 'admin'], 'engines': {'node': '>=20'}}
+-- updatefn base $.store.book[0].title store label
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'title: Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+== update_or_create
+-- create base $.store.book[0].edition store 2
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95, 'edition': 2}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- create base $.store.magazine.title store "Byte"
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}, 'magazine': {'title': 'Byte'}}, 'expensive': 10}
+-- create base a.b.c {} 1
+{'a': {'b': {'c': 1}}}
+-- create base a[2].b {} "x"
+{'a': [{}, {}, {'b': 'x'}]}
+-- create base a[0] {} true
+{'a': [True]}
+-- create base $.retry.backoff[4] config 800
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400, {}, 800]}}
+-- create base $.environments.dev.replicas config 1
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}, 'dev': {'replicas': 1}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400]}}
+-- create base $.environments.*.region config "eu-west-1"
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}, 'region': 'eu-west-1'}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}, 'region': 'eu-west-1'}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400]}}
+-- create base spec.containers[1].name {} "sidecar"
+{'spec': {'containers': [{}, {'name': 'sidecar'}]}}
+-- create base a.b {"a": 5} 1
+! TypeError: argument of type 'int' is not iterable
+-- create base [1] [] 7
+[{}, 7]
+-- create base x[0][1] {} "y"
+{'x': [[{}, 'y']]}
+== find_or_create
+-- findcreate base a.b[1].c {}
+a.b.[1].c = {}
+data {'a': {'b': {LIST_KEY: [{}, {'c': {}}]}}}
+-- findcreate base $.store.book[0].tags store
+store.book.[0].tags = {}
+data {'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95, 'tags': {}}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- findcreate base $.metadata.labels pods
+metadata.labels = {}
+data {'apiVersion': 'v1', 'kind': 'PodList', 'items': [{'metadata': {'name': 'web-7d4b9c-x2kfp', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'web', 'tier': 'frontend'}}, 'spec': {'nodeName': 'node-a', 'containers': [{'name': 'nginx', 'image': 'nginx:1.27', 'ports': [{'containerPort': 80}, {'containerPort': 443}]}, {'name': 'log-shipper', 'image': 'fluent-bit:3.1', 'ports': []}]}, 'status': {'phase': 'Running', 'restartCount': 0, 'podIP': '10.1.4.17'}}, {'metadata': {'name': 'api-5f6c8d-qq9zt', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'api', 'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'api', 'image': 'shop-api:2.4.0', 'ports': [{'containerPort': 8080}]}]}, 'status': {'phase': 'CrashLoopBackOff', 'restartCount': 7, 'podIP': None}}, {'metadata': {'name': 'worker-0', 'namespace': 'batch', 'labels': {'tier': 'backend'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'worker', 'image': 'shop-worker:2.4.0', 'ports': []}]}, 'status': {'phase': 'Pending', 'restartCount': 2}}], 'metadata': {'labels': {}}}
+== filter
+-- filter base $.store.book[*].isbn store any
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'price': 8.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- filter base $.store.book[*] store cheap
+{'store': {'book': [{'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- filter base $.store.book[*].price store cheap
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century'}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3'}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- filter base $.store.* store is_list
+{'store': {'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- filter base $..price store cheap
+{'store': {'book': [{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century'}, {'category': 'fiction', 'author': 'Evelyn Waugh', 'title': 'Sword of Honour', 'price': 12.99}, {'category': 'fiction', 'author': 'Herman Melville', 'title': 'Moby Dick', 'isbn': '0-553-21311-3'}, {'category': 'fiction', 'author': 'J. R. R. Tolkien', 'title': 'The Lord of the Rings', 'isbn': '0-395-19395-8', 'price': 22.99}], 'bicycle': {'color': 'red', 'price': 19.95}}, 'expensive': 10}
+-- filter base $[*] issues unassigned
+[{'number': 1412, 'title': 'Crash when config file is empty', 'state': 'open', 'labels': [{'name': 'bug'}, {'name': 'p1'}], 'assignee': {'login': 'mira'}, 'comments': 12, 'user': {'login': 'tdavis'}}, {'number': 1398, 'title': 'Docs: fix typo in install guide', 'state': 'closed', 'labels': [{'name': 'docs'}, {'name': 'good first issue'}], 'assignee': {'login': 'kofi'}, 'comments': 1, 'user': {'login': 'lena'}}]
+-- filter base $[*].assignee issues is_none
+[{'number': 1412, 'title': 'Crash when config file is empty', 'state': 'open', 'labels': [{'name': 'bug'}, {'name': 'p1'}], 'assignee': {'login': 'mira'}, 'comments': 12, 'user': {'login': 'tdavis'}}, {'number': 1415, 'title': 'Add --json flag to status', 'state': 'open', 'labels': [{'name': 'enhancement'}], 'comments': 3, 'user': {'login': 'kofi'}}, {'number': 1398, 'title': 'Docs: fix typo in install guide', 'state': 'closed', 'labels': [{'name': 'docs'}, {'name': 'good first issue'}], 'assignee': {'login': 'kofi'}, 'comments': 1, 'user': {'login': 'lena'}}, {'number': 1420, 'title': 'Timeout talking to registry', 'state': 'open', 'labels': [], 'comments': 0, 'user': {'login': 'mira'}}]
+-- filter base $.retry.backoff[1] config any
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 400]}}
+-- filter base $.retry.backoff[0:2] config any
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': []}}
+-- filter base $.retry.backoff[*] config big
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'beta.pricing': False, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100]}}
+-- filter ext $.orders[?(@.status == cancelled)] orders any
+{'orders': [{'id': 'A-1001', 'customer': {'name': 'Ana Lima', 'tier': 'gold'}, 'status': 'paid', 'lines': [{'sku': 'TEA-01', 'qty': 2, 'price': 4.5}, {'sku': 'MUG-02', 'qty': 1, 'price': 12.0}], 'discount': 0.1}, {'id': 'A-1002', 'customer': {'name': 'Ben Ode', 'tier': 'silver'}, 'status': 'shipped', 'lines': [{'sku': 'TEA-01', 'qty': 10, 'price': 4.5}], 'discount': 0}, {'id': 'A-1004', 'customer': {'name': 'Dara Kim', 'tier': 'bronze'}, 'status': 'paid', 'lines': [{'sku': 'POT-07', 'qty': 1, 'price': 30.25}, {'sku': 'TEA-03', 'qty': 3, 'price': 6.0}, {'sku': 'SPOON', 'qty': 4, 'price': 1.25}], 'discount': 0.05}], 'currency': 'EUR'}
+-- filter ext $.features[?(@ == false)] config any
+{'service': 'checkout', '@type': 'deployment', 'max-connections': 512, 'features': {'new_ui': True, 'dark_mode': True}, 'environments': {'staging': {'replicas': 2, 'url': 'https://staging.example.test', 'db': {'host': 'db-stg', 'port': 5432}}, 'production': {'replicas': 6, 'url': 'https://shop.example.test', 'db': {'host': 'db-prd', 'port': 5432}}}, 'allowed_origins': ['https://shop.example.test', 'https://admin.example.test'], 'retry': {'attempts': 3, 'backoff': [100, 200, 400]}}
+-- filter ext $.samples[?(@.disk == 'n/a')] metrics any
+{'host': 'db-01', 'samples': [{'ts': 1700000000, 'cpu': 0.42, 'mem': 6144, 'disk': '71'}, {'ts': 1700000060, 'cpu': 0.91, 'mem': 6400, 'disk': '72'}, {'ts': 1700000180, 'cpu': 0.88, 'mem': 7168, 'disk': ' 74 '}], 'thresholds': {'cpu': 0.85, 'mem': 7000}}
+-- filter base $.store.book[*] where isbn store any
+! KeyError: 2
+-- filter base $.items[*].metadata.labels.tier pods any
+{'apiVersion': 'v1', 'kind': 'PodList', 'items': [{'metadata': {'name': 'web-7d4b9c-x2kfp', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'web'}}, 'spec': {'nodeName': 'node-a', 'containers': [{'name': 'nginx', 'image': 'nginx:1.27', 'ports': [{'containerPort': 80}, {'containerPort': 443}]}, {'name': 'log-shipper', 'image': 'fluent-bit:3.1', 'ports': []}]}, 'status': {'phase': 'Running', 'restartCount': 0, 'podIP': '10.1.4.17'}}, {'metadata': {'name': 'api-5f6c8d-qq9zt', 'namespace': 'shop', 'labels': {'app.kubernetes.io/name': 'api'}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'api', 'image': 'shop-api:2.4.0', 'ports': [{'containerPort': 8080}]}]}, 'status': {'phase': 'CrashLoopBackOff', 'restartCount': 7, 'podIP': None}}, {'metadata': {'name': 'worker-0', 'namespace': 'batch', 'labels': {}}, 'spec': {'nodeName': 'node-b', 'containers': [{'name': 'worker', 'image': 'shop-worker:2.4.0', 'ports': []}]}, 'status': {'phase': 'Pending', 'restartCount': 2}}]}
+== the command line
+-- cli base $..author docs/store.json
+Nigel Rees
+Evelyn Waugh
+Herman Melville
+J. R. R. Tolkien
+-- cli base store.bicycle docs/store.json
+{'color': 'red', 'price': 19.95}
+-- cli base items[*].metadata.name docs/pods.json docs/store.json docs/missing.json
+web-7d4b9c-x2kfp
+api-5f6c8d-qq9zt
+worker-0
+
+-- cli base $..login docs/issues.json
+mira
+tdavis
+kofi
+kofi
+lena
+mira
+-- cli base name docs/package.json docs/org.json
+@acme/dashboard
+Ruth Okafor
+-- cli base $.keywords docs/package.json
+['dashboard', 'charts', 'admin']
+-- cli base features[*].properties.rating docs/geo.json
+4.6
+-- cli base $.nope docs/geo.json
+
+-- cli base $.private docs/package.json
+True
