@@ -15818,7 +15818,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (helper, signed) = match owner {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => ("parse_result_int", Some(true)),
             "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => ("parse_result_int", Some(false)),
-            "f64" => ("parse_result_float", None),
+            "f32" | "f64" => ("parse_result_float", None),
             _ => return Ok(false),
         };
         let tcx = self.tys().tcx();

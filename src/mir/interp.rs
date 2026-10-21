@@ -2366,9 +2366,12 @@ impl<'a> Interp<'a> {
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
             ("FileSystem", m) if FS_METHODS.contains(&m) => self.fs_method(method, args, ret),
-            (t, "parse" | "from_str_radix") if t == "f64" || int_width(t).is_some() => {
+            (t, "parse" | "from_str_radix")
+                if t == "f64" || t == "f32" || int_width(t).is_some() =>
+            {
                 self.parse_number(t, method, &args, ret)
             }
+            (t, "checked_from") if int_width(t).is_some() => self.checked_from(t, &args, ret),
             ("VecDeque", _) => self.deque_method(ty_name, method, args, arg_tys, ret),
             ("Map" | "Set" | "SortedMap" | "SortedSet", "clone") => {
                 let [v] = args.as_slice() else {
@@ -7092,6 +7095,8 @@ impl<'a> Interp<'a> {
         let text = text.trim();
         let v = if ty == "f64" {
             text.parse::<f64>().ok().map(Value::Float)
+        } else if ty == "f32" {
+            text.parse::<f32>().ok().map(|f| Value::Float(f64::from(f)))
         } else {
             let (bits, signed) = int_width(ty).expect("checked by the caller");
             let n = if !(2..=36).contains(&radix) || (!signed && text.starts_with('-')) {
@@ -7115,6 +7120,36 @@ impl<'a> Interp<'a> {
             };
             n.map(Value::Int)
         };
+        self.option(ret, v)
+    }
+
+    /// `i32.checked_from(f)`: `Some` of `f` truncated toward zero when it
+    /// is a number in the type's range, else `None` (B-2026-10-21-65).
+    fn checked_from(&mut self, ty: &str, args: &[Value], ret: Ty) -> R<Value> {
+        let f = match args {
+            [Value::Float(f)] => *f,
+            [Value::Ref(a)] => match self.slot(a)? {
+                Value::Float(f) => f,
+                v => return err(format!("{ty}.checked_from of {v:?}")),
+            },
+            _ => return err(format!("{ty}.checked_from: wrong arguments")),
+        };
+        let (bits, signed) = int_width(ty).expect("checked by the caller");
+        let t = f.trunc();
+        // The range's ends as floats: `-2^(bits-1)` and `2^(bits-1)` (or
+        // `0` and `2^bits`) are exact, and a truncated value is in range
+        // when it is at least the low end and below the high one.
+        let (lo, hi) = if signed {
+            (-(2f64.powi(bits as i32 - 1)), 2f64.powi(bits as i32 - 1))
+        } else {
+            (0.0, 2f64.powi(bits as i32))
+        };
+        let n = if bits == 128 && !signed {
+            t as u128 as i128
+        } else {
+            t as i128
+        };
+        let v = (f.is_finite() && t >= lo && t < hi).then_some(Value::Int(n));
         self.option(ret, v)
     }
 

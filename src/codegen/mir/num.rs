@@ -163,6 +163,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 return Ok(Some(()));
             }
             (_, "parse" | "from_str_radix") => return self.parse_num(base, method, args, dest),
+            (t, "checked_from") if crate::numeric_conv::is_int_target(t) => {
+                return self.checked_from(t, args, dest)
+            }
             _ => {}
         }
         let Some(first) = args.first() else {
@@ -625,6 +628,75 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(r.as_basic_value().into_int_value())
     }
 
+    /// `i32.checked_from(f)` into `dest`, an `Option` of the integer:
+    /// `None` for NaN or a value whose truncation toward zero is out of the
+    /// type's range, else `Some` of the truncation (B-2026-10-21-65).
+    fn checked_from(&mut self, t: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let [x] = args else {
+            return Ok(None);
+        };
+        let xt = self.operand_type(x)?;
+        if !matches!(
+            self.tys.kind(xt),
+            TyKind::Float(FloatTy::F32 | FloatTy::F64)
+        ) {
+            return Ok(None);
+        }
+        let Some(&(_, bits, signed)) = crate::numeric_conv::INT_TARGETS
+            .iter()
+            .find(|(name, _, _)| *name == t)
+        else {
+            return Ok(None);
+        };
+        let dty = self.place_type(dest)?;
+        let Ok((some, none)) = self.option_variants(dty) else {
+            return Ok(None);
+        };
+        let pt = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        let f64t = self.llcx.f64_type();
+        let v = self.operand_scalar(x)?;
+        let v = self.float_of(v, xt)?;
+        let v = if v.get_type() == f64t {
+            v
+        } else {
+            self.builder.build_float_ext(v, f64t, "").map_err(e)?
+        };
+        let tr = self.libm("trunc", v, None)?;
+        // The range's ends are powers of two, so exact as `f64`; NaN fails
+        // both ordered compares.
+        let (lo, hi) = if signed {
+            (-(2f64.powi(bits as i32 - 1)), 2f64.powi(bits as i32 - 1))
+        } else {
+            (0.0, 2f64.powi(bits as i32))
+        };
+        let b = &self.builder;
+        let ge = b
+            .build_float_compare(inkwell::FloatPredicate::OGE, tr, f64t.const_float(lo), "")
+            .map_err(e)?;
+        let lt = b
+            .build_float_compare(inkwell::FloatPredicate::OLT, tr, f64t.const_float(hi), "")
+            .map_err(e)?;
+        let fits = b.build_and(ge, lt, "").map_err(e)?;
+        let d = self.place_ptr(dest)?;
+        let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+        let it = self.llvm_ty(pt)?.into_int_type();
+        self.store_tag(d, dty, none)?;
+        self.if_then(fits, |cx| {
+            cx.store_tag(d, dty, some)?;
+            let n = if signed {
+                cx.builder.build_float_to_signed_int(tr, it, "")
+            } else {
+                cx.builder.build_float_to_unsigned_int(tr, it, "")
+            }
+            .map_err(e)?;
+            cx.store(q, n.into())
+        })?;
+        Ok(Some(()))
+    }
+
     fn parse_num(
         &mut self,
         base: &str,
@@ -650,6 +722,9 @@ impl<'ctx> Cx<'ctx, '_> {
         let got = match self.tys.kind(pt) {
             TyKind::Float(FloatTy::F64) if base == "f64" && method == "parse" => {
                 self.rt_u8("parse_f64", &[s.into(), n.into(), slot.into()])?
+            }
+            TyKind::Float(FloatTy::F32) if base == "f32" && method == "parse" => {
+                self.rt_u8("parse_f32", &[s.into(), n.into(), slot.into()])?
             }
             TyKind::Int(it) if it.bits() <= 64 && method == "parse" => {
                 self.parse_decimal(s, n, it, slot)?
@@ -695,6 +770,18 @@ impl<'ctx> Cx<'ctx, '_> {
         self.if_then(ok, |cx| {
             cx.store_tag(d, dty, some)?;
             let v: BasicValueEnum = match cx.tys.kind(pt) {
+                TyKind::Float(FloatTy::F32) => {
+                    // The runtime widened the `f32` it parsed, so this is exact.
+                    let w = cx
+                        .builder
+                        .build_load(cx.llcx.f64_type(), slot, "")
+                        .map_err(e)?
+                        .into_float_value();
+                    cx.builder
+                        .build_float_trunc(w, cx.llcx.f32_type(), "")
+                        .map_err(e)?
+                        .into()
+                }
                 TyKind::Float(_) => cx
                     .builder
                     .build_load(cx.llcx.f64_type(), slot, "")

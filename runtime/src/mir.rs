@@ -2582,6 +2582,28 @@ pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: usize, out: *m
     }
 }
 
+/// `f32.parse(s)`: 1 with the number, parsed at `f32` and widened, at
+/// `out`, else 0. Parsing at `f64` and narrowing would round twice
+/// (B-2026-10-21-65).
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes; `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_parse_f32(ptr: *const u8, len: usize, out: *mut f64) -> u8 {
+    // SAFETY: the caller's contract.
+    let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
+        return 0;
+    };
+    match text.trim().parse::<f32>() {
+        Ok(v) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = f64::from(v) };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
 /// `a.pow(e)` for an integer of `bits` bits (at most 64): 0 with the
 /// power at `out`, 1 when it overflows the type, 2 for an exponent out of
 /// `u32`. An unsigned `a` arrives as its bits.

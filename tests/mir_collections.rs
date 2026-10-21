@@ -470,3 +470,37 @@ fn pool_close_is_clean_under_asan() {
         assert_eq!(out, WANT_POOL_CLOSE);
     }
 }
+
+/// B-2026-10-21-65: `iN.checked_from(f)` is `Some` of `f` truncated toward
+/// zero when that is in the type's range (both ends exact), and `None` for
+/// NaN, an infinity or a value past either end; an `f32` argument widens.
+/// `f32.parse` parses at `f32`, so a value halfway between two `f32`s in
+/// `f64` terms still rounds once (`1.0000001`, not `1.0`).
+const CHECKED_FROM: &str = r#"fn show_i8(o: Option[i8]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn show_i64(o: Option[i64]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn show_u64(o: Option[u64]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn show_u128(o: Option[u128]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn show_f32(r: Result[f32, ParseError]) -> String {
+    match r {
+        Ok(x) => f"{x}",
+        Err(ParseError.Empty) => "Empty".to_string(),
+        Err(ParseError.Invalid) => "Invalid".to_string(),
+        Err(_) => "other".to_string(),
+    }
+}
+fn main() {
+    println(f"{show_i8(i8.checked_from(127.9))} {show_i8(i8.checked_from(-128.5))} {show_i8(i8.checked_from(128.0))} {show_i8(i8.checked_from(-129.0))}");
+    println(f"{show_i64(i64.checked_from(-9223372036854775808.0))} {show_i64(i64.checked_from(9223372036854775808.0))} {show_i64(i64.checked_from(f64.INFINITY))} {show_i64(i64.checked_from(f64.NAN))}");
+    println(f"{show_u64(u64.checked_from(18446744073709549568.0))} {show_u64(u64.checked_from(18446744073709551616.0))} {show_u64(u64.checked_from(-0.9))} {show_u64(u64.checked_from(-1.0))}");
+    println(f"{show_u128(u128.checked_from(1e30))} {show_u128(u128.checked_from(1e39))}");
+    let h: f32 = -7.75;
+    println(f"{show_i64(i64.checked_from(h))}");
+    println(f"{show_f32(f32.parse("0.1"))} {show_f32(f32.parse("1.000000059604644775390625000001"))} {show_f32(f32.parse(""))} {show_f32(f32.parse("abc"))}");
+}
+"#;
+const WANT_CHECKED_FROM: &str = "127 -128 None None\n-9223372036854775808 None None None\n18446744073709549568 None 0 None\n1000000000000000019884624838656 None\n-7\n0.1 1.0000001 Empty Invalid\n";
+
+#[test]
+fn checked_from_and_f32_parse_agree_on_both_backends() {
+    agrees(CHECKED_FROM, WANT_CHECKED_FROM, 0);
+}

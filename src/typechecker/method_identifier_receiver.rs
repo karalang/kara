@@ -348,6 +348,57 @@ impl<'a> super::TypeChecker<'a> {
                         });
                     }
                 }
+                // `<int>.checked_from(f: f64) -> Option[<int>]`: `None` for NaN
+                // or a value out of the type's range, else the value truncated
+                // toward zero (docs/library/core-types.md § Float to integer;
+                // B-2026-10-21-65). An `f32` argument widens.
+                if method == "checked_from"
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                            | "isize"
+                    )
+                {
+                    if args.len() != 1 {
+                        self.type_error(
+                            format!(
+                                "{type_name}.checked_from expects 1 argument, got {}",
+                                args.len()
+                            ),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Some(Type::Error);
+                    }
+                    let arg_ty = match self.infer_expr(&args[0].value) {
+                        Type::Ref(inner) if matches!(*inner, Type::Float(_)) => *inner,
+                        t => t,
+                    };
+                    if !matches!(arg_ty, Type::Float(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "{type_name}.checked_from expects an `f64` or `f32`, got `{}`",
+                                type_display(&arg_ty)
+                            ),
+                            *span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    let int_ty = self.primitive_type(type_name.as_str())?;
+                    return Some(Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![int_ty],
+                    });
+                }
                 // `char.try_from(n: <int>) -> Result[char, i64]` — fallible
                 // codepoint→char conversion (blocker #10; the
                 // `E_INT_AS_CHAR` rejection of `n as char` points here). Not
@@ -772,7 +823,7 @@ impl<'a> super::TypeChecker<'a> {
         let helper = match type_name {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
             | "u128" | "usize" => "parse_result_int",
-            "f64" => "parse_result_float",
+            "f32" | "f64" => "parse_result_float",
             _ => return None,
         };
         let Type::Named { name, args } = &self.env.functions.get(helper)?.return_type else {
