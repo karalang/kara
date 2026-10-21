@@ -1,0 +1,229 @@
+// LeetCode #832: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random images, against
+// the statement read in its two steps.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn flip_and_invert_image_star(image: own Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut img = image;
+    let n = img.len();
+    for r in 0..n {
+        let mut i = 0;
+        let mut j = n - 1;
+        while i < j {
+            let left = img[r][i];
+            img[r][i] = 1 - img[r][j];
+            img[r][j] = 1 - left;
+            i += 1;
+            j -= 1;
+        }
+        if i == j {
+            img[r][i] = 1 - img[r][i];
+        }
+    }
+    img
+}
+
+// ---- fresh-image arm ------------------------------------------------
+
+fn flip_and_invert_image_fresh(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = image.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(1 - image[r][n - 1 - c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- reverse arm ----------------------------------------------------
+
+fn flip_and_invert_image_reverse(image: own Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut img = image;
+    for row in img.iter_mut() {
+        row.reverse();
+        for x in row.iter_mut() {
+            *x ^= 1;
+        }
+    }
+    img
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn flip_and_invert_image_iter(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let out: Vec[Vec[i64]] = image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect();
+    out
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally, in its two steps: flip the image
+// horizontally, each row reversed into a new image, then invert it, each
+// 0 replaced by 1 and each 1 by 0 in another.
+fn statement(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut flipped: Vec[Vec[i64]] = Vec.new();
+    for r in 0..image.len() {
+        let width = image[r].len();
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..width {
+            row.push(image[r][width - 1 - c]);
+        }
+        flipped.push(row);
+    }
+    let mut inverted: Vec[Vec[i64]] = Vec.new();
+    for r in 0..flipped.len() {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..flipped[r].len() {
+            row.push(if flipped[r][c] == 0 { 1 } else { 0 });
+        }
+        inverted.push(row);
+    }
+    inverted
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    if arm == 0 {
+        flip_and_invert_image_star(image.clone())
+    } else if arm == 1 {
+        flip_and_invert_image_fresh(image)
+    } else if arm == 2 {
+        flip_and_invert_image_reverse(image.clone())
+    } else {
+        flip_and_invert_image_iter(image)
+    }
+}
+
+// an n by n image, each cell 1 with chance `ones` in 100
+fn random_image(seed: mut ref i64, n: i64, ones: i64) -> Vec[Vec[i64]] {
+    let mut image: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < ones { 1 } else { 0 });
+        }
+        image.push(row);
+    }
+    image
+}
+
+// an n by n image whose every row reads the same both ways
+fn mirrored_image(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let mut image: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.filled(n, 0);
+        for c in 0..(n + 1) / 2 {
+            let x = next_random(mut seed) % 2;
+            row[c] = x;
+            row[n - 1 - c] = x;
+        }
+        image.push(row);
+    }
+    image
+}
+
+// the image with its rows in the opposite order
+fn rows_reversed(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..image.len() {
+        out.push(image[image.len() - 1 - r].clone());
+    }
+    out
+}
+
+fn ones_in(row: Vec[i64]) -> i64 {
+    let mut count = 0;
+    for x in row.iter() {
+        if x == 1 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// each row of the answer holds as many ones as its row of the image holds
+// zeros, and only zeros and ones
+fn counts_hold(image: Vec[Vec[i64]], got: Vec[Vec[i64]]) -> bool {
+    if got.len() != image.len() {
+        return false;
+    }
+    for r in 0..image.len() {
+        if got[r].len() != image[r].len() or ones_in(got[r].clone()) != image[r].len() - ones_in(image[r].clone()) {
+            return false;
+        }
+        for x in got[r].iter() {
+            if x != 0 and x != 1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = ["star", "fresh", "reverse", "iter"];
+    let properties = ["answer", "twice", "rows reversed", "counts"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 832;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let image = if kind == 0 {
+            // small images, 1 by 1 to 4 by 4, where the middle matters
+            let n = 1 + next_random(mut seed) % 4;
+            let ones = next_random(mut seed) % 101;
+            random_image(mut seed, n, ones)
+        } else if kind == 1 {
+            // images up to LeetCode's 20 by 20
+            let n = 1 + next_random(mut seed) % 20;
+            let ones = next_random(mut seed) % 101;
+            random_image(mut seed, n, ones)
+        } else if kind == 2 {
+            // images whose rows read the same both ways
+            let n = 1 + next_random(mut seed) % 12;
+            mirrored_image(mut seed, n)
+        } else {
+            // images almost all zeros or almost all ones
+            let n = 1 + next_random(mut seed) % 12;
+            let ones = if next_random(mut seed) % 2 == 0 { 3 } else { 97 };
+            random_image(mut seed, n, ones)
+        };
+        let want = statement(image.clone());
+        for arm in 0..4 {
+            let got = answer(arm, image.clone());
+            let oks = [
+                got == want,
+                answer(arm, got.clone()) == image,
+                answer(arm, rows_reversed(image.clone())) == rows_reversed(got.clone()),
+                counts_hold(image.clone(), got.clone()),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: {image} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, fresh {by_arm[1]}, reverse {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, twice {by_property[1]}, rows reversed {by_property[2]}, counts {by_property[3]}");
+}

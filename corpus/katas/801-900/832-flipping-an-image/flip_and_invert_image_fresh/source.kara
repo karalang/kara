@@ -1,0 +1,84 @@
+// LeetCode #832: Flipping an Image -- a fresh image.
+//
+// A new image is built cell by cell: the cell at column c of a row is
+// the inverse of the cell at n - 1 - c in the same row of the input,
+// which is only read. O(n^2).
+
+fn flip_and_invert_image(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = image.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(1 - image[r][n - 1 - c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_image(seed: mut ref i64, n: i64, ones: i64) -> Vec[Vec[i64]] {
+    let mut image: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 100 < ones { 1 } else { 0 });
+        }
+        image.push(row);
+    }
+    image
+}
+
+fn show(image: Vec[Vec[i64]]) {
+    println(f"{image} -> {flip_and_invert_image(image.clone())}");
+}
+
+fn fold(check: i64, image: Vec[Vec[i64]]) -> i64 {
+    let mut c = check;
+    for row in image.iter() {
+        for x in row.iter() {
+            c = (c * 3 + x) % 1000000007;
+        }
+    }
+    c
+}
+
+fn main() {
+    show([[1, 1, 0], [1, 0, 1], [0, 0, 0]]);
+    show([[1, 1, 0, 0], [1, 0, 0, 1], [0, 1, 1, 1], [1, 0, 1, 0]]);
+    show([[0]]);
+    show([[1]]);
+    show([[1, 0], [0, 1]]);
+    show([[1, 1], [1, 1]]);
+    show([[0, 1, 0], [1, 0, 1], [0, 1, 0]]);
+    // LeetCode's largest, 20 by 20: random at half ones, all ones, and
+    // all zeros, each shown by its count of ones and a checksum.
+    let mut seed = 832;
+    for ones in [50, 100, 0] {
+        let out = flip_and_invert_image(random_image(mut seed, 20, ones));
+        let mut count = 0;
+        for row in out.iter() {
+            for x in row.iter() {
+                count += x;
+            }
+        }
+        println(f"20 by 20 at {ones}% ones -> {count} ones, checksum {fold(0, out)}");
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let ones = next_random(mut seed) % 101;
+        let out = flip_and_invert_image(random_image(mut seed, n, ones));
+        total += out.len();
+        check = fold(check, out);
+    }
+    println(f"300 random images: {total} rows, checksum {check}");
+}

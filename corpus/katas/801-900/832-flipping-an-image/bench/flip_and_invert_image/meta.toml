@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/832-flipping-an-image/bench/flip_and_invert_image.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "20d424cd5"
+extracted_src = "4e5f5bcd"
+model_rev = "583cfb0d"
+model_src = "4e5f5bcd"
