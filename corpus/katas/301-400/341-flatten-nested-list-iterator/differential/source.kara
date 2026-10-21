@@ -282,11 +282,7 @@ impl Iterator for NestedIter {
 }
 
 fn flatten_trait(items: own Vec[Nested]) -> Vec[i64] {
-    let mut out: Vec[i64] = Vec.new();
-    for v in NestedIter.new(items) {
-        out.push(v);
-    }
-    return out;
+    NestedIter.new(items).collect()
 }
 
 // ---- the has_next stutter (P7) ----

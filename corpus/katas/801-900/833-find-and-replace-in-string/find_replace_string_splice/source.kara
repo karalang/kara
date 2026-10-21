@@ -1,0 +1,117 @@
+// LeetCode #833: Find And Replace in String -- right to left, in place.
+//
+// The operations are ordered by index, last first, and each one whose
+// source occurs at its index is spliced into the string there. Working
+// from the right, a splice never moves a stretch that a later operation
+// looks at, so each index still points into the original letters.
+// O(k log k + k * n) for k operations on a string of length n.
+
+fn find_replace_string(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let mut order: Vec[i64] = (0..indices.len()).collect();
+    order.sort_by_key(|k| -indices[k]);
+    let mut out = s.clone();
+    for k in order {
+        let i = indices[k];
+        let len = sources[k].len();
+        if s[i..].starts_with(sources[k]) {
+            out = f"{out[0..i]}{targets[k]}{out[i + len..]}";
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(r: i64) -> char {
+    (b'a' + r as u8) as char
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push(letter(next_random(mut seed) % letters));
+    }
+    w
+}
+
+fn show(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) {
+    let out = find_replace_string(s, indices, sources, targets);
+    println(f"\"{s}\" {indices} {sources} {targets} -> \"{out}\"");
+}
+
+fn fold(check: i64, s: String) -> i64 {
+    let mut c = check;
+    for b in s.bytes() {
+        c = (c * 31 + b as i64) % 1000000007;
+    }
+    c
+}
+
+// A string of `n` letters drawn from the first `letters`, and up to
+// `max_ops` operations on disjoint stretches of it in a shuffled order,
+// each source up to `max_len` long. Two in three sources are the
+// stretch itself, so they match; the third has its last letter changed,
+// so it does not.
+fn random_case(seed: mut ref i64, n: i64, letters: i64, max_ops: i64, max_len: i64) -> String {
+    let s = random_word(mut seed, n, letters);
+    let mut indices: Vec[i64] = Vec.new();
+    let mut sources: Vec[String] = Vec.new();
+    let mut targets: Vec[String] = Vec.new();
+    let mut pos = next_random(mut seed) % 4;
+    while pos < n and indices.len() < max_ops {
+        let room = if n - pos < max_len { n - pos } else { max_len };
+        let len = 1 + next_random(mut seed) % room;
+        let mut src = s[pos..pos + len].to_string();
+        if next_random(mut seed) % 3 == 2 {
+            let last = src.bytes().last().unwrap() as i64 - 97;
+            let mut changed = src[0..len - 1].to_string();
+            changed.push(letter((last + 1) % 26));
+            src = changed;
+        }
+        indices.push(pos);
+        sources.push(src);
+        targets.push(random_word(mut seed, 1 + next_random(mut seed) % 7, 26));
+        pos += len + next_random(mut seed) % 4;
+    }
+    let k = indices.len();
+    let mut i = k;
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        indices.swap(i, j);
+        sources.swap(i, j);
+        targets.swap(i, j);
+    }
+    find_replace_string(s, indices, sources, targets)
+}
+
+fn main() {
+    show("abcd".to_string(), [0, 2], ["a".to_string(), "cd".to_string()], ["eee".to_string(), "ffff".to_string()]);
+    show("abcd".to_string(), [0, 2], ["ab".to_string(), "ec".to_string()], ["eee".to_string(), "ffff".to_string()]);
+    show("vmokgggqzp".to_string(), [3, 5, 1], ["kg".to_string(), "ggq".to_string(), "mo".to_string()], ["s".to_string(), "so".to_string(), "bfr".to_string()]);
+    show("a".to_string(), [0], ["a".to_string()], ["b".to_string()]);
+    show("a".to_string(), [0], ["b".to_string()], ["c".to_string()]);
+    show("abc".to_string(), [1], ["bcd".to_string()], ["x".to_string()]);
+    show("abc".to_string(), [2, 0], ["c".to_string(), "a".to_string()], ["zz".to_string(), "yy".to_string()]);
+    show("abcdef".to_string(), [0], ["abcdef".to_string()], ["q".to_string()]);
+    show("abc".to_string(), [0, 2], ["abx".to_string(), "c".to_string()], ["q".to_string(), "x".to_string()]);
+    show("abcd".to_string(), [1, 1], ["bc".to_string(), "bd".to_string()], ["xy".to_string(), "z".to_string()]);
+    let mut seed = 833;
+    let big = random_case(mut seed, 1000, 2, 100, 50);
+    println(f"1000 letters, 100 operations -> {big.len()} letters, checksum {fold(0, big)}");
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let max_len = if round % 2 == 0 { 6 } else { 50 };
+        let out = random_case(mut seed, n, 2 + round % 3, 100, max_len);
+        total += out.len();
+        check = fold(check, out);
+    }
+    println(f"300 random cases: {total} letters, checksum {check}");
+}

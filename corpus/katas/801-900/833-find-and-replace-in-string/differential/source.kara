@@ -1,0 +1,340 @@
+// LeetCode #833: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random strings and
+// operations, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn find_replace_string_star(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let n = s.len();
+    let mut at = Vec.filled(n, -1);
+    for k in 0..indices.len() {
+        let i = indices[k];
+        if s[i..].starts_with(sources[k]) {
+            at[i] = k;
+        }
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let k = at[i];
+        if k >= 0 {
+            out.push_str(targets[k]);
+            i += sources[k].len();
+        } else {
+            out.push_str(s[i..i + 1]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// ---- splice arm -----------------------------------------------------
+
+fn find_replace_string_splice(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let mut order: Vec[i64] = (0..indices.len()).collect();
+    order.sort_by_key(|k| -indices[k]);
+    let mut out = s.clone();
+    for k in order {
+        let i = indices[k];
+        let len = sources[k].len();
+        if s[i..].starts_with(sources[k]) {
+            out = f"{out[0..i]}{targets[k]}{out[i + len..]}";
+        }
+    }
+    out
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn find_replace_string_iter(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let mut ops: Vec[(i64, String, String)] = indices
+        .iter()
+        .zip(sources.iter())
+        .zip(targets.iter())
+        .map(|((i, src), tgt)| (i, src.clone(), tgt.clone()))
+        .filter(|op| s[op.0..].starts_with(op.1))
+        .collect();
+    ops.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = String.new();
+    let mut pos = 0;
+    for (i, src, tgt) in ops {
+        out.push_str(s[pos..i]);
+        out.push_str(tgt);
+        pos = i + src.len();
+    }
+    out.push_str(s[pos..]);
+    out
+}
+
+// ---- letter-by-letter arm -------------------------------------------
+
+fn matches_at(text: Vec[char], i: i64, source: String) -> bool {
+    let src: Vec[char] = source.chars().collect();
+    if i + src.len() > text.len() {
+        return false;
+    }
+    for j in 0..src.len() {
+        if text[i + j] != src[j] {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_replace_string_chars(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let text: Vec[char] = s.chars().collect();
+    let n = text.len();
+    let mut op: Vec[Option[i64]] = Vec.filled(n, None);
+    for k in 0..indices.len() {
+        if matches_at(text, indices[k], sources[k]) {
+            op[indices[k]] = Some(k);
+        }
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        match op[i] {
+            Some(k) => {
+                for c in targets[k].chars() {
+                    out.push(c);
+                }
+                i += sources[k].len();
+            }
+            None => {
+                out.push(text[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: the replacements happen together on the
+// original string, so at each position every operation is looked at, and
+// one whose source occurs at its index there puts its target in place of
+// its source; a position no operation starts at keeps its letter.
+fn statement(s: String, indices: Vec[i64], sources: Vec[String], targets: Vec[String]) -> String {
+    let mut out = String.new();
+    let mut p = 0;
+    while p < s.len() {
+        let mut taken = false;
+        for k in 0..indices.len() {
+            let len = sources[k].len();
+            if not taken and indices[k] == p and p + len <= s.len() and s[p..p + len] == sources[k] {
+                out.push_str(targets[k]);
+                p += len;
+                taken = true;
+            }
+        }
+        if not taken {
+            out.push_str(s[p..p + 1]);
+            p += 1;
+        }
+    }
+    out
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(r: i64) -> char {
+    (b'a' + r as u8) as char
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push(letter(next_random(mut seed) % letters));
+    }
+    w
+}
+
+struct Case {
+    s: String,
+    indices: Vec[i64],
+    sources: Vec[String],
+    targets: Vec[String],
+}
+
+fn answer(arm: i64, c: Case) -> String {
+    if arm == 0 {
+        find_replace_string_star(c.s, c.indices, c.sources, c.targets)
+    } else if arm == 1 {
+        find_replace_string_splice(c.s, c.indices, c.sources, c.targets)
+    } else if arm == 2 {
+        find_replace_string_iter(c.s, c.indices, c.sources, c.targets)
+    } else {
+        find_replace_string_chars(c.s, c.indices, c.sources, c.targets)
+    }
+}
+
+// A string of `n` letters drawn from the first `letters`, and up to
+// `max_ops` operations on disjoint stretches of it, `gap` letters apart at
+// most, in a shuffled order. Two in three sources are their stretch, so
+// they match; the third has its last letter changed, or, at the end of
+// the string, a letter added that runs past it. Then up to `stray` more
+// operations at any index, a stretch's own included, whose sources may
+// cross the stretches: each is a piece of the string with one letter
+// changed to one the string does not hold, so it never matches, and the
+// targets may hold that letter.
+fn random_case(seed: mut ref i64, n: i64, letters: i64, max_ops: i64, max_len: i64, gap: i64, stray: i64) -> Case {
+    let s = random_word(mut seed, n, letters);
+    let mut indices: Vec[i64] = Vec.new();
+    let mut sources: Vec[String] = Vec.new();
+    let mut targets: Vec[String] = Vec.new();
+    let mut pos = next_random(mut seed) % (gap + 1);
+    while pos < n and indices.len() < max_ops {
+        let room = if n - pos < max_len { n - pos } else { max_len };
+        let len = 1 + next_random(mut seed) % room;
+        let mut src = s[pos..pos + len].to_string();
+        if next_random(mut seed) % 3 == 2 {
+            if pos + len == n and next_random(mut seed) % 2 == 0 {
+                src.push(letter(next_random(mut seed) % letters));
+            } else {
+                let last = src.bytes().last().unwrap() as i64 - 97;
+                let mut changed = src[0..len - 1].to_string();
+                changed.push(letter((last + 1) % 26));
+                src = changed;
+            }
+        }
+        indices.push(pos);
+        sources.push(src);
+        targets.push(random_word(mut seed, 1 + next_random(mut seed) % 7, 26));
+        pos += len + next_random(mut seed) % (gap + 1);
+    }
+    for _ in 0..stray {
+        let at = next_random(mut seed) % n;
+        let end = at + 1 + next_random(mut seed) % 6;
+        let piece = if end < n { s[at..end].to_string() } else { s[at..].to_string() };
+        let off = next_random(mut seed) % piece.len();
+        let mut src = piece[0..off].to_string();
+        src.push(letter(letters));
+        src.push_str(piece[off + 1..]);
+        if indices.len() < max_ops {
+            indices.push(at);
+            sources.push(src);
+            targets.push(random_word(mut seed, 1 + next_random(mut seed) % 4, letters + 1));
+        }
+    }
+    let k = indices.len();
+    let mut i = k;
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        indices.swap(i, j);
+        sources.swap(i, j);
+        targets.swap(i, j);
+    }
+    Case { s: s, indices: indices, sources: sources, targets: targets }
+}
+
+fn matches(c: Case, k: i64) -> bool {
+    let i = c.indices[k];
+    let len = c.sources[k].len();
+    i + len <= c.s.len() and c.s[i..i + len] == c.sources[k]
+}
+
+// the operations in the opposite order
+fn reversed_ops(c: Case) -> Case {
+    let mut out = Case { s: c.s.clone(), indices: Vec.new(), sources: Vec.new(), targets: Vec.new() };
+    let k = c.indices.len();
+    for j in 0..k {
+        out.indices.push(c.indices[k - 1 - j]);
+        out.sources.push(c.sources[k - 1 - j].clone());
+        out.targets.push(c.targets[k - 1 - j].clone());
+    }
+    out
+}
+
+// every target set to its own source
+fn identity_ops(c: Case) -> Case {
+    Case { s: c.s.clone(), indices: c.indices.clone(), sources: c.sources.clone(), targets: c.sources.clone() }
+}
+
+// only the operations whose source occurs at their index
+fn matching_ops(c: Case) -> Case {
+    let mut out = Case { s: c.s.clone(), indices: Vec.new(), sources: Vec.new(), targets: Vec.new() };
+    for k in 0..c.indices.len() {
+        if matches(c, k) {
+            out.indices.push(c.indices[k]);
+            out.sources.push(c.sources[k].clone());
+            out.targets.push(c.targets[k].clone());
+        }
+    }
+    out
+}
+
+// the string's length, less each matching source's, plus its target's
+fn expected_len(c: Case) -> i64 {
+    let mut len = c.s.len();
+    for k in 0..c.indices.len() {
+        if matches(c, k) {
+            len = len - c.sources[k].len() + c.targets[k].len();
+        }
+    }
+    len
+}
+
+fn main() {
+    let names = ["star", "splice", "iter", "chars"];
+    let properties = ["answer", "order", "identity", "unmatched", "length"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 833;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let c = if kind == 0 {
+            // short strings, where sources reach the ends
+            let n = 1 + next_random(mut seed) % 8;
+            random_case(mut seed, n, 2, 100, 3, 2, next_random(mut seed) % 4)
+        } else if kind == 1 {
+            // strings up to 300 letters, up to LeetCode's 100 operations
+            let n = 1 + next_random(mut seed) % 300;
+            let letters = 2 + next_random(mut seed) % 3;
+            random_case(mut seed, n, letters, 100, 6, 3, 0)
+        } else if kind == 2 {
+            // sources up to LeetCode's 50 letters
+            let n = 1 + next_random(mut seed) % 300;
+            random_case(mut seed, n, 2, 100, 50, 3, 0)
+        } else {
+            // a string of one letter, the operations side by side, and
+            // operations that do not match crossing them
+            let n = 1 + next_random(mut seed) % 60;
+            random_case(mut seed, n, 1, 100, 4, 0, 1 + next_random(mut seed) % 20)
+        };
+        let want = statement(c.s, c.indices, c.sources, c.targets);
+        for arm in 0..4 {
+            let got = answer(arm, c);
+            let oks = [
+                got == want,
+                answer(arm, reversed_ops(c)) == got,
+                answer(arm, identity_ops(c)) == c.s,
+                answer(arm, matching_ops(c)) == got,
+                got.len() == expected_len(c),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: \"{c.s}\" {c.indices} {c.sources} {c.targets} -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, splice {by_arm[1]}, iter {by_arm[2]}, chars {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, order {by_property[1]}, identity {by_property[2]}, unmatched {by_property[3]}, length {by_property[4]}");
+}

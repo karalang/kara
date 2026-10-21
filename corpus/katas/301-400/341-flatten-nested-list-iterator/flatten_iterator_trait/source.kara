@@ -1,8 +1,8 @@
 // LeetCode #341: Flatten Nested List Iterator — as an `Iterator`.
 //
 // The ★ arm's stack of members, behind the standard `Iterator` trait:
-// `next` returns `Option[i64]`, `None` at the end, so the caller can use a
-// `for` loop instead of the has_next/next pair.
+// `next` returns `Option[i64]`, `None` at the end, so the caller can `collect`
+// it or use a `for` loop instead of the has_next/next pair.
 //
 // O(n) over the whole iteration, O(n) space.
 
@@ -45,11 +45,7 @@ impl Iterator for NestedIter {
 }
 
 fn flatten(items: own Vec[Nested]) -> Vec[i64] {
-    let mut out: Vec[i64] = Vec.new();
-    for v in NestedIter.new(items) {
-        out.push(v);
-    }
-    return out;
+    NestedIter.new(items).collect()
 }
 
 // ---- input --------------------------------------------------------------

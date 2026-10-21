@@ -1,0 +1,12 @@
+"abcd" [0, 2] [a, cd] [eee, ffff] -> "eeebffff"
+"abcd" [0, 2] [ab, ec] [eee, ffff] -> "eeecd"
+"vmokgggqzp" [3, 5, 1] [kg, ggq, mo] [s, so, bfr] -> "vbfrssozp"
+"a" [0] [a] [b] -> "b"
+"a" [0] [b] [c] -> "a"
+"abc" [1] [bcd] [x] -> "abc"
+"abc" [2, 0] [c, a] [zz, yy] -> "yybzz"
+"abcdef" [0] [abcdef] [q] -> "q"
+"abc" [0, 2] [abx, c] [q, x] -> "abx"
+"abcd" [1, 1] [bc, bd] [xy, z] -> "axyd"
+1000 letters, 100 operations -> 559 letters, checksum 484559368
+300 random cases: 23227 letters, checksum 303701052
