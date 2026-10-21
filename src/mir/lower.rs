@@ -17217,7 +17217,7 @@ fn main() {
         let src = r#"
 fn byte_at(c: ref CStr, i: i64) -> u8 { c.as_bytes()[i] }
 fn first_word(s: ref String) -> StringSlice {
-    let end = s.find(' ').unwrap_or(s.len());
+    let end = s.find(" ").unwrap_or(s.len());
     s.slice(0, end)
 }
 fn main() {
