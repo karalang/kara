@@ -4629,7 +4629,7 @@ owned → `ref` (or a view) → `shared`, `sync` or `frozen`. Each step is a cho
 | Several holders in one task: trees, graphs, lists | [`shared struct` / `shared enum`](#shared-types) |
 | Mutation shared across tasks | [`sync struct` / `sync enum`](#sync-types) |
 | A structure built once and then read by many tasks | [`frozen T`](#frozen-handles) |
-| Many values with independent lifetimes and stale-handle detection | `Pool[T]` ([library/collections.md](library/collections.md)) |
+| Many values with independent lifetimes and stale-handle detection | `SlotMap[T]` ([library/collections.md](library/collections.md)) |
 
 ### Shared types
 
@@ -4734,9 +4734,9 @@ let alias = root;          // `alias` and `root` name the same node
 
 **Writing a `mut` field is not an effect.** It needs no annotation. A shared handle never crosses a task, so there is no concurrent access for an effect to order.
 
-**Why a keyword.** Without `shared struct`, trees and graphs need handles into a `Pool[T]` or an arena: correct, but it makes basic data structures feel second-class. Swift makes the same split (`class` versus `struct`); Kāra writes `shared struct` instead of adding `class`, to avoid object-oriented connotations.
+**Why a keyword.** Without `shared struct`, trees and graphs need handles into a `SlotMap[T]` or an arena: correct, but it makes basic data structures feel second-class. Swift makes the same split (`class` versus `struct`); Kāra writes `shared struct` instead of adding `class`, to avoid object-oriented connotations.
 
-**Self-referential data that is deduplicated, not lifetime-managed, uses `Pool[T]`.** Type tables, schemas and descriptors name themselves in their own fields. Reaching for `shared` with `weak` on the recursive field is wrong there: such values are held strongly for the whole computation, and `weak` would thread `Option[T]` through every lookup. Use `Pool[Type]` with `Handle[Type]` in the recursive position: the table holds the pool, equality on types becomes equality on handles, and the cycle is broken structurally. `weak` is for lifetime cycles; `Pool[T]` and `Handle[T]` are for deduplication. See [library/collections.md](library/collections.md) for `Pool[T]` and `Arena[T]`.
+**Self-referential data that is deduplicated, not lifetime-managed, uses `SlotMap[T]`.** Type tables, schemas and descriptors name themselves in their own fields. Reaching for `shared` with `weak` on the recursive field is wrong there: such values are held strongly for the whole computation, and `weak` would thread `Option[T]` through every lookup. Use `SlotMap[Type]` with `Handle[Type]` in the recursive position: the table holds the map, equality on types becomes equality on handles, and the cycle is broken structurally. `weak` is for lifetime cycles; `SlotMap[T]` and `Handle[T]` are for deduplication. See [library/collections.md](library/collections.md) for `SlotMap[T]` and `Arena[T]`.
 
 ### Cycles and `weak`
 
@@ -4778,7 +4778,7 @@ fn connect(a: own GraphNode, b: own GraphNode) {
 **Ergonomics.** `weak` fields show their uncertainty as `Option[T]` on purpose, and there is no shorter spelling.
 - **`Option.expect(msg)` is the tool for an invariant that guarantees the object is alive**, for example `node.parent.expect("a constructed tree has a parent")`. It panics like `.unwrap()`, but the message documents the invariant at the use site and appears in the panic report.
 - **Upgrade once per scope.** `while let Some(p) = current.parent { current = p; }` upgrades once per iteration. Chained `.parent.expect(...).parent.expect(...)` reads count once per step.
-- **If validity is guaranteed by the structure, the reference should be strong**, or the data should move to a central store (`Map[NodeId, NodeData]`, or a `Pool`) with ids.
+- **If validity is guaranteed by the structure, the reference should be strong**, or the data should move to a central store (`Map[NodeId, NodeData]`, or a `SlotMap`) with ids.
 - **Diagnostic.** `.unwrap()` on any `Option` gets a suggestion to use `.expect("…")` with a machine-applicable fix; this covers `weak` reads without a special rule.
 
 **There is no unsafe escape hatch** such as `assume_valid`. `weak` is memory-safe even when the programmer's invariant is wrong, and an operation with undefined behavior on a dead reference would remove that property. The cost is one `.expect` per upgrade, at a site that says why the reference is live.

@@ -298,11 +298,11 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 
 `Vec[T]`, `Array[T, N]`, `Slice[T]` and `VecDeque[T]` implement `PartialEq` (with `Rhs = Self`) when `T: PartialEq`, and `Eq` when `T: Eq`: two sequences are equal when they have the same length and equal elements in order. They implement `PartialOrd` and `Ord` when `T` does, comparing lexicographically. The comparison traits borrow both operands ([design.md §9](../design.md#operator-traits)).
 
-## `Arena[T]` and `Pool[T]`
+## `Arena[T]` and `SlotMap[T]`
 
 Two allocation primitives are library types, not language features:
 - **`Arena[T]`** is a bulk allocator with one lifetime. Every item is freed together when the arena drops, which suits cache-friendly batch work such as parse trees and per-frame game data. Items cannot be removed one at a time. `Arena.new()` makes one; `a.push(x)` stores `x` and returns an `ArenaRef[T]`, `a.get(r)` returns `ref T`, and `a.len()` counts the items. `a.high_water_mark()` returns an `ArenaCheckpoint`, and `a.rewind_to(cp)` drops everything pushed after it, which makes any `ArenaRef` from after the checkpoint dangle.
-- **`Pool[T]`** is a generational-handle allocator with a lifetime per item. Items are inserted and removed one at a time; `pool.insert(x)` returns a `Handle[T]`, and `pool.get(h)` returns `Option[ref T]`, which is `None` when the handle is stale. Use it when items have independent lifetimes and stale-handle detection matters (entities, connection tables), and for self-referential data that is deduplicated rather than shared: a type table holds a `Pool[Type]`, and the recursive positions hold `Handle[Type]` ([design.md §11](../design.md#cycles-and-weak)). Not yet implemented. Until it is, the library's `Pool[T]` is a connection pool (`Pool.new(create, max_connections, max_waiters)`, `acquire`, `release`), which this page does not describe.
+- **`SlotMap[T]`** is a generational-handle allocator with a lifetime per item. Items are inserted and removed one at a time; `slots.insert(x)` returns a `Handle[T]`, and `slots.get(h)` returns `Option[ref T]`, which is `None` when the handle is stale. Use it when items have independent lifetimes and stale-handle detection matters (entities, connection tables), and for self-referential data that is deduplicated rather than shared: a type table holds a `SlotMap[Type]`, and the recursive positions hold `Handle[Type]` ([design.md §11](../design.md#cycles-and-weak)). Not yet implemented. The name `Pool[T]` belongs to the connection pool (`Pool.new(create, max_connections, max_waiters)`, `acquire`, `release`), which this page does not describe.
 
 ## Fallible allocation
 
