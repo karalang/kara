@@ -44733,12 +44733,12 @@ fn test_normalize_returns_string_and_takes_a_normalization_form() {
     // `s.normalize(...)` for normalization-aware comparison, and until this
     // slice neither the method nor the form enum existed. All four forms type,
     // and the result is a `String` a further String method can chain onto.
+    // An expression writes the form qualified (B-2026-10-21-32).
     for form in ["Nfc", "Nfd", "Nfkc", "Nfkd"] {
-        let src = format!("fn main() {{ println(\"x\".normalize({form}).len()); }}");
+        let src =
+            format!("fn main() {{ println(\"x\".normalize(NormalizationForm.{form}).len()); }}");
         typecheck_ok(&src);
     }
-    // The qualified spelling resolves to the same enum.
-    typecheck_ok("fn main() { println(\"x\".normalize(NormalizationForm.Nfd)); }");
 }
 
 #[test]
@@ -44756,7 +44756,9 @@ fn test_normalize_rejects_a_wrong_arity_or_a_non_form_argument() {
         "got {no_args:?}"
     );
 
-    let two_args = typecheck_errors("fn main() { println(\"x\".normalize(Nfc, Nfd)); }");
+    let two_args = typecheck_errors(
+        "fn main() { println(\"x\".normalize(NormalizationForm.Nfc, NormalizationForm.Nfd)); }",
+    );
     assert_eq!(two_args.len(), 1);
     assert!(two_args[0].message.contains("found 2"), "got {two_args:?}");
 
@@ -44768,7 +44770,7 @@ fn test_normalize_rejects_a_wrong_arity_or_a_non_form_argument() {
         "got {int_arg:?}"
     );
 
-    let other_enum = typecheck_errors("fn main() { println(\"x\".normalize(Less)); }");
+    let other_enum = typecheck_errors("fn main() { println(\"x\".normalize(Ordering.Less)); }");
     assert_eq!(other_enum.len(), 1);
     assert!(
         other_enum[0]

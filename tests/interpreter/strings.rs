@@ -2915,8 +2915,8 @@ fn test_normalize_makes_the_spec_hazard_comparable() {
             let a = \"e\\u{0301}\";\n\
             let b = \"\\u{00e9}\";\n\
             println(a == b);\n\
-            println(a.normalize(Nfc) == b.normalize(Nfc));\n\
-            println(a.normalize(Nfd) == b.normalize(Nfd));\n\
+            println(a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc));\n\
+            println(a.normalize(NormalizationForm.Nfd) == b.normalize(NormalizationForm.Nfd));\n\
         }");
     assert_eq!(out, "false\ntrue\ntrue\n");
 }
@@ -2930,9 +2930,9 @@ fn test_normalize_changes_byte_length_in_both_directions() {
             let nfd = \"e\\u{0301}\";\n\
             let nfc = \"\\u{00e9}\";\n\
             println(nfd.len());\n\
-            println(nfd.normalize(Nfc).len());\n\
+            println(nfd.normalize(NormalizationForm.Nfc).len());\n\
             println(nfc.len());\n\
-            println(nfc.normalize(Nfd).len());\n\
+            println(nfc.normalize(NormalizationForm.Nfd).len());\n\
         }");
     assert_eq!(out, "3\n2\n2\n3\n");
 }
@@ -2944,10 +2944,10 @@ fn test_normalize_compatibility_forms_differ_from_canonical_ones() {
     // for NFKC anywhere in the wiring would pass every other test here.
     let out = run("fn main() {\n\
             let lig = \"\\u{FB01}\";\n\
-            println(lig.normalize(Nfc));\n\
-            println(lig.normalize(Nfd));\n\
-            println(lig.normalize(Nfkc));\n\
-            println(lig.normalize(Nfkd));\n\
+            println(lig.normalize(NormalizationForm.Nfc));\n\
+            println(lig.normalize(NormalizationForm.Nfd));\n\
+            println(lig.normalize(NormalizationForm.Nfkc));\n\
+            println(lig.normalize(NormalizationForm.Nfkd));\n\
         }");
     assert_eq!(out, "\u{FB01}\n\u{FB01}\nfi\nfi\n");
 }
@@ -2961,8 +2961,8 @@ fn test_normalize_accepts_a_bare_variant_a_qualified_one_and_a_binding() {
     // silent wrong-form miscompile before the layout seed.
     let out = run("fn main() {\n\
             let a = \"e\\u{0301}\";\n\
-            let bound = Nfc;\n\
-            println(a.normalize(Nfc).len());\n\
+            let bound = NormalizationForm.Nfc;\n\
+            println(a.normalize(NormalizationForm.Nfc).len());\n\
             println(a.normalize(NormalizationForm.Nfc).len());\n\
             println(a.normalize(bound).len());\n\
         }");
@@ -2974,9 +2974,9 @@ fn test_normalize_leaves_empty_and_ascii_untouched() {
     // Nothing to compose or decompose, on every form — the identity cases that
     // catch a transform accidentally rewriting text it should not.
     let out = run("fn main() {\n\
-            println(\"\".normalize(Nfc).len());\n\
-            println(\"plain ascii\".normalize(Nfd));\n\
-            println(\"plain ascii\".normalize(Nfkd));\n\
+            println(\"\".normalize(NormalizationForm.Nfc).len());\n\
+            println(\"plain ascii\".normalize(NormalizationForm.Nfd));\n\
+            println(\"plain ascii\".normalize(NormalizationForm.Nfkd));\n\
         }");
     assert_eq!(out, "0\nplain ascii\nplain ascii\n");
 }

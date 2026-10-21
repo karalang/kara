@@ -508,21 +508,36 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "ElementwiseOrd",
 ];
 
-/// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`,
-/// `MemoryOrdering`, `NormalizationForm`) surfaced unqualified per design.md
-/// § Prelude.
-pub const PRELUDE_VARIANTS: &[&str] = &[
-    "Some", "None", "Ok", "Err",
+/// The variants written bare in an expression: `Option`'s and `Result`'s
+/// (design.md § Prelude).
+pub const PRELUDE_VARIANTS: &[&str] = &["Some", "None", "Ok", "Err"];
+
+/// Variants of other prelude enums, with their enum. An expression writes
+/// them qualified (`Ordering.Less`, strings.md: "its variants are written
+/// qualified"); a pattern over a known scrutinee may still write them bare.
+/// A bare one in an expression is refused with the qualified form as its fix
+/// (B-2026-10-21-32).
+pub const PATTERN_VARIANTS: &[(&str, &str)] = &[
     // Ordering — comparison ordering, returned by Ord.cmp
-    "Less", "Equal", "Greater",
+    ("Less", "Ordering"),
+    ("Equal", "Ordering"),
+    ("Greater", "Ordering"),
     // MemoryOrdering — atomic memory ordering, used by Atomic[T] operations
-    "Relaxed", "Acquire", "Release", "AcqRel", "SeqCst",
+    ("Relaxed", "MemoryOrdering"),
+    ("Acquire", "MemoryOrdering"),
+    ("Release", "MemoryOrdering"),
+    ("AcqRel", "MemoryOrdering"),
+    ("SeqCst", "MemoryOrdering"),
     // Entry[K, V] — Map.entry(k) returns one of these
-    "Occupied", "Vacant",
+    ("Occupied", "Entry"),
+    ("Vacant", "Entry"),
     // NormalizationForm — Unicode normalization form, taken by String.normalize.
     // Acronyms fold to Type-class per design.md CN-4 (`Nfc`, not `NFC`), which
     // the identifier-class check enforces.
-    "Nfc", "Nfd", "Nfkc", "Nfkd",
+    ("Nfc", "NormalizationForm"),
+    ("Nfd", "NormalizationForm"),
+    ("Nfkc", "NormalizationForm"),
+    ("Nfkd", "NormalizationForm"),
 ];
 
 /// Ambient program-rooted effect resources — resources whose provider is

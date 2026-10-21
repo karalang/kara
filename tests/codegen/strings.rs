@@ -10717,11 +10717,11 @@ fn normalize_makes_the_spec_hazard_comparable() {
                      let a = \"e\\u{0301}\";\n\
                      let b = \"\\u{00e9}\";\n\
                      println(a == b);\n\
-                     println(a.normalize(Nfc) == b.normalize(Nfc));\n\
-                     println(a.normalize(Nfd) == b.normalize(Nfd));\n\
+                     println(a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc));\n\
+                     println(a.normalize(NormalizationForm.Nfd) == b.normalize(NormalizationForm.Nfd));\n\
                      println(a.len());\n\
-                     println(a.normalize(Nfc).len());\n\
-                     println(b.normalize(Nfd).len());\n\
+                     println(a.normalize(NormalizationForm.Nfc).len());\n\
+                     println(b.normalize(NormalizationForm.Nfd).len());\n\
                  }"
         ),
         Some("false\ntrue\ntrue\n3\n2\n3\n".to_string())
@@ -10737,10 +10737,10 @@ fn normalize_compatibility_forms_differ_from_canonical_ones() {
         run_program(
             "fn main() {\n\
                      let lig = \"\\u{FB01}\";\n\
-                     println(lig.normalize(Nfc));\n\
-                     println(lig.normalize(Nfd));\n\
-                     println(lig.normalize(Nfkc));\n\
-                     println(lig.normalize(Nfkd));\n\
+                     println(lig.normalize(NormalizationForm.Nfc));\n\
+                     println(lig.normalize(NormalizationForm.Nfd));\n\
+                     println(lig.normalize(NormalizationForm.Nfkc));\n\
+                     println(lig.normalize(NormalizationForm.Nfkd));\n\
                  }"
         ),
         Some("\u{FB01}\n\u{FB01}\nfi\nfi\n".to_string())
@@ -10758,9 +10758,9 @@ fn normalize_form_reaches_codegen_bare_qualified_and_bound() {
         run_program(
             "fn main() {\n\
                      let a = \"e\\u{0301}\";\n\
-                     let bound_c = Nfc;\n\
+                     let bound_c = NormalizationForm.Nfc;\n\
                      let bound_d = NormalizationForm.Nfd;\n\
-                     println(a.normalize(Nfc).len());\n\
+                     println(a.normalize(NormalizationForm.Nfc).len());\n\
                      println(a.normalize(NormalizationForm.Nfc).len());\n\
                      println(a.normalize(bound_c).len());\n\
                      println(a.normalize(bound_d).len());\n\
@@ -10780,10 +10780,10 @@ fn normalize_works_on_a_binding_receiver_and_chains() {
         run_program(
             "fn main() {\n\
                      let s = \"e\\u{0301}fg\";\n\
-                     let n = s.normalize(Nfc);\n\
+                     let n = s.normalize(NormalizationForm.Nfc);\n\
                      println(n.len());\n\
                      println(n.to_uppercase());\n\
-                     println(s.normalize(Nfc).to_uppercase().len());\n\
+                     println(s.normalize(NormalizationForm.Nfc).to_uppercase().len());\n\
                  }"
         ),
         Some("4\n\u{00C9}FG\n4\n".to_string())
@@ -10798,9 +10798,9 @@ fn normalize_leaves_empty_and_ascii_untouched() {
     assert_eq!(
         run_program(
             "fn main() {\n\
-                     println(\"\".normalize(Nfc).len());\n\
-                     println(\"plain ascii\".normalize(Nfd));\n\
-                     println(\"plain ascii\".normalize(Nfkd));\n\
+                     println(\"\".normalize(NormalizationForm.Nfc).len());\n\
+                     println(\"plain ascii\".normalize(NormalizationForm.Nfd));\n\
+                     println(\"plain ascii\".normalize(NormalizationForm.Nfkd));\n\
                  }"
         ),
         Some("0\nplain ascii\nplain ascii\n".to_string())

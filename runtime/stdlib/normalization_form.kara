@@ -19,10 +19,10 @@
 // NFC is what you want for comparison unless you know otherwise: it is the
 // form the web platform, most filesystems, and most text editors emit.
 //
-// Prelude-visible with its variants UNQUALIFIED (`Nfc`, not
-// `NormalizationForm.Nfc`), like `MemoryOrdering`'s `Relaxed` — every call
-// site names a variant and would otherwise need an import for a four-value
-// enum.
+// Prelude-visible, so no import is needed; an expression writes a variant
+// qualified (`s.normalize(NormalizationForm.Nfc)`, strings.md), as it does
+// `MemoryOrdering.Relaxed`, and a pattern may write it bare
+// (B-2026-10-21-32).
 //
 // SPELLED `Nfc`, NOT `NFC`, and design.md's Equality bullet was corrected to
 // match (B-2026-08-20-41). The bullet originally wrote `s.normalize(NFC)`,

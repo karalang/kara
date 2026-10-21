@@ -351,6 +351,9 @@ impl<'a> super::Resolver<'a> {
                         self.error_builtin_not_a_value(name, expr.span);
                         return;
                     }
+                    if let Some(enum_name) = self.bare_prelude_variant(id) {
+                        self.error_bare_prelude_variant(name, enum_name, expr.span);
+                    }
                     self.record_resolution(&expr.span, id);
                     self.record_node_ref(expr.id, id, &[]);
                     // `expr.span` can run past the identifier — a method

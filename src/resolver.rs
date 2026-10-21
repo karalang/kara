@@ -161,6 +161,9 @@ pub struct SymbolTable {
     /// the name, so a local that shadows a builtin (`let println = 5;
     /// println;`) stays legal. B-2026-08-02-6.
     pub prelude_fn_ids: std::collections::HashSet<SymbolId>,
+    /// Symbol ids of the prelude variants a pattern may write bare and an
+    /// expression may not, with their enum (B-2026-10-21-32).
+    pub pattern_variant_ids: std::collections::HashMap<SymbolId, &'static str>,
     symbols: Vec<Symbol>,
     scopes: Vec<Scope>,
     current_scope: ScopeId,
@@ -205,6 +208,7 @@ impl SymbolTable {
         };
         let mut table = SymbolTable {
             prelude_fn_ids: std::collections::HashSet::new(),
+            pattern_variant_ids: std::collections::HashMap::new(),
             symbols: Vec::new(),
             scopes: vec![global_scope],
             current_scope: ScopeId(0),
@@ -276,6 +280,18 @@ impl SymbolTable {
                     param_names: Vec::new(),
                 },
             );
+        }
+        for &(name, enum_name) in crate::prelude::PATTERN_VARIANTS {
+            push(
+                self,
+                name,
+                SymbolKind::Function {
+                    param_names: Vec::new(),
+                },
+            );
+            if let Some(sym) = self.scopes[0].names.get(name).copied() {
+                self.pattern_variant_ids.insert(sym, enum_name);
+            }
         }
         for name in crate::prelude::PRELUDE_EFFECT_RESOURCES {
             push(self, name, SymbolKind::EffectResource);
@@ -1554,6 +1570,50 @@ impl<'a> Resolver<'a> {
     /// who has just written `par { }` and wants one background task writes
     /// `spawn { }` by analogy. `spawn` gets its closure form spelled out; the
     /// rest get the generic call form.
+    /// The prelude enum whose variant `id` names, when an expression must
+    /// write it qualified: the prelude's own symbol, or the library enum's
+    /// variant registered bare in its place (B-2026-10-21-32).
+    pub(crate) fn bare_prelude_variant(&self, id: SymbolId) -> Option<&'static str> {
+        if let Some(enum_name) = self.table.pattern_variant_ids.get(&id) {
+            return Some(enum_name);
+        }
+        let sym = self.table.get_symbol(id);
+        let SymbolKind::EnumVariant { parent_enum, .. } = &sym.kind else {
+            return None;
+        };
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let parent = self.table.get_symbol(*parent_enum);
+        if parent.span.offset < library && parent.span.line != 0 {
+            return None;
+        }
+        crate::prelude::PATTERN_VARIANTS
+            .iter()
+            .find(|(v, e)| *v == sym.name && *e == parent.name)
+            .map(|(_, e)| *e)
+    }
+
+    /// B-2026-10-21-32: `Less`, `Release`, `Nfc` and the other variants of
+    /// prelude enums other than `Option` and `Result` are written qualified in
+    /// an expression (design.md § Prelude); the fix writes the qualified form.
+    pub(crate) fn error_bare_prelude_variant(&mut self, name: &str, enum_name: &str, span: Span) {
+        let qualified = format!("{enum_name}.{name}");
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is a variant of `{enum_name}`: write `{qualified}` (only `Some`, \
+                 `None`, `Ok` and `Err` are written bare in an expression)"
+            ),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: Some(format!("write `{qualified}`")),
+            replacement: Some(Box::new(TextEdit {
+                offset: span.offset,
+                length: name.len(),
+                replacement: qualified,
+            })),
+            stub_hint: None,
+        });
+    }
+
     fn error_builtin_not_a_value(&mut self, name: &str, span: Span) {
         let how = if name == "spawn" {
             " — `spawn` takes a closure: `spawn(|| …)`".to_string()

@@ -10878,3 +10878,33 @@ fn a_pub_fn_may_name_a_library_type() {
         "private type 'Mine' leaks through parameter of 'bad'",
     );
 }
+
+/// B-2026-10-21-32: only `Some`, `None`, `Ok` and `Err` are bare in an
+/// expression. `Less`, `Release`, `Nfc` and the other prelude enums'
+/// variants are written qualified there, with that as the fix; a pattern
+/// over a known scrutinee still writes them bare.
+#[test]
+fn a_prelude_enum_variant_is_qualified_in_an_expression() {
+    rejected_then_fixed_by(
+        "bare-ordering-variant",
+        "fn main() {\n\
+             let o = 3.cmp(4);\n\
+             let b = o == Less;\n\
+             let r = match b { true => Greater, false => Equal };\n\
+             let n = \"x\".normalize(Nfc);\n\
+             println(f\"{b} {r == Ordering.Equal} {n}\");\n\
+         }\n",
+        "`Less` is a variant of `Ordering`: write `Ordering.Less`",
+        "let n = \"x\".normalize(NormalizationForm.Nfc);",
+    );
+    accepted(
+        "bare-variant-in-pattern",
+        "fn main() {\n\
+             match 3.cmp(4) {\n\
+                 Less => println(\"lt\"),\n\
+                 Equal => println(\"eq\"),\n\
+                 Greater => println(\"gt\"),\n\
+             }\n\
+         }\n",
+    );
+}

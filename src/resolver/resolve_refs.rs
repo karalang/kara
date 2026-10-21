@@ -430,7 +430,10 @@ impl<'a> super::Resolver<'a> {
             SymbolKind::Function { .. }
                 if sym.span.line == 0
                     && sym.span.column == 0
-                    && crate::prelude::PRELUDE_VARIANTS.contains(&first) =>
+                    && (crate::prelude::PRELUDE_VARIANTS.contains(&first)
+                        || crate::prelude::PATTERN_VARIANTS
+                            .iter()
+                            .any(|(v, _)| *v == first)) =>
             {
                 Some((sym.id, rest))
             }

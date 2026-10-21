@@ -4,10 +4,10 @@ fn main() {
     let mut last: String = "";
     while i < 50i64 {
         let src = "e\u{0301}fg";
-        total = total + src.normalize(Nfc).len();
-        let held = src.normalize(Nfd);
+        total = total + src.normalize(NormalizationForm.Nfc).len();
+        let held = src.normalize(NormalizationForm.Nfd);
         total = total + held.len();
-        last = src.normalize(Nfc).to_uppercase();
+        last = src.normalize(NormalizationForm.Nfc).to_uppercase();
         i = i + 1;
     }
     println(last);
