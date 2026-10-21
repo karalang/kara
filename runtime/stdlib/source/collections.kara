@@ -26,6 +26,37 @@ impl[T] Iterator for VecIter[T] {
     }
 }
 
+/// The elements of a `Vec`, front to back, each borrowed to be changed in
+/// place (B-2026-10-21-51). Each element is handed out once.
+struct VecIterMut[T] {
+    v: mut ref Vec[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for VecIterMut[T] {
+    type Item = mut ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(mut self.v[i])
+    }
+}
+
+impl[T] DoubleEndedIterator for VecIterMut[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        Some(mut self.v[self.back])
+    }
+}
+
 /// The elements of a slice, front to back, each borrowed.
 struct SliceIter[T] {
     s: Slice[T],
@@ -129,6 +160,12 @@ impl[T] Vec[T] {
     /// The elements, front to back, each borrowed.
     fn iter(ref self) -> VecIter[T] {
         VecIter { v: self, front: 0, back: self.len() }
+    }
+
+    /// The elements, front to back, each borrowed to be changed in place.
+    fn iter_mut(mut ref self) -> VecIterMut[T] {
+        let n = self.len();
+        VecIterMut { v: self, front: 0, back: n }
     }
 
     /// The elements, front to back, each moved out of the vector.

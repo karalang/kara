@@ -7513,3 +7513,55 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-21-51: `Vec.iter_mut()` is a library iterator (`VecIterMut`),
+/// so it takes every adaptor, inside a `for` or driven by hand.
+#[test]
+fn mir_vec_iter_mut_takes_adaptors() {
+    let src = r#"
+fn main() {
+    let mut w: Vec[i64] = [1, 2, 3, 4];
+    for x in w.iter_mut().skip(1) {
+        *x += 10;
+    }
+    println(f"{w}");
+    for x in w.iter_mut().rev().take(2) {
+        *x *= 2;
+    }
+    println(f"{w}");
+    let mut it = w.iter_mut().step_by(2);
+    while let Some(x) = it.next() {
+        *x = 0;
+    }
+    println(f"{w}");
+    let mut k = 0;
+    let mut e = w.iter_mut().enumerate();
+    while let Some((i, x)) = e.next() {
+        *x += i;
+        k += 1;
+    }
+    println(f"{w} {k}");
+    let mut s: Vec[String] = ["a".to_string(), "b".to_string()];
+    for t in s.iter_mut().skip(1) {
+        t.push_str("!");
+    }
+    println(f"{s}");
+    let mut v: Vec[i64] = [1, 2, 3];
+    let mut j = v.iter_mut();
+    let a = j.next().unwrap();
+    let b = j.next().unwrap();
+    *a += 100;
+    *b += 200;
+    let big = v.iter_mut().filter(|x| x > 150).count();
+    println(f"{v} {big}");
+}
+"#;
+    let want = "[1, 12, 13, 14]\n[1, 12, 26, 28]\n[0, 12, 0, 28]\n[0, 13, 2, 31] 4\n[a, b!]\n[101, 202, 3] 1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
