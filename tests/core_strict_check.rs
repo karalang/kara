@@ -11066,3 +11066,47 @@ fn compound_assign_through_a_guards_mut_ref_field_is_accepted() {
         "50\n",
     );
 }
+
+/// B-2026-10-21-63: `Option.unwrap_or_default` (core-types.md, `T: Default`)
+/// gives the value or `T`'s default, and is refused where `T` has none.
+#[test]
+fn option_unwrap_or_default_needs_default() {
+    let src = "fn main() {\n\
+         \x20   let a: Option[i64] = None;\n\
+         \x20   let b: Option[Vec[i64]] = None;\n\
+         \x20   let c: Option[String] = None;\n\
+         \x20   let d: Option[i64] = Some(3);\n\
+         \x20   println(f\"{a.unwrap_or_default()} {b.unwrap_or_default()} {c.unwrap_or_default().len()} {d.unwrap_or_default()}\");\n\
+         }\n";
+    let want = "0 [] 0 3\n";
+    accepted("unwrap-or-default", src);
+    let (dir, path) = fixture("unwrap-or-default", src);
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let (dir, path) = fixture(
+        "unwrap-or-default-no-default",
+        "struct P { x: i64 }\n\
+         fn main() {\n\
+             let a: Option[P] = None;\n\
+             println(f\"{a.unwrap_or_default().x}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must refuse: {err}");
+    assert!(err.contains("`P` does not implement `Default`"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

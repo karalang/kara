@@ -173,6 +173,16 @@ impl[T] Option[T] {
     }
 }
 
+impl[T: Default] Option[T] {
+    /// The value, or `T`'s default on `None` (B-2026-10-21-63).
+    fn unwrap_or_default(own self) -> T {
+        match self {
+            Some(x) => x,
+            None => T.default(),
+        }
+    }
+}
+
 impl[T: Clone] Option[ref T] {
     /// The value this borrows, cloned: `m.get(k).cloned() ?? d`.
     fn cloned(own self) -> Option[T] {
