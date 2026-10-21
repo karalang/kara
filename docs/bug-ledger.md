@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 304 |
 | codegen-gap | 279 |
-| false-positive | 257 |
+| false-positive | 258 |
 | other | 185 |
 | diagnostics | 183 |
 | perf | 180 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2980 |
 | interp | 1001 |
-| typecheck | 521 |
+| typecheck | 522 |
 | ownership | 125 |
 | other | 122 |
 | runtime | 82 |
@@ -172,6 +172,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 | B-2026-10-21-1 | 2026-10-21 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = || { let o = Opts { sub: Some(s) }; match o.sub { Some(s) => println(s), None => .. } };` is error[ownership] "value 'o.sub' was moved into a closure (captured at line 5:15), used again here", with the capture span and the use span both the scrutinee `o.sub`. The same body outside a closure passes, and `__mir-run` prints `bob` | — |
+| B-2026-10-21-2 | 2026-10-21 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receiver, and refuses `mut ref self` calls on that receiver inside the loop body | — |
 
 ### Relocated
 
