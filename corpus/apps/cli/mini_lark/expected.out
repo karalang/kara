@@ -1,0 +1,892 @@
+== grammar calc.lark
+terminals: 13
+  COMMA str ',' prio=0 width=1..1
+  EQUAL str '=' prio=0 width=1..1
+  INT re '(?:[0-9])+' prio=0 width=1..999
+  LPAR str '(' prio=0 width=1..1
+  MINUS str '-' prio=0 width=1..1
+  NAME re '(?:(?:[A-Z]|[a-z])|_)(?:(?:(?:[A-Z]|[a-z])|[0-9]|_))*' prio=0 width=1..999
+  PERCENT str '%' prio=0 width=1..1
+  PLUS str '+' prio=0 width=1..1
+  RPAR str ')' prio=0 width=1..1
+  SLASH str '/' prio=0 width=1..1
+  STAR str '*' prio=0 width=1..1
+  WS_INLINE re '(?:(?:\\ |\t))+' prio=0 width=1..999
+  __ANON_0 str '**' prio=0 width=2..2
+ignore: WS_INLINE
+rules: 20
+  __atom_star_0 -> COMMA sum
+  __atom_star_0 -> __atom_star_0 COMMA sum
+  atom -> INT as number  [expand1]
+  atom -> LPAR sum RPAR  [expand1]
+  atom -> MINUS atom as neg  [expand1]
+  atom -> NAME LPAR RPAR as call  [expand1 empty=0010]
+  atom -> NAME LPAR sum RPAR as call  [expand1]
+  atom -> NAME LPAR sum __atom_star_0 RPAR as call  [expand1]
+  atom -> NAME as var  [expand1]
+  power -> atom  [expand1]
+  power -> atom __ANON_0 power as pow  [expand1]
+  product -> power  [expand1]
+  product -> product PERCENT power as mod  [expand1]
+  product -> product SLASH power as div  [expand1]
+  product -> product STAR power as mul  [expand1]
+  start -> NAME EQUAL sum as assign_var  [expand1]
+  start -> sum  [expand1]
+  sum -> product  [expand1]
+  sum -> sum MINUS product as sub  [expand1]
+  sum -> sum PLUS product as add  [expand1]
+states: 38
+== calc calc.txt
+calc> 1 + 2 * 3
+= 7
+calc> (1 + 2) * 3
+= 9
+calc> 2 ** 3 ** 2
+= 512
+calc> -4 - -6
+= 2
+calc> x = 10
+x = 10
+calc> y = x * 2 + 1
+y = 21
+calc> y % 7
+= 0
+calc> max(x, y, 3) - min(4, 2)
+= 19
+calc> total = abs(-12) + x / 3
+total = 15
+calc> total / 0
+error: division by zero
+calc> z + 1
+error: undefined variable z
+calc> 3 +
+UnexpectedToken: Unexpected token Token('$END', '') at line 1, column 3.
+Expected one of: 
+	* INT
+	* LPAR
+	* MINUS
+	* NAME
+calc> 2 * (4 + 5
+UnexpectedToken: Unexpected token Token('$END', '') at line 1, column 10.
+Expected one of: 
+	* MINUS
+	* PLUS
+	* RPAR
+calc> 7 $ 2
+UnexpectedCharacters: No terminal matches '$' in the current parser context, at line 1 col 3
+
+7 $ 2
+  ^
+Expected one of: 
+	* "**"
+	* COMMA
+	* MINUS
+	* PERCENT
+	* PLUS
+	* RPAR
+	* SLASH
+	* STAR
+
+Previous tokens: Token('INT', '7')
+vars: total=15, x=10, y=21
+== grammar json.lark
+terminals: 12
+  COLON str ':' prio=0 width=1..1
+  COMMA str ',' prio=0 width=1..1
+  ESCAPED_STRING re '".*?(?<!\\\\)(\\\\\\\\)*?"' prio=0 width=2..999
+  FALSE str 'false' prio=0 width=5..5
+  LBRACE str '{' prio=0 width=1..1
+  LSQB str '[' prio=0 width=1..1
+  NULL str 'null' prio=0 width=4..4
+  RBRACE str '}' prio=0 width=1..1
+  RSQB str ']' prio=0 width=1..1
+  SIGNED_NUMBER re '(?:(?:\\+|\\-))?(?:(?:(?:[0-9])+(?:e|E)(?:(?:\\+|\\-))?(?:[0-9])+|(?:(?:[0-9])+\\.(?:(?:[0-9])+)?|\\.(?:[0-9])+)(?:(?:e|E)(?:(?:\\+|\\-))?(?:[0-9])+)?)|(?:[0-9])+)' prio=0 width=1..999
+  TRUE str 'true' prio=0 width=4..4
+  WS re '(?:[ \t\x0c\r\n])+' prio=0 width=1..999
+ignore: WS
+rules: 20
+  __array_star_0 -> COMMA value
+  __array_star_0 -> __array_star_0 COMMA value
+  __object_star_1 -> COMMA pair
+  __object_star_1 -> __object_star_1 COMMA pair
+  array -> LSQB RSQB  [empty=010]
+  array -> LSQB value RSQB
+  array -> LSQB value __array_star_0 RSQB
+  object -> LBRACE RBRACE  [empty=010]
+  object -> LBRACE pair RBRACE
+  object -> LBRACE pair __object_star_1 RBRACE
+  pair -> string COLON value
+  start -> value  [expand1]
+  string -> ESCAPED_STRING
+  value -> FALSE as false  [expand1]
+  value -> NULL as null  [expand1]
+  value -> SIGNED_NUMBER as number  [expand1]
+  value -> TRUE as true  [expand1]
+  value -> array  [expand1]
+  value -> object  [expand1]
+  value -> string  [expand1]
+states: 34
+== json package.json
+$.name = "mini-lark-demo"
+$.version = "1.2.0"
+$.private = true
+$.scripts.build = "tsc -p ."
+$.scripts.test = "jest --ci"
+$.dependencies.lodash = "^4.17.21"
+$.dependencies.express = "4.19.2"
+$.files = []
+$.keywords[0] = "parser"
+$.keywords[1] = "grammar"
+$.keywords[2] = "lalr"
+$.engines.node = ">=18"
+$.rating = -2.5e3
+$.nested[0][0] = 1
+$.nested[0][1] = 2
+$.nested[1][0] = 3
+$.nested[1][1][0] = 4
+$.nested[1][1][1] = null
+$.nested[2] = {}
+subtrees: 58
+== json broken.json
+UnexpectedToken: Unexpected token Token('COMMA', ',') at line 3, column 17.
+Expected one of: 
+	* ESCAPED_STRING
+	* FALSE
+	* LBRACE
+	* LSQB
+	* NULL
+	* SIGNED_NUMBER
+	* TRUE
+  "list": [1, 2,, 3],
+                ^
+classified: double comma
+== recover broken.json
+skip Token('COMMA', ',') at line 3, column 17
+object
+  pair
+    string	"name"
+    string	"broken"
+  pair
+    string	"list"
+    array
+      number	1
+      number	2
+      number	3
+  pair
+    string	"ok"
+    true
+== grammar conf.lark
+terminals: 21
+  COMMA str ',' prio=0 width=1..1
+  COMMENT re '#[^\n]*' prio=0 width=1..999
+  DOT str '.' prio=0 width=1..1
+  DURATION re '(?:[0-9])+(?:ms|s|m|h|d)' prio=2 width=2..999
+  ENV str 'env' prio=0 width=3..3
+  EQUAL str '=' prio=0 width=1..1
+  FALSE str 'false' prio=0 width=5..5
+  INT re '(?:[0-9])+' prio=0 width=1..999
+  LBRACE str '{' prio=0 width=1..1
+  LPAR str '(' prio=0 width=1..1
+  LSQB str '[' prio=0 width=1..1
+  NAME re '[a-z_][a-z0-9_-]*' prio=0 width=1..999
+  RBRACE str '}' prio=0 width=1..1
+  RPAR str ')' prio=0 width=1..1
+  RSQB str ']' prio=0 width=1..1
+  SIZE re '(?:[0-9])+(?:KB|MB|GB)' prio=2 width=3..999
+  STRING re '"[^"\n]*"' prio=0 width=2..999
+  TRUE str 'true' prio=0 width=4..4
+  WS_INLINE re '(?:(?:\\ |\t))+' prio=0 width=1..999
+  _NL re '\r?\n' prio=0 width=1..2
+  __ANON_0 str '+=' prio=0 width=2..2
+ignore: COMMENT WS_INLINE
+rules: 40
+  __key_star_2 -> DOT NAME
+  __key_star_2 -> __key_star_2 DOT NAME
+  __start_star_0 -> _NL
+  __start_star_0 -> __start_star_0 _NL
+  __start_star_1 -> __start_star_1 item
+  __start_star_1 -> __start_star_1 item __start_star_0
+  __start_star_1 -> item
+  __start_star_1 -> item __start_star_0
+  __value_star_3 -> COMMA value
+  __value_star_3 -> __value_star_3 COMMA value
+  block -> NAME LBRACE RBRACE _NL  [empty=01000]
+  block -> NAME LBRACE __start_star_0 RBRACE _NL  [empty=010000]
+  block -> NAME LBRACE __start_star_0 __start_star_1 RBRACE _NL  [empty=0100000]
+  block -> NAME LBRACE __start_star_1 RBRACE _NL  [empty=010000]
+  block -> NAME STRING LBRACE RBRACE _NL
+  block -> NAME STRING LBRACE __start_star_0 RBRACE _NL
+  block -> NAME STRING LBRACE __start_star_0 __start_star_1 RBRACE _NL
+  block -> NAME STRING LBRACE __start_star_1 RBRACE _NL
+  item -> block  [expand1]
+  item -> setting  [expand1]
+  key -> NAME
+  key -> NAME __key_star_2
+  setting -> key EQUAL value _NL
+  setting -> key __ANON_0 value _NL as append
+  start -> <empty>
+  start -> __start_star_0
+  start -> __start_star_0 __start_star_1
+  start -> __start_star_1
+  value -> DURATION as duration  [expand1]
+  value -> ENV LPAR STRING RPAR as env  [expand1]
+  value -> FALSE as false  [expand1]
+  value -> INT as int  [expand1]
+  value -> LSQB RSQB as list  [expand1 empty=010]
+  value -> LSQB value COMMA RSQB as list  [expand1]
+  value -> LSQB value RSQB as list  [expand1]
+  value -> LSQB value __value_star_3 COMMA RSQB as list  [expand1]
+  value -> LSQB value __value_star_3 RSQB as list  [expand1]
+  value -> SIZE as size  [expand1]
+  value -> STRING as string  [expand1]
+  value -> TRUE as true  [expand1]
+states: 73
+== conf service.conf
+name = "payments"
+port = 8443
+debug = false
+timeouts.read = 30000ms (30s)
+timeouts.write = 1500ms (1500ms)
+upstream[ledger].hosts = ["10.0.0.4:7000", "10.0.0.5:7000"]
+upstream[ledger].retries = 3
+upstream[ledger].backoff = 250ms (250ms)
+cache.size = 536870912B (512MB)
+cache.ttl = 3600000ms (1h)
+cache.tags = ["hot"]
+cache.limits.per_user = 65536B (64KB)
+secret = ${PAYMENTS_TOKEN}
+== conf bad.conf
+UnexpectedToken: Unexpected token Token('_NL', '\n') at line 3, column 15.
+Expected one of: 
+	* COMMA
+	* RSQB
+  hosts = ["x"
+              ^
+== grammar sql.lark
+terminals: 33
+  ADD_OP re '(?:\\+|\\-)' prio=0 width=1..1
+  AND str 'AND' flags=i prio=0 width=3..3
+  AS str 'AS' flags=i prio=0 width=2..2
+  BY str 'BY' flags=i prio=0 width=2..2
+  COMMA str ',' prio=0 width=1..1
+  COMMENT re '--[^\n]*' prio=0 width=2..999
+  COMP_OP re '(?:<>|!=|<=|>=|=|<|>)' prio=0 width=1..2
+  DIRECTION re '(?:(?i:DESC)|(?i:ASC))' prio=0 width=3..4
+  DISTINCT str 'DISTINCT' flags=i prio=0 width=8..8
+  DOT str '.' prio=0 width=1..1
+  FROM str 'FROM' flags=i prio=0 width=4..4
+  GROUP str 'GROUP' flags=i prio=0 width=5..5
+  IN str 'IN' flags=i prio=0 width=2..2
+  INT re '(?:[0-9])+' prio=0 width=1..999
+  IS str 'IS' flags=i prio=0 width=2..2
+  JOIN str 'JOIN' flags=i prio=0 width=4..4
+  JOIN_KIND re '(?:(?i:INNER)|(?i:LEFT))' prio=0 width=4..5
+  LIMIT str 'LIMIT' flags=i prio=0 width=5..5
+  LPAR str '(' prio=0 width=1..1
+  MUL_OP re '(?:\\*|/)' prio=0 width=1..1
+  NAME re '[A-Za-z_][A-Za-z0-9_]*' prio=0 width=1..999
+  NOT str 'NOT' flags=i prio=0 width=3..3
+  NULL str 'NULL' flags=i prio=0 width=4..4
+  ON str 'ON' flags=i prio=0 width=2..2
+  OR str 'OR' flags=i prio=0 width=2..2
+  ORDER str 'ORDER' flags=i prio=0 width=5..5
+  RPAR str ')' prio=0 width=1..1
+  SELECT str 'SELECT' flags=i prio=0 width=6..6
+  SEMICOLON str ';' prio=0 width=1..1
+  STAR str '*' prio=0 width=1..1
+  STRING re "'[^']*'" prio=0 width=2..999
+  WHERE str 'WHERE' flags=i prio=0 width=5..5
+  WS re '(?:[ \t\x0c\r\n])+' prio=0 width=1..999
+ignore: COMMENT WS
+rules: 120
+  __columns_star_2 -> COMMA column
+  __columns_star_2 -> __columns_star_2 COMMA column
+  __group_star_3 -> COMMA expr
+  __group_star_3 -> __group_star_3 COMMA expr
+  __order_star_4 -> COMMA ordering
+  __order_star_4 -> __order_star_4 COMMA ordering
+  __select_star_1 -> __select_star_1 join
+  __select_star_1 -> join
+  __start_star_0 -> SEMICOLON select
+  __start_star_0 -> __start_star_0 SEMICOLON select
+  and_expr -> and_expr AND not_expr as and_  [expand1]
+  and_expr -> not_expr  [expand1]
+  atom -> INT as int  [expand1]
+  atom -> LPAR expr RPAR  [expand1]
+  atom -> NAME DOT NAME as qualified  [expand1]
+  atom -> NAME LPAR RPAR as func  [expand1 empty=0010]
+  atom -> NAME LPAR STAR RPAR as func  [expand1]
+  atom -> NAME LPAR expr RPAR as func  [expand1]
+  atom -> NAME LPAR expr __group_star_3 RPAR as func  [expand1]
+  atom -> NAME as ref  [expand1]
+  atom -> STRING as string  [expand1]
+  column -> expr  [empty=01]
+  column -> expr AS NAME
+  columns -> STAR as all_columns
+  columns -> column
+  columns -> column __columns_star_2
+  comparison -> sum  [expand1]
+  comparison -> sum COMP_OP sum as compare  [expand1]
+  comparison -> sum IN LPAR expr RPAR as in_list  [expand1]
+  comparison -> sum IN LPAR expr __group_star_3 RPAR as in_list  [expand1]
+  comparison -> sum IS NULL as is_null  [expand1]
+  expr -> or_expr  [expand1]
+  group -> GROUP BY expr
+  group -> GROUP BY expr __group_star_3
+  join -> JOIN source ON expr  [empty=10000]
+  join -> JOIN_KIND JOIN source ON expr
+  limit -> LIMIT INT
+  not_expr -> NOT not_expr as not_  [expand1]
+  not_expr -> comparison  [expand1]
+  or_expr -> and_expr  [expand1]
+  or_expr -> or_expr OR and_expr as or_  [expand1]
+  order -> ORDER BY ordering
+  order -> ORDER BY ordering __order_star_4
+  ordering -> expr  [empty=01]
+  ordering -> expr DIRECTION
+  select -> SELECT DISTINCT columns FROM source  [empty=000001111]
+  select -> SELECT DISTINCT columns FROM source __select_star_1  [empty=0000001111]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 group  [empty=0000001011]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 group limit  [empty=0000001010]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 group order  [empty=0000001001]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 group order limit  [empty=0000001000]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 limit  [empty=0000001110]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 order  [empty=0000001101]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 order limit  [empty=0000001100]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where  [empty=0000000111]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where group  [empty=0000000011]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where group limit  [empty=0000000010]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where group order  [empty=0000000001]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where group order limit
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where limit  [empty=0000000110]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where order  [empty=0000000101]
+  select -> SELECT DISTINCT columns FROM source __select_star_1 where order limit  [empty=0000000100]
+  select -> SELECT DISTINCT columns FROM source group  [empty=000001011]
+  select -> SELECT DISTINCT columns FROM source group limit  [empty=000001010]
+  select -> SELECT DISTINCT columns FROM source group order  [empty=000001001]
+  select -> SELECT DISTINCT columns FROM source group order limit  [empty=000001000]
+  select -> SELECT DISTINCT columns FROM source limit  [empty=000001110]
+  select -> SELECT DISTINCT columns FROM source order  [empty=000001101]
+  select -> SELECT DISTINCT columns FROM source order limit  [empty=000001100]
+  select -> SELECT DISTINCT columns FROM source where  [empty=000000111]
+  select -> SELECT DISTINCT columns FROM source where group  [empty=000000011]
+  select -> SELECT DISTINCT columns FROM source where group limit  [empty=000000010]
+  select -> SELECT DISTINCT columns FROM source where group order  [empty=000000001]
+  select -> SELECT DISTINCT columns FROM source where group order limit
+  select -> SELECT DISTINCT columns FROM source where limit  [empty=000000110]
+  select -> SELECT DISTINCT columns FROM source where order  [empty=000000101]
+  select -> SELECT DISTINCT columns FROM source where order limit  [empty=000000100]
+  select -> SELECT columns FROM source  [empty=010001111]
+  select -> SELECT columns FROM source __select_star_1  [empty=0100001111]
+  select -> SELECT columns FROM source __select_star_1 group  [empty=0100001011]
+  select -> SELECT columns FROM source __select_star_1 group limit  [empty=0100001010]
+  select -> SELECT columns FROM source __select_star_1 group order  [empty=0100001001]
+  select -> SELECT columns FROM source __select_star_1 group order limit  [empty=0100001000]
+  select -> SELECT columns FROM source __select_star_1 limit  [empty=0100001110]
+  select -> SELECT columns FROM source __select_star_1 order  [empty=0100001101]
+  select -> SELECT columns FROM source __select_star_1 order limit  [empty=0100001100]
+  select -> SELECT columns FROM source __select_star_1 where  [empty=0100000111]
+  select -> SELECT columns FROM source __select_star_1 where group  [empty=0100000011]
+  select -> SELECT columns FROM source __select_star_1 where group limit  [empty=0100000010]
+  select -> SELECT columns FROM source __select_star_1 where group order  [empty=0100000001]
+  select -> SELECT columns FROM source __select_star_1 where group order limit  [empty=0100000000]
+  select -> SELECT columns FROM source __select_star_1 where limit  [empty=0100000110]
+  select -> SELECT columns FROM source __select_star_1 where order  [empty=0100000101]
+  select -> SELECT columns FROM source __select_star_1 where order limit  [empty=0100000100]
+  select -> SELECT columns FROM source group  [empty=010001011]
+  select -> SELECT columns FROM source group limit  [empty=010001010]
+  select -> SELECT columns FROM source group order  [empty=010001001]
+  select -> SELECT columns FROM source group order limit  [empty=010001000]
+  select -> SELECT columns FROM source limit  [empty=010001110]
+  select -> SELECT columns FROM source order  [empty=010001101]
+  select -> SELECT columns FROM source order limit  [empty=010001100]
+  select -> SELECT columns FROM source where  [empty=010000111]
+  select -> SELECT columns FROM source where group  [empty=010000011]
+  select -> SELECT columns FROM source where group limit  [empty=010000010]
+  select -> SELECT columns FROM source where group order  [empty=010000001]
+  select -> SELECT columns FROM source where group order limit  [empty=010000000]
+  select -> SELECT columns FROM source where limit  [empty=010000110]
+  select -> SELECT columns FROM source where order  [empty=010000101]
+  select -> SELECT columns FROM source where order limit  [empty=010000100]
+  source -> NAME  [empty=01]
+  source -> NAME NAME
+  start -> select
+  start -> select SEMICOLON
+  start -> select __start_star_0
+  start -> select __start_star_0 SEMICOLON
+  sum -> sum ADD_OP term as binop  [expand1]
+  sum -> term  [expand1]
+  term -> atom  [expand1]
+  term -> term MUL_OP atom as binop  [expand1]
+  where -> WHERE expr
+states: 166
+== sql queries.sql
+query 1
+  columns: *
+  from: users
+  names: 
+query 2
+  columns: id, name as who
+  from: users u
+  where: ((u.age >= 18) AND (NOT banned))
+  order: name DESC
+  limit: 10
+  names: banned, id, name, u.age
+query 3 (distinct)
+  columns: country, count(*) as n
+  from: users
+  group: country
+  order: n DESC, country ASC
+  names: country, n
+query 4
+  columns: o.id, u.name
+  from: orders o
+  join: LEFT users u on (o.user_id = u.id)
+  where: (((o.total * 2) > 100) OR (o.status IN ['open', 'held']))
+  names: o.id, o.status, o.total, o.user_id, u.id, u.name
+query 5
+  columns: name
+  from: users
+  where: (email IS NULL)
+  names: email, name
+== sql bad.sql
+UnexpectedToken: Unexpected token Token('BY', 'BY') at line 1, column 34.
+Expected one of: 
+	* $END
+	* ADD_OP
+	* AND
+	* COMP_OP
+	* DOT
+	* GROUP
+	* IN
+	* IS
+	* LIMIT
+	* LPAR
+	* MUL_OP
+	* OR
+	* ORDER
+	* SEMICOLON
+SELECT id FROM users WHERE ORDER BY id
+                                 ^
+== grammar outline.lark
+terminals: 6
+  DONE str '[x]' prio=2 width=3..3
+  NUMBER re '\\d+(\\.\\d+)?' prio=0 width=1..999
+  TAG re '@[a-z]+' prio=0 width=2..999
+  WORD re "[A-Za-z][A-Za-z'-]*[.,:]?" prio=0 width=1..999
+  WS_INLINE re '(?:(?:\\ |\t))+' prio=0 width=1..999
+  _NL re '(\r?\n[\t ]*)+' prio=0 width=1..999
+ignore: WS_INLINE
+rules: 19
+  __entry_plus_2 -> DONE
+  __entry_plus_2 -> NUMBER
+  __entry_plus_2 -> TAG
+  __entry_plus_2 -> WORD
+  __entry_plus_2 -> __entry_plus_2 DONE
+  __entry_plus_2 -> __entry_plus_2 NUMBER
+  __entry_plus_2 -> __entry_plus_2 TAG
+  __entry_plus_2 -> __entry_plus_2 WORD
+  __start_star_0 -> _NL
+  __start_star_0 -> __start_star_0 _NL
+  __start_star_1 -> __start_star_1 item
+  __start_star_1 -> item
+  entry -> __entry_plus_2
+  item -> entry _NL
+  item -> entry _NL _INDENT __start_star_1 _DEDENT
+  start -> <empty>  [expand1]
+  start -> __start_star_0  [expand1]
+  start -> __start_star_0 __start_star_1  [expand1]
+  start -> __start_star_1  [expand1]
+states: 23
+== outline todo.outline
+[ ] release 1.4 @work (2)
+  [ ] backend (2)
+    [ ] migrate users table @db
+    [x] add retry to webhooks
+  [ ] frontend (2)
+    [ ] dark mode @ui (1)
+      [ ] check contrast
+    [x] fix login form
+[ ] groceries @home (2)
+  [ ] milk 2
+  [ ] bread
+items: 11, done: 2
+tags: @db=1, @home=1, @ui=1, @work=1
+== outline bad.outline
+DedentError: Unexpected dedent to column 2. Expected dedent to 0
+== grammar features.lark
+terminals: 17
+  COMMA str ',' prio=0 width=1..1
+  DIGITS re '[0-9]{3}' prio=0 width=3..3
+  DOT str '.' prio=0 width=1..1
+  EQUAL str '=' prio=0 width=1..1
+  HASH str '#' prio=0 width=1..1
+  HEX re '[0-9a-f]' prio=0 width=1..1
+  ID re '[a-z][a-z0-9_]*' prio=0 width=1..999
+  LET str 'let' prio=0 width=3..3
+  LPAR str '(' prio=0 width=1..1
+  LSQB str '[' prio=0 width=1..1
+  NUMBER re '-?\\d+' prio=0 width=1..999
+  PERCENT str '%' prio=0 width=1..1
+  RPAR str ')' prio=0 width=1..1
+  RSQB str ']' prio=0 width=1..1
+  SEMICOLON str ';' prio=0 width=1..1
+  TEXT re "'[^']*'" prio=0 width=2..999
+  WS re '(?:[ \t\x0c\r\n])+' prio=0 width=1..999
+ignore: WS
+rules: 33
+  __sep_list{value,COMMA}_star_1 -> COMMA value
+  __sep_list{value,COMMA}_star_1 -> __sep_list{value,COMMA}_star_1 COMMA value
+  __sep_list{value,SEMICOLON}_star_2 -> SEMICOLON value
+  __sep_list{value,SEMICOLON}_star_2 -> __sep_list{value,SEMICOLON}_star_2 SEMICOLON value
+  __start_star_0 -> __start_star_0 stmt
+  __start_star_0 -> stmt
+  _semi -> SEMICOLON
+  call -> ID LPAR RPAR  [empty=0010]
+  call -> ID LPAR sep_list{value,COMMA} RPAR
+  code -> HEX HEX HEX HEX as hex_code
+  code -> HEX HEX HEX as hex_code
+  code -> HEX HEX as hex_code
+  code -> PERCENT DIGITS
+  decl -> LET ID EQUAL value
+  list -> LSQB RSQB
+  list -> LSQB sep_list{value,SEMICOLON} RSQB
+  sep_list{value,COMMA} -> value  [from=sep_list]
+  sep_list{value,COMMA} -> value __sep_list{value,COMMA}_star_1  [from=sep_list]
+  sep_list{value,SEMICOLON} -> value  [from=sep_list]
+  sep_list{value,SEMICOLON} -> value __sep_list{value,SEMICOLON}_star_2  [from=sep_list]
+  start -> <empty>
+  start -> __start_star_0
+  stmt -> call _semi  [expand1]
+  stmt -> code _semi  [expand1]
+  stmt -> decl _semi  [expand1]
+  stmt -> tagged _semi  [expand1]
+  tagged -> HASH ID  [keep]
+  tagged -> HASH ID DOT ID  [keep]
+  tagged -> HASH ID DOT ID DOT ID  [keep]
+  value -> ID  [expand1]
+  value -> NUMBER  [expand1]
+  value -> TEXT  [expand1]
+  value -> list  [expand1]
+states: 55
+== parse features.lark statements.feat
+start
+  decl
+    a
+    'hello'
+  decl
+    b
+    list
+      sep_list
+        1
+        2
+        'three'
+  call
+    log
+    sep_list
+      a
+      b
+      42
+  call
+    reset
+    None
+  tagged
+    #
+    build
+    .
+    release
+  tagged
+    #
+    x
+  hex_code
+    0
+    7
+  hex_code
+    4
+    c
+    2
+  code	123
+tokens: 23, subtrees: 13
+== parse features.lark bad.feat
+UnexpectedToken: Unexpected token Token('DOT', '.') at line 2, column 7.
+Expected one of: 
+	* SEMICOLON
+#a.b.c.d;
+      ^
+== grammar override.lark
+terminals: 7
+  CIRCUMFLEX str '^' prio=0 width=1..1
+  LPAR str '(' prio=0 width=1..1
+  NAME re '[a-z]+' prio=0 width=1..999
+  NUMBER re '\\d+' prio=0 width=1..999
+  PLUS str '+' prio=0 width=1..1
+  RPAR str ')' prio=0 width=1..1
+  WS str ' ' prio=0 width=1..1
+ignore: WS
+rules: 7
+  atom -> LPAR expr RPAR
+  atom -> NAME
+  atom -> NUMBER
+  expr -> atom  [expand1]
+  expr -> expr CIRCUMFLEX atom as power  [expand1]
+  expr -> expr PLUS atom as base__plus  [expand1]
+  start -> expr
+states: 13
+== parse override.lark math.ovr
+start
+  base__plus
+    base__plus
+      atom	1
+      atom
+        power
+          atom	2
+          atom	3
+    atom	x
+tokens: 4, subtrees: 9
+== parse keywords.lark kw.txt lexer=basic
+UnexpectedToken: Unexpected token Token('VALUE', 'a') at line 1, column 1.
+Expected one of: 
+	* $END
+	* NAME
+a = b; c: d = e1;
+^
+== parse keywords.lark kw.txt lexer=contextual
+start
+  assign
+    a
+    b
+  label	c
+  assign
+    d
+    e1
+tokens: 5, subtrees: 4
+== parse placeholders.lark ph.txt
+start
+  item
+    a
+    None
+  item
+    None
+    b
+  item
+    c
+    d
+  item
+    None
+    None
+  paren	x
+  paren
+  brace	None
+  brace
+    p
+    q
+tokens: 7, subtrees: 9
+== parse placeholders.lark ph.txt maybe_placeholders=false
+start
+  item	a
+  item	b
+  item
+    c
+    d
+  item
+  paren	x
+  paren
+  brace
+  brace
+    p
+    q
+tokens: 7, subtrees: 9
+== lex calc.lark calc.txt
+1 + 2 * 3: INT@1=1 PLUS@3=+ INT@5=2 STAR@7=* INT@9=3
+(1 + 2) * 3: LPAR@1=( INT@2=1 PLUS@4=+ INT@6=2 RPAR@7=) STAR@9=* INT@11=3
+2 ** 3 ** 2: INT@1=2 __ANON_0@3=** INT@6=3 __ANON_0@8=** INT@11=2
+-4 - -6: MINUS@1=- INT@2=4 MINUS@4=- MINUS@6=- INT@7=6
+x = 10: NAME@1=x EQUAL@3== INT@5=10
+y = x * 2 + 1: NAME@1=y EQUAL@3== NAME@5=x STAR@7=* INT@9=2 PLUS@11=+ INT@13=1
+y % 7: NAME@1=y PERCENT@3=% INT@5=7
+max(x, y, 3) - min(4, 2): NAME@1=max LPAR@4=( NAME@5=x COMMA@6=, NAME@8=y COMMA@9=, INT@11=3 RPAR@12=) MINUS@14=- NAME@16=min LPAR@19=( INT@20=4 COMMA@21=, INT@23=2 RPAR@24=)
+total = abs(-12) + x / 3: NAME@1=total EQUAL@7== NAME@9=abs LPAR@12=( MINUS@13=- INT@14=12 RPAR@16=) PLUS@18=+ NAME@20=x SLASH@22=/ INT@24=3
+total / 0: NAME@1=total SLASH@7=/ INT@9=0
+z + 1: NAME@1=z PLUS@3=+ INT@5=1
+3 +: INT@1=3 PLUS@3=+
+2 * (4 + 5: INT@1=2 STAR@3=* LPAR@5=( INT@6=4 PLUS@8=+ INT@10=5
+7 $ 2: error
+UnexpectedCharacters: No terminal matches '$' in the current parser context, at line 1 col 3
+
+7 $ 2
+  ^
+Expected one of: 
+	* "**"
+	* COMMA
+	* EQUAL
+	* INT
+	* LPAR
+	* MINUS
+	* NAME
+	* PERCENT
+	* PLUS
+	* RPAR
+	* SLASH
+	* STAR
+
+Previous tokens: Token('INT', '7')
+== complete json.lark {"a": [1, true, {"b": 
+input: '{"a": [1, true, {"b": ' (11 tokens)
+accepts: ESCAPED_STRING FALSE LBRACE LSQB NULL SIGNED_NUMBER TRUE
+as written: ESCAPED_STRING FALSE LBRACE LSQB NULL SIGNED_NUMBER TRUE
+== complete sql.lark SELECT a FROM t WHERE
+input: 'SELECT a FROM t WHERE' (5 tokens)
+accepts: INT LPAR NAME NOT STRING
+as written: INT LPAR NAME NOT STRING
+== badgrammars
+-- missing colon
+GrammarError: Expecting rule or terminal definition (missing colon), at line 1 column 2
+
+a
+ ^
+-- incorrect value type
+GrammarError: Incorrect type of value, at line 1 column 4
+
+a: 1
+   ^
+-- unclosed parenthesis
+UnexpectedToken: Unexpected token Token('_NL', '\n\n') at line 1, column 8.
+Expected one of: 
+	* _RPAR
+a: ("x"
+       ^
+-- unmatched paren
+UnexpectedToken: Unexpected token Token('_RPAR', ')') at line 1, column 7.
+Expected one of: 
+	* _NL
+a: "x")
+      ^
+-- bad rule name
+GrammarError: Illegal name for rules or terminals, at line 1 column 2
+
+Aa: "x"
+ ^
+-- alias needs lowercase
+GrammarError: Alias expects lowercase name, at line 1 column 11
+
+a: "x" -> "y"
+          ^
+-- unexpected colon
+GrammarError: Unexpected colon, at line 1 column 5
+
+a: b:
+    ^
+-- misplaced operator
+GrammarError: Misplaced operator, at line 1 column 6
+
+a: b??
+     ^
+-- option or new rule
+GrammarError: Expecting option ("|") or a new rule or terminal definition, at line 2 column 1
+
+()
+^
+-- dotted terminal
+GrammarError: Terminal names cannot contain dots, at line 1 column 3
+
+A.B
+  ^
+-- literal first
+GrammarError: Expecting rule or terminal definition, at line 1 column 1
+
+"a"
+^
+-- import a string
+GrammarError: %import expects a name, at line 1 column 9
+
+%import "a"
+        ^
+-- ignore an import
+GrammarError: %ignore expects a value, at line 1 column 9
+
+%ignore %import
+        ^
+-- undefined rule
+GrammarError: Rule 'b' used but not defined (in rule start)
+-- undefined terminal
+GrammarError: Rule 'X' used but not defined (in rule start)
+-- defined twice
+GrammarError: Rule 'start' defined more than once
+-- empty terminal
+GrammarError: Empty terminals are not allowed ("")
+-- recursive terminal
+GrammarError: Recursion in terminal 'A' (recursion is only allowed in rules, not terminals)
+-- rule in terminal
+GrammarError: Rules aren't allowed inside terminals (NonTerminal('b') in A)
+-- alias in terminal
+GrammarError: Aliasing not allowed in terminals (You used -> in the wrong place)
+-- inlined alias
+GrammarError: Rule _a is marked for expansion (it starts with an underscore) and isn't allowed to have aliases (alias=y)
+-- unknown ignore
+GrammarError: Terminals {'WS'} were marked to ignore but were not defined!
+-- double underscore
+GrammarError: Unexpected input at line 1 column 8 in <string>: 
+
+start: __x
+       ^
+-- bad range
+GrammarError: Bad Range for Terminal('A') (3..1 isn't allowed)
+-- override missing
+GrammarError: Cannot override a nonexisting rule start
+-- extend missing
+GrammarError: Can't extend rule start as it wasn't defined before
+-- template arity
+GrammarError: Wrong number of template arguments used for t (expected 2, got 1) (in rule start)
+-- template undefined
+GrammarError: Template 'u' used but not defined (in rule start)
+-- reduce reduce
+GrammarError: Reduce/Reduce collision in Terminal('$END') between the following rules: 
+	- <a : X>
+	- <b : X>
+-- newline in string
+GrammarError: Unexpected input at line 1 column 8 in <string>: 
+
+start: "a
+       ^
+-- zero width
+LexError: Lexer does not allow zero-width terminals. (A: 'a*')
+-- bad escape
+GrammarError: Literal ended unexpectedly (bad escaping): `'\\'`
+-- inline expand1
+GrammarError: Inlined rules (_rule) cannot use the ?rule modifier.
+-- nothing imported
+GrammarError: Nothing was imported from grammar `common`
+-- ok after all
+ok
+== meta
+base.lark: rule=3, token=2
+calc.lark: ignore=1, import=3, rule=5
+conf.lark: ignore=2, import=2, rule=6, token=6
+features.lark: ignore=1, import=2, multi_import=1, rule=8, token=3
+json.lark: ignore=1, import=3, rule=6
+keywords.lark: ignore=1, rule=3, token=2
+outline.lark: declare=1, ignore=1, import=1, rule=3, token=5
+override.lark: parse error
+UnexpectedCharacters: No terminal matches '%' in the current parser context, at line 6 col 1
+
+%extend expr: expr "^" atom -> power
+^
+Expected one of: 
+	* "%declare"
+	* "%ignore"
+	* "%import"
+	* "%override"
+	* RULE
+	* TOKEN
+	* _NL
+
+Previous tokens: Token('_NL', '\n')
+placeholders.lark: ignore=1, rule=3, token=1
+shared.lark: rule=2, token=3
+sql.lark: ignore=2, import=2, rule=19, token=9
+common.lark: token=27
+lark.lark: ignore=2, import=3, rule=17, token=8
+python.lark: declare=1, ignore=3, rule=139, token=17
+unicode.lark: token=2
+== summary
+jobs: 30, errors reported: 48
