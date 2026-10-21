@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 605 |
 | double-free | 427 |
-| missing-feature | 304 |
+| missing-feature | 305 |
 | codegen-gap | 279 |
 | false-positive | 259 |
 | other | 185 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2981 |
-| interp | 1001 |
+| codegen | 2982 |
+| interp | 1002 |
 | typecheck | 523 |
 | ownership | 125 |
 | other | 122 |
@@ -161,10 +161,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-20-8 | 2026-10-20 | typecheck+ownership | medium | Providers (§14.1, §14.2, §14.4, §14.5, §14.9) in `karac check`: resource declarations and bounds, `R.m()` resolved against the bounds only, receiver-to-verb rule, `with_provider` / `providers {} in {}` / `#[with_provider]` typing, escape through the view rules naming `R`, `CrossTask` on shared providers; migrate the 8 trait-less corpus provider programs | — |
-| B-2026-10-20-9 | 2026-10-20 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per provider type, `with_provider` owning and dropping `p`, `providers {} in {}` evaluate-then-nest, `#[with_provider]` on tests | — |
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
-| B-2026-10-20-31 | 2026-10-20 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitialized ('discriminant of a value that is not an initialized enum'); the same value bound with `let` first, or an `Option[i64]`, works | — |
 | B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
 | B-2026-10-20-33 | 2026-10-20 | typecheck | low | A collection where an `Iterator` is wanted, a `flat_map` closure that returns one (`|x| pairs(*x)` returning `Vec[i64]`) or one passed to `chain` (`.chain([0])`, kata 818), gets E0200 listing all 29 `Iterator` implementors and no `.into_iter()` hint, then a second error at the same span; design.md promises the `.into_iter()` suggestion for the `for` case only, but the fix here is the same one call | — |
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's parameter or local, `Copy` or not, by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
@@ -174,6 +172,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-2 | 2026-10-21 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receiver, and refuses `mut ref self` calls on that receiver inside the loop body | — |
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
 | B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend (`__mir-llvm-run`, `__mir-llvm-asan`, `build --mir`), the library `max_by_key` / `min_by_key` over a `SortedMap` or `Map` iterator returns the wrong item: the key of one entry with the value of another, or a garbage value; `__mir-run` is right, and the same calls over a `Vec` of tuples are right on both backends | — |
+| B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
 
 ### Relocated
 
@@ -4273,6 +4272,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-5 | parser | medium | The `matches!(x, P)` diagnostic's machine-applicable fix rewrites it to `matches(x, P)`, a name that does not exist: `karac fix` applies it and the f… | 56c1207422 |
 | B-2026-10-20-6 | typecheck | low | A `Vec` literal of string literals passed to a method whose slot is `Vec[Str]` is typed `Vec[String]`: `v.extend(vec!["c", "d"])` on a `Vec[Str]` is… | e73bc08bd4 |
 | B-2026-10-20-7 | effect | medium | Providers (§14.3, §14.6): effect inference must decide exactly which functions take a hidden provider parameter for each provider-rooted resource, re… | 393f6f8862 |
+| B-2026-10-20-9 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per prov… | b2ead3a82f |
 | B-2026-10-20-11 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runt… | e198cade2b |
 | B-2026-10-20-12 | typecheck+interp | low | A local made by an `if`/`match` with a branch that leaves (`return`) is not seen as owning its value, so storing it by value into a local bound to a… | 61a9b3a27f |
 | B-2026-10-20-13 | typecheck | medium | A generic `Fn(V) -> K` instantiated at V = i64 becomes `Fn(ref i64) -> K` and refuses `fn neg(x: i64)`, which the same type written as `Fn(i64) -> i6… | e73bc08bd4 |
@@ -4292,6 +4292,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-28 | effect | low | `#[allow(mutual_recursion_note)]` silences the mutual-recursion note on free functions but not on impl methods: two mutually recursive methods each c… | e2bd1bb71a |
 | B-2026-10-20-29 | interp | medium | MIR interpreter: `Response.bytes()` on a client response whose body is not UTF-8 returns the bytes of its lossy text (each bad byte as U+FFFD, 8 byte… | 51f0e57b3a |
 | B-2026-10-20-30 | typecheck | low | A `sync struct` field may still be declared `mut` when its type is `Atomic[T]` or `Mutex[T]`, though core-semantics §6.3 and Amendment 7 say a `sync`… | 6b3788662e |
+| B-2026-10-20-31 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitiali… | 8dd3fa3bd1 |
 | B-2026-10-20-37 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that sp… | 28736c7d1d |
 | B-2026-10-20-38 | codegen+runtime | low | `karac __mir-llvm-asan` reports a 40-byte leak when a deadlock panic ends the process while a spawned task's coroutine frame is live (corpus mir_task… | 6eac9898c9 |
 | B-2026-10-20-39 | interp+codegen | medium | The prelude's dynamic `Json` value passes `karac check` but neither v2 backend runs `Json.parse` or `j.stringify()`: `__mir-run` stops with "call of… | 8a5fbc89f1 |
