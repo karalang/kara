@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 263 |
 | other | 191 |
 | diagnostics | 184 |
-| perf | 180 |
+| perf | 181 |
 | soundness | 127 |
 | crash | 127 |
 | use-after-free | 92 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2995 |
+| codegen | 2996 |
 | interp | 1015 |
 | typecheck | 533 |
 | ownership | 126 |
@@ -183,6 +183,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-30 | 2026-10-21 | typecheck | low | Library surface collections.md documents that no backend has: `Set.from(array)` / `Map.from(array of pairs)` (the page's opening example; `PriorityQueue.from` works), `Array.from_fn(n, f)`, the mutating `Slice` methods on an `Array` (`sort`, `reverse`, `swap`, `fill`, `split_at`, `split_at_mut`, `sort_by`, `sort_by_key`; the page says an Array "has every `Slice[T]` method"), `f64.total_cmp` as a function value (`w.sort_by(f64.total_cmp)`), `Slice.clone_from_slice`, `Vec.remove_first(pred)`, and Display / PartialEq / PartialOrd / Ord for `VecDeque`. Also the uninitialized-array diagnostic suggests `Array[v; N]` and `Array.from_fn`. Later. | — |
 | B-2026-10-21-31 | 2026-10-21 | typecheck | low | `CStr` does not have the methods docs/library/strings.md lists: `bytes(self) -> Slice[u8]` is spelled `as_bytes` in the typechecker's table (and in the corpus), and `to_str(self) -> Result[Str, Utf8Error]` does not exist under any name; `to_string` does. Later. | — |
 | B-2026-10-21-32 | 2026-10-21 | resolver+typecheck | low | The prelude exports the variants of `Ordering`, `MemoryOrdering`, `Entry` and `NormalizationForm` bare, so `"x".normalize(Nfc)` and an expression `Less` check, against design.md (around line 1310: only `Some`, `None`, `Ok` and `Err` are bare in expressions) and strings.md ("its variants are written qualified"). The review thread ruled 2026-10-21 that the spec holds: drop them from the prelude, refuse a bare one in an expression with a machine-applicable fix to the qualified form, keep accepting it in a pattern whose scrutinee type is known, and migrate the corpus and katas with `karac fix` in the same push. Later. | — |
+| B-2026-10-21-33 | 2026-10-21 | codegen | medium | MIR finish_build is roughly cubic in a body's `?` exits times its live owned locals: one 287-line constructor with ~90 `?` takes 36 s, so mini_inflect times out on every corpus backend | — |
 
 ### Relocated
 
