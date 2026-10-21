@@ -11042,3 +11042,27 @@ fn fetch_add_on_an_atomic_bool_is_refused() {
         "import std.sync.{Atomic};\nfn main() {\n    let f: Atomic[bool] = Atomic.new(false);\n    println(f.swap(true));\n}\n",
     );
 }
+
+/// A compound assignment to a `mut ref` field writes the value it borrows,
+/// so `g.value += 1` on a guard bound without `mut` is accepted, as
+/// `*g.value += 1` and `g.value.count += 1` are (concurrency.md § Mutex;
+/// B-2026-10-21-72).
+#[test]
+fn compound_assign_through_a_guards_mut_ref_field_is_accepted() {
+    accepted_and_runs(
+        "mutex-guard-compound",
+        "import std.sync.{Mutex};\n\
+         fn bump(m: Mutex[i64]) {\n\
+             let g = m.lock();\n\
+             g.value += 1;\n\
+             g.value *= 10;\n\
+         }\n\
+         fn main() {\n\
+             let m = Mutex.new(4);\n\
+             bump(m);\n\
+             let g = m.lock();\n\
+             println(g.value);\n\
+         }\n",
+        "50\n",
+    );
+}

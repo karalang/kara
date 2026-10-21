@@ -449,7 +449,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     if let Some(usage) = param_usage.get_mut(&root) {
                         *usage = ParamUsage::Mutated;
                     }
-                    if !self.place_writes_through_shared(target) {
+                    // A compound assignment to a `mut ref` field writes the
+                    // value it borrows: `g.value += 1` on a `MutexGuard[i64]`
+                    // (concurrency.md; B-2026-10-21-72).
+                    if !self.place_writes_through_shared(target)
+                        && !self.expr_is_mut_ref_field(target)
+                    {
                         self.report_write_to_immutable_binding(
                             &root,
                             &target.span,
