@@ -5152,7 +5152,7 @@ fn test_e2e_lowercase_rand_advances_state() {
     // closing the false-pass gap that test documents.
     let out = run_program(
         r#"
-fn main() with reads(RandomSource) {
+fn main() with writes(RandomSource) {
     let a = rand.next_u64();
     let b = rand.next_u64();
     if a != b { println("rand-advanced"); } else { println("rand-stuck"); }

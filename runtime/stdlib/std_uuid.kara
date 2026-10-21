@@ -15,7 +15,7 @@ fn uuid_hex(out: mut ref String, v: u64, digits: i64) {
 /// A random UUID (RFC 9562 version 4) in its 36-character text form,
 /// lowercase: `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`, `y` one of `8`, `9`,
 /// `a`, `b`.
-pub fn v4() -> String with reads(RandomSource) {
+pub fn v4() -> String with writes(RandomSource) {
     let a = RandomSource.next_u64();
     let b = RandomSource.next_u64();
     // The version in the top four bits of the third group, the variant

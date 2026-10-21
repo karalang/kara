@@ -1914,9 +1914,11 @@ impl<'a> EffectChecker<'a> {
                 seed(name, &[r("Env")]);
             }
 
-            // The other two blessed nondeterminism resources.
+            // The other two blessed nondeterminism resources. A draw advances
+            // the source, so it writes (core-semantics §14.7), as the MIR
+            // effect pass charges it (B-2026-10-21-21).
             seed("Clock.now", &[r("Clock")]);
-            seed("RandomSource.next_u64", &[r("RandomSource")]);
+            seed("RandomSource.next_u64", &[w("RandomSource")]);
 
             // Free `fs` functions. The stateful `File.*` / `BufReader.*` /
             // `BufWriter.*` handles are already seeded above; these are the

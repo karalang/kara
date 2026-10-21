@@ -16,7 +16,7 @@
 // Reuse over invention (see `std.web.net` for the worked example):
 // where a host API is semantically identical to a built-in primitive,
 // stdlib reuses the primitive — `performance.now()` is `reads(Clock)`,
-// `crypto.getRandomValues()` is `reads(RandomSource)`. The resources
+// `crypto.getRandomValues()` is `writes(RandomSource)`. The resources
 // below exist only for capabilities with no native-primitive analogue.
 //
 // Provider wiring: declarations only at this stage. Host-call lowering

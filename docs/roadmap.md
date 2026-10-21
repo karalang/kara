@@ -476,7 +476,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] Network: TCP/UDP primitives — `sends(Network)` / `receives(Network)`
 - [x] Environment: `env.args`, `env.var(name)`, `env.set` — `reads(Env)` / `writes(Env)` *(partial: `env.args` + `env.var` done; `env.set` open)*
 - [x] Clock: `now` — `reads(Clock)`
-- [x] Random: `random` — `reads(RandomSource)`
+- [x] Random: `random` — `writes(RandomSource)` (a draw advances the source; core-semantics §14.7)
 
 ### String Operations
 - [ ] Concatenation, length, slicing, search, replace, split, join, formatting

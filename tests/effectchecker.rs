@@ -11488,8 +11488,31 @@ fn test_nondeterminism_resources_are_inferred() {
     assert_infers(
         "fn p() { let r = RandomSource.next_u64(); }",
         "p",
-        EffectVerbKind::Reads,
+        EffectVerbKind::Writes,
         "RandomSource",
+    );
+}
+
+#[test]
+fn test_random_draw_writes_random_source() {
+    // B-2026-10-21-21: a draw advances the source, so it charges
+    // `writes(RandomSource)` (core-semantics §14.7), on both spellings.
+    assert_infers(
+        "fn p() { let r = rand.next_u64(); }",
+        "p",
+        EffectVerbKind::Writes,
+        "RandomSource",
+    );
+    // A public function declaring the write is accepted ...
+    effectcheck_ok("pub fn f() -> u64 with writes(RandomSource) { RandomSource.next_u64() }");
+    // ... and one declaring only a read is refused.
+    let errs = effectcheck_errors(
+        "pub fn f() -> u64 with reads(RandomSource) { RandomSource.next_u64() }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e:?}").contains("RandomSource")),
+        "a draw under `reads(RandomSource)` must be refused: {errs:?}",
     );
 }
 

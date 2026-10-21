@@ -3519,7 +3519,7 @@ fn test_e2e_ambient_rand_next_u64_advances_state() {
     // not yet lowered (interpreter-only)" codegen error.
     let out = run_program(
         r#"
-fn main() reads(RandomSource) {
+fn main() writes(RandomSource) {
     let a = rand.next_u64();
     let b = rand.next_u64();
     if a != b { println("rand-advanced"); } else { println("rand-stuck"); }
@@ -3565,8 +3565,8 @@ fn test_e2e_with_provider_override_rand_next_u64_scalar() {
         r#"
 struct FakeRng { v: i64 }
 impl FakeRng { fn next_u64(ref self) -> i64 { self.v } }
-fn draw() -> i64 reads(RandomSource) { rand.next_u64() as i64 }
-fn main() reads(RandomSource) {
+fn draw() -> i64 writes(RandomSource) { rand.next_u64() as i64 }
+fn main() writes(RandomSource) {
     with_provider[RandomSource](FakeRng { v: 777 }, || {
         println(draw());
         println(rand.next_u64());

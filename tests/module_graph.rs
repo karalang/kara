@@ -1448,7 +1448,7 @@ fn std_wasi_import_shadows_prelude_resource_cleanly() {
         "src/main.kara",
         concat!(
             "import std.wasi.{FileSystem, Clock, RandomSource};\n",
-            "fn snapshot() with reads(FileSystem) reads(Clock) reads(RandomSource) {}\n",
+            "fn snapshot() with reads(FileSystem) reads(Clock) writes(RandomSource) {}\n",
             "fn main() {}\n",
         ),
     );
