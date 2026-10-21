@@ -173,7 +173,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's parameter or local, `Copy` or not, by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
-| B-2026-10-20-37 | 2026-10-20 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that span's id | — |
 
 ### Relocated
 
@@ -4289,6 +4288,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-28 | effect | low | `#[allow(mutual_recursion_note)]` silences the mutual-recursion note on free functions but not on impl methods: two mutually recursive methods each c… | e2bd1bb71a |
 | B-2026-10-20-29 | interp | medium | MIR interpreter: `Response.bytes()` on a client response whose body is not UTF-8 returns the bytes of its lossy text (each bad byte as U+FFFD, 8 byte… | 51f0e57b3a |
 | B-2026-10-20-30 | typecheck | low | A `sync struct` field may still be declared `mut` when its type is `Atomic[T]` or `Mutex[T]`, though core-semantics §6.3 and Amendment 7 say a `sync`… | 6b3788662e |
+| B-2026-10-20-37 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that sp… | 28736c7d1d |
 | B-2026-10-20-38 | codegen+runtime | low | `karac __mir-llvm-asan` reports a 40-byte leak when a deadlock panic ends the process while a spawned task's coroutine frame is live (corpus mir_task… | 6eac9898c9 |
 | B-2026-10-20-39 | interp+codegen | medium | The prelude's dynamic `Json` value passes `karac check` but neither v2 backend runs `Json.parse` or `j.stringify()`: `__mir-run` stops with "call of… | 8a5fbc89f1 |
 
