@@ -1,0 +1,17 @@
+"RR.L" -> "RR.L"
+".L.R...LR..L.." -> "LL.RR.LLRRLL.."
+"." -> "."
+"R" -> "R"
+"L" -> "L"
+"R.L" -> "R.L"
+"R..L" -> "RRLL"
+"R..." -> "RRRR"
+"...L" -> "LLLL"
+"L...R" -> "L...R"
+"R.R.L" -> "RRR.L"
+".L.R." -> "LL.RR"
+"R....L.....L" -> "RRRLLLLLLLLL"
+100000 dominoes, 1 in 200 pushed each way: 35682 L, 39807 R, 24511 up, checksum 496877679
+100000 dominoes, 10 in 200 pushed each way: 39540 L, 37559 R, 22901 up, checksum 558363504
+100000 dominoes, 60 in 200 pushed each way: 42816 L, 42768 R, 14416 up, checksum 482733729
+300 random lines: 3006 left standing, checksum 679632357

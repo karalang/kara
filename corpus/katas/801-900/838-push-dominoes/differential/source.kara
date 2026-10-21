@@ -1,0 +1,313 @@
+// LeetCode #838: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random lines of dominoes,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn push_dominoes_star(dominoes: String) -> String {
+    let mut d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut left = -1;
+    let mut left_push = 'L';
+    for right in 0..n + 1 {
+        let right_push = if right == n { 'R' } else { d[right] };
+        if right_push == '.' {
+            continue;
+        }
+        if left_push == right_push {
+            for i in left + 1..right {
+                d[i] = right_push;
+            }
+        } else if left_push == 'R' {
+            let mut i = left + 1;
+            let mut j = right - 1;
+            while i < j {
+                d[i] = 'R';
+                d[j] = 'L';
+                i += 1;
+                j -= 1;
+            }
+        }
+        left = right;
+        left_push = right_push;
+    }
+    let mut out = String.new();
+    for c in d {
+        out.push(c);
+    }
+    out
+}
+
+// ---- forces arm -----------------------------------------------------
+
+fn push_dominoes_forces(dominoes: String) -> String {
+    let d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut net = Vec.filled(n, 0);
+    let mut force = 0;
+    for i in 0..n {
+        force = if d[i] == 'R' { n } else if d[i] == 'L' { 0 } else { (force - 1).max(0) };
+        net[i] += force;
+    }
+    force = 0;
+    for i in (0..n).rev() {
+        force = if d[i] == 'L' { n } else if d[i] == 'R' { 0 } else { (force - 1).max(0) };
+        net[i] -= force;
+    }
+    let mut out = String.new();
+    for x in net {
+        out.push(if x > 0 { 'R' } else if x < 0 { 'L' } else { '.' });
+    }
+    out
+}
+
+// ---- second-by-second arm -------------------------------------------
+
+fn push_dominoes_waves(dominoes: String) -> String {
+    let mut d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut settled = Vec.filled(n, false);
+    let mut wave: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if d[i] != '.' {
+            settled[i] = true;
+            wave.push(i);
+        }
+    }
+    let mut incoming = Vec.filled(n, '.');
+    while wave.len() > 0 {
+        let mut hit: Vec[i64] = Vec.new();
+        for i in wave {
+            let j = if d[i] == 'R' { i + 1 } else { i - 1 };
+            if j >= 0 and j < n and not settled[j] {
+                if incoming[j] == '.' {
+                    incoming[j] = d[i];
+                    hit.push(j);
+                } else if incoming[j] != d[i] {
+                    incoming[j] = 'X';
+                }
+            }
+        }
+        let mut next: Vec[i64] = Vec.new();
+        for j in hit {
+            settled[j] = true;
+            if incoming[j] != 'X' {
+                d[j] = incoming[j];
+                next.push(j);
+            }
+            incoming[j] = '.';
+        }
+        wave = next;
+    }
+    let mut out = String.new();
+    for c in d {
+        out.push(c);
+    }
+    out
+}
+
+// ---- nearest-push arm -----------------------------------------------
+
+fn push_dominoes_nearest(dominoes: String) -> String {
+    let d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut from_r = Vec.filled(n, -1);
+    let mut last = -1;
+    for i in 0..n {
+        if d[i] == 'R' {
+            last = i;
+        } else if d[i] == 'L' {
+            last = -1;
+        } else if last >= 0 {
+            from_r[i] = i - last;
+        }
+    }
+    let mut to_l = Vec.filled(n, -1);
+    last = -1;
+    for i in (0..n).rev() {
+        if d[i] == 'L' {
+            last = i;
+        } else if d[i] == 'R' {
+            last = -1;
+        } else if last >= 0 {
+            to_l[i] = last - i;
+        }
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        let c = if d[i] != '.' {
+            d[i]
+        } else if from_r[i] < 0 and to_l[i] < 0 {
+            '.'
+        } else if to_l[i] < 0 or (from_r[i] >= 0 and from_r[i] < to_l[i]) {
+            'R'
+        } else if from_r[i] < 0 or to_l[i] < from_r[i] {
+            'L'
+        } else {
+            '.'
+        };
+        out.push(c);
+    }
+    out
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: second by second, every standing domino
+// with a domino falling right on its left, or falling left on its right,
+// falls that way, unless it has both, when it stays up; the new state is
+// worked out whole from the old one, until a second changes nothing.
+fn statement(dominoes: String) -> String {
+    let mut cur: Vec[char] = dominoes.chars().collect();
+    let n = cur.len();
+    loop {
+        let mut next = cur.clone();
+        let mut changed = false;
+        for i in 0..n {
+            if cur[i] == '.' {
+                let from_left = i > 0 and cur[i - 1] == 'R';
+                let from_right = i + 1 < n and cur[i + 1] == 'L';
+                if from_left and not from_right {
+                    next[i] = 'R';
+                    changed = true;
+                } else if from_right and not from_left {
+                    next[i] = 'L';
+                    changed = true;
+                }
+            }
+        }
+        cur = next;
+        if not changed {
+            break;
+        }
+    }
+    let mut out = String.new();
+    for c in cur {
+        out.push(c);
+    }
+    out
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, dominoes: String) -> String {
+    if arm == 0 {
+        push_dominoes_star(dominoes)
+    } else if arm == 1 {
+        push_dominoes_forces(dominoes)
+    } else if arm == 2 {
+        push_dominoes_waves(dominoes)
+    } else {
+        push_dominoes_nearest(dominoes)
+    }
+}
+
+// n dominoes, each pushed left with chance `pushed` in 200 and right
+// with the same chance
+fn random_line(seed: mut ref i64, n: i64, pushed: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        let r = next_random(mut seed) % 200;
+        s.push(if r < pushed { 'L' } else if r < 2 * pushed { 'R' } else { '.' });
+    }
+    s
+}
+
+// pieces of 0 to 6 standing dominoes, each after an `L` or an `R`
+fn random_pieces(seed: mut ref i64, pieces: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..pieces {
+        s.push(if next_random(mut seed) % 2 == 0 { 'L' } else { 'R' });
+        for _ in 0..next_random(mut seed) % 7 {
+            s.push('.');
+        }
+    }
+    s
+}
+
+// the line read right to left, each push turned round
+fn mirrored(s: String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    for i in (0..cs.len()).rev() {
+        out.push(if cs[i] == 'L' { 'R' } else if cs[i] == 'R' { 'L' } else { '.' });
+    }
+    out
+}
+
+// every pushed domino keeps its push, and only standing ones change
+fn pushes_kept(input: String, got: String) -> bool {
+    let a: Vec[char] = input.chars().collect();
+    let b: Vec[char] = got.chars().collect();
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != '.' and a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = ["star", "forces", "waves", "nearest"];
+    let properties = ["answer", "mirrored", "settled", "pushes kept", "padded"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 838;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let dominoes = if kind == 0 {
+            // short lines of any mix
+            let n = 1 + next_random(mut seed) % 8;
+            let pushed = next_random(mut seed) % 101;
+            random_line(mut seed, n, pushed)
+        } else if kind == 1 {
+            // lines up to 60 with few pushes
+            let n = 1 + next_random(mut seed) % 60;
+            random_line(mut seed, n, 1 + next_random(mut seed) % 20)
+        } else if kind == 2 {
+            // lines up to 60 with many pushes
+            let n = 1 + next_random(mut seed) % 60;
+            random_line(mut seed, n, 30 + next_random(mut seed) % 71)
+        } else {
+            // runs of standing dominoes of every length after either push
+            random_pieces(mut seed, 1 + next_random(mut seed) % 8)
+        };
+        let want = statement(dominoes);
+        for arm in 0..4 {
+            let got = answer(arm, dominoes);
+            let padded = answer(arm, f"L{dominoes}R");
+            let oks = [
+                got == want,
+                answer(arm, mirrored(dominoes)) == mirrored(got),
+                answer(arm, got) == got,
+                pushes_kept(dominoes, got),
+                padded == f"L{got}R",
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: \"{dominoes}\" -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, forces {by_arm[1]}, waves {by_arm[2]}, nearest {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, mirrored {by_property[1]}, settled {by_property[2]}, pushes kept {by_property[3]}, padded {by_property[4]}");
+}

@@ -1,0 +1,82 @@
+// Benchmark for #838: Push Dominoes -- the ★ arm (the stretches between pushes).
+//
+// Only the pushed dominoes on either side of a stretch of standing ones
+// decide it, so the walk goes from push to push, with an `L` imagined
+// before the line and an `R` after it, which push nothing in. Between two
+// pushes the same way every domino falls that way; between an `R` and an
+// `L` the two halves fall inward and a middle domino, if the stretch is
+// odd, stays up; between an `L` and an `R` nothing moves. O(n).
+
+fn push_dominoes(dominoes: String) -> String {
+    let mut d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut left = -1;
+    let mut left_push = 'L';
+    for right in 0..n + 1 {
+        let right_push = if right == n { 'R' } else { d[right] };
+        if right_push == '.' {
+            continue;
+        }
+        if left_push == right_push {
+            for i in left + 1..right {
+                d[i] = right_push;
+            }
+        } else if left_push == 'R' {
+            let mut i = left + 1;
+            let mut j = right - 1;
+            while i < j {
+                d[i] = 'R';
+                d[j] = 'L';
+                i += 1;
+                j -= 1;
+            }
+        }
+        left = right;
+        left_push = right_push;
+    }
+    let mut out = String.new();
+    for c in d {
+        out.push(c);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 lines drawn once, each of LeetCode's longest, 10^5 dominoes,
+    // line g pushing each domino left with chance 1 + 4g in 200 and right
+    // with the same chance. Each round settles the next line and reads 16
+    // dominoes of the result.
+    let count = 16;
+    let rounds = 1300;
+    let n = 100000;
+    let mut seed: i64 = 838;
+    let mut lines: Vec[String] = Vec.new();
+    for g in 0..count {
+        let pushed = 1 + 4 * g;
+        let mut s = String.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) % 200;
+            s.push(if r < pushed { 'L' } else if r < 2 * pushed { 'R' } else { '.' });
+        }
+        lines.push(s);
+    }
+    let mut fallen = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let out = push_dominoes(lines[round % count]);
+        let bytes = out.bytes();
+        for t in 0..16 {
+            let b = bytes[(round * 7919 + t * 6151) % n] as i64;
+            if b != 46 {
+                fallen += 1;
+            }
+            checksum = (checksum * 31 + b) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {count} lines: {fallen} of the dominoes read fallen, checksum {checksum}");
+}

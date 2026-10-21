@@ -1,0 +1,112 @@
+// LeetCode #838: Push Dominoes -- the ★ arm (the stretches between pushes).
+//
+// Only the pushed dominoes on either side of a stretch of standing ones
+// decide it, so the walk goes from push to push, with an `L` imagined
+// before the line and an `R` after it, which push nothing in. Between two
+// pushes the same way every domino falls that way; between an `R` and an
+// `L` the two halves fall inward and a middle domino, if the stretch is
+// odd, stays up; between an `L` and an `R` nothing moves. O(n).
+
+fn push_dominoes(dominoes: String) -> String {
+    let mut d: Vec[char] = dominoes.chars().collect();
+    let n = d.len();
+    let mut left = -1;
+    let mut left_push = 'L';
+    for right in 0..n + 1 {
+        let right_push = if right == n { 'R' } else { d[right] };
+        if right_push == '.' {
+            continue;
+        }
+        if left_push == right_push {
+            for i in left + 1..right {
+                d[i] = right_push;
+            }
+        } else if left_push == 'R' {
+            let mut i = left + 1;
+            let mut j = right - 1;
+            while i < j {
+                d[i] = 'R';
+                d[j] = 'L';
+                i += 1;
+                j -= 1;
+            }
+        }
+        left = right;
+        left_push = right_push;
+    }
+    let mut out = String.new();
+    for c in d {
+        out.push(c);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n dominoes, each pushed left with chance `pushed` in 200 and right
+// with the same chance
+fn random_line(seed: mut ref i64, n: i64, pushed: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        let r = next_random(mut seed) % 200;
+        s.push(if r < pushed { 'L' } else if r < 2 * pushed { 'R' } else { '.' });
+    }
+    s
+}
+
+fn fold(check: i64, s: String) -> i64 {
+    let mut c = check;
+    for b in s.bytes() {
+        c = (c * 31 + b as i64) % 1000000007;
+    }
+    c
+}
+
+fn show(dominoes: String) {
+    println(f"\"{dominoes}\" -> \"{push_dominoes(dominoes)}\"");
+}
+
+fn main() {
+    show("RR.L");
+    show(".L.R...LR..L..");
+    show(".");
+    show("R");
+    show("L");
+    show("R.L");
+    show("R..L");
+    show("R...");
+    show("...L");
+    show("L...R");
+    show("R.R.L");
+    show(".L.R.");
+    show("R....L.....L");
+    // LeetCode's longest, 10^5 dominoes, few, some and many pushed
+    let mut seed = 838;
+    for pushed in [1, 10, 60] {
+        let out = push_dominoes(random_line(mut seed, 100000, pushed));
+        let mut counts = [0, 0, 0];
+        for c in out.chars() {
+            counts[if c == 'L' { 0 } else if c == 'R' { 1 } else { 2 }] += 1;
+        }
+        println(f"100000 dominoes, {pushed} in 200 pushed each way: {counts[0]} L, {counts[1]} R, {counts[2]} up, checksum {fold(0, out)}");
+    }
+    let mut check = 0;
+    let mut up = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let pushed = next_random(mut seed) % 51;
+        let out = push_dominoes(random_line(mut seed, n, pushed));
+        for c in out.chars() {
+            if c == '.' {
+                up += 1;
+            }
+        }
+        check = fold(check, out);
+    }
+    println(f"300 random lines: {up} left standing, checksum {check}");
+}
