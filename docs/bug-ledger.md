@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 605 |
 | double-free | 427 |
 | missing-feature | 308 |
-| codegen-gap | 279 |
+| codegen-gap | 280 |
 | false-positive | 261 |
 | other | 190 |
 | diagnostics | 184 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2988 |
-| interp | 1007 |
+| codegen | 2989 |
+| interp | 1008 |
 | typecheck | 526 |
 | ownership | 125 |
 | other | 123 |
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-15 | 2026-10-21 | interp+codegen | medium | `File.append(p)` with `p: String` moves `p` on the MIR backends ("use of _1, which may have been moved") though it takes `path: Str` like `File.open` and `File.create`, which do not | — |
 | B-2026-10-21-16 | 2026-10-21 | typecheck | low | `VarError.NotUnicode.into()` is refused by check ("no method 'into' on type 'VarError'") though the library provides `impl From[VarError] for IoError` | — |
 | B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
+| B-2026-10-21-18 | 2026-10-21 | interp+codegen | medium | A user `struct Err` breaks the prelude `Err(..)` constructor in the MIR builder: `return Err(Err { msg: .. })` in a `Result[i64, Err]` fn passes `karac check` but `__mir-run` fails "call of unknown function Err" and `__mir-llvm-run` fails "native `Err` is not lowered yet"; `run --interp` prints the right answer. The struct sibling of the enum-variant case B-2026-10-15-3 | — |
 
 ### Relocated
 
