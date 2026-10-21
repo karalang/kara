@@ -6,12 +6,10 @@
 // processes it, and writes a summary. The programmer writes
 // sequential-looking code — the compiler parallelizes it.
 //
-// COMPILE-ONLY. This file type-checks and is the subject of the effect
-// analysis the README walks through; it does not RUN, because no
-// `with_provider` scope ever binds an implementation to the three resources
-// below. Running it stops at "no provider bound for resource 'UserDB'".
-// `examples/db_pipeline` is the runnable counterpart — same shape, with an
-// `InMemoryDb` provider and a `with_provider` binding.
+// `main` binds a small sample provider to each of the three resources in a
+// `providers` block: a call that needs a resource with no default must run
+// where one is bound (core-semantics.md §14.6). `examples/db_pipeline` is the
+// fuller counterpart, with an `InMemoryDb` provider.
 
 // Each resource names the trait its providers implement: a call on a
 // resource goes through its bounds (core-semantics.md §14.1, §14.2), so
@@ -20,15 +18,15 @@
 // `Vec[Order]`, `Vec[Notification]`). `examples/db_pipeline` is the version
 // with a provider bound to them.
 trait UserStore {
-    fn query_one(self, sql: String, id: u64) -> Result[Profile, DbError];
+    fn query_one(ref self, sql: String, id: u64) -> Result[Profile, DbError];
 }
 
 trait OrderStore {
-    fn query(self, sql: String, id: u64) -> Result[Vec[Order], DbError];
+    fn query(ref self, sql: String, id: u64) -> Result[Vec[Order], DbError];
 }
 
 trait NotifStore {
-    fn query(self, sql: String, id: u64) -> Result[Vec[Notification], DbError];
+    fn query(ref self, sql: String, id: u64) -> Result[Vec[Notification], DbError];
 }
 
 effect resource UserDB: UserStore;
@@ -73,11 +71,9 @@ struct Dashboard {
 //   fetch_orders        → reads(OrderDB)  (from OrderDB.query)
 //   fetch_notifications → reads(NotifDB)  (from NotifDB.query)
 //
-// In a runnable program each resource would be backed by a provider trait and
-// a concrete implementation injected via `with_provider` — see
-// `examples/db_pipeline`. This file stops at the declaration (see the note on
-// the resources above); the effect inference below does not depend on the
-// binding, which is the point being made.
+// Each resource is backed by a provider bound in `main` (the sample stores
+// below); the effect inference does not depend on which provider is bound,
+// which is the point being made.
 
 fn fetch_profile(user_id: u64) -> Result[Profile, DbError] {
     UserDB.query_one("SELECT name, email, tier FROM users WHERE id = ?", user_id)
@@ -108,6 +104,44 @@ fn build_dashboard(profile: Profile, orders: Vec[Order], notifs: Vec[Notificatio
     }
 }
 
+// Sample providers, one per resource.
+struct SampleUsers {}
+struct SampleOrders {}
+struct SampleNotifs {}
+
+impl UserStore for SampleUsers {
+    fn query_one(ref self, sql: String, id: u64) -> Result[Profile, DbError] {
+        Ok(Profile { name: f"user{id}", email: f"user{id}@example.com", tier: "gold".to_string() })
+    }
+}
+
+impl OrderStore for SampleOrders {
+    fn query(ref self, sql: String, id: u64) -> Result[Vec[Order], DbError] {
+        Ok([
+            Order { id: 1, total: 19.5, status: "shipped".to_string() },
+            Order { id: 2, total: 5.25, status: "pending".to_string() },
+        ])
+    }
+}
+
+impl NotifStore for SampleNotifs {
+    fn query(ref self, sql: String, id: u64) -> Result[Vec[Notification], DbError] {
+        Ok([Notification { message: "Your order shipped".to_string(), unread: true }])
+    }
+}
+
+// Three independent reads on different resources.
+// The compiler sees: reads(UserDB), reads(OrderDB), reads(NotifDB)
+// No conflicts, no data dependencies → runs all three concurrently.
+fn load_dashboard(user_id: u64) -> Result[Dashboard, DbError] {
+    let profile = fetch_profile(user_id)?;
+    let orders = fetch_orders(user_id)?;
+    let notifs = fetch_notifications(user_id)?;
+
+    // Sync point: build_dashboard needs all three results.
+    Ok(build_dashboard(profile, orders, notifs))
+}
+
 // main is private too — effects inferred automatically.
 // The compiler infers: reads(Env), reads(UserDB), reads(OrderDB), reads(NotifDB), writes(Stdio)
 fn main() -> Result[(), DbError] {
@@ -121,15 +155,13 @@ fn main() -> Result[(), DbError] {
         None => 1,
     };
 
-    // Three independent reads on different resources.
-    // The compiler sees: reads(UserDB), reads(OrderDB), reads(NotifDB)
-    // No conflicts, no data dependencies → runs all three concurrently.
-    let profile = fetch_profile(user_id)?;
-    let orders = fetch_orders(user_id)?;
-    let notifs = fetch_notifications(user_id)?;
-
-    // Sync point: build_dashboard needs all three results.
-    let dashboard = build_dashboard(profile, orders, notifs);
+    let dashboard = providers {
+        UserDB => SampleUsers {},
+        OrderDB => SampleOrders {},
+        NotifDB => SampleNotifs {},
+    } in {
+        load_dashboard(user_id)
+    }?;
 
     println(dashboard.greeting);
     println(dashboard.order_summary);
