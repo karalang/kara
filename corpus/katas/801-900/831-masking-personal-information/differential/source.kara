@@ -1,0 +1,385 @@
+// LeetCode #831: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random emails and
+// phone numbers, against the statement read character by character.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn mask_pii_star(s: String) -> String {
+    match s.find("@") {
+        Some(at) => {
+            let lower = s.to_lowercase();
+            f"{lower[0..1]}*****{lower[at - 1..]}"
+        }
+        None => {
+            let mut digits = String.new();
+            for c in s.chars() {
+                if c.is_ascii_digit() {
+                    digits.push(c);
+                }
+            }
+            let n = digits.len();
+            let local = f"***-***-{digits[n - 4..]}";
+            if n == 10 {
+                local
+            } else {
+                f"+{"*".repeat(n - 10)}-{local}"
+            }
+        }
+    }
+}
+
+// ---- scanning arm ---------------------------------------------------
+
+fn mask_pii_scan(s: String) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    if s.contains("@") {
+        let mut first: u8 = 0;
+        let mut last: u8 = 0;
+        let mut domain = false;
+        for i in 0..n {
+            let c = if b[i] >= b'A' and b[i] <= b'Z' { b[i] + 32 } else { b[i] };
+            if domain {
+                out.push(c as char);
+            } else if c == b'@' {
+                out.push(first as char);
+                out.push_str("*****");
+                out.push(last as char);
+                out.push('@');
+                domain = true;
+            } else {
+                if first == 0 {
+                    first = c;
+                }
+                last = c;
+            }
+        }
+        return out;
+    }
+    let mut digits = 0;
+    // the last four digits, met in reverse
+    let mut shown: Vec[u8] = Vec.new();
+    let mut i = n - 1;
+    while i >= 0 {
+        if b[i] >= b'0' and b[i] <= b'9' {
+            if digits < 4 {
+                shown.push(b[i]);
+            }
+            digits += 1;
+        }
+        i -= 1;
+    }
+    if digits > 10 {
+        out.push('+');
+        for _ in 0..digits - 10 {
+            out.push('*');
+        }
+        out.push('-');
+    }
+    out.push_str("***-***-");
+    for k in 0..4 {
+        out.push(shown[3 - k] as char);
+    }
+    out
+}
+
+// ---- split-and-join arm ---------------------------------------------
+
+fn mask_pii_split(s: String) -> String {
+    let lower = s.to_lowercase();
+    let parts: Vec[String] = lower.split("@").map(|p| p.to_string()).collect();
+    if parts.len() == 2 {
+        let name = parts[0].clone();
+        let k = name.len();
+        return f"{name[0..1]}*****{name[k - 1..k]}@{parts[1]}";
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c >= b'0' and c <= b'9' {
+            digits.push(c);
+        }
+    }
+    let n = digits.len();
+    let mut last = String.new();
+    for i in n - 4..n {
+        last.push(digits[i] as char);
+    }
+    let mut pieces: Vec[String] = Vec.new();
+    if n > 10 {
+        pieces.push(f"+{"*".repeat(n - 10)}");
+    }
+    pieces.push("***".to_string());
+    pieces.push("***".to_string());
+    pieces.push(last);
+    pieces.join("-")
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn mask_pii_iter(s: String) -> String {
+    let lower = s.to_lowercase();
+    match lower.find("@") {
+        Some(at) => {
+            let first = lower.chars().next().unwrap();
+            let last = lower.chars().nth(at - 1).unwrap();
+            let domain: String = lower.chars().skip(at).collect();
+            f"{first}*****{last}{domain}"
+        }
+        None => {
+            let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+            let n = digits.len();
+            let code: String = (0..n - 10).map(|_| '*').collect();
+            let local = f"***-***-{digits[n - 4..]}";
+            if code.len() > 0 { f"+{code}-{local}" } else { local }
+        }
+    }
+}
+
+// ---- the statement ----------------------------------------------------------
+
+fn lowered(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+// The statement read literally, character by character: for an email,
+// the name's first and last letter lowered around five `*`, then `@` and
+// the domain lowered; for a phone number, one `*` per digit of the
+// country code after a `+` and before a `-`, then `***-***-` and the last
+// four digits.
+fn statement(s: String) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut at = -1;
+    for i in 0..n {
+        if b[i] == b'@' {
+            at = i;
+        }
+    }
+    let mut out = String.new();
+    if at >= 0 {
+        out.push(lowered(b[0]) as char);
+        for _ in 0..5 {
+            out.push('*');
+        }
+        for i in at - 1..n {
+            out.push(lowered(b[i]) as char);
+        }
+        return out;
+    }
+    let mut count = 0;
+    for i in 0..n {
+        if is_digit(b[i]) {
+            count += 1;
+        }
+    }
+    if count > 10 {
+        out.push('+');
+        for _ in 0..count - 10 {
+            out.push('*');
+        }
+        out.push('-');
+    }
+    for _ in 0..2 {
+        for _ in 0..3 {
+            out.push('*');
+        }
+        out.push('-');
+    }
+    let mut seen = 0;
+    for i in 0..n {
+        if is_digit(b[i]) {
+            seen += 1;
+            if seen > count - 4 {
+                out.push(b[i] as char);
+            }
+        }
+    }
+    out
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, s: String) -> String {
+    if arm == 0 {
+        mask_pii_star(s)
+    } else if arm == 1 {
+        mask_pii_scan(s)
+    } else if arm == 2 {
+        mask_pii_split(s)
+    } else {
+        mask_pii_iter(s)
+    }
+}
+
+fn letter(seed: mut ref i64) -> u8 {
+    let r = next_random(mut seed) % 52;
+    if r < 26 { b'a' + r as u8 } else { b'A' + (r - 26) as u8 }
+}
+
+// an email: a name of 2 to `name_max` letters, `@`, and a domain of two
+// parts of 1 to 8 letters joined by `.`
+fn random_email(seed: mut ref i64, name_max: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..2 + next_random(mut seed) % (name_max - 1) {
+        s.push(letter(mut seed) as char);
+    }
+    s.push('@');
+    for _ in 0..1 + next_random(mut seed) % 8 {
+        s.push(letter(mut seed) as char);
+    }
+    s.push('.');
+    for _ in 0..1 + next_random(mut seed) % 8 {
+        s.push(letter(mut seed) as char);
+    }
+    s
+}
+
+// a phone number of 10 to 13 digits, a separator before a digit with
+// chance 1 in `sep`
+fn random_phone(seed: mut ref i64, sep: i64) -> String {
+    let separators = ['+', '-', '(', ')', ' '];
+    let mut s = String.new();
+    for _ in 0..10 + next_random(mut seed) % 4 {
+        if next_random(mut seed) % sep == 0 {
+            s.push(separators[next_random(mut seed) % 5]);
+        }
+        s.push((b'0' + (next_random(mut seed) % 10) as u8) as char);
+    }
+    s
+}
+
+// the same email with every letter's case drawn afresh, or the same phone
+// number with its separators drawn afresh
+fn recased(seed: mut ref i64, s: String) -> String {
+    let mut out = String.new();
+    if s.contains("@") {
+        for c in s.bytes() {
+            let l = lowered(c);
+            out.push(if l >= b'a' and l <= b'z' and next_random(mut seed) % 2 == 0 { (l - 32) as char } else { c as char });
+        }
+    } else {
+        let separators = ['+', '-', '(', ')', ' '];
+        for c in s.bytes() {
+            if is_digit(c) {
+                if next_random(mut seed) % 2 == 0 {
+                    out.push(separators[next_random(mut seed) % 5]);
+                }
+                out.push(c as char);
+            }
+        }
+    }
+    out
+}
+
+// the same email with the name's inner letters drawn afresh, or the same
+// phone number with every digit but the last four drawn afresh
+fn hidden_changed(seed: mut ref i64, s: String) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    if s.contains("@") {
+        let mut at = 0;
+        while b[at] != b'@' {
+            at += 1;
+        }
+        for i in 0..n {
+            out.push(if i > 0 and i < at - 1 { letter(mut seed) as char } else { b[i] as char });
+        }
+    } else {
+        let mut count = 0;
+        for c in s.bytes() {
+            if is_digit(c) {
+                count += 1;
+            }
+        }
+        let mut seen = 0;
+        for c in s.bytes() {
+            if is_digit(c) {
+                seen += 1;
+                out.push(if seen <= count - 4 { (b'0' + (next_random(mut seed) % 10) as u8) as char } else { c as char });
+            } else {
+                out.push(c as char);
+            }
+        }
+    }
+    out
+}
+
+// the length the mask must have
+fn mask_length(s: String) -> i64 {
+    match s.find("@") {
+        Some(at) => s.len() - at + 7,
+        None => {
+            let mut count = 0;
+            for c in s.bytes() {
+                if is_digit(c) {
+                    count += 1;
+                }
+            }
+            if count == 10 { 12 } else { 14 + count - 10 }
+        }
+    }
+}
+
+fn main() {
+    let names = ["star", "scan", "split", "iter"];
+    let properties = ["answer", "case or separators", "hidden characters", "length"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 831;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let s = if kind == 0 {
+            // emails with names of 2 to 3 letters, where the ends meet
+            random_email(mut seed, 3)
+        } else if kind == 1 {
+            // emails with names of up to 12 letters
+            random_email(mut seed, 12)
+        } else if kind == 2 {
+            // phone numbers with few separators
+            random_phone(mut seed, 5)
+        } else {
+            // phone numbers with a separator before every digit
+            random_phone(mut seed, 1)
+        };
+        let want = statement(s.clone());
+        let other = recased(mut seed, s.clone());
+        let hidden = hidden_changed(mut seed, s.clone());
+        for arm in 0..4 {
+            let got = answer(arm, s.clone());
+            let oks = [
+                got == want,
+                answer(arm, other.clone()) == got,
+                answer(arm, hidden.clone()) == got,
+                got.len() == mask_length(s.clone()),
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not oks[p] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[p]}: \"{s}\" -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, scan {by_arm[1]}, split {by_arm[2]}, iter {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, case or separators {by_property[1]}, hidden characters {by_property[2]}, length {by_property[3]}");
+}

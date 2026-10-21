@@ -1,0 +1,84 @@
+// Benchmark for #831: Masking Personal Information -- the ★ arm (by the rules).
+//
+// An email keeps its name's first and last letter, lowered, around five
+// `*`, and its domain lowered; a phone number shows its last four digits
+// and masks the country code, the digits before the last ten.
+
+fn mask_pii(s: String) -> String {
+    match s.find("@") {
+        Some(at) => {
+            let lower = s.to_lowercase();
+            f"{lower[0..1]}*****{lower[at - 1..]}"
+        }
+        None => {
+            let mut digits = String.new();
+            for c in s.chars() {
+                if c.is_ascii_digit() {
+                    digits.push(c);
+                }
+            }
+            let n = digits.len();
+            let local = f"***-***-{digits[n - 4..]}";
+            if n == 10 {
+                local
+            } else {
+                f"+{"*".repeat(n - 10)}-{local}"
+            }
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(seed: mut ref i64) -> char {
+    let r = next_random(mut seed) % 52;
+    if r < 26 { (b'a' + r as u8) as char } else { (b'A' + (r - 26) as u8) as char }
+}
+
+fn main() {
+    // 64 strings drawn once, emails and phone numbers in turn: an email's
+    // name of 2 to 20 letters and its two domain parts of 1 to 8, so that
+    // it stays within LeetCode's 40 characters; a phone number of 10 to 13
+    // digits with a separator before about one in three. Each round masks
+    // the next one.
+    let count = 64;
+    let rounds = 12000000;
+    let separators = ['+', '-', '(', ')', ' '];
+    let mut seed: i64 = 831;
+    let mut strings: Vec[String] = Vec.new();
+    for g in 0..count {
+        let mut s = String.new();
+        if g % 2 == 0 {
+            for _ in 0..2 + next_random(mut seed) % 19 {
+                s.push(letter(mut seed));
+            }
+            s.push('@');
+            for _ in 0..1 + next_random(mut seed) % 8 {
+                s.push(letter(mut seed));
+            }
+            s.push('.');
+            for _ in 0..1 + next_random(mut seed) % 8 {
+                s.push(letter(mut seed));
+            }
+        } else {
+            for _ in 0..10 + next_random(mut seed) % 4 {
+                if next_random(mut seed) % 3 == 0 {
+                    s.push(separators[next_random(mut seed) % 5]);
+                }
+                s.push((b'0' + (next_random(mut seed) % 10) as u8) as char);
+            }
+        }
+        strings.push(s);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let m = mask_pii(strings[round % count]);
+        total += m.len();
+        checksum = (checksum * 131 + m.bytes()[m.len() - 1] as i64) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} strings: {total} characters, checksum {checksum}");
+}

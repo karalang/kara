@@ -1,0 +1,100 @@
+// LeetCode #831: Masking Personal Information -- split and join.
+//
+// An email is lowered and split at the `@` into its name and domain,
+// collected, and put back with the name masked. A phone number's digits are gathered,
+// and the parts of the mask, the country code if any, two `***` and the
+// last four digits, are joined with `-`. O(n).
+
+fn mask_pii(s: String) -> String {
+    let lower = s.to_lowercase();
+    let parts: Vec[String] = lower.split("@").map(|p| p.to_string()).collect();
+    if parts.len() == 2 {
+        let name = parts[0].clone();
+        let k = name.len();
+        return f"{name[0..1]}*****{name[k - 1..k]}@{parts[1]}";
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c >= b'0' and c <= b'9' {
+            digits.push(c);
+        }
+    }
+    let n = digits.len();
+    let mut last = String.new();
+    for i in n - 4..n {
+        last.push(digits[i] as char);
+    }
+    let mut pieces: Vec[String] = Vec.new();
+    if n > 10 {
+        pieces.push(f"+{"*".repeat(n - 10)}");
+    }
+    pieces.push("***".to_string());
+    pieces.push("***".to_string());
+    pieces.push(last);
+    pieces.join("-")
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> \"{mask_pii(s.clone())}\"");
+}
+
+fn random_email(seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for part in 0..3 {
+        let len = 2 + next_random(mut seed) % 9;
+        for _ in 0..len {
+            let r = next_random(mut seed) % 52;
+            s.push(if r < 26 { (b'a' + r as u8) as char } else { (b'A' + (r - 26) as u8) as char });
+        }
+        if part == 0 {
+            s.push('@');
+        } else if part == 1 {
+            s.push('.');
+        }
+    }
+    s
+}
+
+fn random_phone(seed: mut ref i64) -> String {
+    let separators = ['+', '-', '(', ')', ' '];
+    let digits = 10 + next_random(mut seed) % 4;
+    let mut s = String.new();
+    for _ in 0..digits {
+        if next_random(mut seed) % 3 == 0 {
+            s.push(separators[next_random(mut seed) % 5]);
+        }
+        s.push((b'0' + (next_random(mut seed) % 10) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    show("LeetCode@LeetCode.com");
+    show("AB@qq.com");
+    show("1(234)567-890");
+    show("ab@b.c");
+    show("ZzZ@QQ.COM");
+    show("1234567890");
+    show("+1 (234) 567-8901");
+    show("+12 345 678 9012");
+    show("+(123)-456-789-0123");
+    let mut seed = 831;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..400 {
+        let s = if i % 2 == 0 { random_email(mut seed) } else { random_phone(mut seed) };
+        let m = mask_pii(s);
+        total += m.len();
+        for b in m.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"400 random strings: {total} characters, checksum {check}");
+}
