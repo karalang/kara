@@ -514,16 +514,19 @@ impl<'a> super::TypeChecker<'a> {
     /// leaking it through one trips `E0221 PrivateTypeInPublicSignature`.
     fn collect_type_visibility(&self) -> HashMap<String, bool> {
         let mut map: HashMap<String, bool> = HashMap::new();
+        // A library type is the library's to expose: a program's `pub fn`
+        // may name `TcpStream` or `VecIter[i64]` (B-2026-10-21-53).
+        let library = self.program.library_start.unwrap_or(usize::MAX);
         for item in &self.program.items {
             match item {
                 Item::StructDef(s) => {
-                    map.insert(s.name.clone(), s.is_pub);
+                    map.insert(s.name.clone(), s.is_pub || s.span.offset >= library);
                 }
                 Item::EnumDef(e) => {
-                    map.insert(e.name.clone(), e.is_pub);
+                    map.insert(e.name.clone(), e.is_pub || e.span.offset >= library);
                 }
                 Item::TraitDef(t) => {
-                    map.insert(t.name.clone(), t.is_pub);
+                    map.insert(t.name.clone(), t.is_pub || t.span.offset >= library);
                 }
                 Item::TypeAlias(t) => {
                     map.insert(t.name.clone(), t.is_pub);

@@ -10856,3 +10856,25 @@ fn a_call_borrows_one_field_and_moves_another() {
         "cannot move `p` while a borrow into it",
     );
 }
+
+/// B-2026-10-21-53: a `pub fn` may name a library type (a socket, a process,
+/// a regex, an iterator); a program's own private type still may not leak.
+#[test]
+fn a_pub_fn_may_name_a_library_type() {
+    accepted(
+        "pub-fn-library-types",
+        "pub fn f(x: Option[TcpStream]) -> bool { x.is_some() }\n\
+         pub fn g(c: ref Command) -> i64 { 1 }\n\
+         pub fn h(r: ref Regex) -> bool { r.is_match(\"a\") }\n\
+         pub fn k(m: Option[Match]) -> bool { m.is_none() }\n\
+         pub fn n(it: own VecIter[i64]) -> i64 { it.count() }\n\
+         fn main() { println(f\"{f(None)} {k(None)}\"); }\n",
+    );
+    rejected(
+        "pub-fn-private-type",
+        "struct Mine { a: i64 }\n\
+         pub fn bad(m: Mine) -> i64 { m.a }\n\
+         fn main() { println(f\"{bad(Mine { a: 1 })}\"); }\n",
+        "private type 'Mine' leaks through parameter of 'bad'",
+    );
+}
