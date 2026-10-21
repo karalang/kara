@@ -58,6 +58,31 @@ pub unsafe extern "C" fn karac_unicode_normalize(
     }
 }
 
+/// The MIR backend's `String.normalize(form)`: the normalized text of the
+/// `(p, n)` view written as a new `String` to `out`. The same
+/// `normalize_str` as [`karac_unicode_normalize`], which the legacy backend
+/// calls, and the same `icu_normalizer` the MIR interpreter calls.
+///
+/// # Safety
+/// `p` is null or points to `n` bytes of UTF-8; `out` is writable for a
+/// `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_unicode_normalize_mir(
+    form: i32,
+    p: *const u8,
+    n: i64,
+    out: *mut crate::mir::RawVec,
+) {
+    let s = if p.is_null() || n <= 0 {
+        ""
+    } else {
+        // SAFETY: the caller's contract.
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(p, n as usize) }).unwrap_or("")
+    };
+    // SAFETY: the caller's contract.
+    unsafe { crate::mir_io::string_of(out, normalize_str(s, form).as_bytes()) };
+}
+
 /// The pure half of [`karac_unicode_normalize`], shared with the unit tests.
 /// Returns ICU's `Cow`: already-normalized input (the overwhelmingly common
 /// case, since most text is NFC already) borrows instead of allocating, and the

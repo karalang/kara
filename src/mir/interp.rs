@@ -2182,6 +2182,26 @@ impl<'a> Interp<'a> {
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
+            // `normalize(form)`: the form is a `NormalizationForm` value,
+            // whose variant index is the order runtime/src/unicode.rs
+            // numbers the forms in. The compiled backend calls the same
+            // `icu_normalizer` through `karac_unicode_normalize`.
+            ("String", "normalize") => match args.as_slice() {
+                [s, Value::Variant(form, _)] => {
+                    let s = self.string_at(s)?;
+                    let t = match form {
+                        0 => icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(&s),
+                        1 => icu_normalizer::DecomposingNormalizerBorrowed::new_nfd().normalize(&s),
+                        2 => icu_normalizer::ComposingNormalizerBorrowed::new_nfkc().normalize(&s),
+                        _ => {
+                            icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd().normalize(&s)
+                        }
+                    }
+                    .into_owned();
+                    Ok(self.alloc_box("String", Value::Str(t)))
+                }
+                _ => err(format!("{name} takes a NormalizationForm")),
+            },
             ("char", "try_from") => match args.as_slice() {
                 // `Err` holds the codepoint that is not a Unicode scalar.
                 [Value::Int(n)] => match u32::try_from(*n).ok().and_then(char::from_u32) {

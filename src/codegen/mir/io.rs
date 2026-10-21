@@ -91,6 +91,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.http_native(base, method, args, dest)
             }
             ("RegexEngine", _) => self.regex_native(method, args, dest),
+            ("String" | "str", "normalize") => self.normalize_native(args, dest).map(Some),
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_native(base, method, args, dest)
             }
@@ -1742,6 +1743,41 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => self.copy(d, out, string)?,
         }
         Ok(Some(()))
+    }
+
+    /// `String.normalize(form)` through `karac_unicode_normalize_mir(form,
+    /// p, n, out)`, which lives in the opt-in unicode archive. The form's
+    /// tag is its variant index, the order runtime/src/unicode.rs numbers
+    /// the forms in; the interpreter calls the same `icu_normalizer`.
+    fn normalize_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.str_parts(&args[0])?;
+        let fty = self.operand_type(&args[1])?;
+        let at = self.operand_ptr(&args[1])?;
+        let tag = self.load_tag(at, fty)?;
+        let form = self
+            .builder
+            .build_int_z_extend_or_bit_cast(tag, self.llcx.i32_type(), "form")
+            .map_err(e)?;
+        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let out = self.temp(string, "normalize.out")?;
+        let f = self.extern_fn(
+            "karac_unicode_normalize_mir",
+            self.llcx.void_type().fn_type(
+                &[
+                    self.llcx.i32_type().into(),
+                    self.ptr_ty().into(),
+                    self.llcx.i64_type().into(),
+                    self.ptr_ty().into(),
+                ],
+                false,
+            ),
+        );
+        self.builder
+            .build_call(f, &[form.into(), p.into(), n.into(), out.into()], "")
+            .map_err(e)?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        self.copy(d, out, string)
     }
 
     /// `std.crypto`'s engine natives (runtime/stdlib/std_crypto*.kara,

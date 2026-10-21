@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 605 |
 | double-free | 427 |
-| missing-feature | 309 |
+| missing-feature | 310 |
 | codegen-gap | 280 |
 | false-positive | 262 |
 | other | 191 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2990 |
-| interp | 1009 |
+| codegen | 2991 |
+| interp | 1010 |
 | typecheck | 528 |
 | ownership | 125 |
 | other | 123 |
@@ -176,6 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-19 | 2026-10-21 | typecheck | low | An un-annotated `if`/`else` whose branches are tuples fails to unify when one branch leaves an inference variable (`Vec.new()`) and the other has a bare `None`: `if/else branches have incompatible types: '(Vec[?T0], Option[i64])' and '(Vec[i64], Option[T])'` | — |
 | B-2026-10-21-21 | 2026-10-21 | effect | medium | A random draw is still `reads(RandomSource)` in the library and the effect checker, though core semantics §14.7 (ruled 2026-10-20) says a draw writes `RandomSource`: `pub fn f() -> u64 with writes(RandomSource) { next_u64() }` is refused and `with reads(RandomSource)` is accepted | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
+| B-2026-10-21-23 | 2026-10-21 | interp+codegen | medium | `String.normalize(form)` (docs/library/strings.md, design.md § Strings (Equality)) is accepted by `karac check` but missing on both MIR backends: `__mir-run` stops with "call of unknown function String.normalize" and the compiled backend with "native `String.normalize` is not lowered yet" (`str.normalize` for a `Str` receiver). B-2026-08-20-41 wired it into the legacy interpreter and codegen only, so M3 would lose it. M3-needed. | — |
 
 ### Relocated
 

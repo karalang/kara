@@ -481,7 +481,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // (the `gpu` / `regex` / `arrow` JIT posture). The entry is here so the
     // symbol survives `-dead_strip` in any build that does carry the feature.
     #[cfg(feature = "unicode")]
-    keep!(unicode::karac_unicode_normalize);
+    keep!(
+        unicode::karac_unicode_normalize,
+        unicode::karac_unicode_normalize_mir,
+    );
     // `dbg()` FFI (`runtime/src/dbg.rs`) — quoting, the current task id, and
     // the direct stderr write. NOT feature-gated: `dbg` is a core language
     // construct, so every archive carries these and `karac run` (JIT) resolves
