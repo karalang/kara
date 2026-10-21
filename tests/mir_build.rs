@@ -7105,3 +7105,36 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_user_struct_named_err_leaves_result_err() {
+    // B-2026-10-21-18: a bare `Err(..)` in a call typed `Result[_, Err]`
+    // resolved to a user `struct Err` and was lowered as a call of an
+    // unknown function; the call's enum names the variant.
+    let src = r#"
+struct Err { msg: String, }
+struct Pair { a: i64, b: i64 }
+fn f(x: i64) -> Result[i64, Err] {
+    if x > 0 { return Err(Err { msg: "no".to_string() }); }
+    Ok(x)
+}
+fn show(r: Result[i64, Err]) -> String {
+    match r { Ok(v) => f"ok {v}", Err(e) => e.msg.clone(), }
+}
+fn main() {
+    match f(1) { Ok(v) => println(f"{v}"), Err(e) => println(e.msg), }
+    println(show(f(0)));
+    println(show(Err(Err { msg: "lent".to_string() })));
+    let p = Pair { a: 3, b: 4 };
+    println(f"{p.a + p.b}");
+}
+"#;
+    let want = "no\nok 0\nlent\n7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

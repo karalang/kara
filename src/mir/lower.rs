@@ -10795,8 +10795,26 @@ impl<'l, 'a> Bx<'l, 'a> {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
             Callee::Value => self.call_value(e, callee, args, dest),
             Callee::Def(d) => {
+                // A bare `Err(..)` may have resolved to a user struct named
+                // `Err`; a call typed as an enum names its variant
+                // (B-2026-10-21-18).
+                let struct_names_variant = self.lcx.defs.table.get(d).kind == DefKind::Struct
+                    && !self.lcx.fns.contains_key(&d)
+                    && {
+                        let t = self.expr_ty(e)?;
+                        let tcx = self.tys().tcx();
+                        let t = match tcx.kind(t) {
+                            HK::Ref(inner) | HK::MutRef(inner) => inner,
+                            _ => t,
+                        };
+                        matches!(
+                            tcx.kind(t),
+                            HK::Adt { def, .. } | HK::Shared { def, .. } if def != d
+                        )
+                    };
                 if self.lcx.variant(d).is_some()
                     || self.lcx.defs.table.get(d).kind == DefKind::Variant
+                    || struct_names_variant
                 {
                     let mut t = self.expr_ty(e)?;
                     // A constructor whose enum the checker left a parameter
