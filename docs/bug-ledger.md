@@ -92,15 +92,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 752 |
+| miscompile | 753 |
 | run-vs-build | 609 |
 | leak | 605 |
 | double-free | 427 |
-| missing-feature | 305 |
+| missing-feature | 308 |
 | codegen-gap | 279 |
-| false-positive | 259 |
-| other | 185 |
-| diagnostics | 183 |
+| false-positive | 261 |
+| other | 190 |
+| diagnostics | 184 |
 | perf | 180 |
 | crash | 126 |
 | soundness | 125 |
@@ -110,16 +110,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2982 |
-| interp | 1002 |
-| typecheck | 523 |
+| codegen | 2988 |
+| interp | 1007 |
+| typecheck | 526 |
 | ownership | 125 |
-| other | 122 |
+| other | 123 |
 | runtime | 82 |
 | cli | 82 |
 | parser | 76 |
 | autopar | 59 |
-| resolver | 48 |
+| resolver | 49 |
 | effect | 39 |
 | lexer | 12 |
 ## Current state
@@ -147,7 +147,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | NARROWED AGAIN 2026-10-19 (Thread A, d3124030ef): `std.sync.MutexGuard` has landed (`m.lock()` returns one, and a `lock` block lowers onto it; B-2026-10-19-23). Still specified-only: `std.iter.Extend` and all of `std.log`. PREVIOUSLY: NARROWED AGAIN 2026-10-19 (Thread A, 7794d0fad9): `std.process.exit` (a gated Kāra module over the native; `-> Never` now lowers) and `std.iter.DoubleEndedIterator` (already the library's trait, only its import was missing) have landed. Still specified-only: `std.sync.MutexGuard`, `std.iter.Extend` and all of `std.log`. MEASURED at 7794d0fad9: `Mutex` has no `lock()` method at all (`no method 'lock' on type 'Mutex'`), only the `lock m x { }` block (which does exclude: 8 tasks of 200000 increments each reach 1600000 on `__mir-llvm-run`, three runs of three); `Extend` has no trait signature anywhere in docs/library (README names it; collections.md gives only `Vec.extend[I: IntoIterator[Item = T]]`), and the v2 library has no `IntoIterator` trait; `std.log` needs `key: value` call fields. PREVIOUSLY: NARROWED 2026-10-19 (Thread A, read off prelude::LIBRARY_GLOBAL_MODULES at bdea5d5967): std.time (Instant partly, B-2026-10-15-112; SystemTime, Duration, sleep), std.random.next_u64 and std.uuid.v4 have landed (aff0e47fee, 3c1fb1d390, d0d9258c19); still specified-only are `std.sync.MutexGuard`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit` and all of `std.log`. WAS: Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
-| B-2026-10-15-17 | 2026-10-15 | typecheck | low | The library has no byte encodings or digests: docs/library/ defines no base64, no hex encode/decode, and no SHA-1 / SHA-256, so a WebSocket handshake, HTTP basic auth, a JWT, an ETag or a content-addressed store each needs its own hand-written SHA-1 and base64 | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
@@ -173,6 +172,18 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
 | B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` replaced by the method's own type parameter, also named `K` (the key the closure returns): `SortedMap[String, i64].iter().max_by_key(|(w, n)| *n)` runs as `SortedMapIter[i64, i64].max_by_key[i64]` and answers with the wrong entry, and a String key on an i64-keyed map exits 101; `__mir-run` is right, and a key of the map's own key type is right | — |
 | B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
+| B-2026-10-21-6 | 2026-10-21 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | — |
+| B-2026-10-21-7 | 2026-10-21 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All checks passed." when the name is not used | — |
+| B-2026-10-21-8 | 2026-10-21 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check refuses `.next()` on `StdinLines`, so a v2 program cannot read standard input by line | — |
+| B-2026-10-21-9 | 2026-10-21 | codegen | medium | On the compiled MIR backend `stdin.read_line()` and `stdin.read_to_string()` fail with `IoError.NotFound`, not `InvalidUtf8`, on input that is not UTF-8 | — |
+| B-2026-10-21-10 | 2026-10-21 | interp+codegen | medium | `stdout.flush()` does not push out a partial line on either MIR backend: after `print("x"); stdout.flush();` a child process's output appears before the `x` | — |
+| B-2026-10-21-11 | 2026-10-21 | codegen | medium | On the compiled MIR backend stdout on a pipe is not line-buffered: a finished `println` line comes out after a later child process's output | — |
+| B-2026-10-21-12 | 2026-10-21 | interp | low | The MIR interpreter's HTTP client follows four redirects, not five: a chain of five fails with "Too Many Redirects" | — |
+| B-2026-10-21-13 | 2026-10-21 | interp+codegen | medium | `IoError.from(VarError.NotPresent)` passes check but fails on both MIR backends: "call of unknown function IoError.from" | — |
+| B-2026-10-21-14 | 2026-10-21 | typecheck | medium | `env.var(name)` with `name: Str` is refused ("expected 'ref String', found 'Str'"): runtime/stdlib/io.kara declares `Env.var(name: ref String)` where time-random-env.md says `name: Str` | — |
+| B-2026-10-21-15 | 2026-10-21 | interp+codegen | medium | `File.append(p)` with `p: String` moves `p` on the MIR backends ("use of _1, which may have been moved") though it takes `path: Str` like `File.open` and `File.create`, which do not | — |
+| B-2026-10-21-16 | 2026-10-21 | typecheck | low | `VarError.NotUnicode.into()` is refused by check ("no method 'into' on type 'VarError'") though the library provides `impl From[VarError] for IoError` | — |
+| B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
 
 ### Relocated
 
@@ -4089,6 +4100,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-15-14 | ownership | medium | `karac check` refuses a `mut ref` local bound to a projection of a named place, which core-semantics.md §5.1 allows: `let p: mut ref P = w.p; p.n +=… | 59fec7044c |
 | B-2026-10-15-15 | typecheck | low | The string library has no reverse search: docs/library/strings.md lists `find` but no `rfind`, `rsplit_once`, `split_once` or `strip_suffix`, and the… | df0cba569d |
 | B-2026-10-15-16 | typecheck+ownership | medium | `let v = m.get(k).unwrap_or(String.new());` binds a borrow of a temporary (core-semantics.md §5.1: `String.new()` in a `ref` slot is a temporary), bu… | 53c746fe27 |
+| B-2026-10-15-17 | typecheck | low | The library had no byte encodings or digests (the encoding half landed as std.encoding in af814ee05c; the digest half is std.crypto's first slice, ru… | 1fffa163ef |
 | B-2026-10-15-18 | typecheck+interp+codegen | medium | There is no UDP socket: docs/library/io.md § Networking defines only `TcpListener` and `TcpStream`, and `UdpSocket.bind(..)` is "undefined name 'UdpS… | 6f078fc512 |
 | B-2026-10-15-19 | typecheck | medium | A `String` argument is not accepted for a `Str` parameter when the method is called through a generic bound: `fn look[S: Store](s: ref S, k: ref Stri… | 83b41fb1d0 |
 | B-2026-10-15-20 | ownership | medium | `karac check` reports "value 'i' is moved inside a loop and not assigned again before the next iteration" for a binding declared INSIDE the loop body… | c782c7871c |
