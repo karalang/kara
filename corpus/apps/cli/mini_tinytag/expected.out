@@ -1,0 +1,1298 @@
+$ tinytag data/song.mp3
+{
+  "filename": "data/song.mp3",
+  "filesize": 6099,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.313469387755102,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100,
+  "artist": [
+    "Ana Lúcia",
+    "Bo Chen"
+  ],
+  "albumartist": [
+    "Various Artists"
+  ],
+  "composer": [
+    "Jörg Weiss"
+  ],
+  "album": [
+    "Platform 9"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "2"
+  ],
+  "title": [
+    "Night Train"
+  ],
+  "track": [
+    "3"
+  ],
+  "track_total": [
+    "12"
+  ],
+  "genre": [
+    "Rock"
+  ],
+  "year": [
+    "2019"
+  ],
+  "comment": [
+    "recorded live at the depot"
+  ],
+  "itunnorm": [
+    " 000003E8 00000412 00002A1B"
+  ],
+  "catalog_number": [
+    "PLAT-009"
+  ],
+  "mood": [
+    "wistful"
+  ],
+  "lyrics": [
+    "la la la\nthe last train",
+    "[00:01.50]Here it comes\n[01:03.25]through the dark"
+  ],
+  "url": [
+    "https://example.com/ana"
+  ],
+  "bpm": [
+    "120"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ],
+  "txyz": [
+    "a frame nobody knows"
+  ],
+  "tlen": [
+    "4000"
+  ],
+  "grouping": [
+    "Evening"
+  ],
+  "work": [
+    "Commute"
+  ]
+}
+exit 0
+$ tinytag --format json data/vbr.mp3 data/vbri.mp3
+{
+  "filename": "data/vbr.mp3",
+  "filesize": 3831,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 26.122448979591837,
+  "channels": 2,
+  "bitrate": 122.37229375,
+  "samplerate": 44100,
+  "artist": [
+    "Kim",
+    "Lee"
+  ],
+  "disc_total": [
+    "2"
+  ],
+  "title": [
+    "Séance"
+  ],
+  "track": [
+    "7"
+  ],
+  "genre": [
+    "Ambient",
+    "Pop"
+  ],
+  "year": [
+    "2021-05-01"
+  ],
+  "movement_total": [
+    "4"
+  ],
+  "movement": [
+    "2"
+  ],
+  "movement_name": [
+    "Andante"
+  ],
+  "initial_key": [
+    "Am"
+  ],
+  "_filename": [
+    "séance-final.wav"
+  ],
+  "publisher": [
+    "Caf� Records �"
+  ],
+  "xsop": [
+    "\u0007bell\tring"
+  ],
+  "grouping": [
+    "Old Grouping"
+  ]
+}
+{
+  "filename": "data/vbri.mp3",
+  "filesize": 1040,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 20.297142857142855,
+  "channels": 1,
+  "bitrate": 38.9276463963964,
+  "samplerate": 22050
+}
+exit 0
+$ tinytag -f json data/old.mp3 data/v1only.mp3 data/stream.dat
+{
+  "filename": "data/old.mp3",
+  "filesize": 6039,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.24,
+  "channels": 2,
+  "bitrate": 188.8,
+  "samplerate": 48000,
+  "artist": [
+    "The Quartet"
+  ],
+  "albumartist": [
+    "Ab�c"
+  ],
+  "album": [
+    "Late Set"
+  ],
+  "title": [
+    "Blue in Green"
+  ],
+  "track": [
+    "5"
+  ],
+  "genre": [
+    "Jazz"
+  ],
+  "year": [
+    "1959"
+  ],
+  "note": [
+    "mono transfer"
+  ],
+  "lyrics": [
+    "(instrumental)",
+    "one\ntwo"
+  ],
+  "barcode": [
+    "0123456789012"
+  ],
+  "grouping": [
+    "Side B"
+  ]
+}
+{
+  "filename": "data/v1only.mp3",
+  "filesize": 5312,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.864,
+  "channels": 1,
+  "bitrate": 48.0,
+  "samplerate": 8000,
+  "artist": [
+    "Unknown"
+  ],
+  "album": [
+    "Tapes"
+  ],
+  "title": [
+    "Field Recording"
+  ],
+  "genre": [
+    "Other"
+  ],
+  "year": [
+    "1987"
+  ],
+  "comment": [
+    "thirty characters of comment!!"
+  ]
+}
+{
+  "filename": "data/stream.dat",
+  "filesize": 1728,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.108,
+  "channels": 1,
+  "bitrate": 128.0,
+  "samplerate": 32000
+}
+exit 0
+$ tinytag -f csv data/album.flac
+filename,data/album.flac
+filesize,2020
+mime_type,audio/flac
+is_lossless,True
+duration,10.0
+channels,2
+bitrate,0.8016
+bitdepth,16
+samplerate,44100
+artist,"['Mira Sol', 'Guest Choir']"
+albumartist,['Mira Sol']
+album,['Coastline']
+disc,['1']
+disc_total,['1']
+title,['Harbour Lights']
+track,['2']
+track_total,['9']
+genre,['Folk']
+year,['2023']
+comment,['mastered for vinyl']
+isrc,['GBXYZ2300042']
+mood,['calm']
+_other,['collides with other']
+lyrics,['first line\nsecond line']
+
+exit 0
+$ tinytag -f tsv data/tagged.flac data/vorbis.ogg
+filename	data/tagged.flac
+filesize	1665
+mime_type	audio/flac
+is_lossless	True
+duration	50.0
+channels	2
+bitrate	0.24
+bitdepth	24
+samplerate	96000
+artist	['Mira Sol']
+title	['From ID3', 'From Vorbis']
+track	['3']
+
+filename	data/vorbis.ogg
+filesize	1858
+mime_type	"audio/ogg; codecs=""vorbis"""
+is_lossless	False
+duration	3.401360544217687
+channels	2
+bitrate	160.0
+samplerate	44100
+artist	['Dune Ensemble']
+album	['Sand']
+disc	['1']
+disc_total	['1']
+title	['Long Way Round']
+track	['4']
+track_total	['10']
+genre	['Ambient']
+year	['2020']
+comment	['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
+encoder	['Lavc60.31.102 libvorbis']
+
+exit 0
+$ tinytag -f tabularcsv data/voice.opus data/flac.oga data/talk.spx
+filename,filesize,mime_type,is_lossless,duration,channels,bitrate,samplerate,artist,title,track,language,bpm
+data/voice.opus,1544,"audio/ogg; codecs=""opus""",False,5.0,2,1.92,48000,"['Tom', 'tom']",['Morning Call'],['1'],['en'],['90']
+data/flac.oga,651,"audio/ogg; codecs=""flac""",True,2.0,1,2.4,16,48000,['Chapel'],['2'],['3'],['Bell']
+data/talk.spx,654,"audio/ogg; codecs=""speex""",False,2.5,1,16000,['Board'],['Minutes'],['2024']
+exit 0
+$ tinytag -f json data/field.wav data/ext.wav data/adpcm.wav
+{
+  "filename": "data/field.wav",
+  "filesize": 2136,
+  "mime_type": "audio/wav; codecs=\"1\"",
+  "is_lossless": true,
+  "duration": 0.010005668934240363,
+  "channels": 2,
+  "bitrate": 1411.2,
+  "bitdepth": 16,
+  "samplerate": 44100,
+  "artist": [
+    "Field Kit",
+    "Field Kit Duo"
+  ],
+  "album": [
+    "Weather"
+  ],
+  "title": [
+    "Rain on Tin"
+  ],
+  "track": [
+    "5"
+  ],
+  "genre": [
+    "Field recording"
+  ],
+  "year": [
+    "2018"
+  ],
+  "comment": [
+    "close mic"
+  ],
+  "isft": [
+    "Lavf60.16.100"
+  ],
+  "bpm": [
+    "60"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'><wav/></x:xmpmeta>"
+  ]
+}
+{
+  "filename": "data/ext.wav",
+  "filesize": 1868,
+  "mime_type": "audio/wav; codecs=\"1\"",
+  "is_lossless": true,
+  "duration": 0.0020833333333333333,
+  "channels": 6,
+  "bitrate": 6912.0,
+  "bitdepth": 24,
+  "samplerate": 48000
+}
+{
+  "filename": "data/adpcm.wav",
+  "filesize": 2148,
+  "mime_type": "audio/wav; codecs=\"11\"",
+  "is_lossless": false,
+  "duration": 3.0,
+  "channels": 1,
+  "bitrate": 5.461333333333333,
+  "bitdepth": 4,
+  "samplerate": 22050,
+  "title": [
+    "Voicemail"
+  ]
+}
+exit 0
+$ tinytag data/tune.m4a data/lossless.m4a
+{
+  "filename": "data/tune.m4a",
+  "filesize": 3506,
+  "mime_type": "audio/mp4; codecs=\"mp4a.40.2\"",
+  "is_lossless": false,
+  "duration": 187.5,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100,
+  "artist": [
+    "Noor & The Lanterns"
+  ],
+  "albumartist": [
+    "Noor"
+  ],
+  "composer": [
+    "N. Haddad"
+  ],
+  "album": [
+    "Glass Hours"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "0"
+  ],
+  "title": [
+    "Glass Hours"
+  ],
+  "track": [
+    "6"
+  ],
+  "track_total": [
+    "11"
+  ],
+  "genre": [
+    "Indie",
+    "Rock"
+  ],
+  "year": [
+    "2022-03-04T08:00:00Z"
+  ],
+  "bpm": [
+    "96"
+  ],
+  "copyright": [
+    "℗ 2022 Lantern Records"
+  ],
+  "lyrics": [
+    "hours of glass\rand light"
+  ],
+  "encoded_by": [
+    "iTunes 12.12"
+  ],
+  "isrc": [
+    "USABC2200011"
+  ],
+  "mood": [
+    "bright",
+    "ignored second value"
+  ],
+  "xid ": [
+    "Lantern:isrc:USABC2200011"
+  ],
+  "rate": [
+    "80"
+  ],
+  "pgap": [
+    "1"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ]
+}
+{
+  "filename": "data/lossless.m4a",
+  "filesize": 1115,
+  "mime_type": "audio/mp4; codecs=\"alac\"",
+  "is_lossless": true,
+  "duration": 42.0,
+  "channels": 2,
+  "bitrate": 2304.0,
+  "bitdepth": 24,
+  "samplerate": 96000,
+  "title": [
+    "Room Tone"
+  ],
+  "conductor": [
+    "Ida Berg"
+  ]
+}
+exit 0
+$ tinytag -f csv data/show.wma
+filename,data/show.wma
+filesize,1199
+mime_type,"application/vnd.ms-asf; codecs=""161"""
+is_lossless,False
+duration,182.4
+channels,2
+bitrate,128.0
+bitdepth,16
+samplerate,44100
+artist,['Station 9']
+composer,['R. Ito']
+album,['Roundups 2024']
+title,['Weekly Roundup']
+track,['14']
+genre,['Podcast']
+year,['2024']
+copyright,['(c) Station 9']
+mood,['informative']
+isvbr,['1']
+encodingtime,['133500000000000000']
+_bitrate,['128']
+shareduserrating,['75']
+xmp,"[""<x:xmpmeta xmlns:x='adobe:ns:meta/'><wma/></x:xmpmeta>""]"
+
+exit 0
+$ tinytag -f json data/loop.aiff data/comp.aifc
+{
+  "filename": "data/loop.aiff",
+  "filesize": 1262,
+  "mime_type": "audio/aiff; codecs=\"NONE\"",
+  "is_lossless": true,
+  "duration": 2.0,
+  "channels": 1,
+  "bitrate": 176.4,
+  "bitdepth": 8,
+  "samplerate": 22050,
+  "artist": [
+    "Beat Lab"
+  ],
+  "title": [
+    "Drum Loop 4"
+  ],
+  "track": [
+    "4"
+  ],
+  "genre": [
+    "Breakbeat"
+  ],
+  "comment": [
+    "take one",
+    "take two"
+  ],
+  "copyright": [
+    "2016 Beat Lab"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ]
+}
+{
+  "filename": "data/comp.aifc",
+  "filesize": 2074,
+  "mime_type": "audio/aiff; codecs=\"sowt\"",
+  "is_lossless": true,
+  "duration": 5.0,
+  "channels": 2,
+  "bitrate": 1536.0,
+  "bitdepth": 16,
+  "samplerate": 48000
+}
+exit 0
+$ tinytag -i data/out/cover.png data/song.mp3
+{
+  "filename": "data/song.mp3",
+  "filesize": 6099,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.313469387755102,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100,
+  "artist": [
+    "Ana Lúcia",
+    "Bo Chen"
+  ],
+  "albumartist": [
+    "Various Artists"
+  ],
+  "composer": [
+    "Jörg Weiss"
+  ],
+  "album": [
+    "Platform 9"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "2"
+  ],
+  "title": [
+    "Night Train"
+  ],
+  "track": [
+    "3"
+  ],
+  "track_total": [
+    "12"
+  ],
+  "genre": [
+    "Rock"
+  ],
+  "year": [
+    "2019"
+  ],
+  "comment": [
+    "recorded live at the depot"
+  ],
+  "itunnorm": [
+    " 000003E8 00000412 00002A1B"
+  ],
+  "catalog_number": [
+    "PLAT-009"
+  ],
+  "mood": [
+    "wistful"
+  ],
+  "lyrics": [
+    "la la la\nthe last train",
+    "[00:01.50]Here it comes\n[01:03.25]through the dark"
+  ],
+  "url": [
+    "https://example.com/ana"
+  ],
+  "bpm": [
+    "120"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ],
+  "txyz": [
+    "a frame nobody knows"
+  ],
+  "tlen": [
+    "4000"
+  ],
+  "grouping": [
+    "Evening"
+  ],
+  "work": [
+    "Commute"
+  ]
+}
+exit 0
+$ tinytag --save-image data/out/art.jpg -f tsv data/album.flac data/tune.m4a data/vorbis.ogg data/v1only.mp3
+filename	data/album.flac
+filesize	2020
+mime_type	audio/flac
+is_lossless	True
+duration	10.0
+channels	2
+bitrate	0.8016
+bitdepth	16
+samplerate	44100
+artist	['Mira Sol', 'Guest Choir']
+albumartist	['Mira Sol']
+album	['Coastline']
+disc	['1']
+disc_total	['1']
+title	['Harbour Lights']
+track	['2']
+track_total	['9']
+genre	['Folk']
+year	['2023']
+comment	['mastered for vinyl']
+isrc	['GBXYZ2300042']
+mood	['calm']
+_other	['collides with other']
+lyrics	['first line\nsecond line']
+
+filename	data/tune.m4a
+filesize	3506
+mime_type	"audio/mp4; codecs=""mp4a.40.2"""
+is_lossless	False
+duration	187.5
+channels	2
+bitrate	128.0
+samplerate	44100
+artist	['Noor & The Lanterns']
+albumartist	['Noor']
+composer	['N. Haddad']
+album	['Glass Hours']
+disc	['1']
+disc_total	['0']
+title	['Glass Hours']
+track	['6']
+track_total	['11']
+genre	['Indie', 'Rock']
+year	['2022-03-04T08:00:00Z']
+bpm	['96']
+copyright	['℗ 2022 Lantern Records']
+lyrics	['hours of glass\rand light']
+encoded_by	['iTunes 12.12']
+isrc	['USABC2200011']
+mood	['bright', 'ignored second value']
+xid 	['Lantern:isrc:USABC2200011']
+rate	['80']
+pgap	['1']
+xmp	"[""<x:xmpmeta xmlns:x='adobe:ns:meta/'/>""]"
+
+filename	data/vorbis.ogg
+filesize	1858
+mime_type	"audio/ogg; codecs=""vorbis"""
+is_lossless	False
+duration	3.401360544217687
+channels	2
+bitrate	160.0
+samplerate	44100
+artist	['Dune Ensemble']
+album	['Sand']
+disc	['1']
+disc_total	['1']
+title	['Long Way Round']
+track	['4']
+track_total	['10']
+genre	['Ambient']
+year	['2020']
+comment	['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
+encoder	['Lavc60.31.102 libvorbis']
+
+filename	data/v1only.mp3
+filesize	5312
+mime_type	audio/mpeg
+is_lossless	False
+duration	0.864
+channels	1
+bitrate	48.0
+samplerate	8000
+artist	['Unknown']
+album	['Tapes']
+title	['Field Recording']
+genre	['Other']
+year	['1987']
+comment	['thirty characters of comment!!']
+
+exit 0
+$ tinytag -s data/notes.txt data/empty.mp3 data/mystery.bin data/real_flac.bin
+{
+  "filename": "data/empty.mp3",
+  "filesize": 0
+}
+exit 0
+$ tinytag data/notes.txt data/loop.aiff
+data/notes.txt: No tag reader found to support file type
+exit 1
+$ tinytag data/empty.mp3 data/real_flac.bin data/really_ogg.mp4
+{
+  "filename": "data/empty.mp3",
+  "filesize": 0
+}
+{
+  "filename": "data/real_flac.bin",
+  "filesize": 1617,
+  "mime_type": "audio/flac",
+  "is_lossless": true,
+  "duration": 50.0,
+  "channels": 2,
+  "bitrate": 0.24,
+  "bitdepth": 24,
+  "samplerate": 96000,
+  "artist": [
+    "Mira Sol"
+  ],
+  "title": [
+    "From Vorbis"
+  ],
+  "track": [
+    "3"
+  ]
+}
+{
+  "filename": "data/really_ogg.mp4",
+  "filesize": 1544,
+  "mime_type": "audio/mp4"
+}
+exit 0
+$ tinytag data/bad.ogg
+data/bad.ogg: Invalid OGG header
+exit 1
+$ tinytag data/bad.flac
+data/bad.flac: Invalid FLAC header
+exit 1
+$ tinytag data/fake.wav
+data/fake.wav: Invalid WAV header
+exit 1
+$ tinytag data/noise.m4a
+data/noise.m4a: Invalid MP4 header
+exit 1
+$ tinytag data/short.m4a
+data/short.m4a: unpack_from requires a buffer of at least 20 bytes for unpacking 8 bytes at offset 12 (actual buffer size is 10)
+exit 1
+$ tinytag data/cut.mp3
+{
+  "filename": "data/cut.mp3",
+  "filesize": 24,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "title": [
+    "Cut"
+  ]
+}
+exit 0
+$ tinytag data/mystery.bin
+data/mystery.bin: No tag reader found to support file type
+exit 1
+$ tinytag data/missing.mp3
+data/missing.mp3: [Errno 2] No such file or directory: 'data/missing.mp3'
+exit 1
+$ tinytag -f xml data/field.wav
+exit 0
+$ tinytag -f csv
+tinytag [options] <filename...>
+
+    -h, --help
+        Display help
+
+    -i, --save-image <image-path>
+        Save the cover art to a file
+
+    -f, --format json|csv|tsv|tabularcsv
+        Specify how the output should be formatted
+
+    -s, --skip-unsupported
+        Skip files that do not have a file extension supported by tinytag
+
+
+exit 0
+$ tinytag -h data/song.mp3
+tinytag [options] <filename...>
+
+    -h, --help
+        Display help
+
+    -i, --save-image <image-path>
+        Save the cover art to a file
+
+    -f, --format json|csv|tsv|tabularcsv
+        Specify how the output should be formatted
+
+    -s, --skip-unsupported
+        Skip files that do not have a file extension supported by tinytag
+
+
+exit 0
+$ get data/vorbis.ogg tags=0
+{
+  "filename": "data/vorbis.ogg",
+  "filesize": 1858,
+  "mime_type": "audio/ogg; codecs=\"vorbis\"",
+  "is_lossless": false,
+  "duration": 3.401360544217687,
+  "channels": 2,
+  "bitrate": 160.0,
+  "samplerate": 44100
+}
+$ get data/vorbis.ogg duration=0
+{
+  "filename": "data/vorbis.ogg",
+  "filesize": 1858,
+  "mime_type": "audio/ogg",
+  "artist": [
+    "Dune Ensemble"
+  ],
+  "album": [
+    "Sand"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "1"
+  ],
+  "title": [
+    "Long Way Round"
+  ],
+  "track": [
+    "4"
+  ],
+  "track_total": [
+    "10"
+  ],
+  "genre": [
+    "Ambient"
+  ],
+  "year": [
+    "2020"
+  ],
+  "comment": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "encoder": [
+    "Lavc60.31.102 libvorbis"
+  ]
+}
+$ get data/tune.m4a duration=0 image=1
+{
+  "filename": "data/tune.m4a",
+  "filesize": 3506,
+  "mime_type": "audio/mp4",
+  "artist": [
+    "Noor & The Lanterns"
+  ],
+  "albumartist": [
+    "Noor"
+  ],
+  "composer": [
+    "N. Haddad"
+  ],
+  "album": [
+    "Glass Hours"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "0"
+  ],
+  "title": [
+    "Glass Hours"
+  ],
+  "track": [
+    "6"
+  ],
+  "track_total": [
+    "11"
+  ],
+  "genre": [
+    "Indie",
+    "Rock"
+  ],
+  "year": [
+    "2022-03-04T08:00:00Z"
+  ],
+  "bpm": [
+    "96"
+  ],
+  "copyright": [
+    "℗ 2022 Lantern Records"
+  ],
+  "lyrics": [
+    "hours of glass\rand light"
+  ],
+  "encoded_by": [
+    "iTunes 12.12"
+  ],
+  "isrc": [
+    "USABC2200011"
+  ],
+  "mood": [
+    "bright",
+    "ignored second value"
+  ],
+  "xid ": [
+    "Lantern:isrc:USABC2200011"
+  ],
+  "rate": [
+    "80"
+  ],
+  "pgap": [
+    "1"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ]
+}
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description=None)]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description=None)
+$ get data/tune.m4a tags=0
+{
+  "filename": "data/tune.m4a",
+  "filesize": 3506,
+  "mime_type": "audio/mp4; codecs=\"mp4a.40.2\"",
+  "is_lossless": false,
+  "duration": 187.5,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100
+}
+$ get data/song.mp3 tags=0
+{
+  "filename": "data/song.mp3",
+  "filesize": 6099,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.313469387755102,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100
+}
+$ get data/song.mp3 duration=0 image=1
+{
+  "filename": "data/song.mp3",
+  "filesize": 6099,
+  "mime_type": "audio/mpeg",
+  "artist": [
+    "Ana Lúcia",
+    "Bo Chen"
+  ],
+  "albumartist": [
+    "Various Artists"
+  ],
+  "composer": [
+    "Jörg Weiss"
+  ],
+  "album": [
+    "Platform 9"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "2"
+  ],
+  "title": [
+    "Night Train"
+  ],
+  "track": [
+    "3"
+  ],
+  "track_total": [
+    "12"
+  ],
+  "genre": [
+    "Rock"
+  ],
+  "year": [
+    "2019"
+  ],
+  "comment": [
+    "recorded live at the depot"
+  ],
+  "itunnorm": [
+    " 000003E8 00000412 00002A1B"
+  ],
+  "catalog_number": [
+    "PLAT-009"
+  ],
+  "mood": [
+    "wistful"
+  ],
+  "lyrics": [
+    "la la la\nthe last train",
+    "[00:01.50]Here it comes\n[01:03.25]through the dark"
+  ],
+  "url": [
+    "https://example.com/ana"
+  ],
+  "bpm": [
+    "120"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>"
+  ],
+  "txyz": [
+    "a frame nobody knows"
+  ],
+  "tlen": [
+    "4000"
+  ],
+  "grouping": [
+    "Evening"
+  ],
+  "work": [
+    "Commute"
+  ]
+}
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='cover')]
+back_cover: [Image(name='back_cover', size=86, data=b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18..', mime_type='image/jpeg', description=None)]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='cover')
+$ get data/album.flac duration=0 image=1
+{
+  "filename": "data/album.flac",
+  "filesize": 2020,
+  "mime_type": "audio/flac",
+  "artist": [
+    "Mira Sol",
+    "Guest Choir"
+  ],
+  "albumartist": [
+    "Mira Sol"
+  ],
+  "album": [
+    "Coastline"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "1"
+  ],
+  "title": [
+    "Harbour Lights"
+  ],
+  "track": [
+    "2"
+  ],
+  "track_total": [
+    "9"
+  ],
+  "genre": [
+    "Folk"
+  ],
+  "year": [
+    "2023"
+  ],
+  "comment": [
+    "mastered for vinyl"
+  ],
+  "isrc": [
+    "GBXYZ2300042"
+  ],
+  "mood": [
+    "calm"
+  ],
+  "_other": [
+    "collides with other"
+  ],
+  "lyrics": [
+    "first line\nsecond line"
+  ]
+}
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='Front')]
+artist: [Image(name='artist', size=86, data=b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18..', mime_type='image/jpeg', description='Mira on stage')]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='Front')
+$ get data/vorbis.ogg image=1
+{
+  "filename": "data/vorbis.ogg",
+  "filesize": 1858,
+  "mime_type": "audio/ogg; codecs=\"vorbis\"",
+  "is_lossless": false,
+  "duration": 3.401360544217687,
+  "channels": 2,
+  "bitrate": 160.0,
+  "samplerate": 44100,
+  "artist": [
+    "Dune Ensemble"
+  ],
+  "album": [
+    "Sand"
+  ],
+  "disc": [
+    "1"
+  ],
+  "disc_total": [
+    "1"
+  ],
+  "title": [
+    "Long Way Round"
+  ],
+  "track": [
+    "4"
+  ],
+  "track_total": [
+    "10"
+  ],
+  "genre": [
+    "Ambient"
+  ],
+  "year": [
+    "2020"
+  ],
+  "comment": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "encoder": [
+    "Lavc60.31.102 libvorbis"
+  ]
+}
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='dune')]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='dune')
+$ get data/old.mp3 image=1
+{
+  "filename": "data/old.mp3",
+  "filesize": 6039,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.24,
+  "channels": 2,
+  "bitrate": 188.8,
+  "samplerate": 48000,
+  "artist": [
+    "The Quartet"
+  ],
+  "albumartist": [
+    "Ab�c"
+  ],
+  "album": [
+    "Late Set"
+  ],
+  "title": [
+    "Blue in Green"
+  ],
+  "track": [
+    "5"
+  ],
+  "genre": [
+    "Jazz"
+  ],
+  "year": [
+    "1959"
+  ],
+  "note": [
+    "mono transfer"
+  ],
+  "lyrics": [
+    "(instrumental)",
+    "one\ntwo"
+  ],
+  "barcode": [
+    "0123456789012"
+  ],
+  "grouping": [
+    "Side B"
+  ]
+}
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='front')]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='front')
+$ get data/field.wav tags=0 duration=0
+{
+  "filename": "data/field.wav",
+  "filesize": 2136
+}
+$ get data/show.wma duration=0
+{
+  "filename": "data/show.wma",
+  "filesize": 1199,
+  "mime_type": "application/vnd.ms-asf",
+  "artist": [
+    "Station 9"
+  ],
+  "composer": [
+    "R. Ito"
+  ],
+  "album": [
+    "Roundups 2024"
+  ],
+  "title": [
+    "Weekly Roundup"
+  ],
+  "track": [
+    "14"
+  ],
+  "genre": [
+    "Podcast"
+  ],
+  "year": [
+    "2024"
+  ],
+  "copyright": [
+    "(c) Station 9"
+  ],
+  "mood": [
+    "informative"
+  ],
+  "isvbr": [
+    "1"
+  ],
+  "encodingtime": [
+    "133500000000000000"
+  ],
+  "_bitrate": [
+    "128"
+  ],
+  "shareduserrating": [
+    "75"
+  ],
+  "xmp": [
+    "<x:xmpmeta xmlns:x='adobe:ns:meta/'><wma/></x:xmpmeta>"
+  ]
+}
+$ get data/loop.aiff tags=0
+{
+  "filename": "data/loop.aiff",
+  "filesize": 1262,
+  "mime_type": "audio/aiff; codecs=\"NONE\"",
+  "is_lossless": true,
+  "duration": 2.0,
+  "channels": 1,
+  "bitrate": 176.4,
+  "bitdepth": 8,
+  "samplerate": 22050
+}
+$ get data/real_flac.bin magic=0
+error: UnsupportedFormatError: No tag reader found to support file type
+$ get data/song.mp3 magic=0 tags=0
+{
+  "filename": "data/song.mp3",
+  "filesize": 6099,
+  "mime_type": "audio/mpeg",
+  "is_lossless": false,
+  "duration": 0.313469387755102,
+  "channels": 2,
+  "bitrate": 128.0,
+  "samplerate": 44100
+}
+$ images data/song.mp3
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='cover')]
+back_cover: [Image(name='back_cover', size=86, data=b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18..', mime_type='image/jpeg', description=None)]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='cover')
+$ images data/album.flac
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='Front')]
+artist: [Image(name='artist', size=86, data=b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18..', mime_type='image/jpeg', description='Mira on stage')]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='Front')
+$ images data/old.mp3
+front_cover: [Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='front')]
+any: Image(name='front_cover', size=73, data=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x08\x02\x00\x00\x00&\x93\t)\x00\x00\x00\x10IDATx\xdac8..', mime_type='image/png', description='front')
+$ images data/field.wav
+no images
+any: None
+$ supported song.mp3 SONG.MP3 a.m4b x.aifc clip.wmv notes.txt archive.flac.zip .ogg
+song.mp3: True
+SONG.MP3: True
+a.m4b: True
+x.aifc: True
+clip.wmv: True
+notes.txt: False
+archive.flac.zip: False
+.ogg: True
+$ files data/out
+art00000.jpg 73 bytes 89504e470d0a1a0a0000000d49484452
+art00001.jpg 73 bytes 89504e470d0a1a0a0000000d49484452
+art00002.jpg 73 bytes 89504e470d0a1a0a0000000d49484452
+cover.png 73 bytes 89504e470d0a1a0a0000000d49484452

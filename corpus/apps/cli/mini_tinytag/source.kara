@@ -1,0 +1,5190 @@
+// mini_tinytag: tinytag 2.3.2, the audio metadata reader for Python, on
+// a shelf of small audio files:
+// - the eight parser classes: ID3 (v1, and v2.2, v2.3 and v2.4 frames,
+//   with text encodings, synced lyrics, pictures, iTunes grouping and
+//   custom frames), MPEG (frame headers, Xing, Info and VBRI headers, and
+//   the CBR estimate), Ogg (Vorbis, Opus, FLAC and Speex streams, with
+//   packets across pages), FLAC (STREAMINFO, Vorbis comments, pictures),
+//   WAVE (fmt, fact, LIST INFO, an ID3 chunk, XMP), ASF (content and
+//   extended content descriptions, the metadata objects, stream
+//   properties), MP4 (the atom tree, ilst items, custom '----' atoms,
+//   mp4a and alac) and AIFF (COMM with its 80-bit rate, AIFC, ID3);
+// - TinyTag's field model: _set_field, which sends a second value to the
+//   other dict and renames a field that collides with an attribute,
+//   _update, Images, as_dict, and how a file's parser class is found by
+//   its name or by its magic bytes;
+// - the command line (python -m tinytag): json, csv, tsv and tabularcsv
+//   output, saving cover art, skipping unsupported files, and the error
+//   messages for broken ones.
+//
+// The inputs are data/jobs.txt and the audio files beside it, made by
+// mk.py. expected.out is the output of oracle.py, which runs the same
+// jobs through tinytag itself (the copy in tinytag/).
+
+struct DataFile {
+    path: String,
+    body: String,
+    hex: bool,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+// hex, where Z<count>; stands for that many zero bytes
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'Z' {
+            let mut n = 0;
+            i += 1;
+            while i < b.len() and b[i] != b';' {
+                n = n * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+            i += 1;
+            let mut k = 0;
+            while k < n {
+                out.push(0);
+                k += 1;
+            }
+            continue;
+        }
+        if i + 1 >= b.len() {
+            break;
+        }
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        if file.hex {
+            if let Err(e) = fs.write_bytes(p.clone(), unhex(file.body)) {
+                return Err(f"cannot write {p}: {e}");
+            }
+        } else if let Err(e) = fs.write(p.clone(), file.body.clone()) {
+            return Err(f"cannot write {p}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ TinyTag.get
+
+fn unsupported() -> Fail {
+    fail("UnsupportedFormatError", "No tag reader found to support file type".to_string())
+}
+
+// TinyTag._get_parser_for_file_handle
+fn magic_class(fh: mut ref Fh) -> i64 {
+    let header = fh.read(30);
+    if starts(header, "ID3") {
+        return K_ID3;
+    }
+    if header.len() >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0 {
+        if fh.buf.len() >= 128 {
+            fh.seek(fh.buf.len() - 128);
+            if is_bytes(fh.read(3), "TAG") {
+                return K_ID3;
+            }
+        }
+        return K_MPEG;
+    }
+    if starts(header, "fLaC") {
+        return K_FLAC;
+    }
+    if starts_at(header, "ftyp", 4) {
+        return K_MP4;
+    }
+    if starts(header, "OggS") {
+        return K_OGG;
+    }
+    if starts(header, "RIFF") and starts_at(header, "WAVE", 8) {
+        return K_WAVE;
+    }
+    if starts_bytes(header, asf_guid("header")) and header.len() > 29 and header[29] == 2 {
+        return K_ASF;
+    }
+    if starts(header, "FORM") and (starts_at(header, "AIFF", 8) or starts_at(header, "AIFC", 8)) {
+        return K_AIFF;
+    }
+    0
+}
+
+fn tt_get(name: ref String, tags: bool, duration: bool, image: bool, magic: bool) -> Result[Tag, Fail] {
+    let mut kind = 0;
+    if not magic {
+        kind = ext_class(name);
+        if kind == 0 {
+            return Err(unsupported());
+        }
+    }
+    let bytes = match fs.read_bytes(name.clone()) {
+        Ok(b) => b,
+        Err(_) => return Err(fail("FileNotFoundError", f"[Errno 2] No such file or directory: {repr_str(name)}")),
+    };
+    let mut fh = fh_of(bytes);
+    if kind == 0 {
+        kind = ext_class(name);
+        if kind == 0 {
+            kind = magic_class(mut fh);
+        }
+        if kind == 0 {
+            return Err(unsupported());
+        }
+    }
+    let filesize = fh.buf.len();
+    fh.seek(0);
+    let mut t = new_tag(kind, name, filesize);
+    match load(mut t, mut fh, tags, duration, image) {
+        Ok(_) => Ok(t),
+        Err(e) => Err(fail("ParseError", e.msg)),
+    }
+}
+
+// ------------------------------------------------------------ the command line
+
+fn usage() {
+    println("tinytag [options] <filename...>\n\n    -h, --help\n        Display help\n\n    -i, --save-image <image-path>\n        Save the cover art to a file\n\n    -f, --format json|csv|tsv|tabularcsv\n        Specify how the output should be formatted\n\n    -s, --skip-unsupported\n        Skip files that do not have a file extension supported by tinytag\n\n");
+}
+
+fn index_of(argv: ref Vec[String], name: Str) -> i64 {
+    let mut i = 0;
+    while i < argv.len() {
+        if argv[i] == name {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// list.pop(i)
+fn pop_at(argv: mut ref Vec[String], i: i64) -> String {
+    let mut rest: Vec[String] = Vec.new();
+    let mut out = String.new();
+    let mut k = 0;
+    while k < argv.len() {
+        if k == i {
+            out = argv[k].clone();
+        } else {
+            rest.push(argv[k].clone());
+        }
+        k += 1;
+    }
+    argv.clear();
+    for x in rest.into_iter() {
+        argv.push(x);
+    }
+    out
+}
+
+fn pop_param(argv: mut ref Vec[String], name: Str) -> Option[String] {
+    let i = index_of(argv, name);
+    if i < 0 {
+        return None;
+    }
+    pop_at(mut argv, i);
+    Some(pop_at(mut argv, i))
+}
+
+fn pop_switch(argv: mut ref Vec[String], name: Str) -> bool {
+    let i = index_of(argv, name);
+    if i < 0 {
+        return false;
+    }
+    pop_at(mut argv, i);
+    true
+}
+
+// `a or b` for two optional strings
+fn or_param(a: own Option[String], argv: mut ref Vec[String], name: Str) -> Option[String] {
+    match a {
+        Some(s) => {
+            if s.len() > 0 {
+                Some(s)
+            } else {
+                pop_param(mut argv, name)
+            }
+        }
+        None => pop_param(mut argv, name),
+    }
+}
+
+// os.path.splitext
+fn splitext(p: ref String) -> (String, String) {
+    let b = p.bytes().to_vec();
+    let mut slash = -1;
+    let mut dot = -1;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'/' {
+            slash = i;
+            dot = -1;
+        } else if b[i] == b'.' {
+            dot = i;
+        }
+        i += 1;
+    }
+    if dot < 0 {
+        return (p.clone(), String.new());
+    }
+    let mut k = slash + 1;
+    while k < dot and b[k] == b'.' {
+        k += 1;
+    }
+    if k == dot {
+        return (p.clone(), String.new());
+    }
+    (text_of(sub(b, 0, dot)), text_of(tail(b, dot)))
+}
+
+fn is_file(p: ref String) -> bool {
+    match fs.metadata(p.clone()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+// __main__._run
+fn run_cli(args: ref Vec[String]) -> i64 {
+    let mut argv: Vec[String] = Vec.new();
+    argv.push("tinytag".to_string());
+    for a in args {
+        argv.push(a.clone());
+    }
+    let mut header_printed = false;
+    let first = pop_param(mut argv, "--save-image");
+    let image_path = or_param(first, mut argv, "-i");
+    let f1 = pop_param(mut argv, "--format");
+    let fmt = match or_param(f1, mut argv, "-f") {
+        Some(f) => if f.len() > 0 { f } else { "json".to_string() },
+        None => "json".to_string(),
+    };
+    let skip_unsupported = pop_switch(mut argv, "--skip-unsupported") or pop_switch(mut argv, "-s");
+    let filenames = argv[1..argv.len()].to_vec();
+    let display_help = filenames.len() == 0 or pop_switch(mut argv, "--help") or pop_switch(mut argv, "-h");
+    if display_help {
+        usage();
+        return 0;
+    }
+    let mut i = 0;
+    while i < filenames.len() {
+        let filename = filenames[i].clone();
+        if skip_unsupported and not (ext_class(filename) != 0 and is_file(filename)) {
+            i += 1;
+            continue;
+        }
+        let tag = match tt_get(filename, true, true, false or image_path.is_some(), true) {
+            Ok(t) => t,
+            Err(e) => {
+                println(f"{filename}: {e.msg}");
+                return 1;
+            }
+        };
+        if let Some(path) = image_path.clone() {
+            if path.len() > 0 {
+                let mut actual = path.clone();
+                if filenames.len() > 1 {
+                    let (root, ext) = splitext(path);
+                    actual = f"{root}{i:05}{ext}";
+                }
+                if let Some(im) = tag.images.any() {
+                    if let Err(e) = fs.write_bytes(actual.clone(), im.data) {
+                        println(f"{filename}: {e}");
+                        return 1;
+                    }
+                }
+            }
+        }
+        header_printed = print_tag(tag, fmt, header_printed);
+        i += 1;
+    }
+    0
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn show_images(t: ref Tag) {
+    let images = t.images.as_dict();
+    if images.len() == 0 {
+        println("no images");
+    }
+    for (k, v) in images.into_iter() {
+        println(f"{k}: {repr_images(v)}");
+    }
+    let any = match t.images.any() {
+        Some(im) => repr_image(im),
+        None => "None".to_string(),
+    };
+    println(f"any: {any}");
+}
+
+fn job_get(args: ref Vec[String]) {
+    let name = args[0].clone();
+    let mut tags = true;
+    let mut duration = true;
+    let mut image = false;
+    let mut magic = true;
+    let mut i = 1;
+    while i < args.len() {
+        if let Some((k, v)) = split_eq(args[i]) {
+            let on = v == "1";
+            if k == "tags" {
+                tags = on;
+            } else if k == "duration" {
+                duration = on;
+            } else if k == "image" {
+                image = on;
+            } else if k == "magic" {
+                magic = on;
+            }
+        }
+        i += 1;
+    }
+    match tt_get(name, tags, duration, image, magic) {
+        Ok(t) => {
+            println(to_json(t.as_dict()));
+            if image {
+                show_images(t);
+            }
+        }
+        Err(e) => println(f"error: {e.kind}: {e.msg}"),
+    }
+}
+
+fn job_images(name: ref String) {
+    match tt_get(name, true, true, true, true) {
+        Ok(t) => show_images(t),
+        Err(e) => println(f"error: {e.kind}: {e.msg}"),
+    }
+}
+
+fn job_files(dir: ref String) {
+    let mut names = match fs.read_dir(dir.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            println(f"cannot list {dir}: {e}");
+            return;
+        }
+    };
+    names.sort();
+    for n in names.iter() {
+        let p = f"{dir}/{n}";
+        match fs.read_bytes(p.clone()) {
+            Ok(b) => println(f"{n} {b.len()} bytes {hex_str(sub(b, 0, 16))}"),
+            Err(e) => println(f"cannot read {p}: {e}"),
+        }
+    }
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(" ") {
+        if p.len() > 0 {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let text = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/jobs.txt: {e}");
+            return;
+        }
+    };
+    for raw in text.lines() {
+        let line = raw.trim().to_string();
+        if line.len() == 0 or raw.starts_with("#") {
+            continue;
+        }
+        println(f"$ {line}");
+        let parts = split_ws(line);
+        let cmd = parts[0].clone();
+        let args = parts[1..parts.len()].to_vec();
+        if cmd == "tinytag" {
+            let rc = run_cli(args);
+            println(f"exit {rc}");
+        } else if cmd == "get" {
+            job_get(args);
+        } else if cmd == "images" {
+            job_images(args[0]);
+        } else if cmd == "supported" {
+            for a in args.iter() {
+                let ok = if ext_class(a) != 0 { "True" } else { "False" };
+                println(f"{a}: {ok}");
+            }
+        } else if cmd == "files" {
+            job_files(args[0]);
+        } else {
+            println("unknown job");
+        }
+    }
+}
+// ------------------------------------------------------------ errors
+
+// A Python exception as tinytag's callers see it: its class name and
+// str(). Parser failures are wrapped in ParseError, as TinyTag.get wraps
+// whatever _load raises.
+#[derive(Clone)]
+struct Fail {
+    kind: String,
+    msg: String,
+}
+
+fn fail(kind: Str, msg: own String) -> Fail {
+    Fail { kind: kind.to_string(), msg: msg }
+}
+
+fn parse_error(msg: Str) -> Fail {
+    fail("ParseError", msg.to_string())
+}
+
+// struct.unpack_from's check, with its message.
+fn need(b: ref Vec[u8], off: i64, size: i64) -> Result[(), Fail] {
+    if off + size > b.len() {
+        return Err(fail("ParseError", f"unpack_from requires a buffer of at least {size + off} bytes for unpacking {size} bytes at offset {off} (actual buffer size is {b.len()})"));
+    }
+    Ok(())
+}
+
+// struct.unpack's check: the buffer must be exactly the format's size.
+fn need_exact(b: ref Vec[u8], size: i64) -> Result[(), Fail] {
+    if b.len() != size {
+        return Err(fail("ParseError", f"unpack requires a buffer of {size} bytes"));
+    }
+    Ok(())
+}
+
+// b[i], or IndexError
+fn at(b: ref Vec[u8], i: i64) -> Result[i64, Fail] {
+    if i < 0 or i >= b.len() {
+        return Err(fail("ParseError", "index out of range".to_string()));
+    }
+    Ok(b[i] as i64)
+}
+
+// ------------------------------------------------------------ bytes
+
+fn sub(b: ref Vec[u8], start: i64, end: i64) -> Vec[u8] {
+    let mut s = start;
+    let mut e = end;
+    if e > b.len() {
+        e = b.len();
+    }
+    if s < 0 {
+        s = 0;
+    }
+    if s > e {
+        s = e;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = s;
+    while i < e {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn tail(b: ref Vec[u8], start: i64) -> Vec[u8] {
+    sub(b, start, b.len())
+}
+
+fn push_all(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for x in b {
+        out.push(x);
+    }
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn same_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// b.startswith(p, at)
+fn starts_at(b: ref Vec[u8], p: Str, at: i64) -> bool {
+    let q = p.bytes().to_vec();
+    if at + q.len() > b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < q.len() {
+        if b[at + i] != q[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn starts(b: ref Vec[u8], p: Str) -> bool {
+    starts_at(b, p, 0)
+}
+
+fn starts_bytes(b: ref Vec[u8], q: ref Vec[u8]) -> bool {
+    if q.len() > b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < q.len() {
+        if b[i] != q[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_bytes(b: ref Vec[u8], p: Str) -> bool {
+    b.len() == p.len() and starts(b, p)
+}
+
+// bytes.find(needle, start)
+fn find_bytes(b: ref Vec[u8], needle: ref Vec[u8], start: i64) -> i64 {
+    let mut i = if start < 0 { 0 } else { start };
+    while i + needle.len() <= b.len() {
+        let mut k = 0;
+        while k < needle.len() and b[i + k] == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find_str(b: ref Vec[u8], needle: Str, start: i64) -> i64 {
+    find_bytes(b, needle.bytes().to_vec(), start)
+}
+
+// bytes.rstrip(b'\x00')
+fn unpad_bytes(b: ref Vec[u8]) -> Vec[u8] {
+    let mut e = b.len();
+    while e > 0 and b[e - 1] == 0 {
+        e -= 1;
+    }
+    sub(b, 0, e)
+}
+
+// bytes.split(b'\x00')
+fn split_nul(b: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for x in b {
+        if x == 0 {
+            out.push(cur.clone());
+            cur = Vec.new();
+        } else {
+            cur.push(x);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn uint(b: ref Vec[u8], off: i64, n: i64, le: bool) -> i64 {
+    let mut v: i64 = 0;
+    let mut i = 0;
+    while i < n {
+        let k = if le { off + n - 1 - i } else { off + i };
+        v = (v << 8) | (b[k] as i64);
+        i += 1;
+    }
+    v
+}
+
+// A signed integer of n bytes.
+fn sint(b: ref Vec[u8], off: i64, n: i64, le: bool) -> i64 {
+    let v = uint(b, off, n, le);
+    if n == 8 {
+        return v;
+    }
+    let top = 1 << (8 * n - 1);
+    if v >= top { v - 2 * top } else { v }
+}
+
+fn be16(b: ref Vec[u8], off: i64) -> i64 {
+    uint(b, off, 2, false)
+}
+
+fn be32(b: ref Vec[u8], off: i64) -> i64 {
+    uint(b, off, 4, false)
+}
+
+fn le16(b: ref Vec[u8], off: i64) -> i64 {
+    uint(b, off, 2, true)
+}
+
+fn le32(b: ref Vec[u8], off: i64) -> i64 {
+    uint(b, off, 4, true)
+}
+
+fn hex2(b: u8) -> String {
+    f"{b:02x}"
+}
+
+fn hex_str(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(hex2(x));
+    }
+    s
+}
+
+// f'{n:X}'
+fn hex_upper(n: i64) -> String {
+    f"{n:X}"
+}
+
+// ------------------------------------------------------------ text
+
+fn push_cp(out: mut ref Vec[u8], c: i64) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+fn text_of(b: ref Vec[u8]) -> String {
+    String.from_utf8(b.clone()).unwrap_or("?".to_string())
+}
+
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b {
+        push_cp(mut out, x as i64);
+    }
+    text_of(out)
+}
+
+// .decode('utf-8', 'replace'): each maximal invalid subpart becomes one
+// U+FFFD, as CPython's decoder reports its errors.
+fn utf8_replace(input: ref Vec[u8]) -> String {
+    let n = input.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let b = input[i] as i64;
+        if b < 0x80 {
+            out.push(b as u8);
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo = 0x80;
+        let mut hi = 0xBF;
+        if b >= 0xC2 and b <= 0xDF {
+            need = 1;
+        } else if b >= 0xE0 and b <= 0xEF {
+            need = 2;
+            if b == 0xE0 {
+                lo = 0xA0;
+            }
+            if b == 0xED {
+                hi = 0x9F;
+            }
+        } else if b >= 0xF0 and b <= 0xF4 {
+            need = 3;
+            if b == 0xF0 {
+                lo = 0x90;
+            }
+            if b == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_cp(mut out, 0xFFFD);
+            i += 1;
+            continue;
+        }
+        let mut k = 1;
+        let mut bad = false;
+        while k <= need {
+            if i + k >= n {
+                break;
+            }
+            let c = input[i + k] as i64;
+            let low = if k == 1 { lo } else { 0x80 };
+            let high = if k == 1 { hi } else { 0xBF };
+            if c < low or c > high {
+                bad = true;
+                break;
+            }
+            k += 1;
+        }
+        if bad {
+            push_cp(mut out, 0xFFFD);
+            i += k;
+            continue;
+        }
+        if k <= need {
+            // cut off by the end of the input
+            push_cp(mut out, 0xFFFD);
+            i = n;
+            continue;
+        }
+        let mut j = 1;
+        let mut c = if need == 1 { b & 0x1F } else if need == 2 { b & 0x0F } else { b & 0x07 };
+        while j <= need {
+            c = (c << 6) | ((input[i + j] as i64) & 0x3F);
+            j += 1;
+        }
+        push_cp(mut out, c);
+        i += need + 1;
+    }
+    text_of(out)
+}
+
+fn unit16(input: ref Vec[u8], i: i64, be: bool) -> i64 {
+    if be {
+        ((input[i] as i64) << 8) | (input[i + 1] as i64)
+    } else {
+        (input[i] as i64) | ((input[i + 1] as i64) << 8)
+    }
+}
+
+// .decode('utf-16-le' or 'utf-16-be', 'replace')
+fn utf16_replace(input: ref Vec[u8], be: bool) -> String {
+    let n = input.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if i + 1 >= n {
+            push_cp(mut out, 0xFFFD);
+            i = n;
+            continue;
+        }
+        let u = unit16(input, i, be);
+        if u < 0xD800 or u > 0xDFFF {
+            push_cp(mut out, u);
+            i += 2;
+            continue;
+        }
+        if u >= 0xDC00 {
+            push_cp(mut out, 0xFFFD);
+            i += 2;
+            continue;
+        }
+        if i + 3 >= n {
+            push_cp(mut out, 0xFFFD);
+            i = n;
+            continue;
+        }
+        let u2 = unit16(input, i + 2, be);
+        if u2 >= 0xDC00 and u2 <= 0xDFFF {
+            push_cp(mut out, 0x10000 + ((u - 0xD800) << 10) + (u2 - 0xDC00));
+            i += 4;
+        } else {
+            push_cp(mut out, 0xFFFD);
+            i += 2;
+        }
+    }
+    text_of(out)
+}
+
+// str.rstrip('\x00')
+fn unpad(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    text_of(unpad_bytes(b))
+}
+
+// str.isdecimal() for the ASCII digits
+fn is_decimal(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.bytes() {
+        if c < b'0' or c > b'9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn to_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.bytes() {
+        v = v * 10 + (c - b'0') as i64;
+    }
+    v
+}
+
+// value.split('/')[:2], as (value, total, found)
+fn split_slash(v: ref String) -> (String, String, bool) {
+    match v.find("/") {
+        Some(i) => {
+            let rest = v[i + 1..v.len()].to_string();
+            let total = match rest.find("/") {
+                Some(j) => rest[0..j].to_string(),
+                None => rest.clone(),
+            };
+            (v[0..i].to_string(), total, true)
+        }
+        None => (v.clone(), String.new(), false),
+    }
+}
+
+// key.split('=', 1)
+fn split_eq(s: ref String) -> Option[(String, String)] {
+    match s.find("=") {
+        Some(i) => Some((s[0..i].to_string(), s[i + 1..s.len()].to_string())),
+        None => None,
+    }
+}
+
+// a2b_base64 in its lenient mode: characters outside the alphabet are
+// skipped, and decoding stops at padding.
+fn b64_val(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+fn b64_decode(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc = 0;
+    let mut bits = 0;
+    for c in s.bytes() {
+        if c == b'=' {
+            break;
+        }
+        let v = b64_val(c);
+        if v < 0 {
+            continue;
+        }
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ repr
+
+fn quote_for(b: ref Vec[u8]) -> u8 {
+    let mut single = false;
+    let mut double = false;
+    for c in b {
+        if c == 39 {
+            single = true;
+        }
+        if c == 34 {
+            double = true;
+        }
+    }
+    if single and not double { 34 } else { 39 }
+}
+
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let q = quote_for(b);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for x in b {
+        if x == q or x == 92 {
+            out.push(92);
+            out.push(x);
+        } else if x == 9 {
+            push_all(mut out, bytes_of("\\t"));
+        } else if x == 10 {
+            push_all(mut out, bytes_of("\\n"));
+        } else if x == 13 {
+            push_all(mut out, bytes_of("\\r"));
+        } else if x >= 0x20 and x < 0x7F {
+            out.push(x);
+        } else {
+            push_all(mut out, bytes_of(f"\\x{hex2(x)}"));
+        }
+    }
+    out.push(q);
+    text_of(out)
+}
+
+// repr(str): the C0 and C1 controls, NO-BREAK SPACE and SOFT HYPHEN
+// are escaped; everything else these files hold is printable.
+fn repr_str(s: ref String) -> String {
+    let q = quote_for(s.bytes().to_vec());
+    let qc = q as char;
+    let mut out = String.new();
+    out.push(qc);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == qc or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n < 0x20 or (n >= 0x7F and n <= 0xA0) or n == 0xAD {
+            out.push_str(f"\\x{hex2(n as u8)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(qc);
+    out
+}
+
+fn repr_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(x) => repr_str(x),
+        None => "None".to_string(),
+    }
+}
+
+// ------------------------------------------------------------ a file
+
+// A binary file object (or a BytesIO) over bytes already read: read,
+// seek and tell as Python has them, so a seek may go past the end.
+struct Fh {
+    buf: Vec[u8],
+    pos: i64,
+}
+
+impl Fh {
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let start = self.pos;
+        let mut end = start + n;
+        if n < 0 or end > self.buf.len() {
+            end = self.buf.len();
+        }
+        if start >= end {
+            return Vec.new();
+        }
+        self.pos = end;
+        sub(self.buf, start, end)
+    }
+
+    fn seek(mut ref self, p: i64) -> i64 {
+        self.pos = p;
+        p
+    }
+
+    fn skip(mut ref self, n: i64) -> i64 {
+        self.pos += n;
+        self.pos
+    }
+
+    fn tell(ref self) -> i64 {
+        self.pos
+    }
+}
+
+fn fh_of(b: own Vec[u8]) -> Fh {
+    Fh { buf: b, pos: 0 }
+}
+// ------------------------------------------------------------ values
+
+// A field's value: tinytag stores str, int, float and bool.
+#[derive(Clone)]
+enum Val {
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
+fn num_of(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Int(n) => Some(n as f64),
+        Val.Float(x) => Some(x),
+        Val.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        Val.Str(_) => None,
+    }
+}
+
+// value == old_value, as Python compares them: numbers across types, and
+// a str never equal to a number.
+fn val_eq(a: ref Val, b: ref Val) -> bool {
+    match a {
+        Val.Str(x) => match b {
+            Val.Str(y) => x == y,
+            _ => false,
+        },
+        _ => match (num_of(a), num_of(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        },
+    }
+}
+
+fn py_float(x: f64) -> String {
+    f"{x}"
+}
+
+// str(value)
+fn val_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => py_float(x),
+        Val.Bool(b) => if b { "True".to_string() } else { "False".to_string() },
+    }
+}
+
+fn s_val(s: Str) -> Val {
+    Val.Str(s.to_string())
+}
+
+// ------------------------------------------------------------ images
+
+#[derive(Clone)]
+struct Image {
+    name: String,
+    size: i64,
+    data: Vec[u8],
+    mime_type: Option[String],
+    description: Option[String],
+}
+
+// Image.__repr__: the data cut to 45 bytes and '..'.
+fn repr_image(im: ref Image) -> String {
+    let mut d = im.data.clone();
+    if d.len() > 45 {
+        d = sub(im.data, 0, 45);
+        d.push(b'.');
+        d.push(b'.');
+    }
+    f"Image(name={repr_str(im.name)}, size={im.size}, data={repr_bytes(d)}, mime_type={repr_opt(im.mime_type)}, description={repr_opt(im.description)})"
+}
+
+fn repr_images(v: ref Vec[Image]) -> String {
+    let mut s = "[".to_string();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(repr_image(v[i]));
+        i += 1;
+    }
+    s.push_str("]");
+    s
+}
+
+// tinytag's Images: three named slots, then the OtherImages dict.
+#[derive(Clone)]
+struct Images {
+    front_cover: Option[Image],
+    back_cover: Option[Image],
+    media: Option[Image],
+    keys: Vec[String],
+    lists: Vec[Vec[Image]],
+}
+
+fn no_images() -> Images {
+    Images { front_cover: None, back_cover: None, media: None, keys: Vec.new(), lists: Vec.new() }
+}
+
+impl Images {
+    fn slot(ref self, name: ref String) -> Option[Option[Image]] {
+        if name == "front_cover" {
+            Some(self.front_cover.clone())
+        } else if name == "back_cover" {
+            Some(self.back_cover.clone())
+        } else if name == "media" {
+            Some(self.media.clone())
+        } else {
+            None
+        }
+    }
+
+    fn set_slot(mut ref self, name: ref String, im: own Image) {
+        if name == "front_cover" {
+            self.front_cover = Some(im);
+        } else if name == "back_cover" {
+            self.back_cover = Some(im);
+        } else {
+            self.media = Some(im);
+        }
+    }
+
+    fn set_other_field(mut ref self, name: ref String, im: own Image) {
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.keys[i] == name {
+                self.lists[i].push(im);
+                return;
+            }
+            i += 1;
+        }
+        self.keys.push(name.clone());
+        let mut l: Vec[Image] = Vec.new();
+        l.push(im);
+        self.lists.push(l);
+    }
+
+    // Images._set_field. Every name tinytag hands it is one of the three
+    // slots or starts with 'other.'.
+    fn set_field(mut ref self, name: ref String, im: own Image) {
+        match self.slot(name) {
+            Some(Some(_)) => {
+                self.set_other_field(name, im);
+                return;
+            }
+            Some(None) => {
+                self.set_slot(name, im);
+                return;
+            }
+            None => {}
+        }
+        if name.starts_with("other.") {
+            let short = name[6..name.len()].to_string();
+            self.set_other_field(short, im);
+        } else {
+            self.set_other_field(name, im);
+        }
+    }
+
+    fn update(mut ref self, other: ref Images) {
+        if let Some(im) = other.front_cover.clone() {
+            self.set_field("front_cover".to_string(), im);
+        }
+        if let Some(im) = other.back_cover.clone() {
+            self.set_field("back_cover".to_string(), im);
+        }
+        if let Some(im) = other.media.clone() {
+            self.set_field("media".to_string(), im);
+        }
+        let mut i = 0;
+        while i < other.keys.len() {
+            for im in other.lists[i].clone().into_iter() {
+                self.set_other_field(other.keys[i], im);
+            }
+            i += 1;
+        }
+    }
+
+    fn any(ref self) -> Option[Image] {
+        if self.front_cover.is_some() {
+            return self.front_cover.clone();
+        }
+        if self.back_cover.is_some() {
+            return self.back_cover.clone();
+        }
+        if self.media.is_some() {
+            return self.media.clone();
+        }
+        for l in self.lists.clone().into_iter() {
+            for im in l.into_iter() {
+                return Some(im);
+            }
+        }
+        None
+    }
+
+    fn as_dict(ref self) -> Vec[(String, Vec[Image])] {
+        let mut out: Vec[(String, Vec[Image])] = Vec.new();
+        if let Some(im) = self.front_cover.clone() {
+            out.push(("front_cover".to_string(), vec_of_image(im)));
+        }
+        if let Some(im) = self.back_cover.clone() {
+            out.push(("back_cover".to_string(), vec_of_image(im)));
+        }
+        if let Some(im) = self.media.clone() {
+            out.push(("media".to_string(), vec_of_image(im)));
+        }
+        let mut i = 0;
+        while i < self.keys.len() {
+            let mut found = false;
+            let mut j = 0;
+            while j < out.len() {
+                if out[j].0 == self.keys[i] {
+                    found = true;
+                    for im in self.lists[i].clone().into_iter() {
+                        out[j].1.push(im);
+                    }
+                }
+                j += 1;
+            }
+            if not found {
+                out.push((self.keys[i].clone(), self.lists[i].clone()));
+            }
+            i += 1;
+        }
+        out
+    }
+}
+
+fn vec_of_image(im: own Image) -> Vec[Image] {
+    let mut v: Vec[Image] = Vec.new();
+    v.push(im);
+    v
+}
+
+// ------------------------------------------------------------ the tag
+
+// The parser classes; each adds its own private attributes to __dict__.
+const K_ID3: i64 = 1;
+const K_MPEG: i64 = 2;
+const K_OGG: i64 = 3;
+const K_WAVE: i64 = 4;
+const K_FLAC: i64 = 5;
+const K_ASF: i64 = 6;
+const K_MP4: i64 = 7;
+const K_AIFF: i64 = 8;
+
+// The public attributes TinyTag.__init__ creates, in order. After them
+// in __dict__ come images, other, the private attributes, and then any
+// attribute a parser added.
+fn public_names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for n in ["filename", "filesize", "mime_type", "is_lossless", "duration", "channels", "bitrate", "bitdepth", "samplerate", "artist", "albumartist", "composer", "album", "disc", "disc_total", "title", "track", "track_total", "genre", "year", "comment"] {
+        v.push(n.to_string());
+    }
+    v
+}
+
+const N_PUBLIC: i64 = 21;
+
+fn private_names(kind: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for n in ["_filehandler", "_default_encoding", "_parse_duration", "_parse_tags", "_load_image", "_duration_parsed", "_tags_parsed"] {
+        v.push(n.to_string());
+    }
+    if kind == K_ID3 {
+        for n in ["_only_id3", "_modern_grouping_values", "_legacy_grouping_values"] {
+            v.push(n.to_string());
+        }
+    } else if kind == K_MPEG {
+        v.push("_end_padding".to_string());
+    } else if kind == K_OGG {
+        for n in ["_granule_pos", "_audio_size", "_granule_pos_serial", "_audio_size_serial"] {
+            v.push(n.to_string());
+        }
+    }
+    v
+}
+
+struct Tag {
+    kind: i64,
+    names: Vec[String],
+    vals: Vec[Option[Val]],
+    other_keys: Vec[String],
+    other_lists: Vec[Vec[String]],
+    images: Images,
+    parse_tags: bool,
+    parse_duration: bool,
+    load_image: bool,
+    duration_parsed: bool,
+    tags_parsed: bool,
+    // _ID3
+    only_id3: bool,
+    modern_grouping: Vec[String],
+    legacy_grouping: Vec[String],
+    // _MPEG
+    end_padding: i64,
+    // _Ogg
+    granule_pos: i64,
+    audio_size: i64,
+    granule_pos_serial: Option[i64],
+    audio_size_serial: Option[i64],
+}
+
+fn new_tag(kind: i64, filename: ref String, filesize: i64) -> Tag {
+    let names = public_names();
+    let mut vals: Vec[Option[Val]] = Vec.new();
+    let mut i = 0;
+    while i < names.len() {
+        vals.push(None);
+        i += 1;
+    }
+    vals[0] = Some(Val.Str(filename.clone()));
+    vals[1] = Some(Val.Int(filesize));
+    Tag {
+        kind: kind,
+        names: names,
+        vals: vals,
+        other_keys: Vec.new(),
+        other_lists: Vec.new(),
+        images: no_images(),
+        parse_tags: true,
+        parse_duration: true,
+        load_image: false,
+        duration_parsed: false,
+        tags_parsed: false,
+        only_id3: false,
+        modern_grouping: Vec.new(),
+        legacy_grouping: Vec.new(),
+        end_padding: 0,
+        granule_pos: 0,
+        audio_size: 0,
+        granule_pos_serial: None,
+        audio_size_serial: None,
+    }
+}
+
+impl Tag {
+    fn index(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.names.len() {
+            if self.names[i] == name {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    fn get(ref self, name: Str) -> Option[Val] {
+        let i = self.index(name.to_string());
+        if i < 0 {
+            return None;
+        }
+        self.vals[i].clone()
+    }
+
+    // `not self.<name>`, for a str field
+    fn empty(ref self, name: Str) -> bool {
+        match self.get(name) {
+            None => true,
+            Some(Val.Str(s)) => s.len() == 0,
+            Some(v) => match num_of(v) {
+                Some(x) => x == 0.0,
+                None => false,
+            },
+        }
+    }
+
+    // self.<name> = value
+    fn put(mut ref self, name: ref String, v: own Val) {
+        let i = self.index(name);
+        if i < 0 {
+            self.names.push(name.clone());
+            self.vals.push(Some(v));
+        } else {
+            self.vals[i] = Some(v);
+        }
+    }
+
+    fn set(mut ref self, name: Str, v: own Val) {
+        self.put(name.to_string(), v);
+    }
+
+    // fieldname in self.__dict__
+    fn in_dict(ref self, name: ref String) -> bool {
+        if self.index(name) >= 0 or name == "images" or name == "other" {
+            return true;
+        }
+        for p in private_names(self.kind) {
+            if p == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn set_other_field(mut ref self, name: ref String, value: ref String) {
+        if value.len() == 0 {
+            return;
+        }
+        let mut i = 0;
+        while i < self.other_keys.len() {
+            if self.other_keys[i] == name {
+                for x in self.other_lists[i].clone() {
+                    if x == value {
+                        return;
+                    }
+                }
+                self.other_lists[i].push(value.clone());
+                return;
+            }
+            i += 1;
+        }
+        self.other_keys.push(name.clone());
+        let mut l: Vec[String] = Vec.new();
+        l.push(value.clone());
+        self.other_lists.push(l);
+    }
+
+    fn set_other(mut ref self, name: Str, value: ref String) {
+        self.set_other_field(name.to_string(), value);
+    }
+
+    fn set_field(mut ref self, name: ref String, value: own Val) {
+        if let Val.Str(s) = value.clone() {
+            if s.len() == 0 {
+                return;
+            }
+        }
+        let i = self.index(name);
+        let old = if i < 0 { None } else { self.vals[i].clone() };
+        if let Some(o) = old {
+            if val_eq(value, o) {
+                return;
+            }
+            self.set_other_field(name, val_str(value));
+            return;
+        }
+        if name.starts_with("other.") {
+            let mut short = name[6..name.len()].to_string();
+            if self.in_dict(short) {
+                short = f"_{short}";
+            }
+            self.set_other_field(short, val_str(value));
+            return;
+        }
+        self.put(name, value);
+    }
+
+    fn sf(mut ref self, name: Str, value: own Val) {
+        self.set_field(name.to_string(), value);
+    }
+
+    fn update(mut ref self, other: ref Tag) {
+        let mut i = 3;
+        while i < N_PUBLIC {
+            if let Some(v) = other.vals[i].clone() {
+                self.set_field(other.names[i], v);
+            }
+            i += 1;
+        }
+        self.images.update(other.images);
+        let mut k = 0;
+        while k < other.other_keys.len() {
+            for v in other.other_lists[k].clone() {
+                self.set_other_field(other.other_keys[k], v);
+            }
+            k += 1;
+        }
+        i = N_PUBLIC;
+        while i < other.names.len() {
+            if let Some(v) = other.vals[i].clone() {
+                self.set_field(other.names[i], v);
+            }
+            i += 1;
+        }
+    }
+
+    fn as_dict(ref self) -> Vec[(String, Field)] {
+        let mut out: Vec[(String, Field)] = Vec.new();
+        let mut i = 0;
+        while i < N_PUBLIC {
+            self.dict_entry(mut out, i);
+            i += 1;
+        }
+        let mut k = 0;
+        while k < self.other_keys.len() {
+            let key = self.other_keys[k].clone();
+            let mut at = -1;
+            let mut j = 0;
+            while j < out.len() {
+                if out[j].0 == key {
+                    at = j;
+                }
+                j += 1;
+            }
+            if at < 0 {
+                out.push((key, Field.List(self.other_lists[k].clone())));
+            } else {
+                let merged = match out[at].1.clone() {
+                    Field.List(l) => {
+                        let mut l2 = l.clone();
+                        for x in self.other_lists[k].clone() {
+                            l2.push(x.clone());
+                        }
+                        l2
+                    }
+                    Field.Raw(_) => self.other_lists[k].clone(),
+                };
+                out[at] = (key, Field.List(merged));
+            }
+            k += 1;
+        }
+        i = N_PUBLIC;
+        while i < self.names.len() {
+            self.dict_entry(mut out, i);
+            i += 1;
+        }
+        out
+    }
+
+    fn dict_entry(ref self, out: mut ref Vec[(String, Field)], i: i64) {
+        if let Some(v) = self.vals[i].clone() {
+            let key = self.names[i].clone();
+            if is_audio_key(key) {
+                out.push((key, Field.Raw(v)));
+            } else {
+                let mut l: Vec[String] = Vec.new();
+                l.push(val_str(v));
+                out.push((key, Field.List(l)));
+            }
+        }
+    }
+}
+
+fn is_audio_key(k: ref String) -> bool {
+    for n in ["filename", "filesize", "mime_type", "duration", "channels", "bitrate", "bitdepth", "samplerate", "is_lossless"] {
+        if k == n {
+            return true;
+        }
+    }
+    false
+}
+
+// A value of as_dict(): an audio property as it is, or a list of str.
+#[derive(Clone)]
+enum Field {
+    Raw(Val),
+    List(Vec[String]),
+}
+
+// ------------------------------------------------------------ output
+
+fn push_json_str(out: mut ref String, s: ref String) {
+    out.push_str("\"");
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 0x20 {
+            out.push_str(f"\\u{n:04x}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push_str("\"");
+}
+
+fn json_val(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => {
+            let mut o = String.new();
+            push_json_str(mut o, s);
+            o
+        }
+        Val.Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+        _ => val_str(v),
+    }
+}
+
+// json.dumps(d, ensure_ascii=False, indent=2)
+fn to_json(d: ref Vec[(String, Field)]) -> String {
+    if d.len() == 0 {
+        return "{}".to_string();
+    }
+    let mut o = "{\n".to_string();
+    let mut i = 0;
+    while i < d.len() {
+        o.push_str("  ");
+        push_json_str(mut o, d[i].0);
+        o.push_str(": ");
+        match d[i].1.clone() {
+            Field.Raw(v) => o.push_str(json_val(v)),
+            Field.List(l) => {
+                if l.len() == 0 {
+                    o.push_str("[]");
+                } else {
+                    o.push_str("[\n");
+                    let mut j = 0;
+                    while j < l.len() {
+                        o.push_str("    ");
+                        push_json_str(mut o, l[j]);
+                        if j + 1 < l.len() {
+                            o.push_str(",");
+                        }
+                        o.push_str("\n");
+                        j += 1;
+                    }
+                    o.push_str("  ]");
+                }
+            }
+        }
+        if i + 1 < d.len() {
+            o.push_str(",");
+        }
+        o.push_str("\n");
+        i += 1;
+    }
+    o.push_str("}");
+    o
+}
+
+// str(value) as the csv module writes it
+fn field_str(f: ref Field) -> String {
+    match f {
+        Field.Raw(v) => val_str(v),
+        Field.List(l) => {
+            let mut s = "[".to_string();
+            let mut i = 0;
+            while i < l.len() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(repr_str(l[i]));
+                i += 1;
+            }
+            s.push_str("]");
+            s
+        }
+    }
+}
+
+// a csv.writer field, QUOTE_MINIMAL
+fn csv_field(s: ref String, delim: u8) -> String {
+    let mut quote = false;
+    for c in s.bytes() {
+        if c == delim or c == b'"' or c == 10 or c == 13 {
+            quote = true;
+        }
+    }
+    if not quote {
+        return s.clone();
+    }
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '"' {
+            o.push_str("\"\"");
+        } else {
+            o.push(c);
+        }
+    }
+    o.push_str("\"");
+    o
+}
+
+fn csv_row(fields: ref Vec[String], delim: u8) -> String {
+    let mut o = String.new();
+    let mut i = 0;
+    while i < fields.len() {
+        if i > 0 {
+            o.push(delim as char);
+        }
+        o.push_str(csv_field(fields[i], delim));
+        i += 1;
+    }
+    o.push_str("\n");
+    o
+}
+
+fn is_py_space(c: u8) -> bool {
+    c == 32 or (c >= 9 and c <= 13) or (c >= 0x1c and c <= 0x1f)
+}
+
+// str.strip()
+fn py_strip(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut a = 0;
+    let mut e = b.len();
+    while a < e and is_py_space(b[a]) {
+        a += 1;
+    }
+    while e > a and is_py_space(b[e - 1]) {
+        e -= 1;
+    }
+    text_of(sub(b, a, e))
+}
+
+// __main__._print_tag
+fn print_tag(t: ref Tag, fmt: ref String, header_printed: bool) -> bool {
+    let data = t.as_dict();
+    if fmt == "json" {
+        println(to_json(data));
+        return header_printed;
+    }
+    if fmt != "csv" and fmt != "tsv" and fmt != "tabularcsv" {
+        return header_printed;
+    }
+    let mut keys: Vec[String] = Vec.new();
+    let mut vals: Vec[String] = Vec.new();
+    for (k, f) in data.into_iter() {
+        let s = match f {
+            Field.Raw(Val.Str(x)) => x.replace("\u{0}", ";"),
+            _ => field_str(f),
+        };
+        keys.push(k);
+        vals.push(s);
+    }
+    let delim = if fmt == "tsv" { b'\t' } else { b',' };
+    let mut hp = header_printed;
+    let mut text = String.new();
+    if fmt == "tabularcsv" {
+        if not hp {
+            text.push_str(csv_row(keys, delim));
+            hp = true;
+        }
+        text.push_str(csv_row(vals, delim));
+        text = py_strip(text);
+    } else {
+        let mut i = 0;
+        while i < keys.len() {
+            let mut row: Vec[String] = Vec.new();
+            row.push(keys[i].clone());
+            row.push(vals[i].clone());
+            text.push_str(csv_row(row, delim));
+            i += 1;
+        }
+    }
+    println(text);
+    hp
+}
+// ------------------------------------------------------------ loading
+
+// TinyTag._load: the flags, then the class's _parse unless the file is
+// empty or neither tags nor duration were asked for.
+fn load(t: mut ref Tag, fh: mut ref Fh, tags: bool, duration: bool, image: bool) -> Result[(), Fail] {
+    t.parse_tags = tags;
+    t.parse_duration = duration;
+    t.load_image = image;
+    if t.filesize() == 0 {
+        return Ok(());
+    }
+    if tags or duration {
+        parse(mut t, mut fh)?;
+    }
+    Ok(())
+}
+
+fn parse(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let k = t.kind;
+    if k == K_ID3 {
+        parse_id3(mut t, mut fh)
+    } else if k == K_MPEG {
+        parse_mpeg(mut t, mut fh)
+    } else if k == K_OGG {
+        parse_ogg(mut t, mut fh)
+    } else if k == K_WAVE {
+        parse_wave(mut t, mut fh)
+    } else if k == K_FLAC {
+        parse_flac(mut t, mut fh)
+    } else if k == K_ASF {
+        parse_asf(mut t, mut fh)
+    } else if k == K_MP4 {
+        parse_mp4(mut t, mut fh)
+    } else {
+        parse_aiff(mut t, mut fh)
+    }
+}
+
+// A parser for a part of the file, as tinytag makes one: a fresh tag of
+// that class with the outer tag's filename and filesize.
+fn sub_tag(kind: i64, t: ref Tag) -> Tag {
+    new_tag(kind, t.filename(), t.filesize())
+}
+
+impl Tag {
+    fn filename(ref self) -> String {
+        match self.vals[0].clone() {
+            Some(Val.Str(s)) => s,
+            _ => String.new(),
+        }
+    }
+
+    fn filesize(ref self) -> i64 {
+        match self.vals[1].clone() {
+            Some(Val.Int(n)) => n,
+            _ => 0,
+        }
+    }
+
+    // an int attribute, or 0 when it is None
+    fn int_of(ref self, name: Str) -> i64 {
+        match self.get(name) {
+            Some(Val.Int(n)) => n,
+            _ => 0,
+        }
+    }
+
+    fn float_of(ref self, name: Str) -> f64 {
+        match self.get(name) {
+            Some(v) => match num_of(v) {
+                Some(x) => x,
+                None => 0.0,
+            },
+            None => 0.0,
+        }
+    }
+}
+
+// ------------------------------------------------------------ _ID3
+
+fn nul1() -> Vec[u8] {
+    bytes_of("\u{0}")
+}
+
+fn nul2() -> Vec[u8] {
+    bytes_of("\u{0}\u{0}")
+}
+
+// _ID3._find_string_end_pos
+fn find_end(content: ref Vec[u8], enc: i64, start: i64) -> i64 {
+    if enc == 0 or enc == 3 {
+        let e = find_bytes(content, nul1(), start);
+        return if e < 0 { start } else { e + 1 };
+    }
+    let mut e = find_bytes(content, nul2(), start);
+    while e >= 0 and (e - start) % 2 != 0 {
+        e = find_bytes(content, nul2(), e + 1);
+    }
+    if e < 0 { start } else { e + 2 }
+}
+
+// _ID3._decode_string; an encoding of -1 is None.
+fn decode_string(v: ref Vec[u8], enc: i64) -> String {
+    let s = if enc == 1 {
+        let be = v.len() >= 2 and v[0] == 0xFE and v[1] == 0xFF;
+        let le = v.len() >= 2 and v[0] == 0xFF and v[1] == 0xFE;
+        if be or le {
+            let end = if v.len() % 2 == 0 { v.len() } else { v.len() - 1 };
+            utf16_replace(sub(v, 2, end), be)
+        } else {
+            utf16_replace(v, false)
+        }
+    } else if enc == 2 {
+        if v.len() % 2 != 0 {
+            utf16_replace(sub(v, 0, v.len() - 1), true)
+        } else {
+            utf16_replace(v, true)
+        }
+    } else if enc == 3 {
+        utf8_replace(v)
+    } else {
+        latin1(v)
+    };
+    unpad(s)
+}
+
+fn unsynchsafe(d: ref Vec[u8], off: i64) -> Result[i64, Fail] {
+    let a = at(d, off)?;
+    let b = at(d, off + 1)?;
+    let c = at(d, off + 2)?;
+    let e = at(d, off + 3)?;
+    Ok((a << 21) | (b << 14) | (c << 7) | e)
+}
+
+fn ascii_lower(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c >= b'A' and c <= b'Z' {
+            out.push(c + 32);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// b[:end], with Python's meaning for a negative end
+fn head(b: ref Vec[u8], end: i64) -> Vec[u8] {
+    if end < 0 {
+        sub(b, 0, b.len() + end)
+    } else {
+        sub(b, 0, end)
+    }
+}
+
+fn strip_other(name: ref String) -> String {
+    if name.starts_with("other.") {
+        name[6..name.len()].to_string()
+    } else {
+        name.clone()
+    }
+}
+
+fn some_text(s: own String) -> Option[String] {
+    if s.len() == 0 { None } else { Some(s) }
+}
+
+// _ID3._create_tag_image
+fn create_tag_image(data: own Vec[u8], pic_type: i64, mime: own Option[String], desc: own Option[String]) -> Result[(String, Image), Fail] {
+    let mut field = "other.unknown".to_string();
+    if pic_type >= 0 and pic_type <= IMAGE_TYPE_LEN {
+        if pic_type == IMAGE_TYPE_LEN {
+            return Err(fail("IndexError", "tuple index out of range".to_string()));
+        }
+        field = image_type(pic_type);
+    }
+    let name = strip_other(field);
+    let size = data.len();
+    let m = match mime {
+        Some(x) => some_text(x),
+        None => None,
+    };
+    let d = match desc {
+        Some(x) => some_text(x),
+        None => None,
+    };
+    Ok((field, Image { name: name, size: size, data: data, mime_type: m, description: d }))
+}
+
+fn id3_header(fh: mut ref Fh) -> Result[(i64, bool, i64), Fail] {
+    let header = fh.read(10);
+    if header.len() == 10 and starts(header, "ID3") {
+        let major = header[3] as i64;
+        let extended = (header[5] & 0x40) > 0;
+        let size = unsynchsafe(header, 6)?;
+        return Ok((size, extended, major));
+    }
+    Ok((0, false, 0))
+}
+
+fn parse_id3(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let mut audio_offset = fh.tell();
+    let mut tag_size = 0;
+    if t.parse_tags {
+        tag_size = parse_id3v2(mut t, mut fh)?;
+    } else if t.parse_duration {
+        let (size, _e, _m) = id3_header(mut fh)?;
+        tag_size = size;
+    }
+    if tag_size > 0 {
+        audio_offset += 10 + tag_size;
+    }
+    fh.seek(audio_offset);
+    if t.only_id3 {
+        return Ok(());
+    }
+    let header = fh.read(4);
+    if t.filename().ends_with(".flac") or is_bytes(header, "fLaC") {
+        t.set("mime_type", s_val("audio/flac"));
+        fh.seek(audio_offset);
+        let mut ft = sub_tag(K_FLAC, t);
+        load(mut ft, mut fh, t.parse_tags, t.parse_duration, t.load_image)?;
+        t.update(ft);
+    } else {
+        t.set("mime_type", s_val("audio/mpeg"));
+        let mut end_padding = 0;
+        if t.filesize() >= 128 {
+            fh.seek(fh.buf.len() - 128);
+            if parse_id3v1(mut t, mut fh)? {
+                end_padding = 128;
+            }
+        }
+        fh.seek(audio_offset);
+        let mut mt = sub_tag(K_MPEG, t);
+        mt.end_padding = end_padding;
+        load(mut mt, mut fh, false, t.parse_duration, false)?;
+        t.update(mt);
+    }
+    t.tags_parsed = t.parse_tags;
+    t.duration_parsed = t.parse_duration;
+    Ok(())
+}
+
+fn parse_id3v2(t: mut ref Tag, fh: mut ref Fh) -> Result[i64, Fail] {
+    let (size, extended, major) = id3_header(mut fh)?;
+    if size <= 0 {
+        return Ok(size);
+    }
+    let mut parsed = 10;
+    if extended {
+        let e = fh.read(6);
+        let ext = unsynchsafe(e, 0)?;
+        parsed += ext;
+        fh.skip(ext - 6);
+    }
+    while parsed < size {
+        let n = parse_frame(mut t, mut fh, size, major)?;
+        if n == -1 {
+            break;
+        }
+        parsed += n;
+    }
+    set_grouping_work_fields(mut t);
+    Ok(size)
+}
+
+fn v1_text(b: ref Vec[u8]) -> String {
+    unpad(latin1(b))
+}
+
+fn parse_id3v1(t: mut ref Tag, fh: mut ref Fh) -> Result[bool, Fail] {
+    let content = fh.read(if t.parse_tags { 128 } else { 3 });
+    if not starts(content, "TAG") {
+        return Ok(false);
+    }
+    if not t.parse_tags {
+        return Ok(true);
+    }
+    if t.empty("title") {
+        t.sf("title", Val.Str(v1_text(sub(content, 3, 33))));
+    }
+    if t.empty("artist") {
+        t.sf("artist", Val.Str(v1_text(sub(content, 33, 63))));
+    }
+    if t.empty("album") {
+        t.sf("album", Val.Str(v1_text(sub(content, 63, 93))));
+    }
+    if t.empty("year") {
+        t.sf("year", Val.Str(v1_text(sub(content, 93, 97))));
+    }
+    let mut comment = sub(content, 97, 127);
+    let n = comment.len();
+    let last = at(comment, n - 1)?;
+    let second = at(comment, n - 2)?;
+    if second == 0 and last != 0 {
+        if t.get("track").is_none() {
+            t.sf("track", Val.Int(last));
+        }
+        comment = sub(comment, 0, n - 2);
+    }
+    if t.empty("comment") {
+        t.sf("comment", Val.Str(v1_text(comment)));
+    }
+    if t.empty("genre") {
+        let g = at(content, 127)?;
+        if g < GENRE_NAME_LEN {
+            t.sf("genre", Val.Str(genre_name(g)));
+        }
+    }
+    Ok(true)
+}
+
+fn set_custom_field(t: mut ref Tag, name: ref String, value: ref String) {
+    let lower = name.to_lowercase();
+    let field = match id3_custom(lower) {
+        Some(f) => f,
+        None => f"other.{lower}",
+    };
+    t.set_field(field, Val.Str(value.clone()));
+}
+
+fn set_grouping_work_fields(t: mut ref Tag) {
+    if t.modern_grouping.len() > 0 {
+        for v in t.modern_grouping.clone() {
+            t.set_other("grouping", v);
+        }
+        for v in t.legacy_grouping.clone() {
+            t.set_other("work", v);
+        }
+        return;
+    }
+    for v in t.legacy_grouping.clone() {
+        t.set_other("grouping", v);
+    }
+}
+
+fn parse_id3_image(fid: ref String, content: ref Vec[u8]) -> Result[(String, Image), Fail] {
+    let enc = at(content, 0)?;
+    let mut mime: Option[String] = None;
+    let mut desc_start = 5;
+    if fid == "PIC" {
+        mime = id3v22_image_format(latin1(ascii_lower(sub(content, 1, 4))));
+    } else {
+        let me = find_end(content, 0, 1);
+        mime = Some(decode_string(sub(content, 1, me), -1).to_lowercase());
+        desc_start = me + 1;
+    }
+    let pic_type = at(content, desc_start - 1)?;
+    let mut de = find_end(content, enc, desc_start);
+    if de + 1 < content.len() and content[de] == 0 and content[de + 1] != 0 {
+        de += 1;
+    }
+    let desc = decode_string(sub(content, desc_start, de), enc);
+    create_tag_image(tail(content, de), pic_type, mime, Some(desc))
+}
+
+fn lrc_timestamp(seconds: f64) -> String {
+    let total = (seconds * 100.0) as i64;
+    let minutes = total / 6000;
+    let rest = total % 6000;
+    let secs = rest / 100;
+    let cs = rest % 100;
+    f"{minutes:02}:{secs:02}.{cs:02}"
+}
+
+fn lstrip_nl(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    while i < b.len() and b[i] == 10 {
+        i += 1;
+    }
+    text_of(tail(b, i))
+}
+
+fn parse_synced_lyrics(content: ref Vec[u8]) -> Result[String, Fail] {
+    let mut lyrics = String.new();
+    let n = content.len();
+    let enc = at(content, 0)?;
+    let ts_format = at(content, 4)?;
+    let mut end_pos = find_end(content, enc, 6);
+    let mut offset = end_pos;
+    let mut found_line = false;
+    while offset < n {
+        end_pos = find_end(content, enc, offset);
+        let value = lstrip_nl(decode_string(sub(content, offset, end_pos), enc));
+        offset = end_pos;
+        if offset + 4 > n {
+            break;
+        }
+        let time = be32(content, offset);
+        offset += 4;
+        if found_line {
+            lyrics.push_str("\n");
+        }
+        found_line = true;
+        if ts_format == 2 {
+            let stamp = lrc_timestamp(time as f64 / 1000.0);
+            lyrics.push_str(f"[{stamp}]{value}");
+        } else {
+            lyrics.push_str(value);
+        }
+    }
+    Ok(lyrics)
+}
+
+fn is_numbered(f: ref String) -> bool {
+    f == "track" or f == "disc" or f == "other.movement"
+}
+
+// the values of a text frame, split at the encoding's terminator
+fn set_text_frame(t: mut ref Tag, fieldname: ref String, content0: ref Vec[u8]) -> Result[(), Fail] {
+    let enc = at(content0, 0)?;
+    let content = tail(content0, 1);
+    let n = content.len();
+    let mut offset = 0;
+    while offset < n {
+        let mut end_pos = find_end(content, enc, offset);
+        if end_pos <= offset {
+            end_pos = n;
+        }
+        let mut value = decode_string(sub(content, offset, end_pos), enc);
+        offset = end_pos;
+        if is_numbered(fieldname) {
+            if value.contains("/") {
+                let (v, total, _found) = split_slash(value);
+                if is_decimal(total) {
+                    t.set_field(f"{fieldname}_total", Val.Int(to_int(total)));
+                }
+                value = v;
+            }
+            if is_decimal(value) {
+                t.set_field(fieldname, Val.Int(to_int(value)));
+            }
+        } else if fieldname == "genre" {
+            let mut genre_id = 255;
+            if is_decimal(value) {
+                genre_id = to_int(value);
+            } else if value.starts_with("(") {
+                let close = match value.find(")") {
+                    Some(i) => i,
+                    None => -1,
+                };
+                let inner = if close < 0 {
+                    if value.len() >= 2 { value[1..value.len() - 1].to_string() } else { String.new() }
+                } else {
+                    value[1..close].to_string()
+                };
+                if close > 0 and is_decimal(inner) {
+                    genre_id = to_int(inner);
+                }
+            }
+            if genre_id >= 0 and genre_id < GENRE_NAME_LEN {
+                value = genre_name(genre_id);
+            }
+            t.set_field(fieldname, Val.Str(value));
+        } else if fieldname == "modern_grouping" {
+            t.modern_grouping.push(value);
+        } else if fieldname == "legacy_grouping" {
+            t.legacy_grouping.push(value);
+        } else {
+            t.set_field(fieldname, Val.Str(value));
+        }
+    }
+    Ok(())
+}
+
+fn all_zero(b: ref Vec[u8]) -> bool {
+    for x in b {
+        if x != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn parse_frame(t: mut ref Tag, fh: mut ref Fh, total_size: i64, ver: i64) -> Result[i64, Fail] {
+    let header_len = if ver == 2 { 6 } else { 10 };
+    let mut parsed = header_len;
+    let size_bytes = if ver == 2 { 3 } else { 4 };
+    let header = fh.read(header_len);
+    if header.len() != header_len {
+        return Ok(-1);
+    }
+    let fid_b = sub(header, 0, size_bytes);
+    if all_zero(fid_b) {
+        return Ok(-1);
+    }
+    let frame_size = if size_bytes == 3 {
+        uint(header, 3, 3, false)
+    } else if ver == 4 {
+        unsynchsafe(header, 4)?
+    } else {
+        be32(header, 4)
+    };
+    parsed += frame_size;
+    if frame_size == 0 {
+        return Ok(parsed);
+    }
+    if frame_size > total_size {
+        return Ok(-1);
+    }
+    let fid = latin1(fid_b);
+    let mapped = if t.parse_tags { id3_field(fid) } else { None };
+    if let Some(fieldname) = mapped {
+        let content0 = fh.read(frame_size);
+        if fieldname == "comment" or fieldname == "other.lyrics" {
+            let enc = at(content0, 0)?;
+            let content = tail(content0, 4);
+            let end_pos = find_end(content, enc, 0);
+            let mut value = decode_string(sub(content, 0, end_pos), enc);
+            if end_pos < content.len() {
+                let descriptor = value.clone();
+                value = decode_string(tail(content, end_pos), enc);
+                if fieldname == "comment" and descriptor.len() > 0 and value.len() > 0 {
+                    set_custom_field(mut t, descriptor, value);
+                    return Ok(parsed);
+                }
+            }
+            t.set_field(fieldname, Val.Str(value));
+            return Ok(parsed);
+        }
+        if fid.starts_with("W") {
+            t.set_field(fieldname, Val.Str(decode_string(content0, -1)));
+            return Ok(parsed);
+        }
+        set_text_frame(mut t, fieldname, content0)?;
+    } else if t.parse_tags and (fid == "SYLT" or fid == "SLT") {
+        let content = fh.read(frame_size);
+        let lyrics = parse_synced_lyrics(content)?;
+        t.set_other("lyrics", lyrics);
+    } else if t.parse_tags and (fid == "TXXX" or fid == "TXX") {
+        let content = fh.read(frame_size);
+        let enc = at(content, 0)?;
+        let end_pos = find_end(content, enc, 1);
+        let description = decode_string(sub(content, 1, end_pos), enc);
+        let value = decode_string(tail(content, end_pos), enc);
+        if description.len() > 0 and value.len() > 0 {
+            set_custom_field(mut t, description, value);
+        }
+    } else if t.parse_tags and fid == "PRIV" {
+        let content = fh.read(frame_size);
+        let owner_end = find_end(content, 0, 0);
+        let owner = head(content, owner_end - 1);
+        if is_bytes(owner, "XMP") {
+            let value = utf8_replace(unpad_bytes(tail(content, owner_end)));
+            t.set_other("xmp", value);
+        }
+    } else if t.parse_tags and not id3_ignored(fid) {
+        let content = fh.read(frame_size);
+        let enc = at(content, 0)?;
+        let value = if enc >= 0 and enc <= 3 {
+            decode_string(tail(content, 1), enc)
+        } else {
+            decode_string(content, -1)
+        };
+        t.set_field(f"other.{fid.to_lowercase()}", Val.Str(value));
+    } else if t.load_image and (fid == "APIC" or fid == "PIC") {
+        let content = fh.read(frame_size);
+        let (field, image) = parse_id3_image(fid, content)?;
+        t.images.set_field(field, image);
+    } else {
+        fh.skip(frame_size);
+    }
+    Ok(parsed)
+}
+
+// ------------------------------------------------------------ _MPEG
+
+fn parse_xing(c: ref Vec[u8], off0: i64) -> Result[(i64, i64), Fail] {
+    let mut off = off0 + 4;
+    need(c, off, 4)?;
+    let flags = sint(c, off, 4, false);
+    off += 4;
+    let mut frames = 0;
+    let mut byte_count = 0;
+    if flags & 1 != 0 {
+        need(c, off, 4)?;
+        frames = sint(c, off, 4, false);
+        off += 4;
+    }
+    if flags & 2 != 0 {
+        need(c, off, 4)?;
+        byte_count = sint(c, off, 4, false);
+    }
+    Ok((frames, byte_count))
+}
+
+fn parse_vbri(c: ref Vec[u8], off0: i64) -> Result[(i64, i64), Fail] {
+    let off = off0 + 10;
+    need(c, off, 4)?;
+    let byte_count = be32(c, off);
+    need(c, off + 4, 4)?;
+    let frames = be32(c, off + 4);
+    Ok((frames, byte_count))
+}
+
+fn parse_mpeg(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    t.set("mime_type", s_val("audio/mpeg"));
+    if not t.parse_duration {
+        return Ok(());
+    }
+    t.set("is_lossless", Val.Bool(false));
+    let mut samples_pf = 0;
+    let mut max_estimation_frames = 0;
+    let mut frame_size_accu = 0;
+    let mut frames = 0;
+    let mut bitrate_accu = 0;
+    let mut last_bitrates: Vec[i64] = Vec.new();
+    let mut first_id = -1;
+    let mut audio_offset = fh.tell();
+    loop {
+        let header = fh.read(4);
+        let header_len = header.len();
+        if header_len < 4 {
+            if frames > 0 {
+                t.set("bitrate", Val.Float(bitrate_accu as f64 / frames as f64));
+            }
+            break;
+        }
+        let id_byte = header[1] as i64;
+        let br_sr_byte = header[2] as i64;
+        let br_id = (br_sr_byte >> 4) & 15;
+        let sr_id = (br_sr_byte >> 2) & 3;
+        let padding = (br_sr_byte >> 1) & 1;
+        let mpeg_id = (id_byte >> 3) & 3;
+        let layer_id = (id_byte >> 1) & 3;
+        let version_id = (id_byte >> 1) & 15;
+        let channel_mode = ((header[3] as i64) >> 6) & 3;
+        if header[0] != 0xFF or (id_byte & 0xE0) != 0xE0 or (first_id >= 0 and first_id != version_id) or br_id > 14 or br_id == 0 or sr_id == 3 or layer_id == 0 or mpeg_id == 1 {
+            let mut idx = -1;
+            let mut k = 1;
+            while k < header_len {
+                if header[k] == 0xFF {
+                    idx = k;
+                    break;
+                }
+                k += 1;
+            }
+            let mut next_offset = header_len;
+            if idx != -1 {
+                next_offset = idx;
+                fh.skip(idx - header_len);
+            }
+            if frames == 0 {
+                audio_offset += next_offset;
+            }
+            continue;
+        }
+        t.set("channels", Val.Int(mpeg_channels(channel_mode)));
+        let frame_br = mpeg_bitrate((mpeg_id * 4 + layer_id) * 16 + br_id);
+        let samplerate = mpeg_sample_rate(mpeg_id * 3 + sr_id);
+        t.set("samplerate", Val.Int(samplerate));
+        samples_pf = mpeg_samples_per_frame(mpeg_id * 4 + layer_id);
+        let slot_size = mpeg_slot_size(layer_id);
+        let coefficient = (samples_pf / 8 / slot_size) * 1000;
+        let frame_length = ((coefficient * frame_br) / samplerate + padding) * slot_size;
+        if first_id < 0 {
+            first_id = version_id;
+            max_estimation_frames = (30 * samplerate) / samples_pf;
+        }
+        if frames == 0 {
+            let mut xframes = 0;
+            let mut byte_count = 0;
+            let prev_offset = header_len + audio_offset;
+            let frame_content = fh.read(if frame_length < 50 { frame_length } else { 50 });
+            let mut xing = find_str(frame_content, "Xing", 0);
+            if xing == -1 {
+                xing = find_str(frame_content, "Info", 0);
+            }
+            if xing != -1 {
+                let (f, b) = parse_xing(frame_content, xing)?;
+                xframes = f;
+                byte_count = b - frame_length;
+            } else {
+                let vbri = find_str(frame_content, "VBRI", 0);
+                if vbri != -1 {
+                    let (f, b) = parse_vbri(frame_content, vbri)?;
+                    xframes = f;
+                    byte_count = b;
+                }
+            }
+            if xframes > 0 and byte_count > 0 {
+                let dur = (xframes * samples_pf) as f64 / samplerate as f64;
+                t.set("duration", Val.Float(dur));
+                t.set("bitrate", Val.Float((byte_count * 8) as f64 / dur / 1000.0));
+                t.duration_parsed = true;
+                return Ok(());
+            }
+            fh.seek(prev_offset);
+        }
+        frames += 1;
+        bitrate_accu += frame_br;
+        if frames <= 5 and not last_bitrates.contains(frame_br) {
+            last_bitrates.push(frame_br);
+        }
+        frame_size_accu += frame_length;
+        let is_cbr = frames == 5 and last_bitrates.len() == 1;
+        if frames == max_estimation_frames or is_cbr {
+            let stream_size = t.filesize() - audio_offset - t.end_padding;
+            let est = (stream_size as f64 / (frame_size_accu as f64 / frames as f64) + 0.5) as i64;
+            let samples = est * samples_pf;
+            t.set("duration", Val.Float(samples as f64 / samplerate as f64));
+            t.set("bitrate", Val.Float(bitrate_accu as f64 / frames as f64));
+            t.duration_parsed = true;
+            return Ok(());
+        }
+        if frame_length > 1 {
+            fh.skip(frame_length - header_len);
+        }
+    }
+    let sr = t.int_of("samplerate");
+    if sr != 0 {
+        t.set("duration", Val.Float((frames * samples_pf) as f64 / sr as f64));
+    }
+    t.duration_parsed = true;
+    Ok(())
+}
+// ------------------------------------------------------------ helpers
+
+// struct.unpack('<I', fh.read(4)) and friends
+fn read_le(fh: mut ref Fh, n: i64) -> Result[i64, Fail] {
+    let b = fh.read(n);
+    need_exact(b, n)?;
+    Ok(uint(b, 0, n, true))
+}
+
+fn read_be(fh: mut ref Fh, n: i64) -> Result[i64, Fail] {
+    let b = fh.read(n);
+    need_exact(b, n)?;
+    Ok(uint(b, 0, n, false))
+}
+
+// int / int, which Python divides as floats
+fn fdiv(a: i64, b: i64) -> f64 {
+    a as f64 / b as f64
+}
+
+// ------------------------------------------------------------ Vorbis comments
+
+// A value _parse_vorbis_comment yields: a field value or a picture.
+enum VItem {
+    V(Val),
+    Img(Image),
+}
+
+fn is_track_disc(f: ref String) -> bool {
+    f == "track" or f == "disc" or f == "track_total" or f == "disc_total"
+}
+
+// _Ogg._parse_vorbis_comment
+fn parse_vorbis_comment(fh: mut ref Fh, load_image: bool, read_data: bool) -> Result[Vec[(String, VItem)], Fail] {
+    let mut out: Vec[(String, VItem)] = Vec.new();
+    let vendor_length = read_le(mut fh, 4)?;
+    fh.skip(vendor_length);
+    let elements = read_le(mut fh, 4)?;
+    let mut i = 0;
+    while i < elements {
+        i += 1;
+        let length = read_le(mut fh, 4)?;
+        if not read_data {
+            fh.skip(length);
+            continue;
+        }
+        let pair = utf8_replace(fh.read(length));
+        let (key, value0) = match split_eq(pair) {
+            Some(kv) => kv,
+            None => continue,
+        };
+        let key_lower = key.to_lowercase();
+        if key_lower == "metadata_block_picture" {
+            if load_image {
+                let mut pic = fh_of(b64_decode(value0));
+                if let Some((field, image)) = parse_flac_image(mut pic, true)? {
+                    out.push((field, VItem.Img(image)));
+                }
+            }
+            continue;
+        }
+        let fieldname = match vorbis_field(key_lower) {
+            Some(f) => f,
+            None => f"other.{key_lower}",
+        };
+        if is_track_disc(fieldname) {
+            let mut value = value0.clone();
+            if (fieldname == "track" or fieldname == "disc") and value.contains("/") {
+                let (v, total, _found) = split_slash(value);
+                if is_decimal(total) {
+                    out.push((f"{fieldname}_total", VItem.V(Val.Int(to_int(total)))));
+                }
+                value = v;
+            }
+            if is_decimal(value) {
+                out.push((fieldname, VItem.V(Val.Int(to_int(value)))));
+            }
+        } else {
+            out.push((fieldname, VItem.V(Val.Str(value0))));
+        }
+    }
+    Ok(out)
+}
+
+fn set_vorbis_comment_fields(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    for (field, item) in parse_vorbis_comment(mut fh, t.load_image, true)?.into_iter() {
+        match item {
+            VItem.Img(im) => t.images.set_field(field, im),
+            VItem.V(v) => t.set_field(field, v),
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ _Ogg
+
+// What _Ogg._parse keeps between packets.
+struct OggState {
+    check_flac: bool,
+    check_speex: bool,
+    preskip: i64,
+}
+
+fn walker_at(packet: ref Vec[u8], pos: i64) -> Fh {
+    let mut w = fh_of(packet.clone());
+    w.seek(pos);
+    w
+}
+
+// One packet of _Ogg._parse's loop; true when the loop breaks.
+fn ogg_packet(t: mut ref Tag, packet: ref Vec[u8], serial: i64, st: mut ref OggState) -> Result[bool, Fail] {
+    if starts(packet, "\u{1}vorbis") {
+        if t.parse_duration {
+            need(packet, 11, 5)?;
+            let channels = packet[11] as i64;
+            let samplerate = sint(packet, 12, 4, true);
+            need(packet, 20, 4)?;
+            let bitrate = sint(packet, 20, 4, true);
+            if channels > 0 {
+                t.set("channels", Val.Int(channels));
+            }
+            if samplerate > 0 {
+                t.set("samplerate", Val.Int(samplerate));
+            }
+            if bitrate > 0 {
+                t.set("bitrate", Val.Float(fdiv(bitrate, 1000)));
+            }
+            t.set("mime_type", s_val("audio/ogg; codecs=\"vorbis\""));
+            t.set("is_lossless", Val.Bool(false));
+            t.granule_pos_serial = Some(serial);
+            t.duration_parsed = true;
+        }
+    } else if starts(packet, "\u{3}vorbis") {
+        if t.parse_tags {
+            let mut w = walker_at(packet, 7);
+            set_vorbis_comment_fields(mut t, mut w)?;
+            t.tags_parsed = true;
+        }
+    } else if starts(packet, "OpusHead") {
+        if t.parse_duration {
+            need(packet, 8, 4)?;
+            let version = packet[8] as i64;
+            let channels = packet[9] as i64;
+            st.preskip = le16(packet, 10);
+            if (version & 0xF0) == 0 {
+                if channels > 0 {
+                    t.set("channels", Val.Int(channels));
+                }
+                t.set("samplerate", Val.Int(48000));
+            }
+            t.set("mime_type", s_val("audio/ogg; codecs=\"opus\""));
+            t.set("is_lossless", Val.Bool(false));
+            t.duration_parsed = true;
+            t.granule_pos_serial = Some(serial);
+        }
+    } else if starts(packet, "OpusTags") {
+        if t.parse_tags {
+            let mut w = walker_at(packet, 8);
+            set_vorbis_comment_fields(mut t, mut w)?;
+            t.tags_parsed = true;
+        }
+        t.audio_size_serial = Some(serial);
+    } else if starts(packet, "\u{7f}FLAC") {
+        let mut w = walker_at(packet, 9);
+        let mut ft = sub_tag(K_FLAC, t);
+        load(mut ft, mut w, false, t.parse_duration, t.load_image)?;
+        t.update(ft);
+        if t.parse_duration {
+            t.set("mime_type", s_val("audio/ogg; codecs=\"flac\""));
+            t.set("is_lossless", Val.Bool(true));
+        }
+        t.duration_parsed = t.parse_duration;
+        st.check_flac = true;
+    } else if st.check_flac {
+        if t.parse_tags {
+            let mut w = walker_at(packet, 0);
+            let meta_header = w.read(4);
+            let block_type = at(meta_header, 0)? & 0x7f;
+            if block_type == 4 {
+                set_vorbis_comment_fields(mut t, mut w)?;
+            }
+            t.tags_parsed = true;
+        }
+        st.check_flac = false;
+    } else if starts(packet, "Speex   ") {
+        if t.parse_duration {
+            need(packet, 36, 4)?;
+            let samplerate = sint(packet, 36, 4, true);
+            need(packet, 48, 8)?;
+            let channels = sint(packet, 48, 4, true);
+            let bitrate = sint(packet, 52, 4, true);
+            if samplerate > 0 {
+                t.set("samplerate", Val.Int(samplerate));
+            }
+            if channels > 0 {
+                t.set("channels", Val.Int(channels));
+            }
+            if bitrate > 0 {
+                t.set("bitrate", Val.Float(fdiv(bitrate, 1000)));
+            }
+            t.set("mime_type", s_val("audio/ogg; codecs=\"speex\""));
+            t.set("is_lossless", Val.Bool(false));
+            t.granule_pos_serial = Some(serial);
+            t.duration_parsed = true;
+        }
+        st.check_speex = true;
+    } else if st.check_speex {
+        if t.parse_tags {
+            let mut w = walker_at(packet, 0);
+            set_vorbis_comment_fields(mut t, mut w)?;
+            t.tags_parsed = true;
+        }
+        st.check_speex = false;
+    }
+    Ok(t.tags_parsed and not t.parse_duration)
+}
+
+fn same_serial(a: Option[i64], serial: i64) -> bool {
+    match a {
+        Some(x) => x == serial,
+        None => false,
+    }
+}
+
+// _Ogg._parse, with _parse_pages run in line: the generator's state and
+// the packet loop's share the tag, so each packet is handled as the
+// generator yields it.
+fn parse_ogg(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let mut st = OggState { check_flac: false, check_speex: false, preskip: 0 };
+    let mut serials: Vec[i64] = Vec.new();
+    let mut packets: Vec[Vec[u8]] = Vec.new();
+    let mut last_granule_pos = 0;
+    let mut last_audio_size = 0;
+    let mut page_header = fh.read(27);
+    if not starts(page_header, "OggS") or not (page_header.len() > 4 and page_header[4] == 0) {
+        return Err(parse_error("Invalid OGG header"));
+    }
+    t.set("mime_type", s_val("audio/ogg"));
+    let mut stop = false;
+    while page_header.len() == 27 {
+        let version = page_header[4];
+        if not starts(page_header, "OggS") or version != 0 {
+            break;
+        }
+        let eos = page_header[5] & 0x04;
+        let granule_pos = sint(page_header, 6, 8, true);
+        let serial = uint(page_header, 14, 4, true);
+        let mut slot = -1;
+        let mut k = 0;
+        while k < serials.len() {
+            if serials[k] == serial {
+                slot = k;
+            }
+            k += 1;
+        }
+        if slot < 0 {
+            serials.push(serial);
+            packets.push(Vec.new());
+            slot = serials.len() - 1;
+        }
+        let size_match = same_serial(t.audio_size_serial, serial);
+        if same_serial(t.granule_pos_serial, serial) {
+            if eos != 0 {
+                t.granule_pos = granule_pos;
+            } else {
+                t.granule_pos = last_granule_pos;
+                last_granule_pos = granule_pos;
+            }
+        }
+        let segments = page_header[26] as i64;
+        let seg_sizes = fh.read(segments);
+        let mut read_size = 0;
+        let mut audio_size = 0;
+        for seg in seg_sizes {
+            let s = seg as i64;
+            read_size += s;
+            if size_match {
+                audio_size += s;
+            }
+            if s < 255 and not t.tags_parsed {
+                let more = fh.read(read_size);
+                push_all(mut packets[slot], more);
+                let packet = packets[slot].clone();
+                if ogg_packet(mut t, packet, serial, mut st)? {
+                    stop = true;
+                    break;
+                }
+                packets[slot] = Vec.new();
+                read_size = 0;
+            }
+        }
+        if stop {
+            break;
+        }
+        if read_size > 0 {
+            if t.tags_parsed and t.duration_parsed {
+                fh.skip(read_size);
+            } else {
+                let more = fh.read(read_size);
+                push_all(mut packets[slot], more);
+            }
+        }
+        if size_match {
+            if eos != 0 {
+                t.audio_size += last_audio_size + audio_size;
+            } else {
+                t.audio_size += last_audio_size;
+                last_audio_size = audio_size;
+            }
+        }
+        page_header = fh.read(27);
+    }
+    let sr = t.int_of("samplerate");
+    if t.get("duration").is_some() or sr == 0 {
+        return Ok(());
+    }
+    let d = fdiv(t.granule_pos - st.preskip, sr);
+    if d < 0.0 {
+        t.set("duration", Val.Int(0));
+    } else {
+        t.set("duration", Val.Float(d));
+    }
+    let dur = t.float_of("duration");
+    if t.audio_size != 0 and dur != 0.0 {
+        t.set("bitrate", Val.Float((t.audio_size * 8) as f64 / dur / 1000.0));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ _Flac
+
+fn parse_flac(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let header = fh.read(4);
+    if not starts(header, "fLaC") {
+        return Err(parse_error("Invalid FLAC header"));
+    }
+    t.set("mime_type", s_val("audio/flac"));
+    let mut found_streaminfo = false;
+    let mut block_header = fh.read(4);
+    while block_header.len() == 4 {
+        let block_type = (block_header[0] & 0x7f) as i64;
+        let is_last = (block_header[0] & 0x80) != 0;
+        let is_streaminfo = block_type == 0;
+        let size = uint(block_header, 1, 3, false);
+        if t.parse_duration and is_streaminfo and not found_streaminfo {
+            let h = fh.read(size);
+            need(h, 10, 8)?;
+            let info = uint(h, 10, 8, false);
+            let samplerate = (info >> 44) & ((1 << 20) - 1);
+            let channels = ((info >> 41) & 7) + 1;
+            let bitdepth = ((info >> 36) & 31) + 1;
+            let total_samples = info & ((1 << 36) - 1);
+            if samplerate > 0 {
+                t.set("samplerate", Val.Int(samplerate));
+                let duration = fdiv(total_samples, samplerate);
+                t.set("duration", Val.Float(duration));
+                if duration > 0.0 {
+                    t.set("bitrate", Val.Float((t.filesize() * 8) as f64 / duration / 1000.0));
+                }
+            }
+            t.set("channels", Val.Int(channels));
+            t.set("bitdepth", Val.Int(bitdepth));
+            t.set("is_lossless", Val.Bool(true));
+        } else if block_type == 4 {
+            for (field, item) in parse_vorbis_comment(mut fh, false, t.parse_tags)?.into_iter() {
+                if let VItem.V(v) = item {
+                    t.set_field(field, v);
+                }
+            }
+        } else if block_type == 6 {
+            if let Some((field, image)) = parse_flac_image(mut fh, t.load_image)? {
+                t.images.set_field(field, image);
+            }
+        } else {
+            fh.skip(size);
+        }
+        if is_streaminfo and not found_streaminfo {
+            found_streaminfo = true;
+        }
+        if is_last {
+            break;
+        }
+        block_header = fh.read(4);
+    }
+    let duration = t.float_of("duration");
+    if duration != 0.0 {
+        let audio_offset = fh.tell();
+        let bitrate = ((t.filesize() - audio_offset) * 8) as f64 / duration / 1000.0;
+        if bitrate > 0.0 {
+            t.set("bitrate", Val.Float(bitrate));
+        }
+    }
+    t.duration_parsed = t.parse_duration;
+    t.tags_parsed = t.parse_tags;
+    Ok(())
+}
+
+// _Flac._parse_image
+fn parse_flac_image(fh: mut ref Fh, read_data: bool) -> Result[Option[(String, Image)], Fail] {
+    let mut mime: Option[String] = None;
+    let pic_type = read_be(mut fh, 4)?;
+    let mime_len = read_be(mut fh, 4)?;
+    if read_data {
+        mime = Some(utf8_replace(fh.read(mime_len)));
+    } else {
+        fh.skip(mime_len);
+    }
+    let mut desc: Option[String] = None;
+    let desc_len = read_be(mut fh, 4)?;
+    if read_data {
+        desc = Some(utf8_replace(fh.read(desc_len)));
+    } else {
+        fh.skip(desc_len);
+    }
+    fh.skip(16);
+    let pic_len = read_be(mut fh, 4)?;
+    if not read_data {
+        fh.skip(pic_len);
+        return Ok(None);
+    }
+    let data = fh.read(pic_len);
+    Ok(Some(create_tag_image(data, pic_type, mime, desc)?))
+}
+
+// ------------------------------------------------------------ _Wave
+
+// an embedded ID3 tag, as _Wave and _Aiff read one
+fn embedded_id3(t: mut ref Tag, body: own Vec[u8]) -> Result[(), Fail] {
+    let mut id3 = sub_tag(K_ID3, t);
+    let mut w = fh_of(body);
+    id3.only_id3 = true;
+    load(mut id3, mut w, true, false, t.load_image)?;
+    t.update(id3);
+    Ok(())
+}
+
+fn parse_wave(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let header = fh.read(12);
+    if not starts(header, "RIFF") or not starts_at(header, "WAVE", 8) {
+        return Err(parse_error("Invalid WAV header"));
+    }
+    t.set("mime_type", s_val("audio/wav"));
+    let mut block_align = 0;
+    let mut audio_size = 0;
+    let mut num_samples = 0;
+    let mut chunk_header = fh.read(8);
+    while chunk_header.len() == 8 {
+        let unpadded = le32(chunk_header, 4);
+        let size = unpadded + unpadded % 2;
+        if t.parse_duration and starts(chunk_header, "fmt ") {
+            let chunk = fh.read(size);
+            need(chunk, 0, 8)?;
+            let mut format_tag = le16(chunk, 0);
+            let channels = le16(chunk, 2);
+            let samplerate = le32(chunk, 4);
+            need(chunk, 12, 4)?;
+            block_align = le16(chunk, 12);
+            let bitdepth = le16(chunk, 14);
+            if format_tag == 0xFFFE {
+                need(chunk, 24, 2)?;
+                format_tag = le16(chunk, 24);
+            }
+            if channels > 0 {
+                t.set("channels", Val.Int(channels));
+            }
+            if samplerate > 0 {
+                t.set("samplerate", Val.Int(samplerate));
+            }
+            if bitdepth > 0 {
+                t.set("bitdepth", Val.Int(bitdepth));
+            }
+            if format_tag != 0 {
+                t.set("mime_type", Val.Str(f"audio/wav; codecs=\"{hex_upper(format_tag)}\""));
+                t.set("is_lossless", Val.Bool(wav_lossless(format_tag)));
+            }
+        } else if t.parse_duration and starts(chunk_header, "data") {
+            audio_size = unpadded;
+            fh.skip(size);
+        } else if t.parse_duration and starts(chunk_header, "fact") {
+            let chunk = fh.read(size);
+            need(chunk, 0, 4)?;
+            num_samples = le32(chunk, 0);
+        } else if t.parse_tags and starts(chunk_header, "LIST") {
+            let chunk = fh.read(size);
+            if starts(chunk, "INFO") {
+                let mut w = walker_at(chunk, 4);
+                let mut field = w.read(4);
+                while field.len() == 4 {
+                    let mut data_length = read_le(mut w, 4)?;
+                    data_length += data_length % 2;
+                    let data = unpad_bytes(w.read(data_length));
+                    let id = latin1(field);
+                    let fieldname = match riff_field(id) {
+                        Some(f) => f,
+                        None => f"other.{id}".to_lowercase(),
+                    };
+                    let value = utf8_replace(data);
+                    if fieldname == "track" {
+                        if is_decimal(value) {
+                            t.set_field(fieldname, Val.Int(to_int(value)));
+                        }
+                    } else {
+                        t.set_field(fieldname, Val.Str(value));
+                    }
+                    field = w.read(4);
+                }
+            }
+        } else if t.parse_tags and (starts(chunk_header, "id3 ") or starts(chunk_header, "ID3 ")) {
+            let body = fh.read(size);
+            embedded_id3(mut t, body)?;
+        } else if t.parse_tags and starts(chunk_header, "_PMX") {
+            let chunk = unpad_bytes(fh.read(size));
+            t.set_other("xmp", utf8_replace(chunk));
+        } else {
+            fh.skip(size);
+        }
+        chunk_header = fh.read(8);
+    }
+    let samplerate = t.int_of("samplerate");
+    let lossless = match t.get("is_lossless") {
+        Some(Val.Bool(b)) => b,
+        _ => false,
+    };
+    if not lossless and samplerate != 0 {
+        if audio_size == 0 {
+            num_samples = 0;
+        }
+        let duration = fdiv(num_samples, samplerate);
+        t.set("duration", Val.Float(duration));
+        if duration != 0.0 {
+            t.set("bitrate", Val.Float((audio_size * 8) as f64 / duration / 1000.0));
+        }
+    } else if block_align != 0 and samplerate != 0 {
+        t.set("duration", Val.Float(fdiv(audio_size, block_align * samplerate)));
+        t.set("bitrate", Val.Float(fdiv(block_align * samplerate * 8, 1000)));
+    }
+    t.duration_parsed = t.parse_duration;
+    t.tags_parsed = t.parse_tags;
+    Ok(())
+}
+
+// ------------------------------------------------------------ _ASF
+
+fn asf_guid(name: Str) -> Vec[u8] {
+    if name == "header" {
+        unhex("3026b2758e66cf11a6d900aa0062ce6c".to_string())
+    } else if name == "content" {
+        unhex("3326b2758e66cf11a6d900aa0062ce6c".to_string())
+    } else if name == "ext_content" {
+        unhex("40a4d0d207e3d21197f000a0c95ea850".to_string())
+    } else if name == "file_prop" {
+        unhex("a1dcab8c47a9cf118ee400c00c205365".to_string())
+    } else if name == "stream_props" {
+        unhex("9107dcb7b7a9cf118ee600c00c205365".to_string())
+    } else if name == "audio_media" {
+        unhex("409e69f84d5bcf11a8fd00805f5c442b".to_string())
+    } else if name == "header_ext" {
+        unhex("b503bf5f2ea9cf118ee300c00c205365".to_string())
+    } else if name == "metadata" {
+        unhex("eacbf8c5af5b77488467aa8c44fa4cca".to_string())
+    } else if name == "metadata_library" {
+        unhex("941c23449894d149a1411d134e457054".to_string())
+    } else {
+        unhex("cbcf7abea997e8429c71999491e3afac".to_string())
+    }
+}
+
+fn utf16le_text(b: ref Vec[u8]) -> String {
+    unpad(utf16_replace(b, false))
+}
+
+// _ASF._parse_value
+fn asf_value(t: mut ref Tag, fh: mut ref Fh, name0: ref String, value_type: i64, value_len: i64) -> Result[(), Fail] {
+    let value = if value_type == 0 {
+        utf16le_text(fh.read(value_len))
+    } else if value_type > 1 and value_type < 6 and (value_len == 1 or value_len == 2 or value_len == 4 or value_len == 8) {
+        let b = fh.read(value_len);
+        need_exact(b, value_len)?;
+        let n = uint(b, 0, value_len, true);
+        if n < 0 {
+            f"{n as u64}"
+        } else {
+            f"{n}"
+        }
+    } else {
+        fh.skip(value_len);
+        return Ok(());
+    };
+    let field = match asf_field(name0) {
+        Some(f) => f,
+        None => {
+            let name = if name0.starts_with("WM/") { name0[3..name0.len()].to_string() } else { name0.clone() };
+            f"other.{name.to_lowercase()}"
+        }
+    };
+    if field == "track" or field == "disc" {
+        if is_decimal(value) {
+            t.set_field(field, Val.Int(to_int(value)));
+        }
+    } else {
+        t.set_field(field, Val.Str(value));
+    }
+    Ok(())
+}
+
+fn parse_asf(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let header = fh.read(30);
+    if not starts_bytes(header, asf_guid("header")) or not (header.len() > 29 and header[29] == 2) {
+        return Err(parse_error("Invalid WMA header"));
+    }
+    t.set("mime_type", s_val("application/vnd.ms-asf"));
+    let header_len = 24;
+    let mut object_header = fh.read(header_len);
+    while object_header.len() == header_len {
+        let mut object_size = uint(object_header, 16, 8, true);
+        if object_size < header_len {
+            break;
+        }
+        object_size -= header_len;
+        if t.parse_tags and starts_bytes(object_header, asf_guid("content")) {
+            let mut w = fh_of(fh.read(object_size));
+            let lens = w.read(10);
+            need_exact(lens, 10)?;
+            let names = ["title", "artist", "other.copyright", "comment", "_rating"];
+            let mut i = 0;
+            while i < 5 {
+                let value = utf16le_text(w.read(le16(lens, 2 * i)));
+                let name = names[i].to_string();
+                if not name.starts_with("_") and value.len() > 0 {
+                    t.set_field(name, Val.Str(value));
+                }
+                i += 1;
+            }
+        } else if t.parse_tags and starts_bytes(object_header, asf_guid("ext_content")) {
+            let mut w = fh_of(fh.read(object_size));
+            let count = read_le(mut w, 2)?;
+            let mut i = 0;
+            while i < count {
+                let name_len = read_le(mut w, 2)?;
+                let name = utf16le_text(w.read(name_len));
+                let tl = w.read(4);
+                need_exact(tl, 4)?;
+                asf_value(mut t, mut w, name, le16(tl, 0), le16(tl, 2))?;
+                i += 1;
+            }
+        } else if t.parse_tags and starts_bytes(object_header, asf_guid("header_ext")) {
+            let mut offset = fh.skip(18);
+            let data_size = read_le(mut fh, 4)?;
+            offset += 4;
+            let end_offset = offset + data_size;
+            while offset < end_offset {
+                let subheader = fh.read(header_len);
+                offset += subheader.len();
+                need(subheader, 16, 8)?;
+                let mut sub_size = uint(subheader, 16, 8, true) - header_len;
+                if sub_size < 0 {
+                    sub_size = 0;
+                }
+                if starts_bytes(subheader, asf_guid("metadata")) or starts_bytes(subheader, asf_guid("metadata_library")) {
+                    let content = fh.read(sub_size);
+                    offset += content.len();
+                    let mut w = fh_of(content);
+                    let count = read_le(mut w, 2)?;
+                    let mut i = 0;
+                    while i < count {
+                        w.skip(4);
+                        let name_len = read_le(mut w, 2)?;
+                        let value_type = read_le(mut w, 2)?;
+                        let value_len = read_le(mut w, 4)?;
+                        let name = utf16le_text(w.read(name_len));
+                        asf_value(mut t, mut w, name, value_type, value_len)?;
+                        i += 1;
+                    }
+                } else {
+                    offset = fh.skip(sub_size);
+                }
+            }
+        } else if t.parse_duration and starts_bytes(object_header, asf_guid("file_prop")) {
+            let data = fh.read(object_size);
+            need(data, 40, 8)?;
+            let play = fdiv(uint(data, 40, 8, true), 10000000);
+            need(data, 56, 8)?;
+            let preroll = fdiv(uint(data, 56, 8, true), 1000);
+            let d = play - preroll;
+            t.set("duration", Val.Float(if d < 0.0 { 0.0 } else { d }));
+        } else if t.parse_duration and starts_bytes(object_header, asf_guid("stream_props")) {
+            let data = fh.read(object_size);
+            if same_bytes(sub(data, 0, 16), asf_guid("audio_media")) {
+                need(data, 54, 12)?;
+                let format_tag = le16(data, 54);
+                let channels = le16(data, 56);
+                let samplerate = le32(data, 58);
+                let avg_bytes = le32(data, 62);
+                if channels > 0 {
+                    t.set("channels", Val.Int(channels));
+                }
+                if samplerate > 0 {
+                    t.set("samplerate", Val.Int(samplerate));
+                }
+                if avg_bytes > 0 {
+                    t.set("bitrate", Val.Float(fdiv(avg_bytes * 8, 1000)));
+                }
+                if format_tag != 0 {
+                    t.set("mime_type", Val.Str(f"application/vnd.ms-asf; codecs=\"{hex_upper(format_tag)}\""));
+                    t.set("is_lossless", Val.Bool(wav_lossless(format_tag)));
+                }
+                need(data, 68, 2)?;
+                let bitdepth = le16(data, 68);
+                if bitdepth > 0 {
+                    t.set("bitdepth", Val.Int(bitdepth));
+                }
+            }
+        } else if t.parse_tags and starts_bytes(object_header, asf_guid("xmp")) {
+            let value = utf8_replace(fh.read(object_size));
+            t.set_other("xmp", value);
+        } else {
+            fh.skip(object_size);
+        }
+        object_header = fh.read(header_len);
+    }
+    t.duration_parsed = t.parse_duration;
+    t.tags_parsed = t.parse_tags;
+    Ok(())
+}
+
+// ------------------------------------------------------------ _Aiff
+
+// 2 ** e as a float, for e <= 0
+fn pow2_neg(e: i64) -> f64 {
+    let mut x = 1.0;
+    let mut i = 0;
+    while i < -e {
+        x = x * 0.5;
+        if x == 0.0 {
+            break;
+        }
+        i += 1;
+    }
+    x
+}
+
+// an unsigned 64-bit integer as the nearest float
+fn u64_float(v: i64) -> f64 {
+    let hi = (v >> 32) & 0xFFFFFFFF;
+    let lo = v & 0xFFFFFFFF;
+    hi as f64 * 4294967296.0 + lo as f64
+}
+
+fn parse_aiff(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let header = fh.read(12);
+    if not starts(header, "FORM") or not (starts_at(header, "AIFC", 8) or starts_at(header, "AIFF", 8)) {
+        return Err(parse_error("Invalid AIFF header"));
+    }
+    t.set("mime_type", s_val("audio/aiff"));
+    let mut chunk_header = fh.read(8);
+    while chunk_header.len() == 8 {
+        let id = latin1(sub(chunk_header, 0, 4));
+        let unpadded = be32(chunk_header, 4);
+        let size = unpadded + unpadded % 2;
+        let mapped = if t.parse_tags { aiff_field(id) } else { None };
+        if let Some(field) = mapped {
+            let chunk = unpad_bytes(fh.read(size));
+            for part in split_nul(chunk) {
+                t.set_field(field, Val.Str(utf8_replace(part)));
+            }
+        } else if t.parse_duration and starts(chunk_header, "COMM") {
+            let chunk = fh.read(size);
+            need(chunk, 0, 8)?;
+            let channels = sint(chunk, 0, 2, false);
+            let num_frames = be32(chunk, 2);
+            let bitdepth = sint(chunk, 6, 2, false);
+            if channels > 0 {
+                t.set("channels", Val.Int(channels));
+            }
+            if bitdepth > 0 {
+                t.set("bitdepth", Val.Int(bitdepth));
+            }
+            need(chunk, 8, 10)?;
+            let exp = be16(chunk, 8);
+            let mantissa = uint(chunk, 10, 8, false);
+            let k = exp - 0x3FFF - 63;
+            let sr = if k >= 0 {
+                mantissa << k
+            } else {
+                (u64_float(mantissa) * pow2_neg(k)) as i64
+            };
+            if sr > 0 {
+                let duration = fdiv(num_frames, sr);
+                let bitrate = fdiv(sr * channels * bitdepth, 1000);
+                if bitrate > 0.0 {
+                    t.set("bitrate", Val.Float(bitrate));
+                }
+                t.set("samplerate", Val.Int(sr));
+                t.set("duration", Val.Float(duration));
+            }
+            let mut compression = latin1(sub(chunk, 18, 22));
+            if compression.len() == 0 {
+                compression = "NONE".to_string();
+            }
+            t.set("mime_type", Val.Str(f"audio/aiff; codecs=\"{compression}\""));
+            t.set("is_lossless", Val.Bool(aiff_uncompressed(compression)));
+            t.duration_parsed = true;
+            if not t.parse_tags {
+                break;
+            }
+        } else if t.parse_tags and (starts(chunk_header, "id3 ") or starts(chunk_header, "ID3 ")) {
+            let body = fh.read(size);
+            embedded_id3(mut t, body)?;
+        } else if t.parse_tags and starts(chunk_header, "APPL") {
+            let chunk = fh.read(size);
+            if starts(chunk, "XMP ") {
+                t.set_other("xmp", utf8_replace(unpad_bytes(tail(chunk, 4))));
+            }
+        } else {
+            fh.skip(size);
+        }
+        chunk_header = fh.read(8);
+    }
+    t.tags_parsed = t.parse_tags;
+    Ok(())
+}
+// ------------------------------------------------------------ _MP4
+
+// A value an atom parser yields: a field value, an image, or a list.
+enum Mv {
+    V(Val),
+    Img(Image),
+    L(Vec[String]),
+}
+
+// A dict of _MP4's parser tree. The trees are fixed except the one
+// _traverse_atoms makes for an unknown atom under ilst, which maps that
+// atom to {b'data': _data_parser(field)}.
+#[derive(Clone)]
+struct Tree {
+    kind: i64,
+    item: i64,
+    f1: String,
+    f2: String,
+    atom: String,
+}
+
+const T_EMPTY: i64 = 0;
+const T_ROOT_AUDIO: i64 = 1;
+const T_ROOT_META: i64 = 2;
+const T_ROOT_BOTH: i64 = 3;
+const T_MOOV_AUDIO: i64 = 4;
+const T_MOOV_META: i64 = 5;
+const T_MOOV_BOTH: i64 = 6;
+const T_TRAK: i64 = 7;
+const T_MDIA: i64 = 8;
+const T_MINF: i64 = 9;
+const T_STBL: i64 = 10;
+const T_STSD: i64 = 11;
+const T_UDTA: i64 = 12;
+const T_META: i64 = 13;
+const T_ILST: i64 = 14;
+const T_ITEM: i64 = 15;
+const T_UNKNOWN: i64 = 16;
+
+// the leaves: the parsers
+const L_DATA: i64 = 0;
+const L_NUMS: i64 = 1;
+const L_GENRE: i64 = 2;
+const L_COVER: i64 = 3;
+const L_CUSTOM: i64 = 4;
+const L_UUID: i64 = 5;
+const L_MVHD: i64 = 6;
+const L_MP4A: i64 = 7;
+const L_ALAC: i64 = 8;
+
+fn tree(kind: i64) -> Tree {
+    Tree { kind: kind, item: 0, f1: String.new(), f2: String.new(), atom: String.new() }
+}
+
+// path.get(atom_type)
+enum Ent {
+    Sub(Tree),
+    Leaf(i64, String, String),
+    Missing,
+}
+
+fn leaf(k: i64) -> Ent {
+    Ent.Leaf(k, String.new(), String.new())
+}
+
+fn child(tr: ref Tree, a: ref String) -> Ent {
+    let k = tr.kind;
+    if k == T_ROOT_AUDIO or k == T_ROOT_META or k == T_ROOT_BOTH {
+        if a == "moov" {
+            return Ent.Sub(tree(k + 3));
+        }
+        if a == "uuid" and k != T_ROOT_AUDIO {
+            return leaf(L_UUID);
+        }
+    } else if k == T_MOOV_AUDIO or k == T_MOOV_BOTH {
+        if a == "mvhd" {
+            return leaf(L_MVHD);
+        }
+        if a == "trak" {
+            return Ent.Sub(tree(T_TRAK));
+        }
+        if a == "udta" and k == T_MOOV_BOTH {
+            return Ent.Sub(tree(T_UDTA));
+        }
+    } else if k == T_MOOV_META {
+        if a == "udta" {
+            return Ent.Sub(tree(T_UDTA));
+        }
+    } else if k == T_TRAK {
+        if a == "mdia" {
+            return Ent.Sub(tree(T_MDIA));
+        }
+    } else if k == T_MDIA {
+        if a == "minf" {
+            return Ent.Sub(tree(T_MINF));
+        }
+    } else if k == T_MINF {
+        if a == "stbl" {
+            return Ent.Sub(tree(T_STBL));
+        }
+    } else if k == T_STBL {
+        if a == "stsd" {
+            return Ent.Sub(tree(T_STSD));
+        }
+    } else if k == T_STSD {
+        if a == "mp4a" {
+            return leaf(L_MP4A);
+        }
+        if a == "alac" {
+            return leaf(L_ALAC);
+        }
+    } else if k == T_UDTA {
+        if a == "meta" {
+            return Ent.Sub(tree(T_META));
+        }
+    } else if k == T_META {
+        if a == "ilst" {
+            return Ent.Sub(tree(T_ILST));
+        }
+    } else if k == T_ILST {
+        if let Some((item, f1, f2)) = ilst_entry(a) {
+            if item == 4 {
+                return leaf(L_CUSTOM);
+            }
+            return Ent.Sub(Tree { kind: T_ITEM, item: item, f1: f1, f2: f2, atom: String.new() });
+        }
+    } else if k == T_ITEM {
+        if a == "data" {
+            return Ent.Leaf(tr.item, tr.f1.clone(), tr.f2.clone());
+        }
+    } else if k == T_UNKNOWN {
+        if a == tr.atom {
+            return Ent.Sub(Tree { kind: T_ITEM, item: L_DATA, f1: tr.f1.clone(), f2: String.new(), atom: String.new() });
+        }
+    }
+    Ent.Missing
+}
+
+// _MP4._read_atom_header: (type, header size, size), where a missing
+// type or size is None.
+fn read_atom_header(fh: mut ref Fh) -> (Option[Vec[u8]], i64, Option[i64]) {
+    let h = fh.read(8);
+    let mut header_size = h.len();
+    if header_size < 8 {
+        return (None, header_size, None);
+    }
+    let mut size = be32(h, 0);
+    let typ = sub(h, 4, 8);
+    if size == 1 {
+        let ext = fh.read(8);
+        header_size += ext.len();
+        if header_size == 16 {
+            size = uint(ext, 0, 8, false);
+        }
+    }
+    if size < header_size {
+        (Some(typ), header_size, None)
+    } else {
+        (Some(typ), header_size, Some(size - header_size))
+    }
+}
+
+fn is_ascii(b: ref Vec[u8]) -> bool {
+    for c in b {
+        if c >= 0x80 {
+            return false;
+        }
+    }
+    true
+}
+
+fn path_is(path: ref Vec[String], want: ref Vec[String]) -> bool {
+    if path.len() != want.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < path.len() {
+        if path[i] != want[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn ilst_path() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for a in ["ftyp", "moov", "udta", "meta", "ilst"] {
+        v.push(a.to_string());
+    }
+    v
+}
+
+fn covr_path() -> Vec[String] {
+    let mut v = ilst_path();
+    v.push("covr".to_string());
+    v
+}
+
+fn parse_mp4(t: mut ref Tag, fh: mut ref Fh) -> Result[(), Fail] {
+    let kind = if t.parse_duration and t.parse_tags {
+        T_ROOT_BOTH
+    } else if t.parse_duration {
+        T_ROOT_AUDIO
+    } else if t.parse_tags {
+        T_ROOT_META
+    } else {
+        T_EMPTY
+    };
+    traverse_atoms(mut t, mut fh, tree(kind), None, None, None)?;
+    t.duration_parsed = t.parse_duration;
+    t.tags_parsed = t.parse_tags;
+    Ok(())
+}
+
+fn traverse_atoms(t: mut ref Tag, fh: mut ref Fh, tr: ref Tree, start: Option[i64], stop: Option[i64], path0: own Option[Vec[String]]) -> Result[i64, Fail] {
+    let mut pos = match start {
+        Some(p) => p,
+        None => fh.tell(),
+    };
+    let mut (typ, header_size, size) = read_atom_header(mut fh);
+    let mut path: Vec[String] = Vec.new();
+    let mut have_path = false;
+    match path0 {
+        Some(p) => {
+            path = p;
+            have_path = true;
+        }
+        None => {
+            let ok = match typ.clone() {
+                Some(b) => is_ascii(b),
+                None => false,
+            };
+            if not ok {
+                return Err(parse_error("Invalid MP4 header"));
+            }
+            t.set("mime_type", s_val("audio/mp4"));
+        }
+    }
+    let stop_pos = match stop {
+        Some(s) => s,
+        None => 0,
+    };
+    loop {
+        let ty = match typ.clone() {
+            Some(b) => b,
+            None => break,
+        };
+        let mut sz = match size {
+            Some(s) => s,
+            None => break,
+        };
+        pos += header_size;
+        let name = latin1(ty);
+        if not have_path {
+            path.push(name.clone());
+            have_path = true;
+        }
+        if sz >= 4 {
+            if name == "meta" or name == "stsd" {
+                pos = fh.skip(4);
+                sz -= 4;
+            }
+            if name == "stsd" {
+                pos = fh.skip(4);
+                sz -= 4;
+            }
+        }
+        match child(tr, name) {
+            Ent.Leaf(k, f1, f2) => {
+                if not t.load_image and path_is(path, covr_path()) {
+                    pos = fh.skip(sz);
+                } else {
+                    let data = fh.read(sz);
+                    pos += data.len();
+                    for (field, value) in run_parser(k, f1, f2, data)?.into_iter() {
+                        match value {
+                            Mv.Img(im) => t.images.set_field(field, im),
+                            Mv.L(l) => {
+                                for x in l.into_iter() {
+                                    t.set_field(field, Val.Str(x));
+                                }
+                            }
+                            Mv.V(v) => {
+                                if field == "codec" {
+                                    t.set("mime_type", Val.Str(f"audio/mp4; codecs=\"{val_str(v)}\""));
+                                } else {
+                                    t.set_field(field, v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ent.Sub(s) => {
+                let mut p2 = path.clone();
+                p2.push(name.clone());
+                pos = traverse_atoms(mut t, mut fh, s, Some(pos), Some(pos + sz), Some(p2))?;
+            }
+            Ent.Missing => {
+                if path_is(path, ilst_path()) {
+                    let field = f"other.{name.to_lowercase()}";
+                    fh.skip(-header_size);
+                    pos -= header_size;
+                    let unknown = Tree { kind: T_UNKNOWN, item: L_DATA, f1: field, f2: String.new(), atom: name.clone() };
+                    let mut p2 = path.clone();
+                    p2.push(name.clone());
+                    pos = traverse_atoms(mut t, mut fh, unknown, Some(pos), Some(pos + sz + header_size), Some(p2))?;
+                } else {
+                    pos = fh.skip(sz);
+                }
+            }
+        }
+        if stop_pos != 0 and pos >= stop_pos {
+            return Ok(pos);
+        }
+        let (a, b, c) = read_atom_header(mut fh);
+        typ = a;
+        header_size = b;
+        size = c;
+    }
+    Ok(pos)
+}
+
+fn one(field: Str, v: own Mv) -> Vec[(String, Mv)] {
+    let mut out: Vec[(String, Mv)] = Vec.new();
+    out.push((field.to_string(), v));
+    out
+}
+
+// _MP4._data_parser(field)
+fn data_atom(field: ref String, data: ref Vec[u8]) -> Result[(String, Mv), Fail] {
+    need(data, 0, 4)?;
+    let data_type = be32(data, 0);
+    let d = tail(data, 8);
+    let mut value = String.new();
+    if data_type == 1 {
+        value = utf8_replace(d);
+    } else if data_type == 21 {
+        let n = d.len();
+        if n == 1 or n == 2 or n == 4 or n == 8 {
+            value = f"{sint(d, 0, n, false)}";
+        }
+    }
+    Ok((field.clone(), Mv.V(Val.Str(value))))
+}
+
+fn run_parser(k: i64, f1: ref String, f2: ref String, data: ref Vec[u8]) -> Result[Vec[(String, Mv)], Fail] {
+    let mut out: Vec[(String, Mv)] = Vec.new();
+    if k == L_DATA {
+        out.push(data_atom(f1, data)?);
+    } else if k == L_NUMS {
+        let nd = sub(data, 8, 14);
+        need_exact(nd, 6)?;
+        out.push((f1.clone(), Mv.V(Val.Int(be16(nd, 2)))));
+        out.push((f2.clone(), Mv.V(Val.Int(be16(nd, 4)))));
+    } else if k == L_GENRE {
+        need(data, 8, 2)?;
+        let idx = be16(data, 8) - 1;
+        if idx < GENRE_NAME_LEN {
+            let i = if idx < 0 { GENRE_NAME_LEN + idx } else { idx };
+            out.push(("genre".to_string(), Mv.V(Val.Str(genre_name(i)))));
+        }
+    } else if k == L_COVER {
+        need(data, 0, 4)?;
+        let data_type = be32(data, 0);
+        let image_data = tail(data, 8);
+        let size = image_data.len();
+        let im = Image { name: "front_cover".to_string(), size: size, data: image_data, mime_type: mp4_image_mime(data_type), description: None };
+        out.push(("front_cover".to_string(), Mv.Img(im)));
+    } else if k == L_CUSTOM {
+        return parse_custom_field(data);
+    } else if k == L_UUID {
+        if same_bytes(sub(data, 0, 16), unhex("be7acfcb97a942e89c71999491e3afac".to_string())) {
+            out.push(("other.xmp".to_string(), Mv.V(Val.Str(utf8_replace(tail(data, 16))))));
+        }
+    } else if k == L_MVHD {
+        let version = at(data, 0)?;
+        if version == 0 {
+            need(data, 12, 8)?;
+            let time_scale = be32(data, 12);
+            let duration = be32(data, 16);
+            if time_scale > 0 {
+                out.push(("duration".to_string(), Mv.V(Val.Float(fdiv(duration, time_scale)))));
+            }
+        } else if version == 1 {
+            need(data, 20, 12)?;
+            let time_scale = be32(data, 20);
+            let duration = uint(data, 24, 8, false);
+            if time_scale > 0 {
+                out.push(("duration".to_string(), Mv.V(Val.Float(fdiv(duration, time_scale)))));
+            }
+        }
+    } else if k == L_MP4A {
+        return parse_mp4a(data);
+    } else {
+        out.push(("codec".to_string(), Mv.V(s_val("alac"))));
+        out.push(("is_lossless".to_string(), Mv.V(Val.Bool(true))));
+        let bitdepth = at(data, 45)?;
+        let channels = at(data, 49)?;
+        need(data, 56, 8)?;
+        let avg_br = be32(data, 56);
+        let samplerate = be32(data, 60);
+        if bitdepth > 0 {
+            out.push(("bitdepth".to_string(), Mv.V(Val.Int(bitdepth))));
+        }
+        if channels > 0 {
+            out.push(("channels".to_string(), Mv.V(Val.Int(channels))));
+        }
+        if avg_br > 0 {
+            out.push(("bitrate".to_string(), Mv.V(Val.Float(fdiv(avg_br, 1000)))));
+        }
+        if samplerate != 0 {
+            out.push(("samplerate".to_string(), Mv.V(Val.Int(samplerate))));
+        }
+    }
+    Ok(out)
+}
+
+fn parse_custom_field(data: ref Vec[u8]) -> Result[Vec[(String, Mv)], Fail] {
+    let mut fh = fh_of(data.clone());
+    let mut field_name = String.new();
+    let mut values: Vec[String] = Vec.new();
+    let mut (typ, _hs, size) = read_atom_header(mut fh);
+    loop {
+        let ty = match typ.clone() {
+            Some(b) => b,
+            None => break,
+        };
+        let sz = match size {
+            Some(s) => s,
+            None => break,
+        };
+        if is_bytes(ty, "name") {
+            let raw = fh.read(sz);
+            let fname = utf8_replace(ascii_lower(tail(raw, 4)));
+            field_name = match mp4_custom(fname) {
+                Some(f) => f,
+                None => f"other.{fname}",
+            };
+        } else if is_bytes(ty, "data") and field_name.len() > 0 {
+            let atom = fh.read(sz);
+            let (_f, v) = data_atom(field_name, atom)?;
+            if let Mv.V(x) = v {
+                values.push(val_str(x));
+            }
+        } else {
+            fh.skip(sz);
+        }
+        let (a, b, c) = read_atom_header(mut fh);
+        typ = a;
+        _hs = b;
+        size = c;
+    }
+    let mut out: Vec[(String, Mv)] = Vec.new();
+    if field_name.len() > 0 and values.len() > 0 {
+        out.push((field_name, Mv.L(values)));
+    }
+    Ok(out)
+}
+
+fn read_descriptor_size(data: ref Vec[u8], off0: i64) -> Result[(i64, i64), Fail] {
+    let mut size = 0;
+    let mut off = off0;
+    let mut i = 0;
+    while i < 4 {
+        let b = at(data, off)?;
+        off += 1;
+        size = (size << 7) | (b & 0x7f);
+        if b & 0x80 == 0 {
+            break;
+        }
+        i += 1;
+    }
+    Ok((size, off))
+}
+
+fn parse_mp4a(data: ref Vec[u8]) -> Result[Vec[(String, Mv)], Fail] {
+    let mut out: Vec[(String, Mv)] = Vec.new();
+    need(data, 16, 2)?;
+    let channels = be16(data, 16);
+    need(data, 22, 4)?;
+    let samplerate = be32(data, 22);
+    if channels > 0 {
+        out.push(("channels".to_string(), Mv.V(Val.Int(channels))));
+    }
+    if samplerate > 0 {
+        out.push(("samplerate".to_string(), Mv.V(Val.Int(samplerate))));
+    }
+    let mut offset = 36 + 5;
+    let (_s1, o1) = read_descriptor_size(data, offset)?;
+    offset = o1 + 4;
+    let (_s2, o2) = read_descriptor_size(data, offset)?;
+    offset = o2;
+    let object_type = at(data, offset)?;
+    let mut codec = f"mp4a.{hex_upper(object_type)}";
+    offset += 9;
+    need(data, offset, 4)?;
+    let avg_br = be32(data, offset);
+    if avg_br > 0 {
+        out.push(("bitrate".to_string(), Mv.V(Val.Float(fdiv(avg_br, 1000)))));
+    }
+    offset += 4;
+    if data.len() > offset {
+        let tag = data[offset] as i64;
+        offset += 1;
+        if tag == 5 {
+            let (_s3, o3) = read_descriptor_size(data, offset)?;
+            offset = o3;
+            let first = at(data, offset)?;
+            let mut aot = first >> 3;
+            if aot == 31 {
+                let next = at(data, offset + 1)?;
+                aot = 32 + (((first & 7) << 3) | (next >> 5));
+            }
+            codec = f"{codec}.{aot}";
+        }
+    }
+    if object_type != 0 {
+        let lossless = mp4_lossless(codec);
+        out.push(("codec".to_string(), Mv.V(Val.Str(codec))));
+        out.push(("is_lossless".to_string(), Mv.V(Val.Bool(lossless))));
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ tables
+
+// tinytag's lookup tables, as gen_kara.py read them from its classes.
+
+// _ID3._ID3_MAPPING: frame id to field
+fn id3_field(k: ref String) -> Option[String] {
+    match k {
+        "COMM" => Some("comment".to_string()),
+        "COM" => Some("comment".to_string()),
+        "TRCK" => Some("track".to_string()),
+        "TRK" => Some("track".to_string()),
+        "TYER" => Some("year".to_string()),
+        "TYE" => Some("year".to_string()),
+        "TDRC" => Some("year".to_string()),
+        "TALB" => Some("album".to_string()),
+        "TAL" => Some("album".to_string()),
+        "TPE1" => Some("artist".to_string()),
+        "TP1" => Some("artist".to_string()),
+        "TIT2" => Some("title".to_string()),
+        "TT2" => Some("title".to_string()),
+        "TCON" => Some("genre".to_string()),
+        "TCO" => Some("genre".to_string()),
+        "TPOS" => Some("disc".to_string()),
+        "TPA" => Some("disc".to_string()),
+        "TPE2" => Some("albumartist".to_string()),
+        "TP2" => Some("albumartist".to_string()),
+        "TCOM" => Some("composer".to_string()),
+        "TCM" => Some("composer".to_string()),
+        "WOAR" => Some("other.url".to_string()),
+        "WAR" => Some("other.url".to_string()),
+        "TSRC" => Some("other.isrc".to_string()),
+        "TRC" => Some("other.isrc".to_string()),
+        "TCOP" => Some("other.copyright".to_string()),
+        "TCR" => Some("other.copyright".to_string()),
+        "TBPM" => Some("other.bpm".to_string()),
+        "TBP" => Some("other.bpm".to_string()),
+        "TKEY" => Some("other.initial_key".to_string()),
+        "TKE" => Some("other.initial_key".to_string()),
+        "TLAN" => Some("other.language".to_string()),
+        "TLA" => Some("other.language".to_string()),
+        "TPUB" => Some("other.publisher".to_string()),
+        "TPB" => Some("other.publisher".to_string()),
+        "USLT" => Some("other.lyrics".to_string()),
+        "ULT" => Some("other.lyrics".to_string()),
+        "TPE3" => Some("other.conductor".to_string()),
+        "TP3" => Some("other.conductor".to_string()),
+        "TEXT" => Some("other.lyricist".to_string()),
+        "TXT" => Some("other.lyricist".to_string()),
+        "TSST" => Some("other.set_subtitle".to_string()),
+        "TENC" => Some("other.encoded_by".to_string()),
+        "TEN" => Some("other.encoded_by".to_string()),
+        "TSSE" => Some("other.encoder_settings".to_string()),
+        "TSS" => Some("other.encoder_settings".to_string()),
+        "TMED" => Some("other.media".to_string()),
+        "TMT" => Some("other.media".to_string()),
+        "WCOP" => Some("other.license".to_string()),
+        "MVNM" => Some("other.movement_name".to_string()),
+        "MVIN" => Some("other.movement".to_string()),
+        "GRP1" => Some("modern_grouping".to_string()),
+        "GP1" => Some("modern_grouping".to_string()),
+        "TIT1" => Some("legacy_grouping".to_string()),
+        "TT1" => Some("legacy_grouping".to_string()),
+        _ => None,
+    }
+}
+
+// _ID3._ID3_MAPPING_CUSTOM
+fn id3_custom(k: ref String) -> Option[String] {
+    match k {
+        "artists" => Some("artist".to_string()),
+        "director" => Some("other.director".to_string()),
+        "license" => Some("other.license".to_string()),
+        "barcode" => Some("other.barcode".to_string()),
+        "catalognumber" => Some("other.catalog_number".to_string()),
+        "showmovement" => Some("other.show_movement".to_string()),
+        _ => None,
+    }
+}
+
+// _ID3._IGNORED_FRAME_IDS
+fn id3_ignored(k: ref String) -> bool {
+    match k {
+        "AENC" => true,
+        "APIC" => true,
+        "ASPI" => true,
+        "ATXT" => true,
+        "BUF" => true,
+        "CHAP" => true,
+        "CNT" => true,
+        "COMR" => true,
+        "CRA" => true,
+        "CRM" => true,
+        "CTOC" => true,
+        "ENCR" => true,
+        "EQU" => true,
+        "EQU2" => true,
+        "ETC" => true,
+        "ETCO" => true,
+        "GEO" => true,
+        "GEOB" => true,
+        "GRID" => true,
+        "LINK" => true,
+        "LNK" => true,
+        "MCDI" => true,
+        "MCI" => true,
+        "MLL" => true,
+        "MLLT" => true,
+        "OWNE" => true,
+        "PCNT" => true,
+        "PIC" => true,
+        "POP" => true,
+        "POPM" => true,
+        "POSS" => true,
+        "RBUF" => true,
+        "REV" => true,
+        "RGAD" => true,
+        "RVA" => true,
+        "RVA2" => true,
+        "RVRB" => true,
+        "SEEK" => true,
+        "SIGN" => true,
+        "STC" => true,
+        "SYTC" => true,
+        "USER" => true,
+        "WXX" => true,
+        "WXXX" => true,
+        _ => false,
+    }
+}
+
+// _ID3._ID3V2_2_IMAGE_FORMATS
+fn id3v22_image_format(k: ref String) -> Option[String] {
+    match k {
+        "bmp" => Some("image/bmp".to_string()),
+        "jpg" => Some("image/jpeg".to_string()),
+        "png" => Some("image/png".to_string()),
+        _ => None,
+    }
+}
+
+// _ID3._ID3V1_GENRES
+const GENRE_NAME_LEN: i64 = 189;
+
+fn genre_name(i: i64) -> String {
+    match i {
+        0 => "Blues".to_string(),
+        1 => "Classic Rock".to_string(),
+        2 => "Country".to_string(),
+        3 => "Dance".to_string(),
+        4 => "Disco".to_string(),
+        5 => "Funk".to_string(),
+        6 => "Grunge".to_string(),
+        7 => "Hip-Hop".to_string(),
+        8 => "Jazz".to_string(),
+        9 => "Metal".to_string(),
+        10 => "New Age".to_string(),
+        11 => "Oldies".to_string(),
+        12 => "Other".to_string(),
+        13 => "Pop".to_string(),
+        14 => "R&B".to_string(),
+        15 => "Rap".to_string(),
+        16 => "Reggae".to_string(),
+        17 => "Rock".to_string(),
+        18 => "Techno".to_string(),
+        19 => "Industrial".to_string(),
+        20 => "Alternative".to_string(),
+        21 => "Ska".to_string(),
+        22 => "Death Metal".to_string(),
+        23 => "Pranks".to_string(),
+        24 => "Soundtrack".to_string(),
+        25 => "Euro-Techno".to_string(),
+        26 => "Ambient".to_string(),
+        27 => "Trip-Hop".to_string(),
+        28 => "Vocal".to_string(),
+        29 => "Jazz+Funk".to_string(),
+        30 => "Fusion".to_string(),
+        31 => "Trance".to_string(),
+        32 => "Classical".to_string(),
+        33 => "Instrumental".to_string(),
+        34 => "Acid".to_string(),
+        35 => "House".to_string(),
+        36 => "Game".to_string(),
+        37 => "Sound Clip".to_string(),
+        38 => "Gospel".to_string(),
+        39 => "Noise".to_string(),
+        40 => "AlternRock".to_string(),
+        41 => "Bass".to_string(),
+        42 => "Soul".to_string(),
+        43 => "Punk".to_string(),
+        44 => "Space".to_string(),
+        45 => "Meditative".to_string(),
+        46 => "Instrumental Pop".to_string(),
+        47 => "Instrumental Rock".to_string(),
+        48 => "Ethnic".to_string(),
+        49 => "Gothic".to_string(),
+        50 => "Darkwave".to_string(),
+        51 => "Techno-Industrial".to_string(),
+        52 => "Electronic".to_string(),
+        53 => "Pop-Folk".to_string(),
+        54 => "Eurodance".to_string(),
+        55 => "Dream".to_string(),
+        56 => "Southern Rock".to_string(),
+        57 => "Comedy".to_string(),
+        58 => "Cult".to_string(),
+        59 => "Gangsta".to_string(),
+        60 => "Top 40".to_string(),
+        61 => "Christian Rap".to_string(),
+        62 => "Pop/Funk".to_string(),
+        63 => "Jungle".to_string(),
+        64 => "Native American".to_string(),
+        65 => "Cabaret".to_string(),
+        66 => "New Wave".to_string(),
+        67 => "Psychadelic".to_string(),
+        68 => "Rave".to_string(),
+        69 => "Showtunes".to_string(),
+        70 => "Trailer".to_string(),
+        71 => "Lo-Fi".to_string(),
+        72 => "Tribal".to_string(),
+        73 => "Acid Punk".to_string(),
+        74 => "Acid Jazz".to_string(),
+        75 => "Polka".to_string(),
+        76 => "Retro".to_string(),
+        77 => "Musical".to_string(),
+        78 => "Rock & Roll".to_string(),
+        79 => "Hard Rock".to_string(),
+        80 => "Folk".to_string(),
+        81 => "Folk-Rock".to_string(),
+        82 => "National Folk".to_string(),
+        83 => "Swing".to_string(),
+        84 => "Fast Fusion".to_string(),
+        85 => "Bebob".to_string(),
+        86 => "Latin".to_string(),
+        87 => "Revival".to_string(),
+        88 => "Celtic".to_string(),
+        89 => "Bluegrass".to_string(),
+        90 => "Avantgarde".to_string(),
+        91 => "Gothic Rock".to_string(),
+        92 => "Progressive Rock".to_string(),
+        93 => "Psychedelic Rock".to_string(),
+        94 => "Symphonic Rock".to_string(),
+        95 => "Slow Rock".to_string(),
+        96 => "Big Band".to_string(),
+        97 => "Chorus".to_string(),
+        98 => "Easy listening".to_string(),
+        99 => "Acoustic".to_string(),
+        100 => "Humour".to_string(),
+        101 => "Speech".to_string(),
+        102 => "Chanson".to_string(),
+        103 => "Opera".to_string(),
+        104 => "Chamber Music".to_string(),
+        105 => "Sonata".to_string(),
+        106 => "Symphony".to_string(),
+        107 => "Booty Bass".to_string(),
+        108 => "Primus".to_string(),
+        109 => "Porn Groove".to_string(),
+        110 => "Satire".to_string(),
+        111 => "Slow Jam".to_string(),
+        112 => "Club".to_string(),
+        113 => "Tango".to_string(),
+        114 => "Samba".to_string(),
+        115 => "Folklore".to_string(),
+        116 => "Ballad".to_string(),
+        117 => "Power Ballad".to_string(),
+        118 => "Rhythmic Soul".to_string(),
+        119 => "Freestyle".to_string(),
+        120 => "Duet".to_string(),
+        121 => "Punk Rock".to_string(),
+        122 => "Drum Solo".to_string(),
+        123 => "A capella".to_string(),
+        124 => "Euro-House".to_string(),
+        125 => "Dance Hall".to_string(),
+        126 => "Goa".to_string(),
+        127 => "Drum & Bass".to_string(),
+        128 => "Club-House".to_string(),
+        129 => "Hardcore Techno".to_string(),
+        130 => "Terror".to_string(),
+        131 => "Indie".to_string(),
+        132 => "BritPop".to_string(),
+        133 => "Afro-Punk".to_string(),
+        134 => "Polsk Punk".to_string(),
+        135 => "Beat".to_string(),
+        136 => "Christian Gangsta Rap".to_string(),
+        137 => "Heavy Metal".to_string(),
+        138 => "Black Metal".to_string(),
+        139 => "Contemporary Christian".to_string(),
+        140 => "Christian Rock".to_string(),
+        141 => "Merengue".to_string(),
+        142 => "Salsa".to_string(),
+        143 => "Thrash Metal".to_string(),
+        144 => "Anime".to_string(),
+        145 => "Jpop".to_string(),
+        146 => "Synthpop".to_string(),
+        147 => "Abstract".to_string(),
+        148 => "Art Rock".to_string(),
+        149 => "Baroque".to_string(),
+        150 => "Bhangra".to_string(),
+        151 => "Big Beat".to_string(),
+        152 => "Breakbeat".to_string(),
+        153 => "Chillout".to_string(),
+        154 => "Downtempo".to_string(),
+        155 => "Dub".to_string(),
+        156 => "EBM".to_string(),
+        157 => "Eclectic".to_string(),
+        158 => "Electro".to_string(),
+        159 => "Electroclash".to_string(),
+        160 => "Emo".to_string(),
+        161 => "Experimental".to_string(),
+        162 => "Garage".to_string(),
+        163 => "Illbient".to_string(),
+        164 => "Industro-Goth".to_string(),
+        165 => "Jam Band".to_string(),
+        166 => "Krautrock".to_string(),
+        167 => "Leftfield".to_string(),
+        168 => "Lounge".to_string(),
+        169 => "Math Rock".to_string(),
+        170 => "New Romantic".to_string(),
+        171 => "Nu-Breakz".to_string(),
+        172 => "Post-Punk".to_string(),
+        173 => "Post-Rock".to_string(),
+        174 => "Psytrance".to_string(),
+        175 => "Shoegaze".to_string(),
+        176 => "Space Rock".to_string(),
+        177 => "Trop Rock".to_string(),
+        178 => "World Music".to_string(),
+        179 => "Neoclassical".to_string(),
+        180 => "Audiobook".to_string(),
+        181 => "Audio Theatre".to_string(),
+        182 => "Neue Deutsche Welle".to_string(),
+        183 => "Podcast".to_string(),
+        184 => "Indie Rock".to_string(),
+        185 => "G-Funk".to_string(),
+        186 => "Dubstep".to_string(),
+        187 => "Garage Rock".to_string(),
+        188 => "Psybient".to_string(),
+        _ => String.new(),
+    }
+}
+
+// _ID3._IMAGE_TYPES
+const IMAGE_TYPE_LEN: i64 = 21;
+
+fn image_type(i: i64) -> String {
+    match i {
+        0 => "other.generic".to_string(),
+        1 => "other.icon".to_string(),
+        2 => "other.alt_icon".to_string(),
+        3 => "front_cover".to_string(),
+        4 => "back_cover".to_string(),
+        5 => "other.leaflet".to_string(),
+        6 => "media".to_string(),
+        7 => "other.lead_artist".to_string(),
+        8 => "other.artist".to_string(),
+        9 => "other.conductor".to_string(),
+        10 => "other.band".to_string(),
+        11 => "other.composer".to_string(),
+        12 => "other.lyricist".to_string(),
+        13 => "other.recording_location".to_string(),
+        14 => "other.during_recording".to_string(),
+        15 => "other.during_performance".to_string(),
+        16 => "other.screen_capture".to_string(),
+        17 => "other.bright_colored_fish".to_string(),
+        18 => "other.illustration".to_string(),
+        19 => "other.band_logo".to_string(),
+        20 => "other.publisher_logo".to_string(),
+        _ => String.new(),
+    }
+}
+
+// _MPEG._SAMPLE_RATES, at mpeg_id * 3 + sr_id
+fn mpeg_sample_rate(i: i64) -> i64 {
+    match i {
+        0 => 11025,
+        1 => 12000,
+        2 => 8000,
+        6 => 22050,
+        7 => 24000,
+        8 => 16000,
+        9 => 44100,
+        10 => 48000,
+        11 => 32000,
+        _ => 0,
+    }
+}
+
+// _MPEG._BITRATE_VERSION_LAYERS, at (mpeg_id * 4 + layer_id) * 16 + br_id
+fn mpeg_bitrate(i: i64) -> i64 {
+    match i {
+        17 => 8,
+        18 => 16,
+        19 => 24,
+        20 => 32,
+        21 => 40,
+        22 => 48,
+        23 => 56,
+        24 => 64,
+        25 => 80,
+        26 => 96,
+        27 => 112,
+        28 => 128,
+        29 => 144,
+        30 => 160,
+        33 => 8,
+        34 => 16,
+        35 => 24,
+        36 => 32,
+        37 => 40,
+        38 => 48,
+        39 => 56,
+        40 => 64,
+        41 => 80,
+        42 => 96,
+        43 => 112,
+        44 => 128,
+        45 => 144,
+        46 => 160,
+        49 => 32,
+        50 => 48,
+        51 => 56,
+        52 => 64,
+        53 => 80,
+        54 => 96,
+        55 => 112,
+        56 => 128,
+        57 => 144,
+        58 => 160,
+        59 => 176,
+        60 => 192,
+        61 => 224,
+        62 => 256,
+        145 => 8,
+        146 => 16,
+        147 => 24,
+        148 => 32,
+        149 => 40,
+        150 => 48,
+        151 => 56,
+        152 => 64,
+        153 => 80,
+        154 => 96,
+        155 => 112,
+        156 => 128,
+        157 => 144,
+        158 => 160,
+        161 => 8,
+        162 => 16,
+        163 => 24,
+        164 => 32,
+        165 => 40,
+        166 => 48,
+        167 => 56,
+        168 => 64,
+        169 => 80,
+        170 => 96,
+        171 => 112,
+        172 => 128,
+        173 => 144,
+        174 => 160,
+        177 => 32,
+        178 => 48,
+        179 => 56,
+        180 => 64,
+        181 => 80,
+        182 => 96,
+        183 => 112,
+        184 => 128,
+        185 => 144,
+        186 => 160,
+        187 => 176,
+        188 => 192,
+        189 => 224,
+        190 => 256,
+        209 => 32,
+        210 => 40,
+        211 => 48,
+        212 => 56,
+        213 => 64,
+        214 => 80,
+        215 => 96,
+        216 => 112,
+        217 => 128,
+        218 => 160,
+        219 => 192,
+        220 => 224,
+        221 => 256,
+        222 => 320,
+        225 => 32,
+        226 => 48,
+        227 => 56,
+        228 => 64,
+        229 => 80,
+        230 => 96,
+        231 => 112,
+        232 => 128,
+        233 => 160,
+        234 => 192,
+        235 => 224,
+        236 => 256,
+        237 => 320,
+        238 => 384,
+        241 => 32,
+        242 => 64,
+        243 => 96,
+        244 => 128,
+        245 => 160,
+        246 => 192,
+        247 => 224,
+        248 => 256,
+        249 => 288,
+        250 => 320,
+        251 => 352,
+        252 => 384,
+        253 => 416,
+        254 => 448,
+        _ => 0,
+    }
+}
+
+// _MPEG._SAMPLES_PER_FRAME, at mpeg_id * 4 + layer_id
+fn mpeg_samples_per_frame(i: i64) -> i64 {
+    match i {
+        1 => 576,
+        2 => 1152,
+        3 => 384,
+        9 => 576,
+        10 => 1152,
+        11 => 384,
+        13 => 1152,
+        14 => 1152,
+        15 => 384,
+        _ => 0,
+    }
+}
+
+// _MPEG._SLOT_SIZES
+fn mpeg_slot_size(i: i64) -> i64 {
+    match i {
+        1 => 1,
+        2 => 1,
+        3 => 4,
+        _ => 0,
+    }
+}
+
+// _MPEG._CHANNELS_PER_CHANNEL_MODE
+fn mpeg_channels(i: i64) -> i64 {
+    match i {
+        0 => 2,
+        1 => 2,
+        2 => 2,
+        3 => 1,
+        _ => 0,
+    }
+}
+
+// _Ogg._VORBIS_MAPPING
+fn vorbis_field(k: ref String) -> Option[String] {
+    match k {
+        "album" => Some("album".to_string()),
+        "albumartist" => Some("albumartist".to_string()),
+        "title" => Some("title".to_string()),
+        "artist" => Some("artist".to_string()),
+        "artists" => Some("artist".to_string()),
+        "author" => Some("artist".to_string()),
+        "date" => Some("year".to_string()),
+        "tracknumber" => Some("track".to_string()),
+        "tracktotal" => Some("track_total".to_string()),
+        "totaltracks" => Some("track_total".to_string()),
+        "discnumber" => Some("disc".to_string()),
+        "disctotal" => Some("disc_total".to_string()),
+        "totaldiscs" => Some("disc_total".to_string()),
+        "genre" => Some("genre".to_string()),
+        "description" => Some("comment".to_string()),
+        "comment" => Some("comment".to_string()),
+        "comments" => Some("comment".to_string()),
+        "composer" => Some("composer".to_string()),
+        "bpm" => Some("other.bpm".to_string()),
+        "copyright" => Some("other.copyright".to_string()),
+        "isrc" => Some("other.isrc".to_string()),
+        "lyrics" => Some("other.lyrics".to_string()),
+        "unsyncedlyrics" => Some("other.lyrics".to_string()),
+        "publisher" => Some("other.publisher".to_string()),
+        "language" => Some("other.language".to_string()),
+        "director" => Some("other.director".to_string()),
+        "website" => Some("other.url".to_string()),
+        "conductor" => Some("other.conductor".to_string()),
+        "lyricist" => Some("other.lyricist".to_string()),
+        "discsubtitle" => Some("other.set_subtitle".to_string()),
+        "setsubtitle" => Some("other.set_subtitle".to_string()),
+        "initialkey" => Some("other.initial_key".to_string()),
+        "key" => Some("other.initial_key".to_string()),
+        "encodedby" => Some("other.encoded_by".to_string()),
+        "encodersettings" => Some("other.encoder_settings".to_string()),
+        "media" => Some("other.media".to_string()),
+        "license" => Some("other.license".to_string()),
+        "barcode" => Some("other.barcode".to_string()),
+        "catalognumber" => Some("other.catalog_number".to_string()),
+        "movementname" => Some("other.movement_name".to_string()),
+        "movement" => Some("other.movement".to_string()),
+        "movementtotal" => Some("other.movement_total".to_string()),
+        "showmovement" => Some("other.show_movement".to_string()),
+        "grouping" => Some("other.grouping".to_string()),
+        "contentgroup" => Some("other.grouping".to_string()),
+        "work" => Some("other.work".to_string()),
+        _ => None,
+    }
+}
+
+// _Wave._RIFF_MAPPING
+fn riff_field(k: ref String) -> Option[String] {
+    match k {
+        "INAM" => Some("title".to_string()),
+        "TITL" => Some("title".to_string()),
+        "IPRD" => Some("album".to_string()),
+        "IART" => Some("artist".to_string()),
+        "IBPM" => Some("other.bpm".to_string()),
+        "ICMT" => Some("comment".to_string()),
+        "IMUS" => Some("composer".to_string()),
+        "ICOP" => Some("other.copyright".to_string()),
+        "ICRD" => Some("year".to_string()),
+        "IGNR" => Some("genre".to_string()),
+        "ILNG" => Some("other.language".to_string()),
+        "ISRC" => Some("other.isrc".to_string()),
+        "IPUB" => Some("other.publisher".to_string()),
+        "IPRT" => Some("track".to_string()),
+        "ITRK" => Some("track".to_string()),
+        "TRCK" => Some("track".to_string()),
+        "IBSU" => Some("other.url".to_string()),
+        "YEAR" => Some("year".to_string()),
+        "IWRI" => Some("other.lyricist".to_string()),
+        "IENC" => Some("other.encoded_by".to_string()),
+        "IMED" => Some("other.media".to_string()),
+        _ => None,
+    }
+}
+
+// _Wave._LOSSLESS_FORMATS
+fn wav_lossless(n: i64) -> bool {
+    match n {
+        1 => true,
+        3 => true,
+        355 => true,
+        2222 => true,
+        6513 => true,
+        61868 => true,
+        _ => false,
+    }
+}
+
+// _ASF._ASF_MAPPING
+fn asf_field(k: ref String) -> Option[String] {
+    match k {
+        "Title" => Some("title".to_string()),
+        "Author" => Some("artist".to_string()),
+        "Description" => Some("comment".to_string()),
+        "Copyright" => Some("other.copyright".to_string()),
+        "WM/ARTISTS" => Some("artist".to_string()),
+        "WM/TrackNumber" => Some("track".to_string()),
+        "WM/PartOfSet" => Some("disc".to_string()),
+        "WM/Year" => Some("year".to_string()),
+        "WM/AlbumArtist" => Some("albumartist".to_string()),
+        "WM/Genre" => Some("genre".to_string()),
+        "WM/AlbumTitle" => Some("album".to_string()),
+        "WM/Composer" => Some("composer".to_string()),
+        "WM/Publisher" => Some("other.publisher".to_string()),
+        "WM/BeatsPerMinute" => Some("other.bpm".to_string()),
+        "WM/InitialKey" => Some("other.initial_key".to_string()),
+        "WM/Lyrics" => Some("other.lyrics".to_string()),
+        "WM/Language" => Some("other.language".to_string()),
+        "WM/Director" => Some("other.director".to_string()),
+        "WM/AuthorURL" => Some("other.url".to_string()),
+        "WM/ISRC" => Some("other.isrc".to_string()),
+        "WM/Conductor" => Some("other.conductor".to_string()),
+        "WM/Writer" => Some("other.lyricist".to_string()),
+        "WM/SetSubTitle" => Some("other.set_subtitle".to_string()),
+        "WM/EncodedBy" => Some("other.encoded_by".to_string()),
+        "WM/EncodingSettings" => Some("other.encoder_settings".to_string()),
+        "WM/Media" => Some("other.media".to_string()),
+        "WM/Barcode" => Some("other.barcode".to_string()),
+        "WM/CatalogNo" => Some("other.catalog_number".to_string()),
+        "WM/ContentGroupDescription" => Some("other.grouping".to_string()),
+        "WM/Work" => Some("other.work".to_string()),
+        _ => None,
+    }
+}
+
+// _MP4._CUSTOM_FIELD_NAME_MAPPING
+fn mp4_custom(k: ref String) -> Option[String] {
+    match k {
+        "artists" => Some("artist".to_string()),
+        "conductor" => Some("other.conductor".to_string()),
+        "discsubtitle" => Some("other.set_subtitle".to_string()),
+        "initialkey" => Some("other.initial_key".to_string()),
+        "isrc" => Some("other.isrc".to_string()),
+        "language" => Some("other.language".to_string()),
+        "lyricist" => Some("other.lyricist".to_string()),
+        "media" => Some("other.media".to_string()),
+        "website" => Some("other.url".to_string()),
+        "license" => Some("other.license".to_string()),
+        "barcode" => Some("other.barcode".to_string()),
+        "catalognumber" => Some("other.catalog_number".to_string()),
+        _ => None,
+    }
+}
+
+// _MP4._IMAGE_MIME_TYPES
+fn mp4_image_mime(n: i64) -> Option[String] {
+    match n {
+        12 => Some("image/gif".to_string()),
+        13 => Some("image/jpeg".to_string()),
+        14 => Some("image/png".to_string()),
+        27 => Some("image/bmp".to_string()),
+        _ => None,
+    }
+}
+
+// _MP4._LOSSLESS_CODECS
+fn mp4_lossless(k: ref String) -> bool {
+    match k {
+        "mp4a.40.35" => true,
+        "mp4a.40.36" => true,
+        "mp4a.40.37" => true,
+        "mp4a.40.38" => true,
+        _ => false,
+    }
+}
+
+// _MP4's tree below ilst: for each atom, the parser of its data atom, as
+// (kind, field, field): 0 _data_parser, 1 _nums_parser, 2 the genre, 3
+// the cover; 4 is the '----' atom, parsed by _parse_custom_field itself.
+fn ilst_entry(k: ref String) -> Option[(i64, String, String)] {
+    match k {
+        "\u{a9}ART" => Some((0, "artist".to_string(), "".to_string())),
+        "\u{a9}alb" => Some((0, "album".to_string(), "".to_string())),
+        "\u{a9}cmt" => Some((0, "comment".to_string(), "".to_string())),
+        "\u{a9}com" => Some((0, "composer".to_string(), "".to_string())),
+        "\u{a9}con" => Some((0, "other.conductor".to_string(), "".to_string())),
+        "\u{a9}day" => Some((0, "year".to_string(), "".to_string())),
+        "\u{a9}des" => Some((0, "other.description".to_string(), "".to_string())),
+        "\u{a9}dir" => Some((0, "other.director".to_string(), "".to_string())),
+        "\u{a9}gen" => Some((0, "genre".to_string(), "".to_string())),
+        "\u{a9}grp" => Some((0, "other.grouping".to_string(), "".to_string())),
+        "\u{a9}lyr" => Some((0, "other.lyrics".to_string(), "".to_string())),
+        "\u{a9}mvc" => Some((0, "other.movement_total".to_string(), "".to_string())),
+        "\u{a9}mvi" => Some((0, "other.movement".to_string(), "".to_string())),
+        "\u{a9}mvn" => Some((0, "other.movement_name".to_string(), "".to_string())),
+        "\u{a9}nam" => Some((0, "title".to_string(), "".to_string())),
+        "\u{a9}pub" => Some((0, "other.publisher".to_string(), "".to_string())),
+        "\u{a9}too" => Some((0, "other.encoded_by".to_string(), "".to_string())),
+        "\u{a9}wrk" => Some((0, "other.work".to_string(), "".to_string())),
+        "\u{a9}wrt" => Some((0, "composer".to_string(), "".to_string())),
+        "aART" => Some((0, "albumartist".to_string(), "".to_string())),
+        "cprt" => Some((0, "other.copyright".to_string(), "".to_string())),
+        "desc" => Some((0, "other.description".to_string(), "".to_string())),
+        "disk" => Some((1, "disc".to_string(), "disc_total".to_string())),
+        "gnre" => Some((2, "".to_string(), "".to_string())),
+        "shwm" => Some((0, "other.show_movement".to_string(), "".to_string())),
+        "trkn" => Some((1, "track".to_string(), "track_total".to_string())),
+        "tmpo" => Some((0, "other.bpm".to_string(), "".to_string())),
+        "covr" => Some((3, "".to_string(), "".to_string())),
+        "----" => Some((4, "".to_string(), "".to_string())),
+        _ => None,
+    }
+}
+
+// _Aiff._AIFF_MAPPING
+fn aiff_field(k: ref String) -> Option[String] {
+    match k {
+        "NAME" => Some("title".to_string()),
+        "AUTH" => Some("artist".to_string()),
+        "ANNO" => Some("comment".to_string()),
+        "(c) " => Some("other.copyright".to_string()),
+        _ => None,
+    }
+}
+
+// _Aiff._UNCOMPRESSED_FORMATS
+fn aiff_uncompressed(k: ref String) -> bool {
+    match k {
+        "23ni" => true,
+        "42ni" => true,
+        "FL32" => true,
+        "FL64" => true,
+        "NONE" => true,
+        "fl32" => true,
+        "fl64" => true,
+        "in24" => true,
+        "in32" => true,
+        "raw " => true,
+        "sowt" => true,
+        "twos" => true,
+        _ => false,
+    }
+}
+
+// TinyTag._get_parser_for_filename: each extension and its class
+fn ext_class(name: ref String) -> i64 {
+    let n = name.to_lowercase();
+    if n.ends_with(".mp1") {
+        return K_ID3;
+    }
+    if n.ends_with(".mp2") {
+        return K_ID3;
+    }
+    if n.ends_with(".mp3") {
+        return K_ID3;
+    }
+    if n.ends_with(".flac") {
+        return K_ID3;
+    }
+    if n.ends_with(".oga") {
+        return K_OGG;
+    }
+    if n.ends_with(".ogv") {
+        return K_OGG;
+    }
+    if n.ends_with(".ogg") {
+        return K_OGG;
+    }
+    if n.ends_with(".opus") {
+        return K_OGG;
+    }
+    if n.ends_with(".spx") {
+        return K_OGG;
+    }
+    if n.ends_with(".wav") {
+        return K_WAVE;
+    }
+    if n.ends_with(".wma") {
+        return K_ASF;
+    }
+    if n.ends_with(".wmv") {
+        return K_ASF;
+    }
+    if n.ends_with(".asf") {
+        return K_ASF;
+    }
+    if n.ends_with(".m4b") {
+        return K_MP4;
+    }
+    if n.ends_with(".m4a") {
+        return K_MP4;
+    }
+    if n.ends_with(".m4r") {
+        return K_MP4;
+    }
+    if n.ends_with(".m4v") {
+        return K_MP4;
+    }
+    if n.ends_with(".mp4") {
+        return K_MP4;
+    }
+    if n.ends_with(".aax") {
+        return K_MP4;
+    }
+    if n.ends_with(".aaxc") {
+        return K_MP4;
+    }
+    if n.ends_with(".aiff") {
+        return K_AIFF;
+    }
+    if n.ends_with(".aifc") {
+        return K_AIFF;
+    }
+    if n.ends_with(".aif") {
+        return K_AIFF;
+    }
+    if n.ends_with(".afc") {
+        return K_AIFF;
+    }
+    0
+}
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order. The binary ones are spelled in
+// hex, with Z<count>; for a run of zero bytes.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    v.push(data_0());
+    v.push(data_1());
+    v.push(data_2());
+    v.push(data_3());
+    v.push(data_4());
+    v.push(data_5());
+    v.push(data_6());
+    v.push(data_7());
+    v.push(data_8());
+    v.push(data_9());
+    v.push(data_10());
+    v.push(data_11());
+    v.push(data_12());
+    v.push(data_13());
+    v.push(data_14());
+    v.push(data_15());
+    v.push(data_16());
+    v.push(data_17());
+    v.push(data_18());
+    v.push(data_19());
+    v.push(data_20());
+    v.push(data_21());
+    v.push(data_22());
+    v.push(data_23());
+    v.push(data_24());
+    v.push(data_25());
+    v.push(data_26());
+    v.push(data_27());
+    v.push(data_28());
+    v.push(data_29());
+    v.push(data_30());
+    v.push(data_31());
+    v
+}
+
+fn data_0() -> DataFile {
+    let mut t = String.new();
+    t.push_str("524946465c08000057415645666d74201400000011000100225600005c2b0000000204000200f9036661637404000000");
+    t.push_str("660201004c49535420000000494e464f494e414d0a000000566f6963656d61696c005452434b02000000780064617461");
+    t.push_str("0008Z2050;");
+    DataFile { path: "adpcm.wav".to_string(), body: t, hex: true }
+}
+
+fn data_1() -> DataFile {
+    let mut t = String.new();
+    t.push_str("664c614300000022100010000000100030000ac442f00006baa8000102030405060708090a0b0c0d0e0f040002582000");
+    t.push_str("00007265666572656e6365206c6962464c414320312e342e3320323032333036323313000000140000005449544c453d");
+    t.push_str("486172626f7572204c69676874730f0000004152544953543d4d69726120536f6c14000000414c42554d415254495354");
+    t.push_str("3d4d69726120536f6c0f000000414c42554d3d436f6173746c696e650f000000545241434b4e554d4245523d322f390c");
+    t.push_str("000000444953434e554d4245523d310b00000044495343544f54414c3d3109000000444154453d323032330a00000047");
+    t.push_str("454e52453d466f6c6b1a000000434f4d4d454e543d6d6173746572656420666f722076696e796c11000000495352433d");
+    t.push_str("474258595a32333030303432090000004d4f4f443d63616c6d0f0000006172746973743d4d69726120536f6c12000000");
+    t.push_str("4172746973743d47756573742043686f6972190000004f544845523d636f6c6c696465732077697468206f746865720c");
+    t.push_str("000000545241434b544f54414c3d781d0000004c59524943533d6669727374206c696e650a7365636f6e64206c696e65");
+    t.push_str("130000006e6f20657175616c73207369676e2068657265bb0000004d455441444154415f424c4f434b5f504943545552");
+    t.push_str("453d414141414177414141416c706257466e5a533977626d6341414141486157647562334a6c5a414141414151414141");
+    t.push_str("41454141414147414141414141414141424a6956424f5277304b47676f414141414e5355684555674141414151414141");
+    t.push_str("4145434149414141416d6b776b704141414145456c4551565234326d4d346f61454252777a4563514452517847426f4e");
+    t.push_str("4e755a4141414141424a52553545726b4a6767673d3d060000770000000300000009696d6167652f706e670000000546");
+    t.push_str("726f6e74000000040000000400000018000000000000004989504e470d0a1a0a0000000d494844520000000400000004");
+    t.push_str("080200000026930929000000104944415478da6338a1a101470cc47100d1431181a0d36e640000000049454e44ae4260");
+    t.push_str("820600008d000000080000000a696d6167652f6a7065670000000d4d697261206f6e2073746167650000000400000004");
+    t.push_str("000000180000000000000056ffd8ffe000104a46494600010100000100010000000102030405060708090a0b0c0d0e0f");
+    t.push_str("101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f");
+    t.push_str("ffd981000064Z100;fff8Z1000;");
+    DataFile { path: "album.flac".to_string(), body: t, hex: true }
+}
+
+fn data_2() -> DataFile {
+    let mut t = String.new();
+    t.push_str("664c6158Z40;");
+    DataFile { path: "bad.flac".to_string(), body: t, hex: true }
+}
+
+fn data_3() -> DataFile {
+    let mut t = String.new();
+    t.push_str("OggZ this is not an ogg stream at all");
+    DataFile { path: "bad.ogg".to_string(), body: t, hex: false }
+}
+
+fn data_4() -> DataFile {
+    let mut t = String.new();
+    t.push_str("464f524d00000812414946434656455200000004a2805140434f4d4d0000002200020003a9800010400ebb8000000000");
+    t.push_str("0000736f77740b6e6f74207377617070656453534e44000007d0Z2000;");
+    DataFile { path: "comp.aifc".to_string(), body: t, hex: true }
+}
+
+fn data_5() -> DataFile {
+    let mut t = String.new();
+    t.push_str("49443303000000000014544954320000000a000000437574");
+    DataFile { path: "cut.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_6() -> DataFile {
+    let mut t = String.new();
+    DataFile { path: "empty.mp3".to_string(), body: t, hex: false }
+}
+
+fn data_7() -> DataFile {
+    let mut t = String.new();
+    t.push_str("524946464407000057415645666d742028000000feff060080bb0000002f0d0012001800160018003f00000001000000");
+    t.push_str("00001000800000aa00389b71646174610807Z1802;");
+    DataFile { path: "ext.wav".to_string(), body: t, hex: true }
+}
+
+fn data_8() -> DataFile {
+    let mut t = String.new();
+    t.push_str("5249464610000000415649204c495354");
+    DataFile { path: "fake.wav".to_string(), body: t, hex: true }
+}
+
+fn data_9() -> DataFile {
+    let mut t = String.new();
+    t.push_str("524946465008000057415645666d7420100000000100020044ac000010b10200040010004c495354a0000000494e464f");
+    t.push_str("494e414d0c0000005261696e206f6e2054696e00494152540a0000004669656c64204b69740049505244080000005765");
+    t.push_str("617468657200494352440500000032303138000049474e52100000004669656c64207265636f7264696e670049434d54");
+    t.push_str("0a000000636c6f7365206d6963004954524b0200000035004950525405000000666976650000495346540e0000004c61");
+    t.push_str("766636302e31362e3130300069643320450000004944330300000000003b545045310000000e0000004669656c64204b");
+    t.push_str("69742044756f5442504d000000030000003630544954320000000c0000005261696e206f6e2054696e005f504d583800");
+    t.push_str("00003c783a786d706d65746120786d6c6e733a783d2761646f62653a6e733a6d6574612f273e3c7761762f3e3c2f783a");
+    t.push_str("786d706d6574613e000064617461e506Z1768;6a756e6b070000000000000000000000");
+    DataFile { path: "field.wav".to_string(), body: t, hex: true }
+}
+
+fn data_10() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4f67675300020000000000000000acf10000000000004fa73aab01337f464c414301000001664c614300000022100010");
+    t.push_str("000000100030000bb800f000017700000102030405060708090a0b0c0d0e0f4f67675300000000000000000000acf100");
+    t.push_str("000100000038838f98015484000050170000007265666572656e6365206c6962464c414320312e342e33030000000a00");
+    t.push_str("00005449544c453d42656c6c0d0000004152544953543d43686170656c0e000000444953434e554d4245523d322f334f");
+    t.push_str("676753000080bb000000000000acf1000002000000cd5a459501cafff8Z200;4f67675300040077010000000000acf10");
+    t.push_str("000030000004108a15701cafff8Z200;");
+    DataFile { path: "flac.oga".to_string(), body: t, hex: true }
+}
+
+fn data_11() -> DataFile {
+    let mut t = String.new();
+    t.push_str("# mini_tinytag jobs: the tinytag command line, then the Python API\n");
+    t.push_str("tinytag data/song.mp3\n");
+    t.push_str("tinytag --format json data/vbr.mp3 data/vbri.mp3\n");
+    t.push_str("tinytag -f json data/old.mp3 data/v1only.mp3 data/stream.dat\n");
+    t.push_str("tinytag -f csv data/album.flac\n");
+    t.push_str("tinytag -f tsv data/tagged.flac data/vorbis.ogg\n");
+    t.push_str("tinytag -f tabularcsv data/voice.opus data/flac.oga data/talk.spx\n");
+    t.push_str("tinytag -f json data/field.wav data/ext.wav data/adpcm.wav\n");
+    t.push_str("tinytag data/tune.m4a data/lossless.m4a\n");
+    t.push_str("tinytag -f csv data/show.wma\n");
+    t.push_str("tinytag -f json data/loop.aiff data/comp.aifc\n");
+    t.push_str("tinytag -i data/out/cover.png data/song.mp3\n");
+    t.push_str("tinytag --save-image data/out/art.jpg -f tsv data/album.flac data/tune.m4a data/vorbis.ogg data/v1only.mp3\n");
+    t.push_str("tinytag -s data/notes.txt data/empty.mp3 data/mystery.bin data/real_flac.bin\n");
+    t.push_str("tinytag data/notes.txt data/loop.aiff\n");
+    t.push_str("tinytag data/empty.mp3 data/real_flac.bin data/really_ogg.mp4\n");
+    t.push_str("tinytag data/bad.ogg\n");
+    t.push_str("tinytag data/bad.flac\n");
+    t.push_str("tinytag data/fake.wav\n");
+    t.push_str("tinytag data/noise.m4a\n");
+    t.push_str("tinytag data/short.m4a\n");
+    t.push_str("tinytag data/cut.mp3\n");
+    t.push_str("tinytag data/mystery.bin\n");
+    t.push_str("tinytag data/missing.mp3\n");
+    t.push_str("tinytag -f xml data/field.wav\n");
+    t.push_str("tinytag -f csv\n");
+    t.push_str("tinytag -h data/song.mp3\n");
+    t.push_str("get data/vorbis.ogg tags=0\n");
+    t.push_str("get data/vorbis.ogg duration=0\n");
+    t.push_str("get data/tune.m4a duration=0 image=1\n");
+    t.push_str("get data/tune.m4a tags=0\n");
+    t.push_str("get data/song.mp3 tags=0\n");
+    t.push_str("get data/song.mp3 duration=0 image=1\n");
+    t.push_str("get data/album.flac duration=0 image=1\n");
+    t.push_str("get data/vorbis.ogg image=1\n");
+    t.push_str("get data/old.mp3 image=1\n");
+    t.push_str("get data/field.wav tags=0 duration=0\n");
+    t.push_str("get data/show.wma duration=0\n");
+    t.push_str("get data/loop.aiff tags=0\n");
+    t.push_str("get data/real_flac.bin magic=0\n");
+    t.push_str("get data/song.mp3 magic=0 tags=0\n");
+    t.push_str("images data/song.mp3\n");
+    t.push_str("images data/album.flac\n");
+    t.push_str("images data/old.mp3\n");
+    t.push_str("images data/field.wav\n");
+    t.push_str("supported song.mp3 SONG.MP3 a.m4b x.aifc clip.wmv notes.txt archive.flac.zip .ogg\n");
+    t.push_str("files data/out\n");
+    DataFile { path: "jobs.txt".to_string(), body: t, hex: false }
+}
+
+fn data_12() -> DataFile {
+    let mut t = String.new();
+    t.push_str("464f524d000004e641494646434f4d4d0000001200010000ac440008400dac440000000000004e414d450000000b4472");
+    t.push_str("756d204c6f6f70203400415554480000000842656174204c6162414e4e4f0000001274616b65206f6e650074616b6520");
+    t.push_str("74776f00286329200000000d323031362042656174204c61620053534e44000003f1Z1010;4944332000000040494433");
+    t.push_str("04000000000036544954320000000c0000034472756d204c6f6f70203454434f4e0000000a000003427265616b626561");
+    t.push_str("745452434b00000002000003344150504c0000002a584d50203c783a786d706d65746120786d6c6e733a783d2761646f");
+    t.push_str("62653a6e733a6d6574612f272f3e00");
+    DataFile { path: "loop.aiff".to_string(), body: t, hex: true }
+}
+
+fn data_13() -> DataFile {
+    let mut t = String.new();
+    t.push_str("00000014667479704d344120000000004d3441200000024b6d6f6f76000000786d76686401Z20;01770000000000003d");
+    t.push_str("86Z83;011c7472616b0000005c746b6864Z87;b86d646961000000206d646864Z27;906d696e6600000010736d686400");
+    t.push_str("00000000000000000000787374626c0000005873747364000000000000000100000048616c6163000000000000000100");
+    t.push_str("0000000000000000020010000000007700000000000024616c616300000000000010000018280a0e0200ff0000000000");
+    t.push_str("232800000177000000001873747473Z19;af75647461000000a76d657461000000000000002168646c72000000000000");
+    t.push_str("00006d6469726170706c0000000000000000000000007a696c737400000021a96e616d00000019646174610000000100");
+    t.push_str("000000526f6f6d20546f6e65000000512d2d2d2d0000001c6d65616e00000000636f6d2e6170706c652e6954756e6573");
+    t.push_str("000000156e616d6500000000434f4e445543544f52000000186461746100000001000000004964612042657267000001");
+    t.push_str("fc6d646174Z500;");
+    DataFile { path: "lossless.m4a".to_string(), body: t, hex: true }
+}
+
+fn data_14() -> DataFile {
+    let mut t = String.new();
+    t.push_str("010203206a75737420736f6d65206279746573");
+    DataFile { path: "mystery.bin".to_string(), body: t, hex: true }
+}
+
+fn data_15() -> DataFile {
+    let mut t = String.new();
+    t.push_str("00000010fffefdfc0000000000000000");
+    DataFile { path: "noise.m4a".to_string(), body: t, hex: true }
+}
+
+fn data_16() -> DataFile {
+    let mut t = String.new();
+    t.push_str("setlist: open with track 3, close with the reprise\n");
+    DataFile { path: "notes.txt".to_string(), body: t, hex: false }
+}
+
+fn data_17() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4944330200000000025d54543200000e00426c756520696e20477265656e54503100001901fffe540068006500200051");
+    t.push_str("0075006100720074006500740054414c000009004c6174652053657454524b00000300303554434f000005004a617a7a");
+    t.push_str("5459450000050031393539434f4d00002c01656e67fffe6e006f00740065000000fffe6d006f006e006f002000740072");
+    t.push_str("0061006e007300660065007200554c5400001300656e670028696e737472756d656e74616c2950494300005400504e47");
+    t.push_str("0366726f6e740089504e470d0a1a0a0000000d4948445200000004000000040802000000269309290000001049444154");
+    t.push_str("78da6338a1a101470cc47100d1431181a0d36e640000000049454e44ae42608254585800001600426172636f64650030");
+    t.push_str("3132333435363738393031325454310000070053696465204254503200000b01fffe4100620000d86300534c54000017");
+    t.push_str("00656e670101006f6e65000000000a74776f0000000014fffda4Z573;fffda6Z574;fffd94Z477;fffdc6Z766;fffda4");
+    t.push_str("Z573;1337ff0067617262616765fffd86Z382;fffdb4Z669;fffda6Z574;fffda4Z573;fffd96Z478;");
+    DataFile { path: "old.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_18() -> DataFile {
+    let mut t = String.new();
+    t.push_str("664c614300000022100010000000100030001770037000493e00000102030405060708090a0b0c0d0e0f840000470600");
+    t.push_str("000066666d70656703000000110000005449544c453d46726f6d20566f726269730f0000004152544953543d4d697261");
+    t.push_str("20536f6c0d000000545241434b4e554d4245523d33Z1500;");
+    DataFile { path: "real_flac.bin".to_string(), body: t, hex: true }
+}
+
+fn data_19() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4f676753000200000000000000005100000000000000826280a001134f707573486561640102380180bb00000000004f");
+    t.push_str("676753000000000000000000005100000001000000fd81e5d001774f707573546167730b0000006c69626f7075732031");
+    t.push_str("2e3406000000120000005449544c453d4d6f726e696e672043616c6c0a0000004152544953543d546f6d0a0000006172");
+    t.push_str("746973743d746f6d0d000000545241434b4e554d4245523d310b0000004c414e47554147453d656e0600000042504d3d");
+    t.push_str("39304f6767530000b8bc00000000000051000000020000003b4fd0b7033c3c3cZ180;4f6767530000387801000000000");
+    t.push_str("0510000000300000042bbcff603464646Z210;4f6767530000b83302000000000051000000040000007b2192cd035050");
+    t.push_str("50Z240;4f676753000038ef02000000000051000000050000002fde64b2035a5a5aZ270;4f6767530004b8aa03000000");
+    t.push_str("00005100000006000000366cdd0403646464Z300;");
+    DataFile { path: "really_ogg.mp4".to_string(), body: t, hex: true }
+}
+
+fn data_20() -> DataFile {
+    let mut t = String.new();
+    t.push_str("0000000c667479704d3441200000001a6d6f6f76000000126d76686400000000000000000000");
+    DataFile { path: "short.m4a".to_string(), body: t, hex: true }
+}
+
+fn data_21() -> DataFile {
+    let mut t = String.new();
+    t.push_str("3026b2758e66cf11a6d900aa0062ce6c6504000000000000070000000102a1dcab8c47a9cf118ee400c00c2053656800");
+    t.push_str("00000000000011111111111111111111111111111111282300000000000000000000000000000c00000000000000c00d");
+    t.push_str("916e0000000000000000000000001c0c00000000000002000000800c0000800c000000fa00009107dcb7b7a9cf118ee6");
+    t.push_str("00c00c2053656a00000000000000409e69f84d5bcf11a8fd00805f5c442bZ24;1c000000000000000100000000006101");
+    t.push_str("020044ac0000803e00009d0b10000a00000000000000000000003326b2758e66cf11a6d900aa0062ce6c780000000000");
+    t.push_str("00001e0014001c00020006005700650065006b006c007900200052006f0075006e006400750070000000530074006100");
+    t.push_str("740069006f006e002000390000002800630029002000530074006100740069006f006e00200039000000000050004700");
+    t.push_str("000040a4d0d207e3d21197f000a0c95ea850a6010000000000000a001c0057004d002f0041006c00620075006d005400");
+    t.push_str("690074006c006500000000001c0052006f0075006e0064007500700073002000320030003200340000001e0057004d00");
+    t.push_str("2f0054007200610063006b004e0075006d006200650072000000030004000e000000100057004d002f00590065006100");
+    t.push_str("7200000000000a0032003000320034000000120057004d002f00470065006e007200650000000000100050006f006400");
+    t.push_str("630061007300740000001a0057004d002f0050006100720074004f00660053006500740000000000080031002f003200");
+    t.push_str("0000100057004d002f004d006f006f00640000000000180069006e0066006f0072006d00610074006900760065000000");
+    t.push_str("0c004900730056004200520000000200040001000000160057004d002f00500069006300740075007200650000000100");
+    t.push_str("0a0003000000000000000000200057004d002f0045006e0063006f00640069006e006700540069006d00650000000400");
+    t.push_str("080000c083ed8a49da01160057004d002f0042006900740072006100740065000000050002008000b503bf5f2ea9cf11");
+    t.push_str("8ee300c00c205365d0Z23;0600a2000000eacbf8c5af5b77488467aa8c44fa4cca840000000000000002000000000018");
+    t.push_str("0000000e00000057004d002f0043006f006d0070006f00730065007200000052002e002000490074006f000000000000");
+    t.push_str("00280003000400000057004d002f00530068006100720065006400550073006500720052006100740069006e00670000");
+    t.push_str("004b000000d2d0a440e30711d297f000a0c95ea8501e00000000000000000000000000cbcf7abea997e8429c71999491");
+    t.push_str("e3afac4e000000000000003c783a786d706d65746120786d6c6e733a783d2761646f62653a6e733a6d6574612f273e3c");
+    t.push_str("776d612f3e3c2f783a786d706d6574613eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee39Z40;3626b2758e66cf11a6d900aa");
+    t.push_str("0062ce6c4aZ57;");
+    DataFile { path: "show.wma".to_string(), body: t, hex: true }
+}
+
+fn data_22() -> DataFile {
+    let mut t = String.new();
+    t.push_str("49443303000000000739544954320000000c0000004e6967687420547261696e5450453100000015000001fffe41006e");
+    t.push_str("00610020004c00fa0063006900610054414c420000000b000000506c6174666f726d2039545045320000001000000056");
+    t.push_str("6172696f757320417274697374735452434b00000005000000332f313254504f5300000004000000312f3254434f4e00");
+    t.push_str("0000050000002831372954594552000000050000003230313954434f4d00000017000001fffe4a00f600720067002000");
+    t.push_str("57006500690073007300434f4d4d0000001f000000656e67007265636f72646564206c69766520617420746865206465");
+    t.push_str("706f74434f4d4d00000028000000656e676954756e4e4f524d0020303030303033453820303030303034313220303030");
+    t.push_str("30324131425458585800000017000000434154414c4f474e554d42455200504c41542d30303954585858000000100000");
+    t.push_str("004152544953545300426f204368656e545858580000000d0000004d6f6f64007769737466756c544954310000000800");
+    t.push_str("0000436f6d6d75746547525031000000080000004576656e696e6755534c540000001c000000656e67006c61206c6120");
+    t.push_str("6c610a746865206c61737420747261696e53594c5400000030000000656e670201000a4865726520697420636f6d6573");
+    t.push_str("00000005dc0a7468726f75676820746865206461726b000000f712574f415200000017000068747470733a2f2f657861");
+    t.push_str("6d706c652e636f6d2f616e615442504d00000004000000313230504f504d0000001a00006c697374656e657240657861");
+    t.push_str("6d706c652e636f6d00c400000007505249560000002a0000584d50003c783a786d706d65746120786d6c6e733a783d27");
+    t.push_str("61646f62653a6e733a6d6574612f272f3e00415049430000005b000000696d6167652f706e670003636f766572008950");
+    t.push_str("4e470d0a1a0a0000000d494844520000000400000004080200000026930929000000104944415478da6338a1a101470c");
+    t.push_str("c47100d1431181a0d36e640000000049454e44ae4260824150494300000064000000696d6167652f6a706567000400ff");
+    t.push_str("d8ffe000104a46494600010100000100010000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c");
+    t.push_str("1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3fffd95458595a00000015000000");
+    t.push_str("61206672616d65206e6f626f6479206b6e6f7773544c454e0000000500000034303030Z64;fffb9240Z414;fffb9040Z");
+    t.push_str("413;fffb9040Z413;fffb9240Z414;fffb9040Z413;fffb9040Z413;fffb9240Z414;fffb9040Z413;fffb9040Z413;f");
+    t.push_str("ffb9240Z414;fffb9040Z413;fffb9040Z413;5441474e6967687420547261696eZ19;416e61204c75636961Z51;3230");
+    t.push_str("313966726f6d207631Z22;0411");
+    DataFile { path: "song.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_23() -> DataFile {
+    let mut t = String.new();
+    t.push_str("ffff48c0Z188;ffff48c0Z188;ffff48c0Z188;ffff48c0Z188;ffff48c0Z188;ffff48c0Z188;ffff48c0Z188;ffff4");
+    t.push_str("8c0Z188;ffff48c0Z188;");
+    DataFile { path: "stream.dat".to_string(), body: t, hex: true }
+}
+
+fn data_24() -> DataFile {
+    let mut t = String.new();
+    t.push_str("49443303000000000026544954320000000900000046726f6d2049443354504531000000090000004d69726120536f6c");
+    t.push_str("664c614300000022100010000000100030001770037000493e00000102030405060708090a0b0c0d0e0f840000470600");
+    t.push_str("000066666d70656703000000110000005449544c453d46726f6d20566f726269730f0000004152544953543d4d697261");
+    t.push_str("20536f6c0d000000545241434b4e554d4245523d33Z1500;");
+    DataFile { path: "tagged.flac".to_string(), body: t, hex: true }
+}
+
+fn data_25() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4f676753000200000000000000000700000000000000aa2220f8014c5370656578202020312e322e3100000000000000");
+    t.push_str("00000000000000000100000050000000803e0000010000000400000001000000ffffffff4001Z18;4f67675300000000");
+    t.push_str("0000000000000700000001000000477c5ad1014e18000000456e636f646564207769746820537065657820312e322e31");
+    t.push_str("030000000d0000005449544c453d4d696e757465730c000000415554484f523d426f61726409000000444154453d3230");
+    t.push_str("32344f6767530000803e0000000000000700000002000000ef1d4fd8052626262626Z190;4f6767530004409c0000000");
+    t.push_str("000000700000003000000bcf546f9052626262626Z190;");
+    DataFile { path: "talk.spx".to_string(), body: t, hex: true }
+}
+
+fn data_26() -> DataFile {
+    let mut t = String.new();
+    t.push_str("0000001c667479704d344120000002004d3441206d70343269736f6d0000001866726565Z18;05696d6f6f760000006c");
+    t.push_str("6d7668640000000000000000000000000000ac44007e2bceZ82;012b7472616b0000005c746b6864Z87;c76d64696100");
+    t.push_str("0000206d646864Z27;9f6d696e6600000010736d68640000000000000000000000877374626c00000067737473640000");
+    t.push_str("000000000001000000576d703461000000000000000100000000000000000002001000000000ac440000000000336573");
+    t.push_str("647300000000038080802200010004808080144015001800000271000001f40005808080021210068080800102000000");
+    t.push_str("1873747473Z18;03ca75647461000003c26d657461000000000000002168646c7200000000000000006d646972617070");
+    t.push_str("6c00000000000000000000000395696c737400000023a96e616d0000001b646174610000000100000000476c61737320");
+    t.push_str("486f7572730000002ba9415254000000236461746100000001000000004e6f6f72202620546865204c616e7465726e73");
+    t.push_str("00000023a9616c620000001b646174610000000100000000476c61737320486f7572730000001c614152540000001464");
+    t.push_str("61746100000001000000004e6f6f720000002074726b6e0000001864617461000000000000000000000006000b000000");
+    t.push_str("00001e6469736b000000166461746100000000000000000000000100000000002ca96461790000002464617461000000");
+    t.push_str("0100000000323032322d30332d30345430383a30303a30305a0000001da967656e000000156461746100000001000000");
+    t.push_str("00496e6469650000001a676e72650000001264617461000000000000000000120000001a746d706f0000001264617461");
+    t.push_str("00000015000000000060000000306370727400000028646174610000000100000000e284972032303232204c616e7465");
+    t.push_str("726e205265636f72647300000021a9777274000000196461746100000001000000004e2e2048616464616400000030a9");
+    t.push_str("6c797200000028646174610000000100000000686f757273206f6620676c6173730d616e64206c6967687400000024a9");
+    t.push_str("746f6f0000001c6461746100000001000000006954756e65732031322e313200000061636f7672000000596461746100");
+    t.push_str("00000e0000000089504e470d0a1a0a0000000d4948445200000004000000040802000000269309290000001049444154");
+    t.push_str("78da6338a1a101470cc47100d1431181a0d36e640000000049454e44ae426082000000502d2d2d2d0000001c6d65616e");
+    t.push_str("00000000636f6d2e6170706c652e6954756e6573000000106e616d6500000000495352430000001c6461746100000001");
+    t.push_str("000000005553414243323230303031310000006e2d2d2d2d0000001c6d65616e00000000636f6d2e6170706c652e6954");
+    t.push_str("756e6573000000106e616d65000000004d4f4f4400000016646174610000000100000000627269676874000000246461");
+    t.push_str("7461000000010000000069676e6f726564207365636f6e642076616c7565000000317869642000000029646174610000");
+    t.push_str("0001000000004c616e7465726e3a697372633a5553414243323230303031310000001c72617465000000146461746100");
+    t.push_str("0000150000000000000050000000197067617000000011646174610000001500000000010000001b7374696b00000013");
+    t.push_str("6461746100000015000000000001020000003d75756964be7acfcb97a942e89c71999491e3afac3c783a786d706d6574");
+    t.push_str("6120786d6c6e733a783d2761646f62653a6e733a6d6574612f272f3e000007d86d646174Z2000;");
+    DataFile { path: "tune.m4a".to_string(), body: t, hex: true }
+}
+
+fn data_27() -> DataFile {
+    let mut t = String.new();
+    t.push_str("ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe36");
+    t.push_str("8c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;ffe368c0Z428;5441474669656c64205265636f7264696e67");
+    t.push_str("000000000000000000000000000000556e6b6e6f776eZ23;5461706573Z25;3139383774686972747920636861726163");
+    t.push_str("74657273206f6620636f6d6d656e7421210c");
+    DataFile { path: "v1only.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_28() -> DataFile {
+    let mut t = String.new();
+    t.push_str("49443304004000000212000000060100544954320000000800000353c3a9616e636554504531000000080000034b696d");
+    t.push_str("004c6565544452430000000b000003323032312d30352d30315452434b000000020000033754434f4e0000000b000003");
+    t.push_str("416d6269656e7400313354504f5300000004000003782f324d56494e00000004000003322f344d564e4d000000080000");
+    t.push_str("03416e64616e7465544b4559000000050000020041006d545858580000001b00000346494c454e414d450073c3a9616e");
+    t.push_str("63652d66696e616c2e776176544954310000000d0000034f6c642047726f7570696e6754505542000000110000034361");
+    t.push_str("66e9205265636f72647320f09f8e58534f500000000a00000762656c6c0972696e6700000000000000000000fffb9040");
+    t.push_str("Z32;58696e6700000003000003e800061a80Z365;fffb9040Z413;fffba040Z518;fffbb040Z622;fffb9040Z413;fff");
+    t.push_str("b7040Z309;fffbd040Z831;");
+    DataFile { path: "vbr.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_29() -> DataFile {
+    let mut t = String.new();
+    t.push_str("fff380c0Z32;56425249000104d2004b000181cd00000309Z154;fff380c0Z204;fff380c0Z204;fff380c0Z204;fff3");
+    t.push_str("80c0Z204;");
+    DataFile { path: "vbri.mp3".to_string(), body: t, hex: true }
+}
+
+fn data_30() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4f676753000200000000000000005100000000000000826280a001134f707573486561640102380180bb00000000004f");
+    t.push_str("676753000000000000000000005100000001000000fd81e5d001774f707573546167730b0000006c69626f7075732031");
+    t.push_str("2e3406000000120000005449544c453d4d6f726e696e672043616c6c0a0000004152544953543d546f6d0a0000006172");
+    t.push_str("746973743d746f6d0d000000545241434b4e554d4245523d310b0000004c414e47554147453d656e0600000042504d3d");
+    t.push_str("39304f6767530000b8bc00000000000051000000020000003b4fd0b7033c3c3cZ180;4f6767530000387801000000000");
+    t.push_str("0510000000300000042bbcff603464646Z210;4f6767530000b83302000000000051000000040000007b2192cd035050");
+    t.push_str("50Z240;4f676753000038ef02000000000051000000050000002fde64b2035a5a5aZ270;4f6767530004b8aa03000000");
+    t.push_str("00005100000006000000366cdd0403646464Z300;");
+    DataFile { path: "voice.opus".to_string(), body: t, hex: true }
+}
+
+fn data_31() -> DataFile {
+    let mut t = String.new();
+    t.push_str("4f676753000200000000000000003412000000000000e960db82011e01766f72626973000000000244ac000000000000");
+    t.push_str("0071020000000000b8014f676753000000000000000000003412000001000000eaf6bf2f02ffff03766f726269733400");
+    t.push_str("0000586970682e4f7267206c6962566f72626973204920323032303037303420285265647563696e6720456e7669726f");
+    t.push_str("6e6d656e74290d000000140000005449544c453d4c6f6e672057617920526f756e64140000004152544953543d44756e");
+    t.push_str("6520456e73656d626c650a000000414c42554d3d53616e640d000000545241434b4e554d4245523d340d000000545241");
+    t.push_str("434b544f54414c3d31300e000000444953434e554d4245523d312f3109000000444154453d323032300d00000047454e");
+    t.push_str("52453d416d6269656e74380100004445534352495054494f4e3d61616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("6161616161616161616161616161616161616161614f676753000100000000000000003412000002000000117d0e1f03");
+    t.push_str("ff0d2f61616161616161616161616161616161611f000000454e434f4445523d4c61766336302e33312e313032206c69");
+    t.push_str("62766f7262697308000000434f4d4d454e543d0c000000544f54414c44495343533d31b70000004d455441444154415f");
+    t.push_str("424c4f434b5f504943545552453d414141414177414141416c706257466e5a533977626d6341414141455a4856755a51");
+    t.push_str("414141415141414141454141414147414141414141414141424a6956424f5277304b47676f414141414e535568455567");
+    t.push_str("41414141514141414145434149414141416d6b776b704141414145456c4551565234326d4d346f61454252777a456351");
+    t.push_str("4452517847426f4e4e755a4141414141424a52553545726b4a6767673d3d0105766f72626973Z40;4f676753000044ac");
+    t.push_str("00000000000034120000030000005dff2016027850Z200;4f676753000088580100000000003412000004000000e6741");
+    t.push_str("439027850Z200;4f6767530000cc0402000000000034120000050000006afa3379027850Z200;4f6767530004f049020");
+    t.push_str("000000000341200000600000096428d9d027850Z200;");
+    DataFile { path: "vorbis.ogg".to_string(), body: t, hex: true }
+}
