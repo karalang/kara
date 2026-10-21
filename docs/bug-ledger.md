@@ -92,35 +92,35 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 754 |
+| miscompile | 755 |
 | run-vs-build | 610 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 323 |
-| codegen-gap | 284 |
-| false-positive | 270 |
-| other | 192 |
+| missing-feature | 325 |
+| codegen-gap | 286 |
+| false-positive | 272 |
+| other | 193 |
 | diagnostics | 184 |
 | perf | 181 |
+| soundness | 129 |
 | crash | 128 |
-| soundness | 127 |
 | use-after-free | 92 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 3010 |
-| interp | 1029 |
-| typecheck | 544 |
-| ownership | 128 |
+| codegen | 3016 |
+| interp | 1031 |
+| typecheck | 548 |
+| ownership | 129 |
 | other | 123 |
 | runtime | 85 |
 | cli | 82 |
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
-| effect | 41 |
+| effect | 42 |
 | lexer | 12 |
 ## Current state
 
@@ -189,6 +189,16 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-55 | 2026-10-21 | typecheck+codegen | medium | A generic fixed only by its return type does not lower on MIR when the call is unwrapped into an annotated binding: `fn make[T: Default]() -> Option[T]` with `let x: i64 = make().unwrap()` checks, but both MIR backends refuse it ("an expression whose type does not lower (Type(UnknownParam(\"T\")))"); the same blocks design.md's `let back: User = Json.deserialize(json).unwrap()` example | — |
 | B-2026-10-21-56 | 2026-10-21 | resolver+typecheck | low | `std.regex` and `std.json` do not exist as modules: `import std.regex.{Regex}` is "unknown module `std.regex`", and `Regex`, `Match`, `Captures`, `RegexError` and `Json` are reached without any import, where docs/library/README.md (and design.md:626, "everything else is under `std.*`") requires `import std.regex.{...}` and `import std.json.{Json}` | — |
 | B-2026-10-21-57 | 2026-10-21 | interp+codegen | low | MIR path appends std.cli whenever the source text contains `Parser` or `Arg` as a substring (`MidiParser`, `Args`, a string literal "Parser()"), not only when the program uses the library. CORRECTION: the `struct Env` failure this was filed for is B-2026-10-21-49 (Thread B); this row is only the substring trigger | — |
+| B-2026-10-21-58 | 2026-10-21 | codegen | high | Compiled MIR stores a folded float constant as an 8-byte `double` into an `f32` slot: `let d: f32 = 1.0 / 3.0; println(d)` prints `14660155000000.0` and clobbers the neighbouring local (`let c: f32 = 0.1` prints `1.6666666`); `__mir-run` is right | — |
+| B-2026-10-21-59 | 2026-10-21 | ownership+codegen | medium | `for w in words.by_ref() { flags.push(w) }` then `words.collect()` (iterators.md's by_ref example) is refused E0516 by check and the MIR borrow checker: the `Str` items are tied to the `by_ref` borrow of `words` rather than to the text `words` splits | — |
+| B-2026-10-21-60 | 2026-10-21 | typecheck+codegen | medium | Iterator methods on a value of generic type `I: Iterator[Item = i64]` fail: check refuses `it.fold(0, |a, x| a + x)` ("expected 'Fn(AccV, I.Item) -> AccV'") and `it.filter(|x| x > 5)`, and `it.map(..).count()` checks but MIR refuses it ("UnknownParam(\"FnV\") is not lowered") | — |
+| B-2026-10-21-61 | 2026-10-21 | typecheck | medium | `Iterator.max` / `min` accept items that are not `Ord`: `v.iter().max()` over `Vec[f64]` checks and prints `2.0`, where iterators.md requires `Self.Item: Ord` (and `Vec[f64].sort()` is correctly refused) | — |
+| B-2026-10-21-62 | 2026-10-21 | effect | medium | `karac check` accepts a `pub fn` that can block without declaring `blocks`: `pub fn f(p: Str) -> bool with reads(FileSystem) { fs.read_to_string(p).is_ok() }` passes, where design.md §12 says `blocks` is not default-permitted and is declared on public functions | — |
+| B-2026-10-21-63 | 2026-10-21 | typecheck | low | `Option.unwrap_or_default` (core-types.md, `T: Default`) does not exist: "no method 'unwrap_or_default' on type 'Option'"; runtime/stdlib/source/option.kara has no such method | — |
+| B-2026-10-21-64 | 2026-10-21 | codegen | medium | `Result.or_else` whose closure changes the error type, or whose body is `Err(..)`, checks but both MIR backends refuse it: "the method call `.or_else` with no resolved callee is not lowered yet" / "a closure with no function type is not lowered yet" | — |
+| B-2026-10-21-65 | 2026-10-21 | typecheck+interp | low | `iN.checked_from(f: f64) -> Option[iN]` (core-types.md, every integer type) does not exist on any backend, and `f32.parse` is missing where core-types.md says every integer and float type has `parse` | — |
+| B-2026-10-21-66 | 2026-10-21 | interp+codegen | low | Number `parse` trims surrounding whitespace (`i64.parse(" 5")`, `"5 "`, `"\t5\n"` give `Ok(5)`; `f64.parse(" 2.5")` gives `Ok(2.5)`), where core-types.md's `InvalidDigit` covers "a character that cannot appear in a number" and its own example trims first | — |
+| B-2026-10-21-67 | 2026-10-21 | codegen | low | Compiled MIR has no lowering for `f64.cbrt`, `asinh`, `acosh`, `atanh` ("native `f64.cbrt` is not lowered yet"); `__mir-run` computes them and every other float method lowers | — |
 
 ### Relocated
 
