@@ -529,11 +529,9 @@ pub(super) fn predecessors(body: &Body) -> Vec<Vec<usize>> {
     preds
 }
 
-/// Immediate dominators (Cooper, Harvey and Kennedy); `usize::MAX` for a
-/// block the entry does not reach, and the entry is its own.
-pub(super) fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
+/// The blocks the entry reaches, in reverse postorder.
+pub(super) fn reverse_postorder(body: &Body) -> Vec<usize> {
     let n = body.blocks.len();
-    // Reverse postorder from the entry.
     let mut order = Vec::with_capacity(n);
     let mut seen = vec![false; n];
     let mut stack = vec![(0usize, 0usize)];
@@ -553,6 +551,14 @@ pub(super) fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
         }
     }
     order.reverse();
+    order
+}
+
+/// Immediate dominators (Cooper, Harvey and Kennedy); `usize::MAX` for a
+/// block the entry does not reach, and the entry is its own.
+pub(super) fn dominators(body: &Body, preds: &[Vec<usize>]) -> Vec<usize> {
+    let order = reverse_postorder(body);
+    let n = body.blocks.len();
     let mut rpo = vec![usize::MAX; n];
     for (i, &b) in order.iter().enumerate() {
         rpo[b] = i;
@@ -611,6 +617,13 @@ pub(super) fn dominates(idom: &[usize], a: usize, mut b: usize) -> bool {
 /// One loop per header, over all its back edges.
 pub(super) fn natural_loops(body: &Body, preds: &[Vec<usize>], idom: &[usize]) -> Vec<Loop> {
     let n = body.blocks.len();
+    // A dominator comes first in reverse postorder, so only an edge that
+    // goes back in it can be a back edge; walking the dominator tree for
+    // every edge is quadratic in a long acyclic body (B-2026-10-21-33).
+    let mut rpo = vec![usize::MAX; n];
+    for (i, b) in reverse_postorder(body).into_iter().enumerate() {
+        rpo[b] = i;
+    }
     let mut loops: Vec<Loop> = Vec::new();
     for t in 0..n {
         if idom[t] == usize::MAX {
@@ -618,7 +631,7 @@ pub(super) fn natural_loops(body: &Body, preds: &[Vec<usize>], idom: &[usize]) -
         }
         for h in body.blocks[t].terminator.kind.successors() {
             let h = h.index();
-            if !dominates(idom, h, t) {
+            if rpo[h] > rpo[t] || !dominates(idom, h, t) {
                 continue;
             }
             let lp = match loops.iter_mut().find(|l| l.header == h) {

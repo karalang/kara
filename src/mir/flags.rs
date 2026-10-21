@@ -38,7 +38,8 @@ pub fn insert_borrow_flags(
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) {
-    let (loans, live) = loan_liveness(body, tys, has_receiver);
+    let track = |k: BorrowKind, p: &Place| !flagged_prefixes(body, tys, p, k).is_empty();
+    let (loans, live) = loan_liveness(body, tys, has_receiver, &track);
     let held: Vec<Vec<(Place, BorrowKind)>> = loans
         .iter()
         .map(|(k, p, _)| flagged_prefixes(body, tys, p, *k))
@@ -375,6 +376,28 @@ mod tests {
 
     fn run(src: &str) -> (String, Option<i32>) {
         run_source(&format!("{BAG}{src}")).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// B-2026-10-21-33: a body with many `?` exits, each dropping every
+    /// owned local before it, and no flagged loan builds and runs; the flag
+    /// pass skips its liveness table, which made the build cubic. One loan
+    /// of a flagged field in the same body keeps the tracked path covered.
+    #[test]
+    fn mir_flags_many_early_exits_build_and_run() {
+        let n = 60;
+        let mut src = String::from("struct T {\n");
+        for k in 0..n {
+            src += &format!("    f{k}: Vec[String],\n");
+        }
+        src += "}\nfn mk(k: i64) -> Result[Vec[String], String] {\n    if k < 0 { return Err(\"neg\") }\n    Ok(vec![k.to_string()])\n}\n";
+        src += "fn build(bag: Bag) -> Result[T, String] {\n    bag.items.push(1);\n";
+        for k in 0..n {
+            src += &format!("    let l{k} = mk({k})?;\n");
+        }
+        let fields: Vec<String> = (0..n).map(|k| format!("f{k}: l{k}")).collect();
+        src += &format!("    Ok(T {{ {} }})\n}}\n", fields.join(", "));
+        src += "fn main() {\n    let bag = Bag { items: Vec.new(), n: 0 };\n    match build(bag) {\n        Ok(t) => println(f\"{t.f0[0]} {t.f59[0]}\"),\n        Err(e) => println(e),\n    }\n}\n";
+        assert_eq!(run(&src), ("0 59\n".into(), Some(0)));
     }
 
     /// §6.2 `panic_shared_field_alias`: pushing to a field through one

@@ -124,8 +124,26 @@ fn only_call_into(body: &Body, l: Local) -> Option<(BasicBlock, &str, &[Operand]
 
 fn tables(body: &Body) -> Vec<Table> {
     let mut out = Vec::new();
-    for (ti, decl) in body.locals.iter().enumerate() {
-        let t = Local(ti as u32);
+    // Only a `from_array` call's destination can be a table; asking every
+    // local scans every block per local (B-2026-10-21-33).
+    let mut candidates: Vec<Local> = body
+        .blocks
+        .iter()
+        .filter_map(|b| match &b.terminator.kind {
+            TerminatorKind::Call {
+                func, destination, ..
+            } if callee(func)
+                .is_some_and(|n| n.starts_with("Vec[") && n.ends_with("].from_array")) =>
+            {
+                Some(destination.local)
+            }
+            _ => None,
+        })
+        .collect();
+    candidates.sort_by_key(|l| l.0);
+    candidates.dedup();
+    for t in candidates {
+        let decl = body.local(t);
         if matches!(decl.kind, LocalKind::ReturnPlace | LocalKind::Arg { .. }) {
             continue;
         }

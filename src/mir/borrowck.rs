@@ -407,12 +407,20 @@ pub(super) type LoanSite = (BorrowKind, Place, (usize, usize));
 /// and each point in it (every statement, then the terminator) the loans
 /// live just before that point: those some live local may hold. The flag
 /// pass releases a run-time borrow flag where its loan stops being live.
+/// When `track` holds for no loan, nothing is computed and the liveness is
+/// empty: the points times loans table is what makes a body with many
+/// exits and many loans slow (B-2026-10-21-33).
 pub(super) fn loan_liveness(
     body: &Body,
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    track: &dyn Fn(BorrowKind, &Place) -> bool,
 ) -> (Vec<LoanSite>, Vec<Vec<Vec<bool>>>) {
     let loans = collect_loans(body, tys);
+    if !loans.iter().any(|l| track(l.kind, &l.place)) {
+        let loans = loans.into_iter().map(|l| (l.kind, l.place, l.at)).collect();
+        return (loans, Vec::new());
+    }
     let entry = Origins::default();
     let cx = Cx {
         body,
