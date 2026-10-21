@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 325 |
 | codegen-gap | 286 |
-| false-positive | 276 |
+| false-positive | 277 |
 | other | 194 |
 | diagnostics | 185 |
 | perf | 182 |
@@ -120,7 +120,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
-| effect | 43 |
+| effect | 44 |
 | lexer | 12 |
 ## Current state
 
@@ -195,6 +195,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-78 | 2026-10-21 | codegen | medium | `karac __mir-llvm-run` takes worse-than-quadratic time in the length of one function: 2000 `push_str` statements take 8.8 s and 4000 take 43 s, while `karac build --mir` takes 2.3 s and 4.3 s | — |
 | B-2026-10-21-79 | 2026-10-21 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String]` reports "expected 'Slice[StringSlice]', found 'Vec[String]'" | — |
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
+| B-2026-10-21-81 | 2026-10-21 | effect | low | `karac check` gives a user type's own `send` / `recv` methods the channel's effects: `pub fn f(s: S) -> i64 { s.send(1) + s.recv() }` over a user `struct S` with plain `send` and `recv` methods is refused with "performs effects [sends(Channel), suspends, receives(Channel)]" | — |
 
 ### Relocated
 
