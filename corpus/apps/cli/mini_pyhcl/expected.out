@@ -1,0 +1,2210 @@
+-- load infra/consul/agent.hcl
+{
+    "acl": {
+        "default_policy": "deny",
+        "enabled": true,
+        "tokens": {
+            "agent": "00000000-0000-0000-0000-000000000000"
+        }
+    },
+    "bootstrap_expect": 3,
+    "data_dir": "/opt/consul",
+    "datacenter": "eu-west-1",
+    "limits": {
+        "http_max_conns_per_client": 200,
+        "rpc_max_burst": 1500.0,
+        "rpc_rate": 1000.0
+    },
+    "log_level": "INFO",
+    "performance": {
+        "raft_multiplier": 1
+    },
+    "ports": {
+        "grpc": 8502,
+        "https": -1
+    },
+    "retry_join": [
+        "provider=aws tag_key=consul tag_value=server"
+    ],
+    "server": true,
+    "telemetry": {
+        "disable_hostname": true,
+        "prometheus_retention_time": "24h"
+    },
+    "ui_config": {
+        "enabled": true
+    }
+}
+-- load infra/nomad/web.nomad
+{
+    "job": {
+        "web": {
+            "datacenters": [
+                "eu-west-1a",
+                "eu-west-1b"
+            ],
+            "group": [
+                {
+                    "frontend": {
+                        "count": 3,
+                        "task": [
+                            {
+                                "nginx": {
+                                    "config": {
+                                        "image": "nginx:1.25",
+                                        "port_map": {
+                                            "http": 80
+                                        }
+                                    },
+                                    "driver": "docker",
+                                    "resources": {
+                                        "cpu": 500,
+                                        "memory": 256
+                                    }
+                                }
+                            },
+                            {
+                                "log-shipper": {
+                                    "config": {
+                                        "image": "timberio/vector:0.34.1-alpine"
+                                    },
+                                    "driver": "docker",
+                                    "resources": {
+                                        "cpu": 100,
+                                        "memory": 64
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
+                    "api": {
+                        "count": 2,
+                        "task": {
+                            "orders": {
+                                "config": {
+                                    "args": [
+                                        "--port",
+                                        "${NOMAD_PORT_http}",
+                                        "--db",
+                                        "orders.service.consul"
+                                    ],
+                                    "command": "/usr/local/bin/orders"
+                                },
+                                "driver": "exec",
+                                "env": {
+                                    "RUST_LOG": "info",
+                                    "WORKERS": 4
+                                },
+                                "resources": {
+                                    "cpu": 1000,
+                                    "memory": 512
+                                }
+                            }
+                        }
+                    }
+                }
+            ],
+            "priority": 60,
+            "type": "service",
+            "update": {
+                "healthy_deadline": "3m",
+                "max_parallel": 1,
+                "min_healthy_time": "10s"
+            }
+        }
+    }
+}
+-- load infra/packer/base.pkr.hcl
+{
+    "build": {
+        "provisioner": [
+            {
+                "shell": {
+                    "inline": [
+                        "sudo apt-get update",
+                        "sudo apt-get install -y unattended-upgrades"
+                    ]
+                }
+            },
+            {
+                "file": {
+                    "destination": "/tmp/motd",
+                    "source": "files/motd"
+                }
+            }
+        ],
+        "sources": [
+            "source.amazon-ebs.base"
+        ]
+    },
+    "source": {
+        "amazon-ebs": {
+            "base": {
+                "ami_name": "shop-base-{{timestamp}}",
+                "instance_type": "t3.micro",
+                "region": "${var.aws_region}",
+                "ssh_username": "ubuntu"
+            }
+        }
+    },
+    "variable": {
+        "aws_region": {
+            "default": "eu-west-1",
+            "type": "string"
+        }
+    }
+}
+-- load infra/terraform/main.tf
+{
+    "data": {
+        "aws_ami": {
+            "ubuntu": {
+                "filter": {
+                    "name": "name",
+                    "values": [
+                        "ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"
+                    ]
+                },
+                "most_recent": true,
+                "owners": [
+                    "099720109477"
+                ]
+            }
+        }
+    },
+    "module": {
+        "dns": {
+            "source": "./modules/dns",
+            "zone": "shop.example"
+        },
+        "vpc": {
+            "azs": [
+                "eu-west-1a",
+                "eu-west-1b"
+            ],
+            "cidr": "10.0.0.0/16",
+            "name": "shop",
+            "public_subnets": [
+                "10.0.1.0/24",
+                "10.0.2.0/24"
+            ],
+            "source": "terraform-aws-modules/vpc/aws",
+            "version": "2.78.0"
+        }
+    },
+    "provider": {
+        "aws": {
+            "alias": "us",
+            "region": "us-east-1",
+            "version": "~> 2.70"
+        }
+    },
+    "resource": {
+        "aws_db_instance": {
+            "orders": {
+                "allocated_storage": 50,
+                "backup_retention_period": 7,
+                "engine": "postgres",
+                "engine_version": "11.9",
+                "instance_class": "db.t3.medium",
+                "max_allocated_storage": 200,
+                "multi_az": false,
+                "name": "orders",
+                "password": "${var.db_password}",
+                "username": "shop"
+            }
+        },
+        "aws_instance": {
+            "web": {
+                "ami": "${data.aws_ami.ubuntu.id}",
+                "count": "${var.instance_count}",
+                "instance_type": "${var.instance_type}",
+                "lifecycle": {
+                    "create_before_destroy": true
+                },
+                "root_block_device": {
+                    "volume_size": 20,
+                    "volume_type": "gp2"
+                },
+                "subnet_id": "${element(module.vpc.public_subnets, count.index)}",
+                "tags": "${merge(var.tags, map(\"Name\", \"web-${count.index + 1}\"))}",
+                "user_data": "#!/bin/sh\napt-get update\napt-get install -y nginx\necho \"web ${count.index}\" > /var/www/html/index.html"
+            }
+        },
+        "aws_lb": {
+            "web": {
+                "idle_timeout": 60,
+                "load_balancer_type": "application",
+                "name": "shop-web",
+                "subnets": [
+                    "${module.vpc.public_subnets}"
+                ]
+            }
+        },
+        "aws_lb_target_group": {
+            "web": {
+                "health_check": {
+                    "healthy_threshold": 2,
+                    "interval": 15,
+                    "path": "/healthz",
+                    "unhealthy_threshold": 3
+                },
+                "name": "shop-web",
+                "port": 80,
+                "protocol": "HTTP",
+                "vpc_id": "${module.vpc.vpc_id}"
+            }
+        },
+        "aws_security_group": {
+            "web": {
+                "egress": {
+                    "cidr_blocks": [
+                        "0.0.0.0/0"
+                    ],
+                    "from_port": 0,
+                    "protocol": "-1",
+                    "to_port": 0
+                },
+                "ingress": [
+                    {
+                        "cidr_blocks": [
+                            "0.0.0.0/0"
+                        ],
+                        "from_port": 443,
+                        "protocol": "tcp",
+                        "to_port": 443
+                    },
+                    {
+                        "cidr_blocks": [
+                            "0.0.0.0/0"
+                        ],
+                        "from_port": 80,
+                        "protocol": "tcp",
+                        "to_port": 80
+                    }
+                ],
+                "name": "shop-web"
+            }
+        }
+    },
+    "terraform": {
+        "backend": {
+            "s3": {
+                "bucket": "shop-terraform-state",
+                "key": "web/terraform.tfstate",
+                "region": "eu-west-1"
+            }
+        },
+        "required_version": ">= 0.11.0"
+    }
+}
+-- load infra/terraform/main.tf.json
+{
+    "output": {
+        "assets_bucket": {
+            "value": "${aws_s3_bucket.assets.id}"
+        }
+    },
+    "resource": {
+        "aws_s3_bucket": {
+            "assets": {
+                "acl": "private",
+                "bucket": "shop-assets",
+                "lifecycle_rule": [
+                    {
+                        "enabled": true,
+                        "expiration": {
+                            "days": 90
+                        },
+                        "id": "old"
+                    }
+                ],
+                "versioning": {
+                    "enabled": true
+                }
+            }
+        }
+    },
+    "variable": {
+        "cdn_ttl": {
+            "default": 3600.5,
+            "description": "seconds \u00e0 la carte"
+        }
+    }
+}
+-- load infra/terraform/outputs.tf
+{
+    "output": {
+        "db_endpoint": {
+            "description": "where the order service connects",
+            "sensitive": true,
+            "value": "${aws_db_instance.orders.endpoint}"
+        },
+        "instance_ips": {
+            "sensitive": false,
+            "value": [
+                "${aws_instance.web.*.private_ip}"
+            ]
+        },
+        "lb_dns_name": {
+            "value": "${aws_lb.web.dns_name}"
+        }
+    }
+}
+-- load infra/terraform/variables.tf
+{
+    "variable": {
+        "allowed_cidrs": {
+            "default": [
+                "10.0.0.0/16",
+                "192.168.10.0/24"
+            ],
+            "type": "list"
+        },
+        "db_password": {
+            "description": "set from the CI secret store"
+        },
+        "instance_count": {
+            "default": 3
+        },
+        "instance_type": {
+            "default": "t3.small",
+            "type": "string"
+        },
+        "region": {
+            "default": "eu-west-1",
+            "description": "AWS region for every resource"
+        },
+        "tags": {
+            "default": {
+                "billing": "shop-42",
+                "team": "platform"
+            },
+            "type": "map"
+        }
+    }
+}
+-- load infra/vault/admin.hcl
+{
+    "path": {
+        "auth/token/root": {
+            "capabilities": [
+                "deny"
+            ]
+        },
+        "secret/*": {
+            "capabilities": [
+                "create",
+                "read",
+                "update",
+                "delete",
+                "list"
+            ]
+        },
+        "secret/data/payments/*": {
+            "capabilities": [
+                "read",
+                "list"
+            ]
+        },
+        "sys/*": {
+            "capabilities": [
+                "create",
+                "read",
+                "update",
+                "delete",
+                "list",
+                "sudo"
+            ]
+        }
+    }
+}
+-- load infra/vault/ci.hcl
+{
+    "path": {
+        "auth/token/renew-self": {
+            "capabilities": [
+                "update"
+            ]
+        },
+        "secret/data/ci/*": {
+            "capabilities": [
+                "read"
+            ]
+        },
+        "secret/data/ci/prod-signing": {
+            "capabilities": [
+                "deny"
+            ]
+        },
+        "secret/metadata/ci/*": {
+            "capabilities": [
+                "list"
+            ]
+        },
+        "transit/encrypt/ci": {
+            "capabilities": [
+                "update"
+            ]
+        }
+    }
+}
+-- load cases/arith_keys.hcl
+! TypeError: keys must be str, int, float, bool or None, not tuple
+-- load cases/arith_keys2.hcl
+! TypeError: keys must be str, int, float, bool or None, not tuple
+-- load cases/attr_error.hcl
+! AttributeError: 'str' object has no attribute 'keys'
+-- load cases/comments.hcl
+{
+    "block": {
+        "inner": 1
+    },
+    "key": "value"
+}
+-- load cases/cond_bool.hcl
+! ValueError: Line 1, column 25: unexpected BOOL; expected IDENTIFIER, STRING, MINUS, NUMBER, FLOAT
+-- load cases/crlf_heredoc.hcl
+{
+    "a": "windows\r\nlines",
+    "b": 1
+}
+-- load cases/duplicates.hcl
+{
+    "check": [
+        {
+            "interval": "10s"
+        },
+        {
+            "interval": "30s"
+        }
+    ],
+    "inner": {
+        "block": [
+            {
+                "a": {
+                    "v": 1
+                }
+            },
+            {
+                "a": {
+                    "w": 2
+                }
+            },
+            {
+                "b": {
+                    "v": 3
+                }
+            }
+        ],
+        "x": [
+            1,
+            2
+        ]
+    },
+    "name": "second",
+    "service": {
+        "db": {
+            "port": 5432
+        },
+        "web": {
+            "port": 80,
+            "tags": [
+                "edge"
+            ]
+        }
+    },
+    "top": "now a string"
+}
+-- load cases/empty.hcl
+{}
+-- load cases/expand.hcl
+! TypeError: ('%s is of type %s; expected type of dict, list, tuple, or str', '1', <class 'int'>)
+-- load cases/expressions.hcl
+{
+    "bracket": "foo[bar]",
+    "cmp": "count.index>=2",
+    "cmp2": "5<var.max",
+    "cond": "var.env==prod?3:1",
+    "fn_list": "concat(var.a,var.b)",
+    "fn_lists": "concat(\"a\" \"b\" \"c\")",
+    "index": "aws_subnet.private[0].id",
+    "index_key": "aws_subnet.private[var.az].id",
+    "splat": [
+        "aws_instance.web.*.id",
+        "aws_instance.db.*.id"
+    ],
+    "splat2": [
+        "var.first",
+        "aws_instance.web.*.id"
+    ]
+}
+-- load cases/flatten_number.hcl
+! TypeError: ('%s is of type %s; expected type of dict, list, tuple, or str', '1', <class 'int'>)
+-- load cases/float_exp.hcl
+! ValueError: could not convert string to float: '1e+17e2'
+-- load cases/fn_nested.hcl
+! ValueError: Line 1, column 19: unexpected LEFTPAREN; expected ASTERISK_PERIOD, RIGHTBRACKET, COMMA, RIGHTPAREN, ADD, MINUS, MULTIPLY, DIVIDE
+-- load cases/fn_objs.hcl
+! TypeError: ('%s is of type %s; expected type of dict, list, tuple, or str', '1', <class 'int'>)
+-- load cases/func_cond.hcl
+! TypeError: ('%s is of type %s; expected type of dict, list, tuple, or str', '1', <class 'int'>)
+-- load cases/heredocs.hcl
+{
+    "after": "done",
+    "empty": "",
+    "plain": "line one\n  line two",
+    "same_line": "first\nlast",
+    "tabbed": "indented\ndeeper"
+}
+-- load cases/json_array.hcl
+{
+    "a": [
+        1,
+        2.5,
+        null,
+        true,
+        "x"
+    ],
+    "b": {}
+}
+-- load cases/json_bad.hcl
+! JSONDecodeError: Illegal trailing comma before end of object: line 1 column 8 (char 7)
+-- load cases/json_dup.hcl
+{
+    "a": 3,
+    "b": 2
+}
+-- load cases/keys.hcl
+{
+    "colon": "value",
+    "dashed-key": 3,
+    "dotted.key": 2,
+    "list_colon": [
+        1,
+        2
+    ],
+    "obj_colon": {
+        "a": 1
+    },
+    "quoted key": 1
+}
+-- load cases/lists.hcl
+{
+    "comments": [
+        "one",
+        "two",
+        "three"
+    ],
+    "empty": [],
+    "nums": [
+        1,
+        2,
+        3
+    ],
+    "objects": [
+        {
+            "name": "a"
+        },
+        {
+            "name": "b"
+        }
+    ],
+    "paren": []
+}
+-- load cases/merges.hcl
+! AttributeError: 'str' object has no attribute 'keys'
+-- load cases/mixed_list.hcl
+! ValueError: Line 1, column 15: unexpected COMMA; expected ADD, MINUS, MULTIPLY, DIVIDE
+-- load cases/nested_lists.hcl
+! ValueError: Line 1, column 18: unexpected LEFTBRACKET; expected RIGHTBRACKET, COMMA
+-- load cases/not_dict.hcl
+! TypeError: 'str' object does not support item assignment
+-- load cases/numbers.hcl
+{
+    "chain": 14,
+    "dec": 42,
+    "diff": 9,
+    "exact": 2.0,
+    "float": 3.25,
+    "hex": 31,
+    "huge": Infinity,
+    "lead": 0.5,
+    "mixed": 3.5,
+    "neg": -17,
+    "negf": -0.0,
+    "neghex": -255,
+    "negmul": 6,
+    "prod": 42,
+    "quot": 3.5,
+    "sci": 1000.0,
+    "scineg": 0.025,
+    "sciplus": 400.0,
+    "sum": 3,
+    "trail": 2.0
+}
+-- load cases/strings.hcl
+{
+    "bare": "some.identifier-name",
+    "empty": "",
+    "escaped": "say \"hi\" now",
+    "falsy": false,
+    "interp": "${var.name}-${lookup(var.map, \"key\")}",
+    "multi": "line one\nline two",
+    "nested": "${format(\"%s-%s\", \"a\", \"${var.b}\")}",
+    "plain": "hello",
+    "slash": "C:\\temp\\new",
+    "tab": "a\\tb",
+    "truthy": true,
+    "unicode": "caf\u00e9 \u2603 \ud83d\ude00"
+}
+-- load cases/trueish.hcl
+! ValueError: Line 1, column 0: unexpected BOOL; expected $end, IDENTIFIER, STRING, COMMENT, MULTICOMMENT, MINUS, NUMBER, FLOAT
+-- load cases/tuple_concat.hcl
+! TypeError: can only concatenate tuple (not "str") to tuple
+-- load cases/unicode_ident.hcl
+{
+    "\u00e9t\u00e9": "summer",
+    "\u03c0": 3.14159
+}
+-- load cases/whitespace.hcl
+! ValueError: No HCL object could be decoded
+-- load cases/zero_div.hcl
+! ZeroDivisionError: division by zero
+-- load cases/zero_div_float.hcl
+! ZeroDivisionError: float division by zero
+-- load broken/comma_start.hcl
+! ValueError: Line 1, column 0: unexpected COMMA; expected $end, IDENTIFIER, STRING, COMMENT, MULTICOMMENT, MINUS, NUMBER, FLOAT
+-- load broken/double_equals.hcl
+! ValueError: Line 1, column 4: unexpected EQUAL; expected BOOL, STRING, IDENTIFIER, LEFTBRACE, LEFTBRACKET, LEFTPAREN, MINUS, NUMBER, FLOAT
+-- load broken/extra_brace.hcl
+! ValueError: Line 2, column 6: unexpected RIGHTBRACE; expected $end, COMMA, IDENTIFIER, STRING, COMMENT, MULTICOMMENT, MINUS, NUMBER, FLOAT
+-- load broken/heredoc_no_marker.hcl
+! ValueError: Line 1, column 4, index 4: Heredoc must have a marker, e.g. '<<FOO'
+-- load broken/illegal_char.hcl
+! ValueError: Line 2, column 4, index 10: Illegal character '@'
+-- load broken/list_comment_first.hcl
+{
+    "a": [
+        1
+    ]
+}
+-- load broken/missing_brace.hcl
+! ValueError: Unexpected end of file; expected RIGHTBRACE, COMMA, IDENTIFIER, STRING, COMMENT, MULTICOMMENT, MINUS, NUMBER, FLOAT
+-- load broken/missing_value.hcl
+! ValueError: Unexpected end of file; expected BOOL, STRING, IDENTIFIER, LEFTBRACE, LEFTBRACKET, LEFTPAREN, MINUS, NUMBER, FLOAT
+-- load broken/newline_in_key.hcl
+! ValueError: Line 1, column 21: unexpected EQUAL; expected LEFTBRACE, COMMENT, MULTICOMMENT, IDENTIFIER, STRING, MINUS, NUMBER, FLOAT
+-- load broken/single_lt.hcl
+! ValueError: Line 1, column 4: unexpected LT; expected BOOL, STRING, IDENTIFIER, LEFTBRACE, LEFTBRACKET, LEFTPAREN, MINUS, NUMBER, FLOAT
+-- load broken/single_slash.hcl
+{
+    "a": [
+        "1",
+        "/",
+        "b"
+    ]
+}
+-- load broken/slash_at_end.hcl
+! ValueError: Unexpected end of file; expected IDENTIFIER, MINUS, NUMBER, FLOAT
+-- load broken/stray_close.hcl
+! ValueError: Line 1, column 7: unexpected DIVIDE; expected IDENTIFIER, MINUS, NUMBER, FLOAT
+-- load broken/tab_in_heredoc_marker.hcl
+! ValueError: Line 1, column 4, index 4: Heredoc must have a marker, e.g. '<<FOO'
+-- load broken/tf012_for.hcl
+! ValueError: Line 1, column 9: unexpected IDENTIFIER; expected ASTERISK_PERIOD, LEFTPAREN, COMMA, LEFTBRACKET, RIGHTBRACKET, RIGHTPAREN, ADD, MINUS, MULTIPLY, DIVIDE
+-- load broken/unterminated_comment.hcl
+! ValueError: Line 2, column 7: unexpected MULTIPLY; expected IDENTIFIER, MINUS, NUMBER, FLOAT
+-- load broken/unterminated_heredoc.hcl
+! ValueError: Line 3, column 0, index 17: EOF before closing heredoc
+-- load broken/unterminated_interp.hcl
+! ValueError: Line 2, column 0, index 12: EOF before closing '${}' expression
+-- load broken/unterminated_string.hcl
+! ValueError: Line 3, column 0, index 16: EOF before closing string quote
+-- load broken/vault_typo.hcl
+! ValueError: Line 3, column 43: unexpected RIGHTBRACE; expected COMMA, RIGHTBRACKET, RIGHTPAREN, LEFTBRACKET, LEFTPAREN
+-- load fixtures/decoder/array_comment.hcl
+{
+    "foo": [
+        "1",
+        "2"
+    ]
+}
+-- load fixtures/decoder/basic.hcl
+{
+    "bar": "${file(\"bing/bong.txt\")}",
+    "foo": "bar"
+}
+-- load fixtures/decoder/basic_squish.hcl
+{
+    "bar": "${file(\"bing/bong.txt\")}",
+    "foo": "bar",
+    "foo-bar": "baz"
+}
+-- load fixtures/decoder/decode_policy.hcl
+{
+    "key": {
+        "": {
+            "policy": "read"
+        },
+        "foo/": {
+            "policy": "write"
+        },
+        "foo/bar/": {
+            "policy": "read"
+        },
+        "foo/bar/baz": {
+            "policy": "deny"
+        }
+    }
+}
+-- load fixtures/decoder/decode_tf_variable.hcl
+{
+    "variable": {
+        "amis": {
+            "default": {
+                "east": "foo"
+            }
+        },
+        "foo": {
+            "default": "bar",
+            "description": "bar"
+        }
+    }
+}
+-- load fixtures/decoder/empty.hcl
+{
+    "resource": {
+        "foo": {}
+    }
+}
+-- load fixtures/decoder/empty_file.hcl
+{}
+-- load fixtures/decoder/escape.hcl
+{
+    "foo": "bar\"baz\\n"
+}
+-- load fixtures/decoder/flat.hcl
+{
+    "Key": 7,
+    "foo": "bar"
+}
+-- load fixtures/decoder/float.hcl
+{
+    "a": 1.02
+}
+-- load fixtures/decoder/function.hcl
+{
+    "data": {
+        "resource": {
+            "object": {
+                "vars": {
+                    "PROXY_AUTH": "join(\":\",var.proxy_username,var.proxy_password)",
+                    "cluster_1": "join(\"\\n\",data.template_file.cluster_1.*.rendered)",
+                    "cluster_2": "format(\"name_%02d\",count.index + 1)"
+                }
+            }
+        }
+    }
+}
+-- load fixtures/decoder/heredoc_terminator_same_line.hcl
+{
+    "bar": "foo\nbaz",
+    "foo": "\nbar\nbaz"
+}
+-- load fixtures/decoder/issue12.hcl
+{
+    "resource": {
+        "aws_db_instance": {
+            "mysqldb": {
+                "allocated_storage": 100,
+                "identifier": "${var.environment}-mysqldb"
+            },
+            "mysqldb-readonly": {
+                "allocated_storage": 100,
+                "identifier": "${var.environment}-mysqldb-readonly"
+            }
+        }
+    }
+}
+-- load fixtures/decoder/multi_line_comment.hcl
+{
+    "foo": "bar"
+}
+-- load fixtures/decoder/multiline_bad.hcl
+{
+    "foo": "bar\nbaz"
+}
+-- load fixtures/decoder/nested_lists.hcl
+{
+    "MX_RECORDS": [
+        [
+            "",
+            [
+                "first string",
+                "second string",
+                "third string",
+                "fourth string",
+                "fifth string"
+            ]
+        ]
+    ]
+}
+-- load fixtures/decoder/only_comments.hcl
+{}
+-- load fixtures/decoder/scientific.hcl
+{
+    "a": 1e-10,
+    "b": 10000000000.0,
+    "c": 10000000000.0,
+    "d": 1.2e-10,
+    "e": 12000000000.0,
+    "f": 12000000000.0
+}
+-- load fixtures/decoder/single_line_comment.hcl
+{
+    "foo": "bar"
+}
+-- load fixtures/decoder/structure.hcl
+{
+    "foo": {
+        "baz": {
+            "foo": "bar",
+            "key": 7
+        }
+    }
+}
+-- load fixtures/decoder/structure2.hcl
+{
+    "foo": {
+        "baz": {
+            "foo": "bar",
+            "key": 7
+        },
+        "key": 7
+    }
+}
+-- load fixtures/decoder/structure_comment.hcl
+{
+    "foo": {
+        "foo": "bar"
+    }
+}
+-- load fixtures/decoder/structure_flatmap.hcl
+{
+    "foo": {
+        "foo": "bar",
+        "key": 7
+    }
+}
+-- load fixtures/decoder/structure_list.hcl
+{
+    "foo": [
+        {
+            "key": 7
+        },
+        {
+            "key": 12
+        }
+    ]
+}
+-- load fixtures/decoder/structure_list_deep.hcl
+{
+    "bar": {
+        "foo": {
+            "ingress": [
+                {
+                    "from_port": 22
+                },
+                {
+                    "from_port": 80
+                },
+                {
+                    "from_port": 51
+                }
+            ],
+            "name": "terraform_example"
+        }
+    }
+}
+-- load fixtures/decoder/structure_multi.hcl
+{
+    "foo": {
+        "bar": {
+            "key": 12
+        },
+        "baz": {
+            "key": 7
+        }
+    }
+}
+-- load fixtures/decoder/structure_three_tiers.hcl
+{
+    "bar": {
+        "foo": {
+            "biz": {
+                "key": 9,
+                "key2": 3
+            },
+            "qux": {
+                "key": 8
+            }
+        }
+    },
+    "baz": {
+        "foo": {
+            "biz": {
+                "key": 9,
+                "key5": "somestring"
+            }
+        }
+    },
+    "foo": {
+        "bar": {
+            "baz": {
+                "key": 4
+            },
+            "biz": {
+                "key": 11
+            },
+            "qux": {
+                "key": 5
+            }
+        }
+    }
+}
+-- load fixtures/decoder/tab_heredoc.hcl
+{
+    "foo": "bar\nbaz"
+}
+-- load fixtures/decoder/terraform_heroku.hcl
+{
+    "config_vars": {
+        "FOO": "bar"
+    },
+    "name": "terraform-test-app"
+}
+-- load cases/comments.hcl LINE
+{
+    "block": {
+        "comment-L007": "inside",
+        "inner": 1
+    },
+    "comment-L001": "A hash comment",
+    "comment-L002": "A slash comment",
+    "comment-L005": "trailing",
+    "key": "value"
+}
+-- load cases/comments.hcl MULTILINE
+{
+    "block": {
+        "inner": 1
+    },
+    "comment-L003": "/* A block\n   comment */",
+    "key": "value"
+}
+-- load cases/comments.hcl ALL
+{
+    "block": {
+        "comment-L007": "inside",
+        "inner": 1
+    },
+    "comment-L001": "A hash comment",
+    "comment-L002": "A slash comment",
+    "comment-L003": "/* A block\n   comment */",
+    "comment-L005": "trailing",
+    "key": "value"
+}
+-- load cases/lists.hcl LINE
+! ValueError: Line 5, column 102: unexpected COMMENT; expected RIGHTBRACKET, COMMA, RIGHTPAREN, IDENTIFIER, STRING, LEFTBRACE, LEFTBRACKET, LEFTPAREN, MINUS, NUMBER, FLOAT
+-- load cases/lists.hcl MULTILINE
+{
+    "comments": [
+        "one",
+        "two",
+        "three"
+    ],
+    "empty": [],
+    "nums": [
+        1,
+        2,
+        3
+    ],
+    "objects": [
+        {
+            "name": "a"
+        },
+        {
+            "name": "b"
+        }
+    ],
+    "paren": []
+}
+-- load cases/lists.hcl ALL
+! ValueError: Line 5, column 102: unexpected COMMENT; expected RIGHTBRACKET, COMMA, RIGHTPAREN, IDENTIFIER, STRING, LEFTBRACE, LEFTBRACKET, LEFTPAREN, MINUS, NUMBER, FLOAT
+-- load infra/vault/ci.hcl LINE
+{
+    "comment-L001": "The CI runners read deploy keys and nothing else.",
+    "path": {
+        "auth/token/renew-self": {
+            "capabilities": [
+                "update"
+            ]
+        },
+        "secret/data/ci/*": {
+            "capabilities": [
+                "read"
+            ]
+        },
+        "secret/data/ci/prod-signing": {
+            "capabilities": [
+                "deny"
+            ]
+        },
+        "secret/metadata/ci/*": {
+            "capabilities": [
+                "list"
+            ]
+        },
+        "transit/encrypt/ci": {
+            "capabilities": [
+                "update"
+            ]
+        }
+    }
+}
+-- load infra/vault/ci.hcl MULTILINE
+{
+    "path": {
+        "auth/token/renew-self": {
+            "capabilities": [
+                "update"
+            ]
+        },
+        "secret/data/ci/*": {
+            "capabilities": [
+                "read"
+            ]
+        },
+        "secret/data/ci/prod-signing": {
+            "capabilities": [
+                "deny"
+            ]
+        },
+        "secret/metadata/ci/*": {
+            "capabilities": [
+                "list"
+            ]
+        },
+        "transit/encrypt/ci": {
+            "capabilities": [
+                "update"
+            ]
+        }
+    }
+}
+-- load infra/vault/ci.hcl ALL
+{
+    "comment-L001": "The CI runners read deploy keys and nothing else.",
+    "path": {
+        "auth/token/renew-self": {
+            "capabilities": [
+                "update"
+            ]
+        },
+        "secret/data/ci/*": {
+            "capabilities": [
+                "read"
+            ]
+        },
+        "secret/data/ci/prod-signing": {
+            "capabilities": [
+                "deny"
+            ]
+        },
+        "secret/metadata/ci/*": {
+            "capabilities": [
+                "list"
+            ]
+        },
+        "transit/encrypt/ci": {
+            "capabilities": [
+                "update"
+            ]
+        }
+    }
+}
+-- load fixtures/decoder/array_comment.hcl LINE
+{
+    "foo": [
+        "1",
+        "2"
+    ]
+}
+-- load fixtures/decoder/array_comment.hcl MULTILINE
+{
+    "foo": [
+        "1",
+        "2"
+    ]
+}
+-- load fixtures/decoder/array_comment.hcl ALL
+{
+    "foo": [
+        "1",
+        "2"
+    ]
+}
+-- load fixtures/decoder/structure_comment.hcl LINE
+{
+    "foo": {
+        "comment-L002": "single line comment",
+        "foo": "bar"
+    }
+}
+-- load fixtures/decoder/structure_comment.hcl MULTILINE
+{
+    "foo": {
+        "comment-L003": "/*\n        multi line comment\n    */",
+        "foo": "bar"
+    }
+}
+-- load fixtures/decoder/structure_comment.hcl ALL
+{
+    "foo": {
+        "comment-L002": "single line comment",
+        "comment-L003": "/*\n        multi line comment\n    */",
+        "foo": "bar"
+    }
+}
+-- load fixtures/decoder/multi_line_comment.hcl LINE
+{
+    "foo": "bar"
+}
+-- load fixtures/decoder/multi_line_comment.hcl MULTILINE
+{
+    "comment-L001": "/*\n    test multi line comment\n*/",
+    "foo": "bar"
+}
+-- load fixtures/decoder/multi_line_comment.hcl ALL
+{
+    "comment-L001": "/*\n    test multi line comment\n*/",
+    "foo": "bar"
+}
+-- load fixtures/decoder/single_line_comment.hcl LINE
+{
+    "comment-L001": "test single line comment with slash",
+    "comment-L002": "test single line comment with hashtag",
+    "foo": "bar"
+}
+-- load fixtures/decoder/single_line_comment.hcl MULTILINE
+{
+    "foo": "bar"
+}
+-- load fixtures/decoder/single_line_comment.hcl ALL
+{
+    "comment-L001": "test single line comment with slash",
+    "comment-L002": "test single line comment with hashtag",
+    "foo": "bar"
+}
+-- load cases/comments.hcl EVERYTHING
+! ValueError: Only `LINE`, `MULTILINE` and `ALL` value are allowed for `export_comments`. given: `EVERYTHING`.
+-- tokens fixtures/lexer/array_comment.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  LEFTBRACKET '[' line 1 at 6
+  STRING '1' line 2 at 14
+  COMMA ',' line 2 at 15
+  STRING '2' line 3 at 23
+  COMMA ',' line 3 at 24
+  RIGHTBRACKET ']' line 4 at 36
+-- tokens fixtures/lexer/assign_colon.hcl
+  IDENTIFIER 'resource' line 1 at 0
+  EQUAL '=' line 1 at 9
+  LEFTBRACKET '[' line 1 at 11
+  LEFTBRACE '{' line 1 at 12
+  STRING 'foo' line 2 at 19
+  COLON ':' line 2 at 20
+  LEFTBRACE '{' line 2 at 22
+  STRING 'bar' line 3 at 30
+  COLON ':' line 3 at 31
+  LEFTBRACE '{' line 3 at 33
+  RIGHTBRACE '}' line 3 at 34
+  COMMA ',' line 3 at 35
+  STRING 'baz' line 4 at 43
+  COLON ':' line 4 at 44
+  LEFTBRACKET '[' line 4 at 46
+  NUMBER 1 line 4 at 47
+  COMMA ',' line 4 at 48
+  NUMBER 2 line 4 at 50
+  COMMA ',' line 4 at 51
+  STRING 'foo' line 4 at 57
+  RIGHTBRACKET ']' line 4 at 58
+  COMMA ',' line 4 at 59
+  RIGHTBRACE '}' line 5 at 62
+  RIGHTBRACE '}' line 6 at 64
+  RIGHTBRACKET ']' line 6 at 65
+-- tokens fixtures/lexer/assign_deep.hcl
+  IDENTIFIER 'resource' line 1 at 0
+  EQUAL '=' line 1 at 9
+  LEFTBRACKET '[' line 1 at 11
+  LEFTBRACE '{' line 1 at 12
+  IDENTIFIER 'foo' line 2 at 16
+  EQUAL '=' line 2 at 20
+  LEFTBRACKET '[' line 2 at 22
+  LEFTBRACE '{' line 2 at 23
+  IDENTIFIER 'bar' line 3 at 28
+  EQUAL '=' line 3 at 32
+  LEFTBRACE '{' line 3 at 34
+  RIGHTBRACE '}' line 3 at 35
+  RIGHTBRACE '}' line 4 at 39
+  RIGHTBRACKET ']' line 4 at 40
+  RIGHTBRACE '}' line 5 at 43
+  RIGHTBRACKET ']' line 5 at 44
+-- tokens fixtures/lexer/comment.hcl
+  IDENTIFIER 'foo' line 15 at 78
+  EQUAL '=' line 15 at 82
+  STRING 'bar' line 15 at 88
+-- tokens fixtures/lexer/complex.hcl
+  IDENTIFIER 'variable' line 2 at 40
+  STRING 'foo' line 2 at 53
+  LEFTBRACE '{' line 2 at 55
+  IDENTIFIER 'default' line 3 at 61
+  EQUAL '=' line 3 at 69
+  STRING 'bar' line 3 at 75
+  IDENTIFIER 'description' line 4 at 81
+  EQUAL '=' line 4 at 93
+  STRING 'bar' line 4 at 99
+  RIGHTBRACE '}' line 5 at 101
+  IDENTIFIER 'provider' line 7 at 104
+  STRING 'aws' line 7 at 117
+  LEFTBRACE '{' line 7 at 119
+  IDENTIFIER 'access_key' line 8 at 123
+  EQUAL '=' line 8 at 134
+  STRING 'foo' line 8 at 140
+  IDENTIFIER 'secret_key' line 9 at 144
+  EQUAL '=' line 9 at 155
+  STRING 'bar' line 9 at 161
+  RIGHTBRACE '}' line 10 at 163
+  IDENTIFIER 'provider' line 12 at 166
+  STRING 'do' line 12 at 178
+  LEFTBRACE '{' line 12 at 180
+  IDENTIFIER 'api_key' line 13 at 184
+  EQUAL '=' line 13 at 192
+  STRING '${var.foo}' line 13 at 205
+  RIGHTBRACE '}' line 14 at 207
+  IDENTIFIER 'resource' line 16 at 210
+  STRING 'aws_security_group' line 16 at 238
+  STRING 'firewall' line 16 at 249
+  LEFTBRACE '{' line 16 at 251
+  IDENTIFIER 'count' line 17 at 257
+  EQUAL '=' line 17 at 263
+  NUMBER 5 line 17 at 265
+  RIGHTBRACE '}' line 18 at 267
+  IDENTIFIER 'resource' line 20 at 270
+  IDENTIFIER 'aws_instance' line 20 at 279
+  STRING 'web' line 20 at 296
+  LEFTBRACE '{' line 20 at 298
+  IDENTIFIER 'ami' line 21 at 304
+  EQUAL '=' line 21 at 308
+  STRING '${var.foo}' line 21 at 321
+  IDENTIFIER 'security_groups' line 22 at 327
+  EQUAL '=' line 22 at 343
+  LEFTBRACKET '[' line 22 at 345
+  STRING 'foo' line 23 at 359
+  COMMA ',' line 23 at 360
+  STRING '${aws_security_group.firewall.foo}' line 24 at 405
+  RIGHTBRACKET ']' line 25 at 411
+  IDENTIFIER 'network_interface' line 27 at 418
+  LEFTBRACE '{' line 27 at 436
+  IDENTIFIER 'device_index' line 28 at 446
+  EQUAL '=' line 28 at 459
+  NUMBER 0 line 28 at 461
+  IDENTIFIER 'description' line 29 at 471
+  EQUAL '=' line 29 at 483
+  STRING 'Main network interface' line 29 at 508
+  RIGHTBRACE '}' line 30 at 514
+  RIGHTBRACE '}' line 31 at 516
+  IDENTIFIER 'resource' line 33 at 519
+  STRING 'aws_instance' line 33 at 541
+  STRING 'db' line 33 at 546
+  LEFTBRACE '{' line 33 at 548
+  IDENTIFIER 'security_groups' line 34 at 554
+  EQUAL '=' line 34 at 570
+  STRING '${aws_security_group.firewall.*.id}' line 34 at 608
+  IDENTIFIER 'VPC' line 35 at 614
+  EQUAL '=' line 35 at 618
+  STRING 'foo' line 35 at 624
+  IDENTIFIER 'depends_on' line 37 at 631
+  EQUAL '=' line 37 at 642
+  LEFTBRACKET '[' line 37 at 644
+  STRING 'aws_instance.web' line 37 at 662
+  RIGHTBRACKET ']' line 37 at 663
+  RIGHTBRACE '}' line 38 at 665
+  IDENTIFIER 'output' line 40 at 668
+  STRING 'web_ip' line 40 at 682
+  LEFTBRACE '{' line 40 at 684
+  IDENTIFIER 'value' line 41 at 690
+  EQUAL '=' line 41 at 696
+  STRING '${aws_instance.web.private_ip}' line 41 at 729
+  RIGHTBRACE '}' line 42 at 731
+-- tokens fixtures/lexer/conditional_operator.hcl
+  IDENTIFIER 'identifier1' line 2 at 74
+  EQUAL '=' line 2 at 86
+  IDENTIFIER 'identifier2' line 2 at 88
+  QMARK '?' line 2 at 101
+  IDENTIFIER 'identifier3' line 2 at 103
+  COLON ':' line 2 at 115
+  IDENTIFIER 'identifier4' line 2 at 117
+  IDENTIFIER 'identifier1' line 4 at 200
+  EQUAL '=' line 4 at 212
+  IDENTIFIER 'identifier2' line 4 at 214
+  QMARK '?' line 4 at 226
+  IDENTIFIER 'identifier3' line 4 at 228
+  COLON ':' line 4 at 240
+  NUMBER 1 line 4 at 242
+  IDENTIFIER 'identifier1' line 6 at 313
+  EQUAL '=' line 6 at 325
+  IDENTIFIER 'identifier2' line 6 at 327
+  QMARK '?' line 6 at 339
+  IDENTIFIER 'identifier3' line 6 at 341
+  COLON ':' line 6 at 353
+  IDENTIFIER 'True' line 6 at 355
+  IDENTIFIER 'identifier1' line 8 at 433
+  EQUAL '=' line 8 at 445
+  IDENTIFIER 'identifier2' line 8 at 447
+  QMARK '?' line 8 at 459
+  IDENTIFIER 'identifier3' line 8 at 461
+  COLON ':' line 8 at 473
+  IDENTIFIER 'element' line 8 at 475
+  LEFTPAREN '(' line 8 at 482
+  IDENTIFIER 'identifier4' line 8 at 483
+  COMMA ',' line 8 at 494
+  IDENTIFIER 'identifier5' line 8 at 496
+  RIGHTPAREN ')' line 8 at 507
+  IDENTIFIER 'identifier1' line 10 at 580
+  EQUAL '=' line 10 at 592
+  IDENTIFIER 'identifier2' line 10 at 594
+  QMARK '?' line 10 at 606
+  NUMBER 1 line 10 at 608
+  COLON ':' line 10 at 610
+  IDENTIFIER 'identifier3' line 10 at 612
+  IDENTIFIER 'identifier1' line 12 at 693
+  EQUAL '=' line 12 at 705
+  IDENTIFIER 'identifier2' line 12 at 707
+  QMARK '?' line 12 at 719
+  IDENTIFIER 'True' line 12 at 721
+  COLON ':' line 12 at 726
+  IDENTIFIER 'identifier3' line 12 at 728
+  IDENTIFIER 'identifier1' line 14 at 813
+  EQUAL '=' line 14 at 825
+  IDENTIFIER 'identifier2' line 14 at 827
+  QMARK '?' line 14 at 839
+  IDENTIFIER 'element' line 14 at 841
+  LEFTPAREN '(' line 14 at 848
+  IDENTIFIER 'identifier3' line 14 at 849
+  COMMA ',' line 14 at 860
+  IDENTIFIER 'identifier4' line 14 at 862
+  RIGHTPAREN ')' line 14 at 873
+  COLON ':' line 14 at 875
+  IDENTIFIER 'identifier5' line 14 at 877
+  IDENTIFIER 'identifier1' line 16 at 957
+  EQUAL '=' line 16 at 969
+  IDENTIFIER 'identifier2' line 16 at 971
+  QMARK '?' line 16 at 983
+  NUMBER 1 line 16 at 985
+  COLON ':' line 16 at 987
+  NUMBER 2 line 16 at 989
+  IDENTIFIER 'identifier1' line 18 at 1057
+  EQUAL '=' line 18 at 1069
+  IDENTIFIER 'identifier2' line 18 at 1071
+  QMARK '?' line 18 at 1083
+  NUMBER 1 line 18 at 1085
+  COLON ':' line 18 at 1087
+  IDENTIFIER 'True' line 18 at 1089
+  IDENTIFIER 'identifier1' line 20 at 1164
+  EQUAL '=' line 20 at 1176
+  IDENTIFIER 'identifier2' line 20 at 1178
+  QMARK '?' line 20 at 1190
+  NUMBER 1 line 20 at 1192
+  COLON ':' line 20 at 1194
+  IDENTIFIER 'element' line 20 at 1196
+  LEFTPAREN '(' line 20 at 1203
+  IDENTIFIER 'identifier3' line 20 at 1204
+  COMMA ',' line 20 at 1215
+  IDENTIFIER 'identifier4' line 20 at 1217
+  RIGHTPAREN ')' line 20 at 1228
+  IDENTIFIER 'identifier1' line 22 at 1296
+  EQUAL '=' line 22 at 1308
+  IDENTIFIER 'identifier2' line 22 at 1310
+  QMARK '?' line 22 at 1322
+  IDENTIFIER 'True' line 22 at 1324
+  COLON ':' line 22 at 1329
+  NUMBER 1 line 22 at 1331
+  IDENTIFIER 'identifier1' line 24 at 1401
+  EQUAL '=' line 24 at 1413
+  IDENTIFIER 'identifier2' line 24 at 1415
+  QMARK '?' line 24 at 1427
+  IDENTIFIER 'True' line 24 at 1429
+  COLON ':' line 24 at 1434
+  IDENTIFIER 'element' line 24 at 1436
+  LEFTPAREN '(' line 24 at 1443
+  IDENTIFIER 'identifier3' line 24 at 1444
+  COMMA ',' line 24 at 1455
+  IDENTIFIER 'identifier4' line 24 at 1457
+  RIGHTPAREN ')' line 24 at 1468
+  IDENTIFIER 'identifier1' line 26 at 1534
+  EQUAL '=' line 26 at 1546
+  IDENTIFIER 'identifier2' line 26 at 1548
+  QMARK '?' line 26 at 1560
+  IDENTIFIER 'True' line 26 at 1562
+  COLON ':' line 26 at 1567
+  IDENTIFIER 'False' line 26 at 1569
+  IDENTIFIER 'identifier1' line 29 at 1651
+  EQUAL '=' line 29 at 1663
+  IDENTIFIER 'identifier2' line 29 at 1665
+  EQ '==' line 29 at 1677
+  IDENTIFIER 'identifier3' line 29 at 1680
+  QMARK '?' line 29 at 1692
+  IDENTIFIER 'identifier4' line 29 at 1694
+  COLON ':' line 29 at 1706
+  IDENTIFIER 'identifier5' line 29 at 1708
+  IDENTIFIER 'identifier1' line 31 at 1792
+  EQUAL '=' line 31 at 1804
+  IDENTIFIER 'identifier2' line 31 at 1806
+  EQ '==' line 31 at 1818
+  IDENTIFIER 'identifier3' line 31 at 1821
+  QMARK '?' line 31 at 1833
+  IDENTIFIER 'identifier4' line 31 at 1835
+  COLON ':' line 31 at 1847
+  NUMBER 1 line 31 at 1849
+  IDENTIFIER 'identifier1' line 33 at 1921
+  EQUAL '=' line 33 at 1933
+  IDENTIFIER 'identifier2' line 33 at 1935
+  EQ '==' line 33 at 1947
+  IDENTIFIER 'identifier3' line 33 at 1950
+  QMARK '?' line 33 at 1962
+  IDENTIFIER 'identifier4' line 33 at 1964
+  COLON ':' line 33 at 1976
+  IDENTIFIER 'True' line 33 at 1978
+  IDENTIFIER 'identifier1' line 35 at 2057
+  EQUAL '=' line 35 at 2069
+  IDENTIFIER 'identifier2' line 35 at 2071
+  EQ '==' line 35 at 2083
+  IDENTIFIER 'identifier3' line 35 at 2086
+  QMARK '?' line 35 at 2098
+  IDENTIFIER 'identifier4' line 35 at 2100
+  COLON ':' line 35 at 2112
+  IDENTIFIER 'element' line 35 at 2114
+  LEFTPAREN '(' line 35 at 2121
+  IDENTIFIER 'identifier5' line 35 at 2122
+  COMMA ',' line 35 at 2133
+  IDENTIFIER 'identifier6' line 35 at 2135
+  RIGHTPAREN ')' line 35 at 2146
+  IDENTIFIER 'identifier1' line 37 at 2220
+  EQUAL '=' line 37 at 2232
+  IDENTIFIER 'identifier2' line 37 at 2234
+  EQ '==' line 37 at 2246
+  IDENTIFIER 'identifier3' line 37 at 2249
+  QMARK '?' line 37 at 2261
+  NUMBER 1 line 37 at 2263
+  COLON ':' line 37 at 2265
+  IDENTIFIER 'identifier4' line 37 at 2267
+  IDENTIFIER 'identifier1' line 39 at 2349
+  EQUAL '=' line 39 at 2361
+  IDENTIFIER 'identifier2' line 39 at 2363
+  EQ '==' line 39 at 2375
+  IDENTIFIER 'identifier3' line 39 at 2378
+  QMARK '?' line 39 at 2390
+  IDENTIFIER 'True' line 39 at 2392
+  COLON ':' line 39 at 2397
+  IDENTIFIER 'identifier4' line 39 at 2399
+  IDENTIFIER 'identifier1' line 41 at 2485
+  EQUAL '=' line 41 at 2497
+  IDENTIFIER 'identifier2' line 41 at 2499
+  EQ '==' line 41 at 2511
+  IDENTIFIER 'identifier3' line 41 at 2514
+  QMARK '?' line 41 at 2526
+  IDENTIFIER 'element' line 41 at 2528
+  LEFTPAREN '(' line 41 at 2535
+  IDENTIFIER 'identifier4' line 41 at 2536
+  COMMA ',' line 41 at 2547
+  IDENTIFIER 'identifier5' line 41 at 2549
+  RIGHTPAREN ')' line 41 at 2560
+  COLON ':' line 41 at 2562
+  IDENTIFIER 'identifier6' line 41 at 2564
+  IDENTIFIER 'identifier1' line 43 at 2645
+  EQUAL '=' line 43 at 2657
+  IDENTIFIER 'identifier2' line 43 at 2659
+  EQ '==' line 43 at 2671
+  IDENTIFIER 'identifier3' line 43 at 2674
+  QMARK '?' line 43 at 2686
+  NUMBER 1 line 43 at 2688
+  COLON ':' line 43 at 2690
+  NUMBER 2 line 43 at 2692
+  IDENTIFIER 'identifier1' line 45 at 2761
+  EQUAL '=' line 45 at 2773
+  IDENTIFIER 'identifier2' line 45 at 2775
+  EQ '==' line 45 at 2787
+  IDENTIFIER 'identifier3' line 45 at 2790
+  QMARK '?' line 45 at 2802
+  NUMBER 1 line 45 at 2804
+  COLON ':' line 45 at 2806
+  IDENTIFIER 'True' line 45 at 2808
+  IDENTIFIER 'identifier1' line 47 at 2884
+  EQUAL '=' line 47 at 2896
+  IDENTIFIER 'identifier2' line 47 at 2898
+  EQ '==' line 47 at 2910
+  IDENTIFIER 'identifier3' line 47 at 2913
+  QMARK '?' line 47 at 2925
+  NUMBER 1 line 47 at 2927
+  COLON ':' line 47 at 2929
+  IDENTIFIER 'element' line 47 at 2931
+  LEFTPAREN '(' line 47 at 2938
+  IDENTIFIER 'identifier4' line 47 at 2939
+  COMMA ',' line 47 at 2950
+  IDENTIFIER 'identifier5' line 47 at 2952
+  RIGHTPAREN ')' line 47 at 2963
+  IDENTIFIER 'identifier1' line 49 at 3032
+  EQUAL '=' line 49 at 3044
+  IDENTIFIER 'identifier2' line 49 at 3046
+  EQ '==' line 49 at 3058
+  IDENTIFIER 'identifier3' line 49 at 3061
+  QMARK '?' line 49 at 3073
+  IDENTIFIER 'True' line 49 at 3075
+  COLON ':' line 49 at 3080
+  NUMBER 1 line 49 at 3082
+  IDENTIFIER 'identifier1' line 51 at 3153
+  EQUAL '=' line 51 at 3165
+  IDENTIFIER 'identifier2' line 51 at 3167
+  EQ '==' line 51 at 3179
+  IDENTIFIER 'identifier3' line 51 at 3182
+  QMARK '?' line 51 at 3194
+  IDENTIFIER 'True' line 51 at 3196
+  COLON ':' line 51 at 3201
+  IDENTIFIER 'element' line 51 at 3203
+  LEFTPAREN '(' line 51 at 3210
+  IDENTIFIER 'identifier4' line 51 at 3211
+  COMMA ',' line 51 at 3222
+  IDENTIFIER 'identifier5' line 51 at 3224
+  RIGHTPAREN ')' line 51 at 3235
+  IDENTIFIER 'identifier1' line 53 at 3302
+  EQUAL '=' line 53 at 3314
+  IDENTIFIER 'identifier2' line 53 at 3316
+  EQ '==' line 53 at 3328
+  IDENTIFIER 'identifier3' line 53 at 3331
+  QMARK '?' line 53 at 3343
+  IDENTIFIER 'True' line 53 at 3345
+  COLON ':' line 53 at 3350
+  IDENTIFIER 'False' line 53 at 3352
+-- tokens fixtures/lexer/empty_heredoc.hcl
+  IDENTIFIER 'empty' line 1 at 0
+  EQUAL '=' line 1 at 6
+  STRING '' line 2 at 14
+-- tokens fixtures/lexer/heredoc_terminator_same_line.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  STRING '\nThe terminator is on this line' line 2 at 13
+-- tokens fixtures/lexer/list.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  LEFTBRACKET '[' line 1 at 6
+  NUMBER 1 line 1 at 7
+  COMMA ',' line 1 at 8
+  NUMBER 2 line 1 at 10
+  COMMA ',' line 1 at 11
+  STRING 'foo' line 1 at 17
+  RIGHTBRACKET ']' line 1 at 18
+-- tokens fixtures/lexer/list_comma.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  LEFTBRACKET '[' line 1 at 6
+  NUMBER 1 line 1 at 7
+  COMMA ',' line 1 at 8
+  NUMBER 2 line 1 at 10
+  COMMA ',' line 1 at 11
+  STRING 'foo' line 1 at 17
+  COMMA ',' line 1 at 18
+  RIGHTBRACKET ']' line 1 at 19
+-- tokens fixtures/lexer/list_of_maps.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  LEFTBRACKET '[' line 1 at 6
+  LEFTBRACE '{' line 2 at 10
+  IDENTIFIER 'somekey1' line 2 at 11
+  EQUAL '=' line 2 at 20
+  STRING 'someval1' line 2 at 31
+  RIGHTBRACE '}' line 2 at 32
+  COMMA ',' line 2 at 33
+  LEFTBRACE '{' line 3 at 37
+  IDENTIFIER 'somekey2' line 3 at 38
+  EQUAL '=' line 3 at 47
+  STRING 'someval2' line 3 at 58
+  COMMA ',' line 3 at 59
+  IDENTIFIER 'someextrakey' line 3 at 61
+  EQUAL '=' line 3 at 74
+  STRING 'someextraval' line 3 at 89
+  RIGHTBRACE '}' line 3 at 90
+  COMMA ',' line 3 at 91
+  RIGHTBRACKET ']' line 4 at 93
+-- tokens fixtures/lexer/multiple.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  STRING 'bar' line 1 at 10
+  IDENTIFIER 'key' line 2 at 13
+  EQUAL '=' line 2 at 17
+  NUMBER 7 line 2 at 19
+-- tokens fixtures/lexer/nested_comment.hcl
+  MULTIPLY '*' line 5 at 13
+  DIVIDE '/' line 5 at 14
+-- tokens fixtures/lexer/old.hcl
+  IDENTIFIER 'default' line 1 at 0
+  EQUAL '=' line 1 at 8
+  LEFTBRACE '{' line 1 at 10
+  STRING 'eu-west-1' line 2 at 26
+  COLON ':' line 2 at 27
+  STRING 'ami-b1cf19c6' line 2 at 42
+  COMMA ',' line 2 at 43
+  RIGHTBRACE '}' line 3 at 45
+-- tokens fixtures/lexer/structure.hcl
+  IDENTIFIER 'foo' line 2 at 42
+  IDENTIFIER 'bar' line 2 at 46
+  STRING 'baz' line 2 at 54
+  LEFTBRACE '{' line 2 at 56
+  IDENTIFIER 'key' line 3 at 59
+  EQUAL '=' line 3 at 63
+  NUMBER 7 line 3 at 65
+  IDENTIFIER 'foo' line 4 at 68
+  EQUAL '=' line 4 at 72
+  STRING 'bar' line 4 at 78
+  RIGHTBRACE '}' line 5 at 80
+-- tokens fixtures/lexer/structure_basic.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  LEFTBRACE '{' line 1 at 4
+  IDENTIFIER 'value' line 2 at 8
+  EQUAL '=' line 2 at 14
+  NUMBER 7 line 2 at 16
+  STRING 'value' line 3 at 26
+  EQUAL '=' line 3 at 28
+  NUMBER 8 line 3 at 30
+  STRING 'complex::value' line 4 at 49
+  EQUAL '=' line 4 at 51
+  NUMBER 9 line 4 at 53
+  RIGHTBRACE '}' line 5 at 56
+-- tokens fixtures/lexer/structure_comma.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  LEFTBRACE '{' line 1 at 4
+  IDENTIFIER 'key' line 2 at 10
+  EQUAL '=' line 2 at 14
+  STRING 'key' line 2 at 20
+  COMMA ',' line 2 at 21
+  IDENTIFIER 'value' line 3 at 27
+  EQUAL '=' line 3 at 33
+  NUMBER 7 line 3 at 35
+  COMMA ',' line 3 at 36
+  RIGHTBRACE '}' line 4 at 38
+  IDENTIFIER 'bar' line 6 at 41
+  LEFTBRACE '{' line 6 at 45
+  IDENTIFIER 'key' line 6 at 46
+  EQUAL '=' line 6 at 50
+  STRING 'key' line 6 at 56
+  COMMA ',' line 6 at 57
+  IDENTIFIER 'value' line 6 at 59
+  EQUAL '=' line 6 at 65
+  NUMBER 7 line 6 at 67
+  RIGHTBRACE '}' line 6 at 68
+-- tokens fixtures/lexer/structure_empty.hcl
+  IDENTIFIER 'resource' line 1 at 0
+  STRING 'foo' line 1 at 13
+  STRING 'bar' line 1 at 19
+  LEFTBRACE '{' line 1 at 21
+  RIGHTBRACE '}' line 1 at 22
+-- tokens fixtures/lexer/terraform0.12syntax.hcl
+  IDENTIFIER 'locals' line 1 at 0
+  LEFTBRACE '{' line 1 at 7
+  IDENTIFIER 'https_inbound_sg_id' line 2 at 11
+  EQUAL '=' line 2 at 32
+  IDENTIFIER 'coalesce' line 2 at 34
+  LEFTPAREN '(' line 2 at 42
+  IDENTIFIER 'join' line 2 at 43
+  LEFTPAREN '(' line 2 at 47
+  STRING '' line 2 at 49
+  COMMA ',' line 2 at 50
+  IDENTIFIER 'aws_security_group.https_inbound_sg.' line 2 at 52
+  ASTERISK_PERIOD '*.' line 2 at 88
+  IDENTIFIER 'id' line 2 at 90
+  RIGHTPAREN ')' line 2 at 92
+  COMMA ',' line 2 at 93
+  IDENTIFIER 'join' line 2 at 95
+  LEFTPAREN '(' line 2 at 99
+  STRING '' line 2 at 101
+  COMMA ',' line 2 at 102
+  IDENTIFIER 'data.aws_security_group.https_inbound_sg.' line 2 at 104
+  ASTERISK_PERIOD '*.' line 2 at 145
+  IDENTIFIER 'id' line 2 at 147
+  RIGHTPAREN ')' line 2 at 149
+  RIGHTPAREN ')' line 2 at 150
+  RIGHTBRACE '}' line 3 at 152
+  IDENTIFIER 'variable' line 5 at 155
+  STRING 'env_variables' line 5 at 178
+  LEFTBRACE '{' line 5 at 180
+  IDENTIFIER 'type' line 6 at 184
+  EQUAL '=' line 6 at 196
+  IDENTIFIER 'map' line 6 at 198
+  LEFTPAREN '(' line 6 at 201
+  IDENTIFIER 'string' line 6 at 202
+  RIGHTPAREN ')' line 6 at 208
+  IDENTIFIER 'default' line 7 at 212
+  EQUAL '=' line 7 at 224
+  LEFTBRACE '{' line 7 at 226
+  IDENTIFIER 'terraform' line 7 at 228
+  COLON ':' line 7 at 237
+  STRING 'needs dynamic blocks of code' line 7 at 268
+  RIGHTBRACE '}' line 7 at 269
+  RIGHTBRACE '}' line 8 at 271
+  IDENTIFIER 'resource' line 10 at 274
+  STRING 'aws_iam_role_policy_attachment' line 10 at 314
+  STRING 'policy_attachment' line 10 at 334
+  LEFTBRACE '{' line 10 at 336
+  IDENTIFIER 'count' line 11 at 340
+  EQUAL '=' line 11 at 351
+  IDENTIFIER 'var.module_count' line 11 at 353
+  IDENTIFIER 'role' line 12 at 372
+  EQUAL '=' line 12 at 383
+  IDENTIFIER 'aws_iam_role.role' line 12 at 385
+  LEFTBRACKET '[' line 12 at 402
+  IDENTIFIER 'count.index' line 12 at 403
+  RIGHTBRACKET ']' line 12 at 414
+  PERIOD '.' line 12 at 415
+  IDENTIFIER 'name' line 12 at 416
+  RIGHTBRACE '}' line 13 at 421
+  IDENTIFIER 'resource' line 15 at 424
+  STRING 'aws_rds_cluster' line 15 at 449
+  STRING 'interaction-database-cluster' line 15 at 480
+  LEFTBRACE '{' line 15 at 482
+  IDENTIFIER 'cluster_identifier' line 16 at 486
+  EQUAL '=' line 16 at 510
+  IDENTIFIER 'local.rds_name' line 16 at 512
+  IDENTIFIER 'scaling_configuration' line 18 at 530
+  LEFTBRACE '{' line 18 at 552
+  IDENTIFIER 'max_capacity' line 19 at 558
+  EQUAL '=' line 19 at 583
+  NUMBER 256 line 19 at 585
+  IDENTIFIER 'auto_pause' line 20 at 593
+  EQUAL '=' line 20 at 618
+  IDENTIFIER 'var.environment' line 20 at 620
+  EQ '==' line 20 at 636
+  STRING 'prod' line 20 at 644
+  QMARK '?' line 20 at 646
+  BOOL False line 20 at 648
+  COLON ':' line 20 at 654
+  BOOL True line 20 at 656
+  IDENTIFIER 'seconds_until_auto_pause' line 21 at 665
+  EQUAL '=' line 21 at 690
+  IDENTIFIER 'var.environment' line 21 at 692
+  EQ '==' line 21 at 708
+  STRING 'prod' line 21 at 716
+  QMARK '?' line 21 at 718
+  IDENTIFIER 'null' line 21 at 720
+  COLON ':' line 21 at 725
+  NUMBER 3600 line 21 at 727
+  RIGHTBRACE '}' line 22 at 734
+  RIGHTBRACE '}' line 23 at 736
+  IDENTIFIER 'resource' line 25 at 739
+  STRING 'aws_lambda_function' line 25 at 768
+  STRING 'github_collector' line 25 at 787
+  LEFTBRACE '{' line 25 at 789
+  IDENTIFIER 'function_name' line 26 at 793
+  EQUAL '=' line 26 at 810
+  IDENTIFIER 'var.github_collector_function_name' line 26 at 812
+  IDENTIFIER 'environment' line 28 at 850
+  LEFTBRACE '{' line 28 at 862
+  IDENTIFIER 'variables' line 29 at 868
+  EQUAL '=' line 29 at 878
+  LEFTBRACE '{' line 29 at 880
+  IDENTIFIER 'PROXY_AUTH' line 30 at 888
+  EQUAL '=' line 30 at 902
+  IDENTIFIER 'join' line 30 at 904
+  LEFTPAREN '(' line 30 at 908
+  STRING ':' line 30 at 911
+  COMMA ',' line 30 at 912
+  LEFTBRACKET '[' line 30 at 914
+  IDENTIFIER 'var.proxy_username' line 30 at 915
+  COMMA ',' line 30 at 933
+  IDENTIFIER 'var.proxy_password' line 30 at 935
+  RIGHTBRACKET ']' line 30 at 953
+  RIGHTPAREN ')' line 30 at 954
+  RIGHTBRACE '}' line 31 at 960
+  RIGHTBRACE '}' line 32 at 964
+  RIGHTBRACE '}' line 33 at 966
+-- tokens fixtures/lexer/types.hcl
+  IDENTIFIER 'foo' line 1 at 0
+  EQUAL '=' line 1 at 4
+  STRING 'bar' line 1 at 10
+  IDENTIFIER 'bar' line 2 at 13
+  EQUAL '=' line 2 at 17
+  NUMBER 7 line 2 at 19
+  IDENTIFIER 'baz' line 3 at 22
+  EQUAL '=' line 3 at 26
+  LEFTBRACKET '[' line 3 at 28
+  NUMBER 1 line 3 at 29
+  COMMA ',' line 3 at 30
+  NUMBER 2 line 3 at 31
+  COMMA ',' line 3 at 32
+  NUMBER 3 line 3 at 33
+  RIGHTBRACKET ']' line 3 at 34
+  IDENTIFIER 'foo' line 4 at 37
+  EQUAL '=' line 4 at 41
+  NUMBER -12 line 4 at 43
+  IDENTIFIER 'bar' line 5 at 48
+  EQUAL '=' line 5 at 52
+  FLOAT 3.14159 line 5 at 54
+  IDENTIFIER 'foo' line 6 at 63
+  EQUAL '=' line 6 at 67
+  BOOL True line 6 at 69
+  IDENTIFIER 'bar' line 7 at 75
+  EQUAL '=' line 7 at 79
+  BOOL False line 7 at 81
+-- tokens fixtures/lexer/unterminated_block_comment.hcl
+  DIVIDE '/' line 1 at 0
+  MULTIPLY '*' line 1 at 1
+  IDENTIFIER 'Foo' line 2 at 3
+-- tokens fixtures/lexer/windows_heredoc.hcl
+  IDENTIFIER 'data_json' line 4 at 74
+  EQUAL '=' line 4 at 84
+  STRING '{\r\n  "foo":   "bar",\r\n  "pizza": "cheese"\r\n}' line 5 at 139
+-- tokens cases/numbers.hcl
+  IDENTIFIER 'dec' line 1 at 0
+  EQUAL '=' line 1 at 10
+  NUMBER 42 line 1 at 12
+  IDENTIFIER 'neg' line 2 at 15
+  EQUAL '=' line 2 at 25
+  NUMBER -17 line 2 at 27
+  IDENTIFIER 'hex' line 3 at 31
+  EQUAL '=' line 3 at 41
+  NUMBER 31 line 3 at 43
+  IDENTIFIER 'neghex' line 4 at 48
+  EQUAL '=' line 4 at 58
+  NUMBER -255 line 4 at 60
+  IDENTIFIER 'float' line 5 at 66
+  EQUAL '=' line 5 at 76
+  FLOAT 3.25 line 5 at 78
+  IDENTIFIER 'lead' line 6 at 83
+  EQUAL '=' line 6 at 93
+  FLOAT 0.5 line 6 at 95
+  IDENTIFIER 'trail' line 7 at 98
+  EQUAL '=' line 7 at 108
+  FLOAT 2.0 line 7 at 110
+  IDENTIFIER 'negf' line 8 at 113
+  EQUAL '=' line 8 at 123
+  FLOAT -0.0 line 8 at 125
+  IDENTIFIER 'sci' line 9 at 130
+  EQUAL '=' line 9 at 140
+  NUMBER 1 line 9 at 142
+  EPLUS 'e' line 9 at 143
+  NUMBER 3 line 9 at 144
+  IDENTIFIER 'scineg' line 10 at 146
+  EQUAL '=' line 10 at 156
+  FLOAT 2.5 line 10 at 158
+  EMINUS 'e-' line 10 at 161
+  NUMBER 2 line 10 at 163
+  IDENTIFIER 'sciplus' line 11 at 165
+  EQUAL '=' line 11 at 175
+  NUMBER 4 line 11 at 177
+  EPLUS 'E+' line 11 at 178
+  NUMBER 2 line 11 at 180
+  IDENTIFIER 'huge' line 12 at 182
+  EQUAL '=' line 12 at 192
+  NUMBER 1 line 12 at 194
+  EPLUS 'e' line 12 at 195
+  NUMBER 400 line 12 at 196
+  IDENTIFIER 'sum' line 13 at 200
+  EQUAL '=' line 13 at 210
+  NUMBER 1 line 13 at 212
+  ADD '+' line 13 at 214
+  NUMBER 2 line 13 at 216
+  IDENTIFIER 'mixed' line 14 at 218
+  EQUAL '=' line 14 at 228
+  NUMBER 1 line 14 at 230
+  ADD '+' line 14 at 232
+  FLOAT 2.5 line 14 at 234
+  IDENTIFIER 'diff' line 15 at 238
+  EQUAL '=' line 15 at 248
+  NUMBER 10 line 15 at 250
+  MINUS '-' line 15 at 253
+  NUMBER 3 line 15 at 255
+  MINUS '-' line 15 at 257
+  NUMBER 2 line 15 at 259
+  IDENTIFIER 'prod' line 16 at 261
+  EQUAL '=' line 16 at 271
+  NUMBER 6 line 16 at 273
+  MULTIPLY '*' line 16 at 275
+  NUMBER 7 line 16 at 277
+  IDENTIFIER 'quot' line 17 at 279
+  EQUAL '=' line 17 at 289
+  NUMBER 7 line 17 at 291
+  DIVIDE '/' line 17 at 293
+  NUMBER 2 line 17 at 295
+  IDENTIFIER 'exact' line 18 at 297
+  EQUAL '=' line 18 at 307
+  NUMBER 8 line 18 at 309
+  DIVIDE '/' line 18 at 311
+  NUMBER 4 line 18 at 313
+  IDENTIFIER 'chain' line 19 at 315
+  EQUAL '=' line 19 at 325
+  NUMBER 2 line 19 at 327
+  ADD '+' line 19 at 329
+  NUMBER 3 line 19 at 331
+  MULTIPLY '*' line 19 at 333
+  NUMBER 4 line 19 at 335
+  IDENTIFIER 'negmul' line 20 at 337
+  EQUAL '=' line 20 at 347
+  NUMBER -2 line 20 at 349
+  MULTIPLY '*' line 20 at 352
+  NUMBER -3 line 20 at 354
+-- tokens cases/strings.hcl
+  IDENTIFIER 'plain' line 1 at 0
+  EQUAL '=' line 1 at 8
+  STRING 'hello' line 1 at 16
+  IDENTIFIER 'escaped' line 2 at 18
+  EQUAL '=' line 2 at 26
+  STRING 'say "hi" now' line 2 at 43
+  IDENTIFIER 'slash' line 3 at 45
+  EQUAL '=' line 3 at 53
+  STRING 'C:\\temp\\new' line 3 at 69
+  IDENTIFIER 'tab' line 4 at 71
+  EQUAL '=' line 4 at 79
+  STRING 'a\\tb' line 4 at 86
+  IDENTIFIER 'interp' line 5 at 88
+  EQUAL '=' line 5 at 96
+  STRING '${var.name}-${lookup(var.map, "key")}' line 5 at 136
+  IDENTIFIER 'nested' line 6 at 138
+  EQUAL '=' line 6 at 146
+  STRING '${format("%s-%s", "a", "${var.b}")}' line 6 at 184
+  IDENTIFIER 'unicode' line 7 at 186
+  EQUAL '=' line 7 at 194
+  STRING 'café ☃ 😀' line 7 at 205
+  IDENTIFIER 'multi' line 8 at 207
+  EQUAL '=' line 8 at 215
+  STRING 'line one\nline two' line 8 at 235
+  IDENTIFIER 'empty' line 10 at 237
+  EQUAL '=' line 10 at 245
+  STRING '' line 10 at 248
+  IDENTIFIER 'bare' line 11 at 250
+  EQUAL '=' line 11 at 258
+  IDENTIFIER 'some.identifier-name' line 11 at 260
+  IDENTIFIER 'truthy' line 12 at 281
+  EQUAL '=' line 12 at 289
+  BOOL True line 12 at 291
+  IDENTIFIER 'falsy' line 13 at 296
+  EQUAL '=' line 13 at 304
+  BOOL False line 13 at 306
+-- tokens cases/heredocs.hcl
+  IDENTIFIER 'plain' line 1 at 0
+  EQUAL '=' line 1 at 6
+  STRING 'line one\n  line two' line 2 at 34
+  IDENTIFIER 'tabbed' line 5 at 38
+  EQUAL '=' line 5 at 45
+  STRING 'indented\ndeeper' line 6 at 73
+  IDENTIFIER 'same_line' line 9 at 78
+  EQUAL '=' line 9 at 88
+  STRING 'first\nlast' line 10 at 102
+  IDENTIFIER 'empty' line 12 at 110
+  EQUAL '=' line 12 at 116
+  STRING '' line 13 at 124
+  IDENTIFIER 'after' line 14 at 128
+  EQUAL '=' line 14 at 134
+  STRING 'done' line 14 at 141
+-- tokens cases/crlf_heredoc.hcl
+  IDENTIFIER 'a' line 1 at 0
+  EQUAL '=' line 1 at 2
+  STRING 'windows\r\nlines' line 2 at 27
+  IDENTIFIER 'b' line 5 at 32
+  EQUAL '=' line 5 at 34
+  NUMBER 1 line 5 at 36
+-- tokens cases/expressions.hcl
+  IDENTIFIER 'cond' line 1 at 0
+  EQUAL '=' line 1 at 10
+  IDENTIFIER 'var.env' line 1 at 12
+  EQ '==' line 1 at 20
+  STRING 'prod' line 1 at 28
+  QMARK '?' line 1 at 30
+  NUMBER 3 line 1 at 32
+  COLON ':' line 1 at 34
+  NUMBER 1 line 1 at 36
+  IDENTIFIER 'cmp' line 2 at 38
+  EQUAL '=' line 2 at 48
+  IDENTIFIER 'count.index' line 2 at 50
+  GE '>=' line 2 at 62
+  NUMBER 2 line 2 at 65
+  IDENTIFIER 'cmp2' line 3 at 67
+  EQUAL '=' line 3 at 77
+  NUMBER 5 line 3 at 79
+  LT '<' line 3 at 81
+  IDENTIFIER 'var.max' line 3 at 83
+  IDENTIFIER 'fn_list' line 4 at 91
+  EQUAL '=' line 4 at 101
+  IDENTIFIER 'concat' line 4 at 103
+  LEFTPAREN '(' line 4 at 109
+  IDENTIFIER 'var.a' line 4 at 110
+  COMMA ',' line 4 at 115
+  IDENTIFIER 'var.b' line 4 at 117
+  RIGHTPAREN ')' line 4 at 122
+  IDENTIFIER 'fn_lists' line 5 at 124
+  EQUAL '=' line 5 at 134
+  IDENTIFIER 'concat' line 5 at 136
+  LEFTPAREN '(' line 5 at 142
+  LEFTBRACKET '[' line 5 at 143
+  STRING 'a' line 5 at 146
+  RIGHTBRACKET ']' line 5 at 147
+  COMMA ',' line 5 at 148
+  LEFTBRACKET '[' line 5 at 150
+  STRING 'b' line 5 at 153
+  RIGHTBRACKET ']' line 5 at 154
+  COMMA ',' line 5 at 155
+  LEFTBRACKET '[' line 5 at 157
+  STRING 'c' line 5 at 160
+  RIGHTBRACKET ']' line 5 at 161
+  RIGHTPAREN ')' line 5 at 162
+  IDENTIFIER 'splat' line 6 at 164
+  EQUAL '=' line 6 at 174
+  LEFTBRACKET '[' line 6 at 176
+  IDENTIFIER 'aws_instance.web.' line 6 at 177
+  ASTERISK_PERIOD '*.' line 6 at 194
+  IDENTIFIER 'id' line 6 at 196
+  COMMA ',' line 6 at 198
+  IDENTIFIER 'aws_instance.db.' line 6 at 200
+  ASTERISK_PERIOD '*.' line 6 at 216
+  IDENTIFIER 'id' line 6 at 218
+  RIGHTBRACKET ']' line 6 at 220
+  IDENTIFIER 'splat2' line 7 at 222
+  EQUAL '=' line 7 at 232
+  LEFTBRACKET '[' line 7 at 234
+  IDENTIFIER 'var.first' line 7 at 235
+  COMMA ',' line 7 at 244
+  IDENTIFIER 'aws_instance.web.' line 7 at 246
+  ASTERISK_PERIOD '*.' line 7 at 263
+  IDENTIFIER 'id' line 7 at 265
+  RIGHTBRACKET ']' line 7 at 267
+  IDENTIFIER 'index' line 8 at 269
+  EQUAL '=' line 8 at 279
+  IDENTIFIER 'aws_subnet.private' line 8 at 281
+  LEFTBRACKET '[' line 8 at 299
+  NUMBER 0 line 8 at 300
+  RIGHTBRACKET ']' line 8 at 301
+  PERIOD '.' line 8 at 302
+  IDENTIFIER 'id' line 8 at 303
+  IDENTIFIER 'index_key' line 9 at 306
+  EQUAL '=' line 9 at 316
+  IDENTIFIER 'aws_subnet.private' line 9 at 318
+  LEFTBRACKET '[' line 9 at 336
+  IDENTIFIER 'var.az' line 9 at 337
+  RIGHTBRACKET ']' line 9 at 343
+  PERIOD '.' line 9 at 344
+  IDENTIFIER 'id' line 9 at 345
+  IDENTIFIER 'bracket' line 10 at 348
+  EQUAL '=' line 10 at 358
+  IDENTIFIER 'foo' line 10 at 360
+  LEFTBRACKET '[' line 10 at 363
+  IDENTIFIER 'bar' line 10 at 364
+  RIGHTBRACKET ']' line 10 at 367
+-- tokens broken/unterminated_string.hcl
+  IDENTIFIER 'a' line 1 at 0
+  EQUAL '=' line 1 at 2
+! ValueError: Line 3, column 0, index 16: EOF before closing string quote
+-- tokens broken/single_slash.hcl
+  IDENTIFIER 'a' line 1 at 0
+  EQUAL '=' line 1 at 2
+  NUMBER 1 line 1 at 4
+  DIVIDE '/' line 1 at 6
+  IDENTIFIER 'b' line 1 at 8
+-- tokens broken/illegal_char.hcl
+  IDENTIFIER 'a' line 1 at 0
+  EQUAL '=' line 1 at 2
+  NUMBER 1 line 1 at 4
+  IDENTIFIER 'b' line 2 at 6
+  EQUAL '=' line 2 at 8
+! ValueError: Line 2, column 4, index 10: Illegal character '@'
+-- tokens cases/comments.hcl ALL
+  COMMENT 'A hash comment' line 1 at 0
+  COMMENT 'A slash comment' line 2 at 17
+  MULTICOMMENT '/* A block\n   comment */' line 3 at 36
+  IDENTIFIER 'key' line 5 at 61
+  EQUAL '=' line 5 at 65
+  STRING 'value' line 5 at 73
+  COMMENT 'trailing' line 5 at 75
+  IDENTIFIER 'block' line 6 at 86
+  LEFTBRACE '{' line 6 at 92
+  COMMENT 'inside' line 7 at 96
+  IDENTIFIER 'inner' line 8 at 107
+  EQUAL '=' line 8 at 113
+  NUMBER 1 line 8 at 115
+  RIGHTBRACE '}' line 9 at 117
+-- terraform infra/terraform
+  main.tf:
+    terraform {"backend": {"s3": {"bucket": "shop-terraform-state", "key": "web/terraform.tfstate", "region": "eu-west-1"}}, "required_version": ">= 0.11.0"}
+    provider aws {"alias": "us", "region": "us-east-1", "version": "~> 2.70"}
+    data aws_ami.ubuntu: filter, most_recent, owners
+    resource aws_instance.web: ami, count, instance_type, lifecycle, root_block_device, subnet_id, tags, user_data
+    resource aws_lb.web: idle_timeout, load_balancer_type, name, subnets
+    resource aws_lb_target_group.web: health_check, name, port, protocol, vpc_id
+    resource aws_security_group.web: egress, ingress, name
+    resource aws_db_instance.orders: allocated_storage, backup_retention_period, engine, engine_version, instance_class, max_allocated_storage, multi_az, name, password, username
+    module vpc source=terraform-aws-modules/vpc/aws version=2.78.0
+    module dns source=./modules/dns version=-
+  main.tf.json:
+    variable cdn_ttl default=3600.5 (seconds à la carte)
+    resource aws_s3_bucket.assets: acl, bucket, lifecycle_rule, versioning
+    output assets_bucket sensitive=False value="${aws_s3_bucket.assets.id}"
+  outputs.tf:
+    output lb_dns_name sensitive=False value="${aws_lb.web.dns_name}"
+    output instance_ips sensitive=False value=["${aws_instance.web.*.private_ip}"]
+    output db_endpoint sensitive=True value="${aws_db_instance.orders.endpoint}"
+  variables.tf:
+    variable region default="eu-west-1" (AWS region for every resource)
+    variable instance_count default=3
+    variable instance_type default="t3.small" type=string
+    variable allowed_cidrs default=["10.0.0.0/16", "192.168.10.0/24"] type=list
+    variable tags default={"billing": "shop-42", "team": "platform"} type=map
+    variable db_password default=- (set from the CI secret store)
+-- vault infra/vault/admin.hcl read:sys/health sudo:sys/rotate read:auth/token/root read:secret/data/payments/stripe update:secret/data/payments/stripe delete:secret/app/config read:other/path list:secret/
+  read sys/health: allowed by "sys/*"
+  sudo sys/rotate: allowed by "sys/*"
+  read auth/token/root: denied by "auth/token/root"
+  read secret/data/payments/stripe: allowed by "secret/data/payments/*"
+  update secret/data/payments/stripe: denied by "secret/data/payments/*"
+  delete secret/app/config: allowed by "secret/*"
+  read other/path: denied (no rule)
+  list secret/: allowed by "secret/*"
+-- vault infra/vault/ci.hcl read:secret/data/ci/deploy-key read:secret/data/ci/prod-signing list:secret/metadata/ci/ update:auth/token/renew-self update:transit/encrypt/ci update:transit/encrypt/prod read:secret/data/cia
+  read secret/data/ci/deploy-key: allowed by "secret/data/ci/*"
+  read secret/data/ci/prod-signing: denied by "secret/data/ci/prod-signing"
+  list secret/metadata/ci/: allowed by "secret/metadata/ci/*"
+  update auth/token/renew-self: allowed by "auth/token/renew-self"
+  update transit/encrypt/ci: allowed by "transit/encrypt/ci"
+  update transit/encrypt/prod: denied (no rule)
+  read secret/data/cia: denied (no rule)
+-- nomad infra/nomad/web.nomad
+  job web type=service priority=60 datacenters=eu-west-1a,eu-west-1b
+    group frontend count=3
+      task nginx driver=docker cpu=500 memory=256 config={"image": "nginx:1.25", "port_map": {"http": 80}}
+      task log-shipper driver=docker cpu=100 memory=64 config={"image": "timberio/vector:0.34.1-alpine"}
+    group api count=2
+      task orders driver=exec cpu=1000 memory=512 config={"args": ["--port", "${NOMAD_PORT_http}", "--db", "orders.service.consul"], "command": "/usr/local/bin/orders"}
+        env {"RUST_LOG": "info", "WORKERS": 4}
+    total cpu=3800 memory=1984
+-- consul infra/consul/agent.hcl
+  acl: dict {"default_policy": "deny", "enabled": true, "tokens": {"agent": "00000000-0000-0000-0000-000000000000"}}
+  bootstrap_expect: int 3
+  data_dir: str "/opt/consul"
+  datacenter: str "eu-west-1"
+  limits: dict {"http_max_conns_per_client": 200, "rpc_max_burst": 1500.0, "rpc_rate": 1000.0}
+  log_level: str "INFO"
+  performance: dict {"raft_multiplier": 1}
+  ports: dict {"grpc": 8502, "https": -1}
+  retry_join: list ["provider=aws tag_key=consul tag_value=server"]
+  server: bool true
+  telemetry: dict {"disable_hostname": true, "prometheus_retention_time": "24h"}
+  ui_config: dict {"enabled": true}
