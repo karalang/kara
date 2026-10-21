@@ -76,6 +76,7 @@ Everything else is imported from a `std.*` module:
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
+| `std.pool` | `Pool`, `PooledConnection`, `PoolError` |
 | `std.path` | `parent`, `file_name`, `extension`, `stem`, `join`, `normalize`, `is_absolute`, `components` |
 | `std.encoding` | `base64_encode`, `base64_decode`, `base64url_encode`, `base64url_decode`, `hex_encode`, `hex_decode`, `DecodeError` |
 | `std.crypto` | `constant_time_eq` |

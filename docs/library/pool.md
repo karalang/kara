@@ -1,8 +1,11 @@
 # Connection pools: `Pool`
 
-`Pool[T, E]` keeps a bounded set of reusable values, usually connections to a database or another service, and lends them out one at a time. Opening a connection is slow and a server limits how many it accepts, so a program opens a few, reuses them, and waits when all are in use. Database drivers, HTTP clients and other resource pools build on it. (The generational-handle allocator is a different type, `SlotMap[T]`; see [collections.md](collections.md).)
+`Pool[T, E]` keeps a bounded set of reusable values, usually connections to a database or another service, and lends them out one at a time. Opening a connection is slow and a server limits how many it accepts, so a program opens a few, reuses them, and waits when all are in use. Database drivers, HTTP clients and other resource pools build on it. The items are in `std.pool`, which a program imports. (The generational-handle allocator is a different type, `SlotMap[T]`; see [collections.md](collections.md).)
 
 ```kara
+import std.pool.{Pool, PoolError}
+import std.time.{Duration}
+
 struct Conn { id: i64 }
 
 enum ConnectError { Refused, AuthFailed }
@@ -51,6 +54,6 @@ When the `Pool` itself drops, its idle values drop. A loan that outlives its poo
 
 ## Not yet implemented
 
-- The signatures above. Today the pool is `Pool[T]` with `create_fn: own Fn() -> T`, `PoolError` has no payload and `CreateFailed` is never produced (B-2026-10-21-41); `acquire` takes `timeout: i64` milliseconds (B-2026-10-21-42); and `with_health_check` takes `ref self` (B-2026-10-21-43).
+- The signatures above. Today the pool is `Pool[T]` with `create_fn: own Fn() -> T`, `PoolError` has no payload and `CreateFailed` is never produced (B-2026-10-21-41); `acquire` takes `timeout: i64` milliseconds (B-2026-10-21-42); and `with_health_check` takes `ref self` (B-2026-10-21-43). The items are in the prelude, and there is no `std.pool` module (B-2026-10-21-42). These land together after M3 removes the legacy backend, which shares today's pool source.
 - Waiting. `acquire` fails with `Timeout` at once when every value is in use, whatever the `timeout`, `max_waiters` limits nothing, and `PoolError` has no `Busy` variant yet (B-2026-10-21-44).
 - `#[must_use]` on `PooledConnection` is recorded but not enforced. A bare `pool.acquire(..);` statement is still warned about, because `Result` is always must-use.
