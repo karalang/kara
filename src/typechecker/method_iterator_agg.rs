@@ -386,10 +386,16 @@ impl<'a> super::TypeChecker<'a> {
                     // `current` / `new` must be assignable to the atomic's
                     // inner type T. Two trailing orderings are the
                     // deprecated form (B-2026-10-19-67).
-                    let old_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&inner, &old_ty, args[0].value.span);
-                    let new_ty = self.infer_expr(&args[1].value);
-                    self.check_assignable(&inner, &new_ty, args[1].value.span);
+                    // Under v2 a bare literal takes `T` (B-2026-10-21-73).
+                    if v2 {
+                        self.check_atomic_operand(&args[0].value, &inner);
+                        self.check_atomic_operand(&args[1].value, &inner);
+                    } else {
+                        let old_ty = self.infer_expr(&args[0].value);
+                        self.check_assignable(&inner, &old_ty, args[0].value.span);
+                        let new_ty = self.infer_expr(&args[1].value);
+                        self.check_assignable(&inner, &new_ty, args[1].value.span);
+                    }
                     if args.len() == 4 {
                         self.infer_expr(&args[2].value);
                         self.infer_expr(&args[3].value);
@@ -485,9 +491,33 @@ impl<'a> super::TypeChecker<'a> {
                     // store / RMW: the leading value must be assignable to the
                     // atomic's inner type `T`. (`swap` accepts any `T`,
                     // including `Atomic[bool]`.)
-                    if want == 1 {
+                    if want == 1 && v2 {
+                        // A bare literal takes `T` (B-2026-10-21-73).
+                        self.check_atomic_operand(&args[0].value, &inner);
+                    } else if want == 1 {
                         let val_ty = self.infer_expr(&args[0].value);
                         self.check_assignable(&inner, &val_ty, args[0].value.span);
+                    }
+                    // `fetch_add` and `fetch_sub` are for an integer `T`
+                    // (concurrency.md § Atomics; B-2026-10-21-74).
+                    let resolved =
+                        super::inference::resolve_type_var_top(&inner, &self.env.substitutions);
+                    if v2
+                        && matches!(method, "fetch_add" | "fetch_sub")
+                        && !matches!(
+                            resolved,
+                            Type::Int(_) | Type::UInt(_) | Type::TypeVar(_) | Type::Error
+                        )
+                    {
+                        self.type_error(
+                            format!(
+                                "`{method}` is for an integer `Atomic[T]`; an `Atomic[{}]` has \
+                                 `load`, `store`, `swap` and `compare_exchange`",
+                                super::types::type_display(&resolved)
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                        );
                     }
                     if args.len() > want {
                         self.infer_expr(&args[want].value);
@@ -500,6 +530,20 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// An `Atomic[T]` operand, checked against `T`: a bare integer literal
+    /// is a `T` (`a.fetch_add(1)` on an `Atomic[i32]`), recorded for typed
+    /// HIR as a `let` or an argument records it (B-2026-10-21-73).
+    pub(super) fn check_atomic_operand(&mut self, arg: &Expr, inner: &Type) {
+        self.check_expr(arg, inner);
+        let inner = super::inference::resolve_type_var_top(inner, &self.env.substitutions);
+        if matches!(inner, Type::Int(_) | Type::UInt(_))
+            && Self::unsuffixed_int_literal_value(arg).is_some()
+        {
+            self.record_expr_type(&arg.span, &inner);
+            self.record_node_type(arg.id, &inner);
+        }
     }
 
     /// The deprecated trailing `MemoryOrdering` arguments of an `Atomic`

@@ -2270,6 +2270,43 @@ impl<'a> super::TypeChecker<'a> {
         // mode return (`Vec[?T]` minted by `infer_call`) flows through
         // `types_compatible`, which can't unify the fresh typevar
         // against `Vec<Fn()>` etc. (the existing legacy callers' shape).
+        // `Atomic.new(v)` / `Mutex.new(v)` at an `Atomic[T]` / `Mutex[T]`
+        // slot: `v` is checked against `T`, so a bare literal takes it
+        // (`let a: Atomic[i32] = Atomic.new(1)`; B-2026-10-21-73). An
+        // `Atomic` of a type no atomic holds keeps the synth path's error.
+        if let (ExprKind::Call { callee, args }, Type::Named { name, args: targs }) =
+            (&expr.kind, Self::peel_borrow(expected))
+        {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+                let inner = resolve_type_var_top(
+                    &targs.first().cloned().unwrap_or(Type::Error),
+                    &self.env.substitutions,
+                );
+                let holds = name == "Mutex"
+                    || matches!(
+                        inner,
+                        Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Pointer { .. }
+                    );
+                if v2
+                    && holds
+                    && args.len() == 1
+                    && targs.len() == 1
+                    && segments.len() == 2
+                    && segments[1] == "new"
+                    && segments[0] == *name
+                    && (name == "Atomic" || name == "Mutex")
+                {
+                    let ty = Type::Named {
+                        name: name.clone(),
+                        args: vec![inner.clone()],
+                    };
+                    self.check_atomic_operand(&args[0].value, &inner);
+                    self.record_expr_type(&expr.span, &ty);
+                    return ty;
+                }
+            }
+        }
         if let ExprKind::Call { callee, args } = &expr.kind {
             if args.is_empty() {
                 if let ExprKind::Path { segments, .. } = &callee.kind {

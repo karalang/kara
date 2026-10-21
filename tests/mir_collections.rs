@@ -590,3 +590,36 @@ fn main() {
 fn var_error_into_io_error_agrees_on_both_backends() {
     agrees(VAR_ERROR_INTO, "InvalidUtf8\nNotFound\nInvalidUtf8\n", 0);
 }
+
+/// An `Atomic[T]` operand that is a bare literal is a `T`: `new`, `store`,
+/// `fetch_add`, `fetch_sub` and `compare_exchange` on `i32` / `u64` atomics,
+/// struct fields included (concurrency.md § Atomics; B-2026-10-21-73).
+const ATOMIC_LITERALS: &str = r#"import std.sync.{Atomic};
+sync struct Metrics {
+    requests: Atomic[u64],
+    small: Atomic[i32],
+}
+fn main() {
+    let m = Metrics { requests: Atomic.new(0), small: Atomic.new(-5) };
+    m.requests.fetch_add(3);
+    m.requests.store(18000000000000000000);
+    m.small.fetch_sub(-2);
+    println(f"{m.requests.load()} {m.small.load()}");
+    let a: Atomic[i32] = Atomic.new(2147483647);
+    let p = a.fetch_add(1);
+    println(f"{p} {a.load()}");
+    let r = m.small.compare_exchange(-3, 40);
+    println(f"{r.is_ok()} {m.small.load()}");
+    let u: Atomic[u32] = Atomic.new(0);
+    println(f"{u.fetch_sub(1)} {u.load()}");
+}
+"#;
+
+#[test]
+fn atomic_literal_operands_take_the_atomic_type() {
+    agrees(
+        ATOMIC_LITERALS,
+        "18000000000000000000 -3\n2147483647 -2147483648\ntrue 40\n0 4294967295\n",
+        0,
+    );
+}

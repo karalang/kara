@@ -11027,3 +11027,18 @@ fn an_unknown_item_in_a_library_import_is_refused_at_the_import() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `fetch_add` and `fetch_sub` are for an integer `Atomic[T]`
+/// (concurrency.md § Atomics; B-2026-10-21-74).
+#[test]
+fn fetch_add_on_an_atomic_bool_is_refused() {
+    rejected(
+        "atomic-bool-fetch-add",
+        "import std.sync.{Atomic};\nfn main() {\n    let f: Atomic[bool] = Atomic.new(false);\n    f.fetch_add(true);\n}\n",
+        "`fetch_add` is for an integer `Atomic[T]`",
+    );
+    accepted(
+        "atomic-bool-swap",
+        "import std.sync.{Atomic};\nfn main() {\n    let f: Atomic[bool] = Atomic.new(false);\n    println(f.swap(true));\n}\n",
+    );
+}
