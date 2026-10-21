@@ -286,6 +286,20 @@ fn fallible_twins_report_out_of_memory() {
     );
 }
 
+/// B-2026-10-21-40: a view of a literal receiver chosen in an `if` outlives
+/// the branch (the literal is lent from static data), on both backends; a
+/// `mut` method on a literal still has a `String` of its own.
+#[test]
+fn literal_receiver_view_outlives_its_branch() {
+    agrees(
+        "fn pick(upper: bool) -> u8 {\n    let digits = if upper { \"ABC\".bytes() } else { \"abc\".bytes() };\n    digits[1]\n}\n\
+         fn first(n: i64) -> Str {\n    match n { 0 => \"zero\".as_str(), _ => \"many\".as_str() }\n}\n\
+         fn main() {\n    println(f\"{pick(true)} {pick(false)}\");\n    println(f\"{first(0)} {first(3)} {\"abc\".len()}\");\n}\n",
+        "66 98\nzero many 3\n",
+        0,
+    );
+}
+
 /// B-2026-10-21-38: a health check over a connection type with a `Drop`
 /// is lent each idle value (a bare closure parameter borrows it); a failing
 /// one is evicted, dropped, and a fresh one minted, on both backends.

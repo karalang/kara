@@ -14282,8 +14282,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if let ExprKind::StringLit(lit) = &object.kind {
             // A literal receiver is a static `Str` with no origins (core
-            // semantics §5.4): a view of it may outlive the statement, so
-            // its `String` lives to the end of the enclosing block.
+            // semantics §5.4): a shared borrow lends a `String` in static
+            // data, so a view of it outlives any block, a branch's
+            // included (B-2026-10-21-40).
+            if !mutable && matches!(self.tys().tcx().kind(t), HK::Str) {
+                let i = self.lcx.literal_static(object, t);
+                return Ok(PendingRecv::Ready(Operand::Const(Const {
+                    ty: self.tys().tcx().reference(t, false),
+                    kind: ConstKind::Static(i),
+                })));
+            }
+            // A `mut` one has a `String` of its own, to the end of the
+            // enclosing block.
             let l = self.temp(t);
             let op = self.static_str(lit);
             self.call_native("String.from", vec![op], Place::local(l));
