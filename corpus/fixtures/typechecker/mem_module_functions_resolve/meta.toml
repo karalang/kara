@@ -1,17 +1,18 @@
 source = "tests/typechecker.rs::mem_module_functions_resolve"
 dedup_of = []
-expect = "error:codegen"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 1
 rules = []
 backends = []
 env = {}
-bucket = "e-differs:stdout"
-classified_with = "db0aa9a19"
+note = "a v2 record: legacy codegen refused the program; expected.out follows design.md and library/: swap leaves a = [2, 3] and b = [1]; replace hands back [2, 3] and leaves a = [9]; take hands back [1] and leaves b empty e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "c3f84545b"
 extracted_src = "918acf41"
 model_rev = "583cfb0d"
 model_src = "918acf41"

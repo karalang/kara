@@ -239,6 +239,7 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
 def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin):
     with tempfile.TemporaryDirectory(prefix="classify-") as tmp:
         d = Path(tmp)
+        raw = src
         if template is not None:
             src = render_template(src, template, d, origin)
         (d / "source.kara").write_text(src)
@@ -268,15 +269,26 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
             codes = sorted({diag_key(e) for e in errs})
             if not any(is_v2(e) for e in errs):
                 return {**out, "class": "e", "bucket": f"check-refuses:{codes[0]}"}
+            # A template entry's fix is written back to source.kara, so it is
+            # made on the program as recorded, before it is filled in, and
+            # the fixed program is filled in again to run. A `[holes]`
+            # template is no program until filled in, so it has no fix.
+            if template is not None and "replace" not in template:
+                return {**out, "class": "e", "bucket": "b-fix-template:" + codes[0]}
+            fd = d / "fix"
+            fd.mkdir()
+            (fd / "source.kara").write_text(raw)
             for _ in range(20):
-                before = (d / "source.kara").read_text()
-                sh([args.karac, "fix", "source.kara"], d, env, args.timeout)
-                if (d / "source.kara").read_text() == before:
+                before = (fd / "source.kara").read_text()
+                sh([args.karac, "fix", "source.kara"], fd, env, args.timeout)
+                if (fd / "source.kara").read_text() == before:
                     break
+            fixed = (fd / "source.kara").read_text()
+            filled = render_template(fixed, template, d, origin) if template is not None else fixed
+            (d / "source.kara").write_text(filled)
             if check_errors(args.karac, d, env, args.timeout):
                 return {**out, "class": "e", "bucket": "b-fix-incomplete:" + codes[0]}
-            fixed = (d / "source.kara").read_text()
-            if fixed == src:
+            if fixed == raw:
                 return {**out, "class": "e", "bucket": "b-fix-noop:" + codes[0]}
         r = mir_run(args.karac, d, env, args.timeout, driver)
         if r is not None and template is not None:
