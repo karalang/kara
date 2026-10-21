@@ -1,0 +1,1266 @@
+== units
+j1 = Every 10 seconds do ping() (last run: [never], next run: 2026-10-21 09:15:37)
+j2 = Every 1 minute do sync('inbox') (last run: [never], next run: 2026-10-21 09:16:27)
+j3 = Every 2 hours do report('hourly', fmt='csv') (last run: [never], next run: 2026-10-21 11:15:27)
+j4 = Every 1 day at 10:30:00 do backup('db') (last run: [never], next run: 2026-10-21 10:30:00)
+j5 = Every 3 days at 08:00:15 do vacuum() (last run: [never], next run: 2026-10-24 08:00:15)
+j6 = Every 1 week do digest() (last run: [never], next run: 2026-10-28 09:15:27)
+j7 = Every 1 week do standup() (last run: [never], next run: 2026-10-26 09:15:27)
+j8 = Every 1 week at 09:00:00 do review() (last run: [never], next run: 2026-10-28 09:00:00)
+j9 = Every 1 week at 13:45:00 do demo() (last run: [never], next run: 2026-10-21 13:45:00)
+j10 = Every 1 week at 23:59:59 do rollover() (last run: [never], next run: 2026-10-25 23:59:59)
+j11 = Every 2 weeks do audit() (last run: [never], next run: 2026-11-04 09:15:27)
+jobs at 2026-10-21 09:15:27.250000:
+  j1: Every 10 seconds do ping() (last run: [never], next run: 2026-10-21 09:15:37)
+  j2: Every 1 minute do sync('inbox') (last run: [never], next run: 2026-10-21 09:16:27)
+  j3: Every 2 hours do report('hourly', fmt='csv') (last run: [never], next run: 2026-10-21 11:15:27)
+  j4: Every 1 day at 10:30:00 do backup('db') (last run: [never], next run: 2026-10-21 10:30:00)
+  j5: Every 3 days at 08:00:15 do vacuum() (last run: [never], next run: 2026-10-24 08:00:15)
+  j6: Every 1 week do digest() (last run: [never], next run: 2026-10-28 09:15:27)
+  j7: Every 1 week do standup() (last run: [never], next run: 2026-10-26 09:15:27)
+  j8: Every 1 week at 09:00:00 do review() (last run: [never], next run: 2026-10-28 09:00:00)
+  j9: Every 1 week at 13:45:00 do demo() (last run: [never], next run: 2026-10-21 13:45:00)
+  j10: Every 1 week at 23:59:59 do rollover() (last run: [never], next run: 2026-10-25 23:59:59)
+  j11: Every 2 weeks do audit() (last run: [never], next run: 2026-11-04 09:15:27)
+next_run: 2026-10-21 09:15:37.250000
+idle_seconds: 10.0
+@ 2026-10-21 09:15:37
+@ 2026-10-21 09:15:37.250000
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 09:15:37.250000
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=sync, args=('inbox',), kwargs={})
+  run sync('inbox') at 2026-10-21 09:16:27.250000
+@ 2026-10-21 09:16:37.250000
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 09:16:37.250000
+idle_seconds: 10.0
+@ 2026-10-21 10:30:00
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 10:30:00
+  log: Running job Job(interval=1, unit=minutes, do=sync, args=('inbox',), kwargs={})
+  run sync('inbox') at 2026-10-21 10:30:00
+  log: Running job Job(interval=1, unit=days, do=backup, args=('db',), kwargs={})
+  run backup('db') at 2026-10-21 10:30:00
+@ 2026-10-21 11:15:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 11:15:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=sync, args=('inbox',), kwargs={})
+  run sync('inbox') at 2026-10-21 11:15:27.250000
+  log: Running job Job(interval=2, unit=hours, do=report, args=('hourly',), kwargs={'fmt': 'csv'})
+  run report('hourly', fmt='csv') at 2026-10-21 11:15:27.250000
+@ 2026-10-21 13:45:00
+  log: Running job Job(interval=10, unit=seconds, do=ping, args=(), kwargs={})
+  run ping() at 2026-10-21 13:45:00
+  log: Running job Job(interval=1, unit=minutes, do=sync, args=('inbox',), kwargs={})
+  run sync('inbox') at 2026-10-21 13:45:00
+  log: Running job Job(interval=2, unit=hours, do=report, args=('hourly',), kwargs={'fmt': 'csv'})
+  run report('hourly', fmt='csv') at 2026-10-21 13:45:00
+  log: Running job Job(interval=1, unit=weeks, do=demo, args=(), kwargs={})
+  run demo() at 2026-10-21 13:45:00
+jobs at 2026-10-21 13:45:00:
+  j1: Every 10 seconds do ping() (last run: 2026-10-21 13:45:00, next run: 2026-10-21 13:45:10)
+  j2: Every 1 minute do sync('inbox') (last run: 2026-10-21 13:45:00, next run: 2026-10-21 13:46:00)
+  j3: Every 2 hours do report('hourly', fmt='csv') (last run: 2026-10-21 13:45:00, next run: 2026-10-21 15:45:00)
+  j4: Every 1 day at 10:30:00 do backup('db') (last run: 2026-10-21 10:30:00, next run: 2026-10-22 10:30:00)
+  j5: Every 3 days at 08:00:15 do vacuum() (last run: [never], next run: 2026-10-24 08:00:15)
+  j6: Every 1 week do digest() (last run: [never], next run: 2026-10-28 09:15:27)
+  j7: Every 1 week do standup() (last run: [never], next run: 2026-10-26 09:15:27)
+  j8: Every 1 week at 09:00:00 do review() (last run: [never], next run: 2026-10-28 09:00:00)
+  j9: Every 1 week at 13:45:00 do demo() (last run: 2026-10-21 13:45:00, next run: 2026-10-28 13:45:00)
+  j10: Every 1 week at 23:59:59 do rollover() (last run: [never], next run: 2026-10-25 23:59:59)
+  j11: Every 2 weeks do audit() (last run: [never], next run: 2026-11-04 09:15:27)
+== intervals
+a: IntervalError: Use minutes instead of minute
+b: IntervalError: Use seconds instead of second
+c: IntervalError: Use hours instead of hour
+d: IntervalError: Use days instead of day
+e: IntervalError: Use weeks instead of week
+f: IntervalError: Scheduling .monday() jobs is only allowed for weekly jobs. Using .monday() on a job scheduled to run every 2 or more weeks is not supported.
+g: IntervalError: Scheduling .sunday() jobs is only allowed for weekly jobs. Using .sunday() on a job scheduled to run every 2 or more weeks is not supported.
+h = Every 1.0 minute do one_float() (last run: [never], next run: 2026-10-21 09:16:27)
+i = Every True hour do one_bool() (last run: [never], next run: 2026-10-21 10:15:27)
+k = Every 1.5 minutes do ninety_s() (last run: [never], next run: 2026-10-21 09:16:57)
+l = Every 0.25 seconds do quarter() (last run: [never], next run: 2026-10-21 09:15:27)
+m = Every 0.0001 hours do tiny() (last run: [never], next run: 2026-10-21 09:15:27)
+n: TypeError: unsupported type for timedelta minutes component: str
+o: IntervalError: Use minutes instead of minute
+p: ScheduleValueError: Invalid unit (valid units are `seconds`, `minutes`, `hours`, `days`, and `weeks`)
+q = Every 3 None do [None] (last run: [never], next run: [never])
+r = <repr raised TypeError: 'NoneType' object is not subscriptable>
+s = Every 2 minutes do [None] (last run: [never], next run: [never])
+str q: Job(interval=3, unit=None, do=None, args=(), kwargs={})
+str r: Job(interval=1, unit=None, do=None, args=(), kwargs={})
+str s: Job(interval=2, unit=minutes, do=None, args=(), kwargs={})
+str n: Job(interval=5, unit=minutes, do=text, args=(), kwargs={})
+should_run q: AssertionError: must run _schedule_next_run before
+should_run h: False
+jobs at 2026-10-21 09:15:27.250000:
+  h: Every 1.0 minute do one_float() (last run: [never], next run: 2026-10-21 09:16:27)
+  i: Every True hour do one_bool() (last run: [never], next run: 2026-10-21 10:15:27)
+  k: Every 1.5 minutes do ninety_s() (last run: [never], next run: 2026-10-21 09:16:57)
+  l: Every 0.25 seconds do quarter() (last run: [never], next run: 2026-10-21 09:15:27)
+  m: Every 0.0001 hours do tiny() (last run: [never], next run: 2026-10-21 09:15:27)
+@ 2026-10-21 09:15:27.500000
+  log: Running job Job(interval=0.25, unit=seconds, do=quarter, args=(), kwargs={})
+  run quarter() at 2026-10-21 09:15:27.500000
+@ 2026-10-21 09:15:28
+  log: Running job Job(interval=0.0001, unit=hours, do=tiny, args=(), kwargs={})
+  run tiny() at 2026-10-21 09:15:28
+  log: Running job Job(interval=0.25, unit=seconds, do=quarter, args=(), kwargs={})
+  run quarter() at 2026-10-21 09:15:28
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=0.25, unit=seconds, do=quarter, args=(), kwargs={})
+  run quarter() at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=0.0001, unit=hours, do=tiny, args=(), kwargs={})
+  run tiny() at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1.0, unit=minutes, do=one_float, args=(), kwargs={})
+  run one_float() at 2026-10-21 09:16:27.250000
+@ 2026-10-21 09:16:57.250000
+  log: Running job Job(interval=0.25, unit=seconds, do=quarter, args=(), kwargs={})
+  run quarter() at 2026-10-21 09:16:57.250000
+  log: Running job Job(interval=0.0001, unit=hours, do=tiny, args=(), kwargs={})
+  run tiny() at 2026-10-21 09:16:57.250000
+  log: Running job Job(interval=1.5, unit=minutes, do=ninety_s, args=(), kwargs={})
+  run ninety_s() at 2026-10-21 09:16:57.250000
+jobs at 2026-10-21 09:16:57.250000:
+  h: Every 1.0 minute do one_float() (last run: 2026-10-21 09:16:27, next run: 2026-10-21 09:17:27)
+  i: Every True hour do one_bool() (last run: [never], next run: 2026-10-21 10:15:27)
+  k: Every 1.5 minutes do ninety_s() (last run: 2026-10-21 09:16:57, next run: 2026-10-21 09:18:27)
+  l: Every 0.25 seconds do quarter() (last run: 2026-10-21 09:16:57, next run: 2026-10-21 09:16:57)
+  m: Every 0.0001 hours do tiny() (last run: 2026-10-21 09:16:57, next run: 2026-10-21 09:16:57)
+== at_daily
+d1 = Every 1 day at 10:30:00 do t() (last run: [never], next run: 2026-10-21 10:30:00)
+d2: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d3: ScheduleValueError: Invalid number of hours ({} is not between 0 and 23)
+d4: ScheduleValueError: Invalid number of hours ({} is not between 0 and 23)
+d5: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d6: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d7: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d8 = Every 1 day at 07:30:00 do newline() (last run: [never], next run: 2026-10-22 07:30:00)
+d9 = Every 1 day at 09:15:27 do this_second() (last run: [never], next run: 2026-10-22 09:15:27)
+d10 = Every 1 day at 09:15:28 do next_second() (last run: [never], next run: 2026-10-21 09:15:28)
+d11 = Every 1 day at 10:30:00 do fullwidth() (last run: [never], next run: 2026-10-21 10:30:00)
+d12: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d13: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d14: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+d15: TypeError: at() should be passed a string
+d16: ModuleNotFoundError: No module named 'pytz'
+d17: ModuleNotFoundError: No module named 'pytz'
+d18 = Every 2 days at 06:00:00 do every_other() (last run: [never], next run: 2026-10-23 06:00:00)
+d19 = Every 2 days at 23:00:00 do every_other_late() (last run: [never], next run: 2026-10-23 23:00:00)
+d20 = Every 1 day at 00:00:00 do midnight() (last run: [never], next run: 2026-10-22 00:00:00)
+d21 = Every 1 day at 23:59:59 do last_second() (last run: [never], next run: 2026-10-21 23:59:59)
+d22 = Every 1 day at 11:45:00 do twice_at() (last run: [never], next run: 2026-10-21 11:45:00)
+jobs at 2026-10-21 09:15:27.250000:
+  d1: Every 1 day at 10:30:00 do t() (last run: [never], next run: 2026-10-21 10:30:00)
+  d8: Every 1 day at 07:30:00 do newline() (last run: [never], next run: 2026-10-22 07:30:00)
+  d9: Every 1 day at 09:15:27 do this_second() (last run: [never], next run: 2026-10-22 09:15:27)
+  d10: Every 1 day at 09:15:28 do next_second() (last run: [never], next run: 2026-10-21 09:15:28)
+  d11: Every 1 day at 10:30:00 do fullwidth() (last run: [never], next run: 2026-10-21 10:30:00)
+  d18: Every 2 days at 06:00:00 do every_other() (last run: [never], next run: 2026-10-23 06:00:00)
+  d19: Every 2 days at 23:00:00 do every_other_late() (last run: [never], next run: 2026-10-23 23:00:00)
+  d20: Every 1 day at 00:00:00 do midnight() (last run: [never], next run: 2026-10-22 00:00:00)
+  d21: Every 1 day at 23:59:59 do last_second() (last run: [never], next run: 2026-10-21 23:59:59)
+  d22: Every 1 day at 11:45:00 do twice_at() (last run: [never], next run: 2026-10-21 11:45:00)
+@ 2026-10-21 09:15:28.250000
+  log: Running job Job(interval=1, unit=days, do=next_second, args=(), kwargs={})
+  run next_second() at 2026-10-21 09:15:28.250000
+@ 2026-10-22 00:00:00
+  log: Running job Job(interval=1, unit=days, do=t, args=(), kwargs={})
+  run t() at 2026-10-22 00:00:00
+  log: Running job Job(interval=1, unit=days, do=fullwidth, args=(), kwargs={})
+  run fullwidth() at 2026-10-22 00:00:00
+  log: Running job Job(interval=1, unit=days, do=twice_at, args=(), kwargs={})
+  run twice_at() at 2026-10-22 00:00:00
+  log: Running job Job(interval=1, unit=days, do=last_second, args=(), kwargs={})
+  run last_second() at 2026-10-22 00:00:00
+  log: Running job Job(interval=1, unit=days, do=midnight, args=(), kwargs={})
+  run midnight() at 2026-10-22 00:00:00
+@ 2026-10-22 09:30:00
+  log: Running job Job(interval=1, unit=days, do=newline, args=(), kwargs={})
+  run newline() at 2026-10-22 09:30:00
+  log: Running job Job(interval=1, unit=days, do=this_second, args=(), kwargs={})
+  run this_second() at 2026-10-22 09:30:00
+  log: Running job Job(interval=1, unit=days, do=next_second, args=(), kwargs={})
+  run next_second() at 2026-10-22 09:30:00
+jobs at 2026-10-22 09:30:00:
+  d1: Every 1 day at 10:30:00 do t() (last run: 2026-10-22 00:00:00, next run: 2026-10-22 10:30:00)
+  d8: Every 1 day at 07:30:00 do newline() (last run: 2026-10-22 09:30:00, next run: 2026-10-23 07:30:00)
+  d9: Every 1 day at 09:15:27 do this_second() (last run: 2026-10-22 09:30:00, next run: 2026-10-23 09:15:27)
+  d10: Every 1 day at 09:15:28 do next_second() (last run: 2026-10-22 09:30:00, next run: 2026-10-23 09:15:28)
+  d11: Every 1 day at 10:30:00 do fullwidth() (last run: 2026-10-22 00:00:00, next run: 2026-10-22 10:30:00)
+  d18: Every 2 days at 06:00:00 do every_other() (last run: [never], next run: 2026-10-23 06:00:00)
+  d19: Every 2 days at 23:00:00 do every_other_late() (last run: [never], next run: 2026-10-23 23:00:00)
+  d20: Every 1 day at 00:00:00 do midnight() (last run: 2026-10-22 00:00:00, next run: 2026-10-23 00:00:00)
+  d21: Every 1 day at 23:59:59 do last_second() (last run: 2026-10-22 00:00:00, next run: 2026-10-22 23:59:59)
+  d22: Every 1 day at 11:45:00 do twice_at() (last run: 2026-10-22 00:00:00, next run: 2026-10-22 11:45:00)
+== at_hourly_minutely
+h1 = Every 1 hour at 00:30:00 do half_past() (last run: [never], next run: 2026-10-21 09:30:00)
+h2 = Every 1 hour at 00:15:30 do m15s30() (last run: [never], next run: 2026-10-21 09:15:30)
+h3: ScheduleValueError: Invalid time format for an hourly job (valid format is (MM)?:SS)
+h4: ScheduleValueError: Invalid time format for an hourly job (valid format is (MM)?:SS)
+h5: ScheduleValueError: Invalid time format for an hourly job (valid format is (MM)?:SS)
+h6 = Every 3 hours at 00:00:00 do on_the_hour() (last run: [never], next run: 2026-10-21 12:00:00)
+h7 = Every 1 hour at 00:15:27 do this_minute() (last run: [never], next run: 2026-10-21 10:15:27)
+m1 = Every 1 minute at 00:00:15 do sec15() (last run: [never], next run: 2026-10-21 09:16:15)
+m2: ScheduleValueError: Invalid time format for a minutely job (valid format is :SS)
+m3 = Every 5 minutes at 00:00:45 do every5_at45() (last run: [never], next run: 2026-10-21 09:20:45)
+m4 = Every 1 minute at 00:00:27 do now_second() (last run: [never], next run: 2026-10-21 09:16:27)
+s1: ScheduleValueError: Invalid unit (valid units are `days`, `hours`, and `minutes`)
+s2: ScheduleValueError: Invalid unit (valid units are `days`, `hours`, and `minutes`)
+s3: ScheduleValueError: Invalid unit (valid units are `days`, `hours`, and `minutes`)
+s4: ScheduleValueError: Invalid number of hours ({} is not between 0 and 23)
+s5: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+s6: ScheduleValueError: Invalid unit (valid units are `days`, `hours`, and `minutes`)
+jobs at 2026-10-21 09:15:27.250000:
+  h1: Every 1 hour at 00:30:00 do half_past() (last run: [never], next run: 2026-10-21 09:30:00)
+  h2: Every 1 hour at 00:15:30 do m15s30() (last run: [never], next run: 2026-10-21 09:15:30)
+  h6: Every 3 hours at 00:00:00 do on_the_hour() (last run: [never], next run: 2026-10-21 12:00:00)
+  h7: Every 1 hour at 00:15:27 do this_minute() (last run: [never], next run: 2026-10-21 10:15:27)
+  m1: Every 1 minute at 00:00:15 do sec15() (last run: [never], next run: 2026-10-21 09:16:15)
+  m3: Every 5 minutes at 00:00:45 do every5_at45() (last run: [never], next run: 2026-10-21 09:20:45)
+  m4: Every 1 minute at 00:00:27 do now_second() (last run: [never], next run: 2026-10-21 09:16:27)
+@ 2026-10-21 09:16:00
+  log: Running job Job(interval=1, unit=hours, do=m15s30, args=(), kwargs={})
+  run m15s30() at 2026-10-21 09:16:00
+@ 2026-10-21 09:17:00
+  log: Running job Job(interval=1, unit=minutes, do=sec15, args=(), kwargs={})
+  run sec15() at 2026-10-21 09:17:00
+  log: Running job Job(interval=1, unit=minutes, do=now_second, args=(), kwargs={})
+  run now_second() at 2026-10-21 09:17:00
+@ 2026-10-21 09:30:00
+  log: Running job Job(interval=1, unit=minutes, do=sec15, args=(), kwargs={})
+  run sec15() at 2026-10-21 09:30:00
+  log: Running job Job(interval=1, unit=minutes, do=now_second, args=(), kwargs={})
+  run now_second() at 2026-10-21 09:30:00
+  log: Running job Job(interval=5, unit=minutes, do=every5_at45, args=(), kwargs={})
+  run every5_at45() at 2026-10-21 09:30:00
+  log: Running job Job(interval=1, unit=hours, do=half_past, args=(), kwargs={})
+  run half_past() at 2026-10-21 09:30:00
+@ 2026-10-21 10:15:30
+  log: Running job Job(interval=1, unit=minutes, do=sec15, args=(), kwargs={})
+  run sec15() at 2026-10-21 10:15:30
+  log: Running job Job(interval=1, unit=minutes, do=now_second, args=(), kwargs={})
+  run now_second() at 2026-10-21 10:15:30
+  log: Running job Job(interval=5, unit=minutes, do=every5_at45, args=(), kwargs={})
+  run every5_at45() at 2026-10-21 10:15:30
+  log: Running job Job(interval=1, unit=hours, do=this_minute, args=(), kwargs={})
+  run this_minute() at 2026-10-21 10:15:30
+  log: Running job Job(interval=1, unit=hours, do=m15s30, args=(), kwargs={})
+  run m15s30() at 2026-10-21 10:15:30
+@ 2026-10-21 12:00:00
+  log: Running job Job(interval=1, unit=minutes, do=sec15, args=(), kwargs={})
+  run sec15() at 2026-10-21 12:00:00
+  log: Running job Job(interval=1, unit=minutes, do=now_second, args=(), kwargs={})
+  run now_second() at 2026-10-21 12:00:00
+  log: Running job Job(interval=5, unit=minutes, do=every5_at45, args=(), kwargs={})
+  run every5_at45() at 2026-10-21 12:00:00
+  log: Running job Job(interval=1, unit=hours, do=half_past, args=(), kwargs={})
+  run half_past() at 2026-10-21 12:00:00
+  log: Running job Job(interval=1, unit=hours, do=this_minute, args=(), kwargs={})
+  run this_minute() at 2026-10-21 12:00:00
+  log: Running job Job(interval=1, unit=hours, do=m15s30, args=(), kwargs={})
+  run m15s30() at 2026-10-21 12:00:00
+  log: Running job Job(interval=3, unit=hours, do=on_the_hour, args=(), kwargs={})
+  run on_the_hour() at 2026-10-21 12:00:00
+jobs at 2026-10-21 12:00:00:
+  h1: Every 1 hour at 00:30:00 do half_past() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:30:00)
+  h2: Every 1 hour at 00:15:30 do m15s30() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:15:30)
+  h6: Every 3 hours at 00:00:00 do on_the_hour() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 15:00:00)
+  h7: Every 1 hour at 00:15:27 do this_minute() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:15:27)
+  m1: Every 1 minute at 00:00:15 do sec15() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:00:15)
+  m3: Every 5 minutes at 00:00:45 do every5_at45() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:05:45)
+  m4: Every 1 minute at 00:00:27 do now_second() (last run: 2026-10-21 12:00:00, next run: 2026-10-21 12:00:27)
+== random_to
+r1 = Every 5 to 10 minutes do jitter() (last run: [never], next run: 2026-10-21 09:25:27)
+r2 = Every 1 to 3 hour do hourly_jitter() (last run: [never], next run: 2026-10-21 10:15:27)
+r3 = Every 10 to 30 seconds do sec_jitter() (last run: [never], next run: 2026-10-21 09:15:37)
+r4: ScheduleError: `latest` is greater than `interval`
+r5: TypeError: 'float' object cannot be interpreted as an integer
+r6: TypeError: 'float' object cannot be interpreted as an integer
+r7: TypeError: 'float' object cannot be interpreted as an integer
+r8 = Every 1 to 1 minute do same() (last run: [never], next run: 2026-10-21 09:16:27)
+r9 = Every 1 day at 12:00:00 do noonish() (last run: [never], next run: 2026-10-21 12:00:00)
+r10 = Every True to 3 minute do bool_low() (last run: [never], next run: 2026-10-21 09:16:27)
+r11 = Every 1 to 2 minute do [None] (last run: [never], next run: [never])
+str r11: Job(interval=1, unit=minutes, do=None, args=(), kwargs={})
+jobs at 2026-10-21 09:15:27.250000:
+  r1: Every 5 to 10 minutes do jitter() (last run: [never], next run: 2026-10-21 09:25:27)
+  r2: Every 1 to 3 hour do hourly_jitter() (last run: [never], next run: 2026-10-21 10:15:27)
+  r3: Every 10 to 30 seconds do sec_jitter() (last run: [never], next run: 2026-10-21 09:15:37)
+  r8: Every 1 to 1 minute do same() (last run: [never], next run: 2026-10-21 09:16:27)
+  r9: Every 1 day at 12:00:00 do noonish() (last run: [never], next run: 2026-10-21 12:00:00)
+  r10: Every True to 3 minute do bool_low() (last run: [never], next run: 2026-10-21 09:16:27)
+@ 2026-10-21 09:20:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=sec_jitter, args=(), kwargs={})
+  run sec_jitter() at 2026-10-21 09:20:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=same, args=(), kwargs={})
+  run same() at 2026-10-21 09:20:27.250000
+  log: Running job Job(interval=True, unit=minutes, do=bool_low, args=(), kwargs={})
+  run bool_low() at 2026-10-21 09:20:27.250000
+@ 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=sec_jitter, args=(), kwargs={})
+  run sec_jitter() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=same, args=(), kwargs={})
+  run same() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=True, unit=minutes, do=bool_low, args=(), kwargs={})
+  run bool_low() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=jitter, args=(), kwargs={})
+  run jitter() at 2026-10-21 09:25:27.250000
+@ 2026-10-21 09:30:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=sec_jitter, args=(), kwargs={})
+  run sec_jitter() at 2026-10-21 09:30:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=same, args=(), kwargs={})
+  run same() at 2026-10-21 09:30:27.250000
+  log: Running job Job(interval=True, unit=minutes, do=bool_low, args=(), kwargs={})
+  run bool_low() at 2026-10-21 09:30:27.250000
+@ 2026-10-21 09:40:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=sec_jitter, args=(), kwargs={})
+  run sec_jitter() at 2026-10-21 09:40:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=same, args=(), kwargs={})
+  run same() at 2026-10-21 09:40:27.250000
+  log: Running job Job(interval=True, unit=minutes, do=bool_low, args=(), kwargs={})
+  run bool_low() at 2026-10-21 09:40:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=jitter, args=(), kwargs={})
+  run jitter() at 2026-10-21 09:40:27.250000
+@ 2026-10-21 10:10:27.250000
+  log: Running job Job(interval=10, unit=seconds, do=sec_jitter, args=(), kwargs={})
+  run sec_jitter() at 2026-10-21 10:10:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=same, args=(), kwargs={})
+  run same() at 2026-10-21 10:10:27.250000
+  log: Running job Job(interval=True, unit=minutes, do=bool_low, args=(), kwargs={})
+  run bool_low() at 2026-10-21 10:10:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=jitter, args=(), kwargs={})
+  run jitter() at 2026-10-21 10:10:27.250000
+jobs at 2026-10-21 10:10:27.250000:
+  r1: Every 5 to 10 minutes do jitter() (last run: 2026-10-21 10:10:27, next run: 2026-10-21 10:20:27)
+  r2: Every 1 to 3 hour do hourly_jitter() (last run: [never], next run: 2026-10-21 10:15:27)
+  r3: Every 10 to 30 seconds do sec_jitter() (last run: 2026-10-21 10:10:27, next run: 2026-10-21 10:10:37)
+  r8: Every 1 to 1 minute do same() (last run: 2026-10-21 10:10:27, next run: 2026-10-21 10:11:27)
+  r9: Every 1 day at 12:00:00 do noonish() (last run: [never], next run: 2026-10-21 12:00:00)
+  r10: Every True to 3 minute do bool_low() (last run: 2026-10-21 10:10:27, next run: 2026-10-21 10:13:27)
+== random_seeds
+x = Every 1 to 1000 second do wide() (last run: [never], next run: 2026-10-21 09:17:29)
+@ 2026-10-21 09:32:07.250000
+  log: Running job Job(interval=1, unit=seconds, do=wide, args=(), kwargs={})
+  run wide() at 2026-10-21 09:32:07.250000
+@ 2026-10-21 09:48:47.250000
+  log: Running job Job(interval=1, unit=seconds, do=wide, args=(), kwargs={})
+  run wide() at 2026-10-21 09:48:47.250000
+@ 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=1, unit=seconds, do=wide, args=(), kwargs={})
+  run wide() at 2026-10-21 10:05:27.250000
+@ 2026-10-21 10:22:07.250000
+  log: Running job Job(interval=1, unit=seconds, do=wide, args=(), kwargs={})
+  run wide() at 2026-10-21 10:22:07.250000
+jobs at 2026-10-21 10:22:07.250000:
+  x: Every 1 to 1000 second do wide() (last run: 2026-10-21 10:22:07, next run: 2026-10-21 10:30:52)
+== until
+u1 = Every 5 minutes do t1() (last run: [never], next run: 2026-10-21 09:20:27)
+u2 = Every 5 minutes do t2() (last run: [never], next run: 2026-10-21 09:20:27)
+u3 = Every 6 hours do t3() (last run: [never], next run: 2026-10-21 15:15:27)
+u4 = Every 10 minutes do t4() (last run: [never], next run: 2026-10-21 09:25:27)
+u5 = Every 10 minutes do t5() (last run: [never], next run: 2026-10-21 09:25:27)
+u6: ScheduleValueError: Cannot schedule a job to run until a time in the past
+u7: ScheduleValueError: Invalid string format for until()
+u8: ScheduleValueError: Invalid string format for until()
+u9 = Every 10 minutes do t9() (last run: [never], next run: 2026-10-21 09:25:27)
+u10: ScheduleValueError: Invalid string format for until()
+u11: ScheduleValueError: Cannot schedule a job to run until a time in the past
+u12 = Every 10 minutes do t12() (last run: [never], next run: 2026-10-21 09:25:27)
+u13: ScheduleValueError: Cannot schedule a job to run until a time in the past
+u14 = Every 10 minutes do t14() (last run: [never], next run: 2026-10-21 09:25:27)
+u15: ScheduleValueError: Invalid string format for until()
+u16 = Every 10 minutes do t16() (last run: [never], next run: 2026-10-21 09:25:27)
+u17 = Every 10 minutes do t17() (last run: [never], next run: 2026-10-21 09:25:27)
+u18 = Every 10 minutes do t18() (last run: [never], next run: 2026-10-21 09:25:27)
+u19 = Every 10 minutes do t19() (last run: [never], next run: 2026-10-21 09:25:27)
+u20: ScheduleValueError: Cannot schedule a job to run until a time in the past
+u21: TypeError: until() takes a string, datetime.datetime, datetime.timedelta, datetime.time parameter
+u22: ScheduleValueError: Cannot schedule a job to run until a time in the past
+u23 = Every 10 minutes do t() (last run: [never], next run: 2026-10-21 09:25:27)
+u24 = Every 1 minute do t24() (last run: [never], next run: 2026-10-21 09:16:27)
+u25 = Every 20 minutes do t25() (last run: [never], next run: 2026-10-21 09:35:27)
+jobs at 2026-10-21 09:15:27.250000:
+  u1: Every 5 minutes do t1() (last run: [never], next run: 2026-10-21 09:20:27)
+  u2: Every 5 minutes do t2() (last run: [never], next run: 2026-10-21 09:20:27)
+  u3: Every 6 hours do t3() (last run: [never], next run: 2026-10-21 15:15:27)
+  u4: Every 10 minutes do t4() (last run: [never], next run: 2026-10-21 09:25:27)
+  u5: Every 10 minutes do t5() (last run: [never], next run: 2026-10-21 09:25:27)
+  u9: Every 10 minutes do t9() (last run: [never], next run: 2026-10-21 09:25:27)
+  u12: Every 10 minutes do t12() (last run: [never], next run: 2026-10-21 09:25:27)
+  u14: Every 10 minutes do t14() (last run: [never], next run: 2026-10-21 09:25:27)
+  u16: Every 10 minutes do t16() (last run: [never], next run: 2026-10-21 09:25:27)
+  u17: Every 10 minutes do t17() (last run: [never], next run: 2026-10-21 09:25:27)
+  u18: Every 10 minutes do t18() (last run: [never], next run: 2026-10-21 09:25:27)
+  u19: Every 10 minutes do t19() (last run: [never], next run: 2026-10-21 09:25:27)
+  u23: Every 10 minutes do t() (last run: [never], next run: 2026-10-21 09:25:27)
+  u24: Every 1 minute do t24() (last run: [never], next run: 2026-10-21 09:16:27)
+  u25: Every 20 minutes do t25() (last run: [never], next run: 2026-10-21 09:35:27)
+@ 2026-10-21 09:20:27.250000
+  log: Cancelling job Job(interval=1, unit=minutes, do=t24, args=(), kwargs={})
+  log: Cancelling job "Job(interval=1, unit=minutes, do=t24, args=(), kwargs={})"
+  log: Running job Job(interval=5, unit=minutes, do=t1, args=(), kwargs={})
+  run t1() at 2026-10-21 09:20:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})
+  run t2() at 2026-10-21 09:20:27.250000
+@ 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=t1, args=(), kwargs={})
+  run t1() at 2026-10-21 09:25:27.250000
+  log: Cancelling job Job(interval=5, unit=minutes, do=t1, args=(), kwargs={})
+  log: Cancelling job "Job(interval=5, unit=minutes, do=t1, args=(), kwargs={})"
+  log: Running job Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})
+  run t2() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t4, args=(), kwargs={})
+  run t4() at 2026-10-21 09:25:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t4, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t4, args=(), kwargs={})"
+  log: Running job Job(interval=10, unit=minutes, do=t5, args=(), kwargs={})
+  run t5() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t17, args=(), kwargs={})
+  run t17() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t18, args=(), kwargs={})
+  run t18() at 2026-10-21 09:25:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t19, args=(), kwargs={})
+  run t19() at 2026-10-21 09:25:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t, args=(), kwargs={})"
+@ 2026-10-21 09:30:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})
+  run t2() at 2026-10-21 09:30:27.250000
+@ 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})
+  run t2() at 2026-10-21 09:35:27.250000
+  log: Cancelling job Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})
+  log: Cancelling job "Job(interval=5, unit=minutes, do=t2, args=(), kwargs={})"
+  log: Running job Job(interval=10, unit=minutes, do=t5, args=(), kwargs={})
+  run t5() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t17, args=(), kwargs={})
+  run t17() at 2026-10-21 09:35:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t17, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t17, args=(), kwargs={})"
+  log: Running job Job(interval=10, unit=minutes, do=t18, args=(), kwargs={})
+  run t18() at 2026-10-21 09:35:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t19, args=(), kwargs={})
+  run t19() at 2026-10-21 09:35:27.250000
+  log: Cancelling job Job(interval=20, unit=minutes, do=t25, args=(), kwargs={})
+  log: Cancelling job "Job(interval=20, unit=minutes, do=t25, args=(), kwargs={})"
+@ 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t5, args=(), kwargs={})
+  run t5() at 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-21 09:45:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t18, args=(), kwargs={})
+  run t18() at 2026-10-21 09:45:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t18, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t18, args=(), kwargs={})"
+  log: Running job Job(interval=10, unit=minutes, do=t19, args=(), kwargs={})
+  run t19() at 2026-10-21 09:45:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t19, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t19, args=(), kwargs={})"
+@ 2026-10-21 10:05:27.250000
+  log: Cancelling job Job(interval=10, unit=minutes, do=t5, args=(), kwargs={})
+  log: Cancelling job "Job(interval=10, unit=minutes, do=t5, args=(), kwargs={})"
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-21 10:05:27.250000
+jobs at 2026-10-21 10:05:27.250000:
+  u3: Every 6 hours do t3() (last run: [never], next run: 2026-10-21 15:15:27)
+  u9: Every 10 minutes do t9() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u12: Every 10 minutes do t12() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u14: Every 10 minutes do t14() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u16: Every 10 minutes do t16() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+run_all
+  log: Running *all* 5 jobs with 0s delay in between
+  log: Running job Job(interval=6, unit=hours, do=t3, args=(), kwargs={})
+  run t3() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-21 10:05:27.250000
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-21 10:05:27.250000
+  now 2026-10-21 10:05:27.250000
+jobs at 2026-10-21 10:05:27.250000:
+  u3: Every 6 hours do t3() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 16:05:27)
+  u9: Every 10 minutes do t9() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u12: Every 10 minutes do t12() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u14: Every 10 minutes do t14() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+  u16: Every 10 minutes do t16() (last run: 2026-10-21 10:05:27, next run: 2026-10-21 10:15:27)
+@ 2026-10-22 12:00:00
+  log: Running job Job(interval=10, unit=minutes, do=t9, args=(), kwargs={})
+  run t9() at 2026-10-22 12:00:00
+  log: Running job Job(interval=10, unit=minutes, do=t12, args=(), kwargs={})
+  run t12() at 2026-10-22 12:00:00
+  log: Running job Job(interval=10, unit=minutes, do=t14, args=(), kwargs={})
+  run t14() at 2026-10-22 12:00:00
+  log: Running job Job(interval=10, unit=minutes, do=t16, args=(), kwargs={})
+  run t16() at 2026-10-22 12:00:00
+  log: Cancelling job Job(interval=6, unit=hours, do=t3, args=(), kwargs={})
+  log: Cancelling job "Job(interval=6, unit=hours, do=t3, args=(), kwargs={})"
+jobs at 2026-10-22 12:00:00:
+  u9: Every 10 minutes do t9() (last run: 2026-10-22 12:00:00, next run: 2026-10-22 12:10:00)
+  u12: Every 10 minutes do t12() (last run: 2026-10-22 12:00:00, next run: 2026-10-22 12:10:00)
+  u14: Every 10 minutes do t14() (last run: 2026-10-22 12:00:00, next run: 2026-10-22 12:10:00)
+  u16: Every 10 minutes do t16() (last run: 2026-10-22 12:00:00, next run: 2026-10-22 12:10:00)
+== tags
+t1 = Every 5 minutes do a() (last run: [never], next run: 2026-10-21 09:20:27)
+t2 = Every 7 minutes do b() (last run: [never], next run: 2026-10-21 09:22:27)
+t3 = Every 9 minutes do c() (last run: [never], next run: 2026-10-21 09:24:27)
+t4 = Every 11 minutes do d() (last run: [never], next run: 2026-10-21 09:26:27)
+t5: TypeError: Tags must be hashable
+t6: TypeError: Tags must be hashable
+t7 = Every 17 minutes do g() (last run: [never], next run: 2026-10-21 09:32:27)
+t8 = Every 19 minutes do h() (last run: [never], next run: 2026-10-21 09:34:27)
+str t5: Job(interval=13, unit=minutes, do=None, args=(), kwargs={})
+tags t1: ['db', 'nightly']
+tags t3: ['db', True]
+tags t4: ['1', 1.0]
+tags t7: ['web', None]
+get_jobs 'db': [t1, t3]
+get_jobs 1: [t2, t3, t4]
+get_jobs True: [t2, t3, t4]
+get_jobs 1.0: [t2, t3, t4]
+get_jobs '1': [t4]
+get_jobs None: [t1, t2, t3, t4, t7, t8]
+get_jobs 'nope': []
+get_jobs (all): [t1, t2, t3, t4, t7, t8]
+next_run 'db': 2026-10-21 09:20:27.250000
+next_run 'web': 2026-10-21 09:32:27.250000
+next_run 'nope': None
+clear 1.0
+  log: Deleting all jobs tagged "1.0"
+get_jobs (all): [t1, t7, t8]
+clear 'db'
+  log: Deleting all jobs tagged "db"
+get_jobs (all): [t7, t8]
+clear 'nope'
+  log: Deleting all jobs tagged "nope"
+clear
+  log: Deleting *all* jobs
+get_jobs (all): []
+next_run: None
+idle_seconds: None
+@ 2026-10-21 09:16:27.250000
+== returns
+o1 = Every 1 minute do once() (last run: [never], next run: 2026-10-21 09:16:27)
+o2 = Every 1 minute do once_obj() (last run: [never], next run: 2026-10-21 09:16:27)
+l1 = Every 2 minutes do limited(times=3) (last run: [never], next run: 2026-10-21 09:17:27)
+v1 = Every 1 minute do returns(42) (last run: [never], next run: 2026-10-21 09:16:27)
+v2 = Every 1 minute do returns('CancelJob') (last run: [never], next run: 2026-10-21 09:16:27)
+jobs at 2026-10-21 09:15:27.250000:
+  o1: Every 1 minute do once() (last run: [never], next run: 2026-10-21 09:16:27)
+  o2: Every 1 minute do once_obj() (last run: [never], next run: 2026-10-21 09:16:27)
+  l1: Every 2 minutes do limited(times=3) (last run: [never], next run: 2026-10-21 09:17:27)
+  v1: Every 1 minute do returns(42) (last run: [never], next run: 2026-10-21 09:16:27)
+  v2: Every 1 minute do returns('CancelJob') (last run: [never], next run: 2026-10-21 09:16:27)
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=once, args=(), kwargs={})
+  run once() at 2026-10-21 09:16:27.250000
+  log: Cancelling job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+  log: Running job Job(interval=1, unit=minutes, do=once_obj, args=(), kwargs={})
+  run once_obj() at 2026-10-21 09:16:27.250000
+  log: Cancelling job "Job(interval=1, unit=minutes, do=once_obj, args=(), kwargs={})"
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})
+  run returns(42) at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=('CancelJob',), kwargs={})
+  run returns('CancelJob') at 2026-10-21 09:16:27.250000
+jobs at 2026-10-21 09:16:27.250000:
+  l1: Every 2 minutes do limited(times=3) (last run: [never], next run: 2026-10-21 09:17:27)
+  v1: Every 1 minute do returns(42) (last run: 2026-10-21 09:16:27, next run: 2026-10-21 09:17:27)
+  v2: Every 1 minute do returns('CancelJob') (last run: 2026-10-21 09:16:27, next run: 2026-10-21 09:17:27)
+@ 2026-10-21 09:17:27.250000
+  log: Running job Job(interval=2, unit=minutes, do=limited, args=(), kwargs={'times': 3})
+  run limited(times=3) at 2026-10-21 09:17:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})
+  run returns(42) at 2026-10-21 09:17:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=('CancelJob',), kwargs={})
+  run returns('CancelJob') at 2026-10-21 09:17:27.250000
+@ 2026-10-21 09:18:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})
+  run returns(42) at 2026-10-21 09:18:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=('CancelJob',), kwargs={})
+  run returns('CancelJob') at 2026-10-21 09:18:27.250000
+@ 2026-10-21 09:19:27.250000
+  log: Running job Job(interval=2, unit=minutes, do=limited, args=(), kwargs={'times': 3})
+  run limited(times=3) at 2026-10-21 09:19:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})
+  run returns(42) at 2026-10-21 09:19:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=('CancelJob',), kwargs={})
+  run returns('CancelJob') at 2026-10-21 09:19:27.250000
+@ 2026-10-21 09:21:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})
+  run returns(42) at 2026-10-21 09:21:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=returns, args=('CancelJob',), kwargs={})
+  run returns('CancelJob') at 2026-10-21 09:21:27.250000
+  log: Running job Job(interval=2, unit=minutes, do=limited, args=(), kwargs={'times': 3})
+  run limited(times=3) at 2026-10-21 09:21:27.250000
+  log: Cancelling job "Job(interval=2, unit=minutes, do=limited, args=(), kwargs={'times': 3})"
+jobs at 2026-10-21 09:21:27.250000:
+  v1: Every 1 minute do returns(42) (last run: 2026-10-21 09:21:27, next run: 2026-10-21 09:22:27)
+  v2: Every 1 minute do returns('CancelJob') (last run: 2026-10-21 09:21:27, next run: 2026-10-21 09:22:27)
+cancel o1
+  log: Cancelling job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+  log: Cancelling not-scheduled job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+cancel v1
+  log: Cancelling job "Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})"
+cancel v1
+  log: Cancelling job "Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})"
+  log: Cancelling not-scheduled job "Job(interval=1, unit=minutes, do=returns, args=(42,), kwargs={})"
+jobs at 2026-10-21 09:21:27.250000:
+  v2: Every 1 minute do returns('CancelJob') (last run: 2026-10-21 09:21:27, next run: 2026-10-21 09:22:27)
+== failures
+f1 = Every 1 minute do ping('a') (last run: [never], next run: 2026-10-21 09:16:27)
+f2 = Every 30 seconds do boom('disk full') (last run: [never], next run: 2026-10-21 09:15:57)
+f3 = Every 2 minutes do ping('c') (last run: [never], next run: 2026-10-21 09:17:27)
+@ 2026-10-21 09:15:57.250000
+  log: Running job Job(interval=30, unit=seconds, do=boom, args=('disk full',), kwargs={})
+  run boom('disk full') at 2026-10-21 09:15:57.250000
+  error: RuntimeError: disk full
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=30, unit=seconds, do=boom, args=('disk full',), kwargs={})
+  run boom('disk full') at 2026-10-21 09:16:27.250000
+  error: RuntimeError: disk full
+jobs at 2026-10-21 09:16:27.250000:
+  f1: Every 1 minute do ping('a') (last run: [never], next run: 2026-10-21 09:16:27)
+  f2: Every 30 seconds do boom('disk full') (last run: [never], next run: 2026-10-21 09:15:57)
+  f3: Every 2 minutes do ping('c') (last run: [never], next run: 2026-10-21 09:17:27)
+@ 2026-10-21 09:16:28.250000
+  log: Running job Job(interval=30, unit=seconds, do=boom, args=('disk full',), kwargs={})
+  run boom('disk full') at 2026-10-21 09:16:28.250000
+  error: RuntimeError: disk full
+cancel f2
+  log: Cancelling job "Job(interval=30, unit=seconds, do=boom, args=('disk full',), kwargs={})"
+@ 2026-10-21 09:17:28.250000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('a',), kwargs={})
+  run ping('a') at 2026-10-21 09:17:28.250000
+  log: Running job Job(interval=2, unit=minutes, do=ping, args=('c',), kwargs={})
+  run ping('c') at 2026-10-21 09:17:28.250000
+jobs at 2026-10-21 09:17:28.250000:
+  f1: Every 1 minute do ping('a') (last run: 2026-10-21 09:17:28, next run: 2026-10-21 09:18:28)
+  f3: Every 2 minutes do ping('c') (last run: 2026-10-21 09:17:28, next run: 2026-10-21 09:19:28)
+f4 = Every 1 minute do boom('') (last run: [never], next run: 2026-10-21 09:18:28)
+@ 2026-10-21 09:18:28.250000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('a',), kwargs={})
+  run ping('a') at 2026-10-21 09:18:28.250000
+  log: Running job Job(interval=1, unit=minutes, do=boom, args=('',), kwargs={})
+  run boom('') at 2026-10-21 09:18:28.250000
+  error: RuntimeError: 
+f5 = Every 1 minute do boom_type() (last run: [never], next run: 2026-10-21 09:19:28)
+clear
+  log: Deleting *all* jobs
+f6 = Every 1 minute do boom_type() (last run: [never], next run: 2026-10-21 09:19:28)
+@ 2026-10-21 09:19:28.250000
+  log: Running job Job(interval=1, unit=minutes, do=boom_type, args=(), kwargs={})
+  run boom_type() at 2026-10-21 09:19:28.250000
+  error: TypeError: unsupported operand type(s) for +: 'int' and 'str'
+== slow_jobs
+w1 = Every 1 minute do slow(90) (last run: [never], next run: 2026-10-21 09:16:27)
+w2 = Every 1 minute do ping('after') (last run: [never], next run: 2026-10-21 09:16:27)
+w3 = Every 3 minutes do slow(0.5) (last run: [never], next run: 2026-10-21 09:18:27)
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=slow, args=(90,), kwargs={})
+  run slow(90) at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('after',), kwargs={})
+  run ping('after') at 2026-10-21 09:17:57.250000
+jobs at 2026-10-21 09:17:57.250000:
+  w1: Every 1 minute do slow(90) (last run: 2026-10-21 09:17:57, next run: 2026-10-21 09:18:57)
+  w2: Every 1 minute do ping('after') (last run: 2026-10-21 09:17:57, next run: 2026-10-21 09:18:57)
+  w3: Every 3 minutes do slow(0.5) (last run: [never], next run: 2026-10-21 09:18:27)
+idle_seconds: 30.0
+@ 2026-10-21 09:18:27.250000
+  log: Running job Job(interval=3, unit=minutes, do=slow, args=(0.5,), kwargs={})
+  run slow(0.5) at 2026-10-21 09:18:27.250000
+@ 2026-10-21 09:19:27.750000
+  log: Running job Job(interval=1, unit=minutes, do=slow, args=(90,), kwargs={})
+  run slow(90) at 2026-10-21 09:19:27.750000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('after',), kwargs={})
+  run ping('after') at 2026-10-21 09:20:57.750000
+jobs at 2026-10-21 09:20:57.750000:
+  w1: Every 1 minute do slow(90) (last run: 2026-10-21 09:20:57, next run: 2026-10-21 09:21:57)
+  w2: Every 1 minute do ping('after') (last run: 2026-10-21 09:20:57, next run: 2026-10-21 09:21:57)
+  w3: Every 3 minutes do slow(0.5) (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:21:27)
+run_all delay=5
+  log: Running *all* 3 jobs with 5s delay in between
+  log: Running job Job(interval=1, unit=minutes, do=slow, args=(90,), kwargs={})
+  run slow(90) at 2026-10-21 09:20:57.750000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('after',), kwargs={})
+  run ping('after') at 2026-10-21 09:22:32.750000
+  log: Running job Job(interval=3, unit=minutes, do=slow, args=(0.5,), kwargs={})
+  run slow(0.5) at 2026-10-21 09:22:37.750000
+  now 2026-10-21 09:22:43.250000
+jobs at 2026-10-21 09:22:43.250000:
+  w1: Every 1 minute do slow(90) (last run: 2026-10-21 09:22:27, next run: 2026-10-21 09:23:27)
+  w2: Every 1 minute do ping('after') (last run: 2026-10-21 09:22:32, next run: 2026-10-21 09:23:32)
+  w3: Every 3 minutes do slow(0.5) (last run: 2026-10-21 09:22:38, next run: 2026-10-21 09:25:38)
+run_all delay=2.5
+  log: Running *all* 3 jobs with 2s delay in between
+  log: Running job Job(interval=1, unit=minutes, do=slow, args=(90,), kwargs={})
+  run slow(90) at 2026-10-21 09:22:43.250000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('after',), kwargs={})
+  run ping('after') at 2026-10-21 09:24:15.750000
+  log: Running job Job(interval=3, unit=minutes, do=slow, args=(0.5,), kwargs={})
+  run slow(0.5) at 2026-10-21 09:24:18.250000
+  now 2026-10-21 09:24:21.250000
+last_run w1: 2026-10-21 09:24:13.250000
+last_run w2: 2026-10-21 09:24:15.750000
+== run_all
+run_all delay=3
+  log: Running *all* 0 jobs with 3s delay in between
+  now 2026-10-21 09:15:27.250000
+a1 = Every 1 hour do ping('a1') (last run: [never], next run: 2026-10-21 10:15:27)
+a2 = Every 1 day at 18:00:00 do ping('a2') (last run: [never], next run: 2026-10-21 18:00:00)
+a3 = Every 3 minutes do ping('a3') (last run: [never], next run: 2026-10-21 09:18:27)
+a4 = Every 1 minute do once() (last run: [never], next run: 2026-10-21 09:16:27)
+run_all delay=60
+  log: Running *all* 4 jobs with 60s delay in between
+  log: Running job Job(interval=1, unit=hours, do=ping, args=('a1',), kwargs={})
+  run ping('a1') at 2026-10-21 09:15:27.250000
+  log: Running job Job(interval=1, unit=days, do=ping, args=('a2',), kwargs={})
+  run ping('a2') at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=3, unit=minutes, do=ping, args=('a3',), kwargs={})
+  run ping('a3') at 2026-10-21 09:17:27.250000
+  log: Cancelling job Job(interval=3, unit=minutes, do=ping, args=('a3',), kwargs={})
+  log: Cancelling job "Job(interval=3, unit=minutes, do=ping, args=('a3',), kwargs={})"
+  log: Running job Job(interval=1, unit=minutes, do=once, args=(), kwargs={})
+  run once() at 2026-10-21 09:18:27.250000
+  log: Cancelling job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+  now 2026-10-21 09:19:27.250000
+jobs at 2026-10-21 09:19:27.250000:
+  a1: Every 1 hour do ping('a1') (last run: 2026-10-21 09:15:27, next run: 2026-10-21 10:15:27)
+  a2: Every 1 day at 18:00:00 do ping('a2') (last run: 2026-10-21 09:16:27, next run: 2026-10-21 18:00:00)
+run_all
+  log: Running *all* 2 jobs with 0s delay in between
+  log: Running job Job(interval=1, unit=hours, do=ping, args=('a1',), kwargs={})
+  run ping('a1') at 2026-10-21 09:19:27.250000
+  log: Running job Job(interval=1, unit=days, do=ping, args=('a2',), kwargs={})
+  run ping('a2') at 2026-10-21 09:19:27.250000
+  now 2026-10-21 09:19:27.250000
+jobs at 2026-10-21 09:19:27.250000:
+  a1: Every 1 hour do ping('a1') (last run: 2026-10-21 09:19:27, next run: 2026-10-21 10:19:27)
+  a2: Every 1 day at 18:00:00 do ping('a2') (last run: 2026-10-21 09:19:27, next run: 2026-10-21 18:00:00)
+run_all delay=0.75
+  log: Running *all* 2 jobs with 0s delay in between
+  log: Running job Job(interval=1, unit=hours, do=ping, args=('a1',), kwargs={})
+  run ping('a1') at 2026-10-21 09:19:27.250000
+  log: Running job Job(interval=1, unit=days, do=ping, args=('a2',), kwargs={})
+  run ping('a2') at 2026-10-21 09:19:28
+  now 2026-10-21 09:19:28.750000
+jobs at 2026-10-21 09:19:28.750000:
+  a1: Every 1 hour do ping('a1') (last run: 2026-10-21 09:19:27, next run: 2026-10-21 10:19:27)
+  a2: Every 1 day at 18:00:00 do ping('a2') (last run: 2026-10-21 09:19:28, next run: 2026-10-21 18:00:00)
+== inside_jobs
+c1 = Every 1 minute do ping('c1') (last run: [never], next run: 2026-10-21 09:16:27)
+c2 = Every 1 minute do clear_all() (last run: [never], next run: 2026-10-21 09:16:27)
+c3 = Every 1 minute do ping('c3') (last run: [never], next run: 2026-10-21 09:16:27)
+c4 = Every 1 minute do once() (last run: [never], next run: 2026-10-21 09:16:27)
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('c1',), kwargs={})
+  run ping('c1') at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=clear_all, args=(), kwargs={})
+  run clear_all() at 2026-10-21 09:16:27.250000
+  log: Deleting *all* jobs
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('c3',), kwargs={})
+  run ping('c3') at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=once, args=(), kwargs={})
+  run once() at 2026-10-21 09:16:27.250000
+  log: Cancelling job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+  log: Cancelling not-scheduled job "Job(interval=1, unit=minutes, do=once, args=(), kwargs={})"
+jobs at 2026-10-21 09:16:27.250000:
+s1 = Every 1 minute do spawn(15, 'child') (last run: [never], next run: 2026-10-21 09:17:27)
+s2 = Every 2 minutes do ping('s2') (last run: [never], next run: 2026-10-21 09:18:27)
+@ 2026-10-21 09:17:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=spawn, args=(15, 'child'), kwargs={})
+  run spawn(15, 'child') at 2026-10-21 09:17:27.250000
+  spawned child1 = Every 15 seconds do child1() (last run: [never], next run: 2026-10-21 09:17:42)
+jobs at 2026-10-21 09:17:27.250000:
+  s1: Every 1 minute do spawn(15, 'child') (last run: 2026-10-21 09:17:27, next run: 2026-10-21 09:18:27)
+  s2: Every 2 minutes do ping('s2') (last run: [never], next run: 2026-10-21 09:18:27)
+  child1: Every 15 seconds do child1() (last run: [never], next run: 2026-10-21 09:17:42)
+@ 2026-10-21 09:17:42.250000
+  log: Running job Job(interval=15, unit=seconds, do=child1, args=(), kwargs={})
+  run child1() at 2026-10-21 09:17:42.250000
+@ 2026-10-21 09:18:27.250000
+  log: Running job Job(interval=15, unit=seconds, do=child1, args=(), kwargs={})
+  run child1() at 2026-10-21 09:18:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=spawn, args=(15, 'child'), kwargs={})
+  run spawn(15, 'child') at 2026-10-21 09:18:27.250000
+  spawned child2 = Every 15 seconds do child2() (last run: [never], next run: 2026-10-21 09:18:42)
+  log: Running job Job(interval=2, unit=minutes, do=ping, args=('s2',), kwargs={})
+  run ping('s2') at 2026-10-21 09:18:27.250000
+jobs at 2026-10-21 09:18:27.250000:
+  s1: Every 1 minute do spawn(15, 'child') (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:19:27)
+  s2: Every 2 minutes do ping('s2') (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:20:27)
+  child1: Every 15 seconds do child1() (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:18:42)
+  child2: Every 15 seconds do child2() (last run: [never], next run: 2026-10-21 09:18:42)
+x1 = Every 20 seconds do clear_tag('spawned') (last run: [never], next run: 2026-10-21 09:18:47)
+@ 2026-10-21 09:18:47.250000
+  log: Running job Job(interval=15, unit=seconds, do=child1, args=(), kwargs={})
+  run child1() at 2026-10-21 09:18:47.250000
+  log: Running job Job(interval=15, unit=seconds, do=child2, args=(), kwargs={})
+  run child2() at 2026-10-21 09:18:47.250000
+  log: Running job Job(interval=20, unit=seconds, do=clear_tag, args=('spawned',), kwargs={})
+  run clear_tag('spawned') at 2026-10-21 09:18:47.250000
+  log: Deleting all jobs tagged "spawned"
+jobs at 2026-10-21 09:18:47.250000:
+  s1: Every 1 minute do spawn(15, 'child') (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:19:27)
+  s2: Every 2 minutes do ping('s2') (last run: 2026-10-21 09:18:27, next run: 2026-10-21 09:20:27)
+  child1: Every 15 seconds do child1() (last run: 2026-10-21 09:18:47, next run: 2026-10-21 09:19:02)
+  child2: Every 15 seconds do child2() (last run: 2026-10-21 09:18:47, next run: 2026-10-21 09:19:02)
+== clock_moves
+k1 = Every 1 day at 06:00:00 do daily() (last run: [never], next run: 2026-10-22 06:00:00)
+k2 = Every 15 minutes do tick15() (last run: [never], next run: 2026-10-21 09:30:27)
+k3 = Every 4 hours do every4h() (last run: [never], next run: 2026-10-21 13:15:27)
+@ 2026-10-24 12:00:00
+  log: Running job Job(interval=15, unit=minutes, do=tick15, args=(), kwargs={})
+  run tick15() at 2026-10-24 12:00:00
+  log: Running job Job(interval=4, unit=hours, do=every4h, args=(), kwargs={})
+  run every4h() at 2026-10-24 12:00:00
+  log: Running job Job(interval=1, unit=days, do=daily, args=(), kwargs={})
+  run daily() at 2026-10-24 12:00:00
+jobs at 2026-10-24 12:00:00:
+  k1: Every 1 day at 06:00:00 do daily() (last run: 2026-10-24 12:00:00, next run: 2026-10-25 06:00:00)
+  k2: Every 15 minutes do tick15() (last run: 2026-10-24 12:00:00, next run: 2026-10-24 12:15:00)
+  k3: Every 4 hours do every4h() (last run: 2026-10-24 12:00:00, next run: 2026-10-24 16:00:00)
+@ 2026-10-24 11:00:00
+should_run k2: False
+idle_seconds: 4500.0
+@ 2026-10-24 12:16:00
+  log: Running job Job(interval=15, unit=minutes, do=tick15, args=(), kwargs={})
+  run tick15() at 2026-10-24 12:16:00
+jobs at 2026-10-24 12:16:00:
+  k1: Every 1 day at 06:00:00 do daily() (last run: 2026-10-24 12:00:00, next run: 2026-10-25 06:00:00)
+  k2: Every 15 minutes do tick15() (last run: 2026-10-24 12:16:00, next run: 2026-10-24 12:31:00)
+  k3: Every 4 hours do every4h() (last run: 2026-10-24 12:00:00, next run: 2026-10-24 16:00:00)
+@ 2026-10-25 05:59:59.999999
+  log: Running job Job(interval=15, unit=minutes, do=tick15, args=(), kwargs={})
+  run tick15() at 2026-10-25 05:59:59.999999
+  log: Running job Job(interval=4, unit=hours, do=every4h, args=(), kwargs={})
+  run every4h() at 2026-10-25 05:59:59.999999
+idle_seconds: 1e-06
+@ 2026-10-25 06:00:00
+  log: Running job Job(interval=1, unit=days, do=daily, args=(), kwargs={})
+  run daily() at 2026-10-25 06:00:00
+jobs at 2026-10-25 06:00:00:
+  k1: Every 1 day at 06:00:00 do daily() (last run: 2026-10-25 06:00:00, next run: 2026-10-26 06:00:00)
+  k2: Every 15 minutes do tick15() (last run: 2026-10-25 05:59:59, next run: 2026-10-25 06:14:59)
+  k3: Every 4 hours do every4h() (last run: 2026-10-25 05:59:59, next run: 2026-10-25 09:59:59)
+@ 2026-12-31 23:59:59
+  log: Running job Job(interval=15, unit=minutes, do=tick15, args=(), kwargs={})
+  run tick15() at 2026-12-31 23:59:59
+  log: Running job Job(interval=4, unit=hours, do=every4h, args=(), kwargs={})
+  run every4h() at 2026-12-31 23:59:59
+  log: Running job Job(interval=1, unit=days, do=daily, args=(), kwargs={})
+  run daily() at 2026-12-31 23:59:59
+jobs at 2026-12-31 23:59:59:
+  k1: Every 1 day at 06:00:00 do daily() (last run: 2026-12-31 23:59:59, next run: 2027-01-01 06:00:00)
+  k2: Every 15 minutes do tick15() (last run: 2026-12-31 23:59:59, next run: 2027-01-01 00:14:59)
+  k3: Every 4 hours do every4h() (last run: 2026-12-31 23:59:59, next run: 2027-01-01 03:59:59)
+== weekdays
+w0 = Every 1 week at 09:00:00 do mon() (last run: [never], next run: 2026-10-26 09:00:00)
+w1 = Every 1 week do tue() (last run: [never], next run: 2026-10-27 09:15:27)
+w2 = Every 1 week do wed_now() (last run: [never], next run: 2026-10-28 09:15:27)
+w3 = Every 1 week at 09:15:27 do wed_this_second() (last run: [never], next run: 2026-10-28 09:15:27)
+w4 = Every 1 week at 00:00:00 do thu() (last run: [never], next run: 2026-10-22 00:00:00)
+w5 = Every 1 week at 17:30:45 do fri() (last run: [never], next run: 2026-10-23 17:30:45)
+w6 = Every 1 week at 10:00:00 do sat() (last run: [never], next run: 2026-10-24 10:00:00)
+w7 = Every 1 week do sun() (last run: [never], next run: 2026-10-25 09:15:27)
+w8 = Every 1 week do both_days() (last run: [never], next run: 2026-10-27 09:15:27)
+w9: ScheduleValueError: `unit` should be 'weeks'
+w10 = Every 1 week at 08:00:00 do day_then_fri() (last run: [never], next run: 2026-10-23 08:00:00)
+w11: ScheduleValueError: Invalid time format for a daily job (valid format is HH:MM(:SS)?)
+jobs at 2026-10-21 09:15:27.250000:
+  w0: Every 1 week at 09:00:00 do mon() (last run: [never], next run: 2026-10-26 09:00:00)
+  w1: Every 1 week do tue() (last run: [never], next run: 2026-10-27 09:15:27)
+  w2: Every 1 week do wed_now() (last run: [never], next run: 2026-10-28 09:15:27)
+  w3: Every 1 week at 09:15:27 do wed_this_second() (last run: [never], next run: 2026-10-28 09:15:27)
+  w4: Every 1 week at 00:00:00 do thu() (last run: [never], next run: 2026-10-22 00:00:00)
+  w5: Every 1 week at 17:30:45 do fri() (last run: [never], next run: 2026-10-23 17:30:45)
+  w6: Every 1 week at 10:00:00 do sat() (last run: [never], next run: 2026-10-24 10:00:00)
+  w7: Every 1 week do sun() (last run: [never], next run: 2026-10-25 09:15:27)
+  w8: Every 1 week do both_days() (last run: [never], next run: 2026-10-27 09:15:27)
+  w10: Every 1 week at 08:00:00 do day_then_fri() (last run: [never], next run: 2026-10-23 08:00:00)
+@ 2026-10-23 17:30:45
+  log: Running job Job(interval=1, unit=weeks, do=thu, args=(), kwargs={})
+  run thu() at 2026-10-23 17:30:45
+  log: Running job Job(interval=1, unit=weeks, do=day_then_fri, args=(), kwargs={})
+  run day_then_fri() at 2026-10-23 17:30:45
+  log: Running job Job(interval=1, unit=weeks, do=fri, args=(), kwargs={})
+  run fri() at 2026-10-23 17:30:45
+@ 2026-10-26 09:00:00
+  log: Running job Job(interval=1, unit=weeks, do=sat, args=(), kwargs={})
+  run sat() at 2026-10-26 09:00:00
+  log: Running job Job(interval=1, unit=weeks, do=sun, args=(), kwargs={})
+  run sun() at 2026-10-26 09:00:00
+  log: Running job Job(interval=1, unit=weeks, do=mon, args=(), kwargs={})
+  run mon() at 2026-10-26 09:00:00
+@ 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=tue, args=(), kwargs={})
+  run tue() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=both_days, args=(), kwargs={})
+  run both_days() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=wed_this_second, args=(), kwargs={})
+  run wed_this_second() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=wed_now, args=(), kwargs={})
+  run wed_now() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=thu, args=(), kwargs={})
+  run thu() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=day_then_fri, args=(), kwargs={})
+  run day_then_fri() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=fri, args=(), kwargs={})
+  run fri() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=sat, args=(), kwargs={})
+  run sat() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=sun, args=(), kwargs={})
+  run sun() at 2026-11-02 10:00:00
+  log: Running job Job(interval=1, unit=weeks, do=mon, args=(), kwargs={})
+  run mon() at 2026-11-02 10:00:00
+jobs at 2026-11-02 10:00:00:
+  w0: Every 1 week at 09:00:00 do mon() (last run: 2026-11-02 10:00:00, next run: 2026-11-09 09:00:00)
+  w1: Every 1 week do tue() (last run: 2026-11-02 10:00:00, next run: 2026-11-03 10:00:00)
+  w2: Every 1 week do wed_now() (last run: 2026-11-02 10:00:00, next run: 2026-11-04 10:00:00)
+  w3: Every 1 week at 09:15:27 do wed_this_second() (last run: 2026-11-02 10:00:00, next run: 2026-11-04 09:15:27)
+  w4: Every 1 week at 00:00:00 do thu() (last run: 2026-11-02 10:00:00, next run: 2026-11-05 00:00:00)
+  w5: Every 1 week at 17:30:45 do fri() (last run: 2026-11-02 10:00:00, next run: 2026-11-06 17:30:45)
+  w6: Every 1 week at 10:00:00 do sat() (last run: 2026-11-02 10:00:00, next run: 2026-11-07 10:00:00)
+  w7: Every 1 week do sun() (last run: 2026-11-02 10:00:00, next run: 2026-11-08 10:00:00)
+  w8: Every 1 week do both_days() (last run: 2026-11-02 10:00:00, next run: 2026-11-03 10:00:00)
+  w10: Every 1 week at 08:00:00 do day_then_fri() (last run: 2026-11-02 10:00:00, next run: 2026-11-06 08:00:00)
+== weekdays_sunday_start
+w0 = Every 1 week at 09:00:00 do mon() (last run: [never], next run: 2026-11-02 09:00:00)
+w6 = Every 1 week at 23:00:00 do sat() (last run: [never], next run: 2026-11-07 23:00:00)
+w7 = Every 1 week at 07:00:00 do sun_morning() (last run: [never], next run: 2026-11-08 07:00:00)
+w8 = Every 1 week at 21:00:00 do sun_evening() (last run: [never], next run: 2026-11-01 21:00:00)
+jobs at 2026-11-01 08:00:00:
+  w0: Every 1 week at 09:00:00 do mon() (last run: [never], next run: 2026-11-02 09:00:00)
+  w6: Every 1 week at 23:00:00 do sat() (last run: [never], next run: 2026-11-07 23:00:00)
+  w7: Every 1 week at 07:00:00 do sun_morning() (last run: [never], next run: 2026-11-08 07:00:00)
+  w8: Every 1 week at 21:00:00 do sun_evening() (last run: [never], next run: 2026-11-01 21:00:00)
+@ 2026-11-01 21:00:00
+  log: Running job Job(interval=1, unit=weeks, do=sun_evening, args=(), kwargs={})
+  run sun_evening() at 2026-11-01 21:00:00
+jobs at 2026-11-01 21:00:00:
+  w0: Every 1 week at 09:00:00 do mon() (last run: [never], next run: 2026-11-02 09:00:00)
+  w6: Every 1 week at 23:00:00 do sat() (last run: [never], next run: 2026-11-07 23:00:00)
+  w7: Every 1 week at 07:00:00 do sun_morning() (last run: [never], next run: 2026-11-08 07:00:00)
+  w8: Every 1 week at 21:00:00 do sun_evening() (last run: 2026-11-01 21:00:00, next run: 2026-11-08 21:00:00)
+== detached
+d1: ScheduleError: Unable to a add job to schedule. Job is not associated with an scheduler
+str d1: Job(interval=5, unit=minutes, do=lonely, args=(), kwargs={})
+should_run d1: False
+d2 = Every 1 minute do [None] (last run: [never], next run: [never])
+str d2: Job(interval=1, unit=minutes, do=None, args=(), kwargs={})
+should_run d2: AssertionError: must run _schedule_next_run before
+cancel d1
+  log: Cancelling job "Job(interval=5, unit=minutes, do=lonely, args=(), kwargs={})"
+  log: Cancelling not-scheduled job "Job(interval=5, unit=minutes, do=lonely, args=(), kwargs={})"
+jobs at 2026-10-21 09:15:27.250000:
+== arg_reprs
+p1 = Every 1 minute do echo("it's", 'say "hi"', 'both \' and "', 'tab\there', 'back\\slash') (last run: [never], next run: 2026-10-21 09:16:27)
+p2 = Every 1 minute do echo(1, -2.5, 1e+100, 1e-07, 0.1, True, False, None) (last run: [never], next run: 2026-10-21 09:16:27)
+p3 = Every 1 minute do echo([1, 'a', [None]], {'k': [1.5]}, {}) (last run: [never], next run: 2026-10-21 09:16:27)
+p4 = Every 1 minute do echo(name='café', n=0, flag=None) (last run: [never], next run: 2026-10-21 09:16:27)
+p5 = Every 1 minute do echo('é中😀', '\x7f\x01', '\u200b', '\u2028') (last run: [never], next run: 2026-10-21 09:16:27)
+p6 = Every 1 minute do echo(12345678901234567890, -0.0, 100.0, 1.5e+16) (last run: [never], next run: 2026-10-21 09:16:27)
+jobs at 2026-10-21 09:15:27.250000:
+  p1: Every 1 minute do echo("it's", 'say "hi"', 'both \' and "', 'tab\there', 'back\\slash') (last run: [never], next run: 2026-10-21 09:16:27)
+  p2: Every 1 minute do echo(1, -2.5, 1e+100, 1e-07, 0.1, True, False, None) (last run: [never], next run: 2026-10-21 09:16:27)
+  p3: Every 1 minute do echo([1, 'a', [None]], {'k': [1.5]}, {}) (last run: [never], next run: 2026-10-21 09:16:27)
+  p4: Every 1 minute do echo(name='café', n=0, flag=None) (last run: [never], next run: 2026-10-21 09:16:27)
+  p5: Every 1 minute do echo('é中😀', '\x7f\x01', '\u200b', '\u2028') (last run: [never], next run: 2026-10-21 09:16:27)
+  p6: Every 1 minute do echo(12345678901234567890, -0.0, 100.0, 1.5e+16) (last run: [never], next run: 2026-10-21 09:16:27)
+str p1: Job(interval=1, unit=minutes, do=echo, args=("it's", 'say "hi"', 'both \' and "', 'tab\there', 'back\\slash'), kwargs={})
+str p2: Job(interval=1, unit=minutes, do=echo, args=(1, -2.5, 1e+100, 1e-07, 0.1, True, False, None), kwargs={})
+str p3: Job(interval=1, unit=minutes, do=echo, args=([1, 'a', [None]], {'k': [1.5]}, {}), kwargs={})
+str p4: Job(interval=1, unit=minutes, do=echo, args=(), kwargs={'name': 'café', 'n': 0, 'flag': None})
+str p5: Job(interval=1, unit=minutes, do=echo, args=('é中😀', '\x7f\x01', '\u200b', '\u2028'), kwargs={})
+str p6: Job(interval=1, unit=minutes, do=echo, args=(12345678901234567890, -0.0, 100.0, 1.5e+16), kwargs={})
+@ 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=("it's", 'say "hi"', 'both \' and "', 'tab\there', 'back\\slash'), kwargs={})
+  run echo("it's", 'say "hi"', 'both \' and "', 'tab\there', 'back\\slash') at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=(1, -2.5, 1e+100, 1e-07, 0.1, True, False, None), kwargs={})
+  run echo(1, -2.5, 1e+100, 1e-07, 0.1, True, False, None) at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=([1, 'a', [None]], {'k': [1.5]}, {}), kwargs={})
+  run echo([1, 'a', [None]], {'k': [1.5]}, {}) at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=(), kwargs={'name': 'café', 'n': 0, 'flag': None})
+  run echo(name='café', n=0, flag=None) at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=('é中😀', '\x7f\x01', '\u200b', '\u2028'), kwargs={})
+  run echo('é中😀', '\x7f\x01', '\u200b', '\u2028') at 2026-10-21 09:16:27.250000
+  log: Running job Job(interval=1, unit=minutes, do=echo, args=(12345678901234567890, -0.0, 100.0, 1.5e+16), kwargs={})
+  run echo(12345678901234567890, -0.0, 100.0, 1.5e+16) at 2026-10-21 09:16:27.250000
+== sort_order
+e1 = Every 3 minutes do ping('e1') (last run: [never], next run: 2026-10-21 09:18:27)
+e2 = Every 1 minute do ping('e2') (last run: [never], next run: 2026-10-21 09:16:27)
+e3 = Every 2 minutes do ping('e3') (last run: [never], next run: 2026-10-21 09:17:27)
+e4 = Every 90 seconds do ping('e4') (last run: [never], next run: 2026-10-21 09:16:57)
+e5 = Every 1 minute do ping('e5') (last run: [never], next run: 2026-10-21 09:16:27)
+@ 2026-10-21 09:25:00
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('e2',), kwargs={})
+  run ping('e2') at 2026-10-21 09:25:00
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('e5',), kwargs={})
+  run ping('e5') at 2026-10-21 09:25:00
+  log: Running job Job(interval=90, unit=seconds, do=ping, args=('e4',), kwargs={})
+  run ping('e4') at 2026-10-21 09:25:00
+  log: Running job Job(interval=2, unit=minutes, do=ping, args=('e3',), kwargs={})
+  run ping('e3') at 2026-10-21 09:25:00
+  log: Running job Job(interval=3, unit=minutes, do=ping, args=('e1',), kwargs={})
+  run ping('e1') at 2026-10-21 09:25:00
+jobs at 2026-10-21 09:25:00:
+  e1: Every 3 minutes do ping('e1') (last run: 2026-10-21 09:25:00, next run: 2026-10-21 09:28:00)
+  e2: Every 1 minute do ping('e2') (last run: 2026-10-21 09:25:00, next run: 2026-10-21 09:26:00)
+  e3: Every 2 minutes do ping('e3') (last run: 2026-10-21 09:25:00, next run: 2026-10-21 09:27:00)
+  e4: Every 90 seconds do ping('e4') (last run: 2026-10-21 09:25:00, next run: 2026-10-21 09:26:30)
+  e5: Every 1 minute do ping('e5') (last run: 2026-10-21 09:25:00, next run: 2026-10-21 09:26:00)
+next_run: 2026-10-21 09:26:00
+@ 2026-10-21 09:25:30
+@ 2026-10-21 09:26:00
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('e2',), kwargs={})
+  run ping('e2') at 2026-10-21 09:26:00
+  log: Running job Job(interval=1, unit=minutes, do=ping, args=('e5',), kwargs={})
+  run ping('e5') at 2026-10-21 09:26:00
+== daemon
+daemon: daemon.conf
+  line 5: Every 15 minutes do rotate_logs('/var/log/app.log', keep=5) (last run: [never], next run: 2026-10-21 09:14:30)
+  line 6: Every 1 day at 02:30:00 do backup('db') (last run: [never], next run: 2026-10-22 02:30:00)
+  line 7: Every 1 day at 02:30:00 do backup('media') (last run: [never], next run: 2026-10-22 02:30:00)
+  line 8: Every 10 to 20 minutes do poll_feed('https://status.example.com/feed.xml') (last run: [never], next run: 2026-10-21 09:11:30)
+  line 9: Every 1 week at 09:00:00 do weekly_report(team='ops') (last run: [never], next run: 2026-10-26 09:00:00)
+  line 10: Every 1 week at 17:00:00 do weekly_report(team='web') (last run: [never], next run: 2026-10-21 17:00:00)
+  line 11: Every 1 hour at 00:05:00 do healthcheck('api') (last run: [never], next run: 2026-10-21 09:05:00)
+  line 12: Every 6 hours do refresh_certs() (last run: [never], next run: 2026-10-21 14:59:30)
+  line 13: Every 90 seconds do heartbeat() (last run: [never], next run: 2026-10-21 09:01:00)
+  line 14: Every 2 days at 23:45:10 do compact_db(shards=4) (last run: [never], next run: 2026-10-23 23:45:10)
+  line 15: ScheduleValueError: Invalid time format for an hourly job (valid format is (MM)?:SS)
+  line 16: ValueError: unknown unit 'fortnights'
+  line 17: ScheduleValueError: Invalid number of hours ({} is not between 0 and 23)
+  line 18: ValueError: no task named 'no_such_task'
+  line 19: ValueError: invalid literal for int() with base 10: 'x'
+  line 20: IntervalError: Use minutes instead of minute
+  line 21: ScheduleError: `latest` is greater than `interval`
+  line 22: ValueError: 'until' goes before 'do'
+  line 23: Every 1 to 3 day do send_digest() (last run: [never], next run: 2026-10-24 08:59:30)
+  line 24: ValueError: no unit
+  11 tasks scheduled at 2026-10-21 08:59:30
+  stopped at 2026-10-23 11:59:30 after 477 wakeups
+  daemon.log: 506 lines
+    2026-10-21 09:01:00 heartbeat
+    2026-10-21 09:02:30 heartbeat
+    2026-10-21 09:04:00 heartbeat
+    2026-10-21 09:05:00 healthcheck api
+    2026-10-21 09:05:30 heartbeat
+    2026-10-21 09:07:00 heartbeat
+    2026-10-21 09:08:30 heartbeat
+    2026-10-21 09:10:00 heartbeat
+    2026-10-21 09:11:30 poll_feed https://status.example.com/feed.xml
+    2026-10-21 09:11:30 heartbeat
+    2026-10-21 09:13:00 heartbeat
+    2026-10-21 09:14:30 rotate_logs /var/log/app.log keep=5
+    ...
+    2026-10-23 11:23:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 11:29:30 rotate_logs /var/log/app.log keep=5
+    2026-10-23 11:33:30 poll_feed https://status.example.com/feed.xml
+    2026-10-23 11:44:30 rotate_logs /var/log/app.log keep=5
+    2026-10-23 11:49:30 poll_feed https://status.example.com/feed.xml
+    2026-10-23 11:59:30 rotate_logs /var/log/app.log keep=5
+  failures:
+    2026-10-21 09:47:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 09:59:30 heartbeat FAILED: ConnectionError: collector gone
+    2026-10-21 09:59:30 heartbeat cancelled
+    2026-10-21 10:58:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 11:55:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 12:56:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 13:50:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 14:45:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 15:43:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 16:42:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 17:39:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 18:44:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 19:45:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 20:42:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 21:43:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 22:43:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-21 23:55:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 00:55:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 02:05:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 02:30:00 backup FAILED: OSError: No space left on device: '/backup/media'
+    2026-10-22 02:30:00 backup cancelled
+    2026-10-22 03:01:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 04:04:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 05:08:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 06:14:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 07:15:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 08:09:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 09:20:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 10:20:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 11:14:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 12:19:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 13:26:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 14:35:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 15:38:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 16:39:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 17:37:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 18:45:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 19:49:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 20:50:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 22:00:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-22 23:02:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 00:03:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 00:56:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 01:48:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 02:30:00 backup FAILED: OSError: connection refused
+    2026-10-23 02:42:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 03:38:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 04:30:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 05:26:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 06:34:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 07:40:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 08:31:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 09:29:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 10:25:30 poll_feed FAILED: TimeoutError: timed out after 10s
+    2026-10-23 11:23:30 poll_feed FAILED: TimeoutError: timed out after 10s
+  by task:
+    backup         runs=3    failed=2  last=2026-10-23 02:30:00
+    compact_db     runs=0    failed=0  last=never
+    healthcheck    runs=51   failed=0  last=2026-10-23 11:05:00
+    heartbeat      runs=40   failed=1  last=2026-10-21 09:59:30
+    poll_feed      runs=202  failed=50 last=2026-10-23 11:49:30
+    refresh_certs  runs=3    failed=0  last=2026-10-22 02:59:30
+    rotate_logs    runs=204  failed=0  last=2026-10-23 11:59:30
+    send_digest    runs=0    failed=0  last=never
+    weekly_report  runs=1    failed=0  last=2026-10-21 17:00:00
+  still scheduled:
+    Every 15 minutes do rotate_logs('/var/log/app.log', keep=5) (last run: 2026-10-23 11:59:30, next run: 2026-10-23 12:14:30)
+    Every 1 day at 02:30:00 do backup('db') (last run: 2026-10-23 02:30:00, next run: 2026-10-24 02:30:00)
+    Every 10 to 20 minutes do poll_feed('https://status.example.com/feed.xml') (last run: 2026-10-23 11:49:30, next run: 2026-10-23 12:01:30)
+    Every 1 week at 09:00:00 do weekly_report(team='ops') (last run: [never], next run: 2026-10-26 09:00:00)
+    Every 1 week at 17:00:00 do weekly_report(team='web') (last run: 2026-10-21 17:00:00, next run: 2026-10-28 17:00:00)
+    Every 1 hour at 00:05:00 do healthcheck('api') (last run: 2026-10-23 11:05:00, next run: 2026-10-23 12:05:00)
+    Every 2 days at 23:45:10 do compact_db(shards=4) (last run: [never], next run: 2026-10-23 23:45:10)
+    Every 1 to 3 day do send_digest() (last run: [never], next run: 2026-10-24 08:59:30)
+  next: 2026-10-23 12:01:30; nightly: 2026-10-24 02:30:00
+== monitor
+monitor: health.csv from 2026-10-21 13:00:00
+  2026-10-21 13:30:30 DOWN (down)
+  2026-10-21 13:30:30 retry in 10s (next run 2026-10-21 13:30:40)
+  2026-10-21 13:30:40 retry: still down
+  2026-10-21 13:30:40 retry in 20s (next run 2026-10-21 13:31:00)
+  2026-10-21 13:31:00 retry: still down
+  2026-10-21 13:31:00 retry in 40s (next run 2026-10-21 13:31:40)
+  2026-10-21 13:31:40 retry: still down
+  2026-10-21 13:31:40 retry in 80s (next run 2026-10-21 13:33:00)
+  2026-10-21 13:33:00 retry: still down
+  2026-10-21 13:33:00 retry in 120s (next run 2026-10-21 13:35:00)
+  2026-10-21 13:35:00 retry: still down
+  2026-10-21 13:35:00 retry in 120s (next run 2026-10-21 13:37:00)
+  2026-10-21 13:37:00 retry: still down
+  2026-10-21 13:37:00 retry in 120s (next run 2026-10-21 13:39:00)
+  2026-10-21 13:39:00 retry: still down
+  2026-10-21 13:39:00 retry in 120s (next run 2026-10-21 13:41:00)
+  2026-10-21 13:41:00 retry: still degraded
+  2026-10-21 13:41:00 retry in 120s (next run 2026-10-21 13:43:00)
+  2026-10-21 13:43:00 retry: still degraded
+  2026-10-21 13:43:00 retry in 120s (next run 2026-10-21 13:45:00)
+  2026-10-21 13:45:00 retry: still down
+  2026-10-21 13:45:00 retry in 120s (next run 2026-10-21 13:47:00)
+  2026-10-21 13:47:00 retry: still down
+  2026-10-21 13:47:00 retry in 120s (next run 2026-10-21 13:49:00)
+  2026-10-21 13:49:00 retry: still down
+  2026-10-21 13:49:00 retry in 120s (next run 2026-10-21 13:51:00)
+  2026-10-21 13:50:00 RECOVERED after 0:19:30; dropping 1 retries
+  2026-10-21 14:40:00 DOWN (down)
+  2026-10-21 14:40:00 retry in 10s (next run 2026-10-21 14:40:10)
+  2026-10-21 14:40:10 retry: still down
+  2026-10-21 14:40:10 retry in 20s (next run 2026-10-21 14:40:30)
+  2026-10-21 14:40:30 RECOVERED after 0:00:30; dropping 1 retries
+  2026-10-21 14:40:30 retry: up again
+  2026-10-21 15:30:00 DOWN (down)
+  2026-10-21 15:30:00 retry in 10s (next run 2026-10-21 15:30:10)
+  2026-10-21 15:30:10 retry: still down
+  2026-10-21 15:30:10 retry in 20s (next run 2026-10-21 15:30:30)
+  2026-10-21 15:30:30 retry: still down
+  2026-10-21 15:30:30 retry in 40s (next run 2026-10-21 15:31:10)
+  2026-10-21 15:31:10 retry: still down
+  2026-10-21 15:31:10 retry in 80s (next run 2026-10-21 15:32:30)
+  2026-10-21 15:32:30 retry: still down
+  2026-10-21 15:32:30 retry in 120s (next run 2026-10-21 15:34:30)
+  2026-10-21 15:34:30 retry: still down
+  2026-10-21 15:34:30 retry in 120s (next run 2026-10-21 15:36:30)
+  2026-10-21 15:36:30 retry: still down
+  2026-10-21 15:36:30 retry in 120s (next run 2026-10-21 15:38:30)
+  2026-10-21 15:38:30 retry: still down
+  2026-10-21 15:38:30 retry in 120s (next run 2026-10-21 15:40:30)
+  2026-10-21 15:40:30 retry: still down
+  2026-10-21 15:40:30 retry in 120s (next run 2026-10-21 15:42:30)
+  2026-10-21 15:42:30 retry: still down
+  2026-10-21 15:42:30 retry in 120s (next run 2026-10-21 15:44:30)
+  2026-10-21 15:44:30 retry: still down
+  2026-10-21 15:44:30 retry in 120s (next run 2026-10-21 15:46:30)
+  2026-10-21 15:46:30 retry: still down
+  2026-10-21 15:46:30 retry in 120s (next run 2026-10-21 15:48:30)
+  2026-10-21 15:48:30 retry: still down
+  2026-10-21 15:48:30 retry in 120s (next run 2026-10-21 15:50:30)
+  2026-10-21 15:50:30 retry: still down
+  2026-10-21 15:50:30 retry in 120s (next run 2026-10-21 15:52:30)
+  2026-10-21 15:52:30 retry: still down
+  2026-10-21 15:52:30 retry in 120s (next run 2026-10-21 15:54:30)
+  2026-10-21 15:54:30 retry: still down
+  2026-10-21 15:54:30 retry in 120s (next run 2026-10-21 15:56:30)
+  2026-10-21 15:56:30 retry: still down
+  2026-10-21 15:56:30 retry in 120s (next run 2026-10-21 15:58:30)
+  2026-10-21 15:58:30 retry: still down
+  2026-10-21 15:58:30 retry in 120s (next run 2026-10-21 16:00:30)
+  2026-10-21 16:00:30 retry: still down
+  2026-10-21 16:00:30 retry in 120s (next run 2026-10-21 16:02:30)
+  2026-10-21 16:02:30 retry: still down
+  2026-10-21 16:02:30 retry in 120s (next run 2026-10-21 16:04:30)
+  2026-10-21 16:04:30 retry: still down
+  2026-10-21 16:04:30 retry in 120s (next run 2026-10-21 16:06:30)
+  2026-10-21 16:06:30 retry: still down
+  2026-10-21 16:06:30 retry in 120s (next run 2026-10-21 16:08:30)
+  2026-10-21 16:08:30 retry: still down
+  2026-10-21 16:08:30 retry in 120s (next run 2026-10-21 16:10:30)
+  2026-10-21 16:10:30 retry: still down
+  2026-10-21 16:10:30 retry in 120s (next run 2026-10-21 16:12:30)
+  2026-10-21 16:12:30 retry: still down
+  2026-10-21 16:12:30 retry in 120s (next run 2026-10-21 16:14:30)
+  2026-10-21 16:14:30 retry: still down
+  2026-10-21 16:14:30 retry in 120s (next run 2026-10-21 16:16:30)
+  2026-10-21 16:16:30 retry: still down
+  2026-10-21 16:16:30 retry in 120s (next run 2026-10-21 16:18:30)
+  2026-10-21 16:18:30 retry: still down
+  2026-10-21 16:18:30 retry in 120s (next run 2026-10-21 16:20:30)
+  2026-10-21 16:20:00 RECOVERED after 0:50:00; dropping 1 retries
+  checks=480 retries=41 outages=3 at 2026-10-21 17:00:00
+  left: Every 30 seconds do check() (last run: 2026-10-21 17:00:00, next run: 2026-10-21 17:00:30)

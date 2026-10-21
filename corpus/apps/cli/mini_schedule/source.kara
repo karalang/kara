@@ -1,0 +1,3067 @@
+// mini_schedule: schedule 1.2.2, the in-process job scheduler ("every
+// 10 minutes do this"), as it runs without pytz:
+// - the builder: every(n), the unit properties and their IntervalErrors,
+//   the days of the week, at() with each unit's time formats, to() with
+//   random intervals from MT19937, until() with datetimes, timedeltas,
+//   times and strings read through strptime's own regexes, tag() and do();
+// - when a job runs next, from _schedule_next_run's arithmetic on naive
+//   datetimes, with timedelta's rounding for float intervals;
+// - the Scheduler: run_pending in next-run order, run_all, get_jobs,
+//   clear and cancel_job by tag, next_run and idle_seconds, CancelJob,
+//   and the jobs' __str__ and __repr__ with their debug log lines;
+// - an ops daemon whose tasks come from a config file and that sleeps
+//   for idle_seconds() between runs, and a health monitor that retries
+//   with exponential backoff through one-off jobs.
+//
+// The inputs are data/jobs.jsonl and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through schedule itself (the copy in schedule/) on a fake clock.
+
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+// ------------------------------------------------------------ Python values
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// str.isprintable outside ASCII: controls, format characters, separators
+// other than space, surrogates and private use are not printable.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x8E2 or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for ch in s.chars() {
+        let c = ch as i64;
+        if ch == quote or ch == '\\' {
+            out.push('\\');
+            out.push(ch);
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c < 0x20 or c == 0x7F {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c < 0x7F or is_printable(c) {
+            out.push(ch);
+        } else if c <= 0xFF {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c <= 0xFFFF {
+            out.push_str(f"\\u{hex_n(c, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_n(c, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn repr(v: ref J) -> String {
+    match v {
+        J.Null => "None".to_string(),
+        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Int(digits) => digits.clone(),
+        J.Float(x) => float_repr(*x),
+        J.Str(s) => str_repr(s),
+        J.Arr(items) => {
+            let mut out = "[".to_string();
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr(items[i]));
+            }
+            out.push(']');
+            out
+        }
+        J.Obj(members) => {
+            let mut out = "{".to_string();
+            for i in 0..members.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(str_repr(members[i].key));
+                out.push_str(": ");
+                out.push_str(repr(members[i].val));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
+// str(v)
+fn py_str(v: ref J) -> String {
+    match v {
+        J.Str(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+fn type_name(v: ref J) -> String {
+    let n = match v {
+        J.Null => "NoneType",
+        J.Bool(_) => "bool",
+        J.Int(_) => "int",
+        J.Float(_) => "float",
+        J.Str(_) => "str",
+        J.Arr(_) => "list",
+        J.Obj(_) => "dict",
+    };
+    n.to_string()
+}
+
+// The number a bool, int or float compares as.
+fn num_of(v: ref J) -> Option[f64] {
+    match v {
+        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
+        J.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+fn is_number(v: ref J) -> bool {
+    num_of(v).is_some()
+}
+
+// a == b, with Python's rules: True == 1 == 1.0, and dicts compare by
+// their members, not their order.
+fn py_eq(a: ref J, b: ref J) -> bool {
+    if let J.Int(x) = a {
+        if let J.Int(y) = b {
+            return x == y;
+        }
+    }
+    if is_number(a) and is_number(b) {
+        return num_of(a).unwrap() == num_of(b).unwrap();
+    }
+    match a {
+        J.Null => match b {
+            J.Null => true,
+            _ => false,
+        },
+        J.Str(x) => match b {
+            J.Str(y) => x == y,
+            _ => false,
+        },
+        J.Arr(xs) => match b {
+            J.Arr(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for i in 0..xs.len() {
+                    if not py_eq(xs[i], ys[i]) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        J.Obj(xs) => match b {
+            J.Obj(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for m in xs.iter() {
+                    match j_get(b, m.key.as_str()) {
+                        Some(v) => {
+                            if not py_eq(m.val, v) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// d.get(key) on a dict; None for anything else.
+fn j_get(d: ref J, key: Str) -> Option[J] {
+    if let J.Obj(members) = d {
+        for m in members.iter() {
+            if m.key == key {
+                return Some(m.val.clone());
+            }
+        }
+    }
+    None
+}
+
+fn j_has(d: ref J, key: Str) -> bool {
+    j_get(d, key).is_some()
+}
+// ------------------------------------------------------------ text
+
+// The code points Python's int() and re's \d read as the digit 0: each
+// starts a run of ten (Unicode's Nd digits, as in Python 3.13).
+const ND_ZEROS: Array[i64, 68] = [
+    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6,
+    0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0,
+    0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0,
+    0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136,
+    0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x11730, 0x118e0, 0x11950,
+    0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8,
+    0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0,
+];
+
+// The digit c stands for, or -1.
+fn digit_value(c: i64) -> i64 {
+    for i in 0..68 {
+        let z = ND_ZEROS[i];
+        if c >= z and c < z + 10 {
+            return c - z;
+        }
+    }
+    -1
+}
+
+fn is_digit_cp(c: i64) -> bool {
+    digit_value(c) >= 0
+}
+
+// str.isspace(), which is also re's \s.
+fn is_py_space(c: i64) -> bool {
+    (c >= 9 and c <= 13) or (c >= 28 and c <= 32) or c == 0x85 or c == 0xA0 or c == 0x1680
+        or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F
+        or c == 0x205F or c == 0x3000
+}
+
+fn cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for ch in s.chars() {
+        out.push(ch as i64);
+    }
+    out
+}
+
+// int(s) for a str: surrounding whitespace, a sign, digits of any script
+// and single underscores between digits.
+fn py_int(s: ref String) -> Result[i64, Exc] {
+    py_int_cps(cps(s), s)
+}
+
+fn py_int_cps(c: ref Vec[i64], s: ref String) -> Result[i64, Exc] {
+    let mut a = 0;
+    let mut b = c.len();
+    while a < b and is_py_space(c[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(c[b - 1]) {
+        b -= 1;
+    }
+    let mut neg = false;
+    if a < b and (c[a] == 43 or c[a] == 45) {
+        neg = c[a] == 45;
+        a += 1;
+    }
+    let mut v: i64 = 0;
+    let mut digits = 0;
+    let mut last_underscore = false;
+    let mut ok = a < b;
+    let mut i = a;
+    while ok and i < b {
+        if c[i] == 95 {
+            if digits == 0 or last_underscore {
+                ok = false;
+            }
+            last_underscore = true;
+        } else {
+            let d = digit_value(c[i]);
+            if d < 0 {
+                ok = false;
+            } else {
+                v = v * 10 + d;
+                digits += 1;
+                last_underscore = false;
+            }
+        }
+        i += 1;
+    }
+    if not ok or last_underscore {
+        return Err(exc("ValueError", f"invalid literal for int() with base 10: {str_repr(s)}"));
+    }
+    Ok(if neg { -v } else { v })
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn pad_num(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+// %-Ns
+fn ljust(s: ref String, width: i64) -> String {
+    let mut out = s.clone();
+    let mut n = s.chars().count();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn split_ws(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for ch in text.chars() {
+        if is_py_space(ch as i64) {
+            if cur.len() > 0 {
+                out.push(cur.clone());
+                cur = String.new();
+            }
+        } else {
+            cur.push(ch);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ datetime
+//
+// A naive datetime is its microseconds since 0001-01-01 00:00:00, and a
+// timedelta its microseconds.
+
+const US_SEC: i64 = 1000000;
+const US_MIN: i64 = 60000000;
+const US_HOUR: i64 = 3600000000;
+const US_DAY: i64 = 86400000000;
+const US_WEEK: i64 = 604800000000;
+
+const DAYS_BEFORE_MONTH: Array[i64, 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const DAYS_IN_MONTH: Array[i64, 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 and is_leap(y) { 29 } else { DAYS_IN_MONTH[m] }
+}
+
+// date.toordinal()
+fn ymd_to_ord(y: i64, m: i64, d: i64) -> i64 {
+    let y1 = y - 1;
+    let mut n = y1 * 365 + y1 / 4 - y1 / 100 + y1 / 400 + DAYS_BEFORE_MONTH[m] + d;
+    if m > 2 and is_leap(y) {
+        n += 1;
+    }
+    n
+}
+
+// date.fromordinal(), as _ord2ymd does it.
+fn ord_to_ymd(ord: i64) -> (i64, i64, i64) {
+    let mut n = ord - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year += n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let leap = n1 == 3 and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) >> 5;
+    let mut preceding = DAYS_BEFORE_MONTH[month] + if month > 2 and leap { 1 } else { 0 };
+    if preceding > n {
+        month -= 1;
+        preceding -= DAYS_IN_MONTH[month] + if month == 2 and leap { 1 } else { 0 };
+    }
+    (year, month, n - preceding + 1)
+}
+
+struct Parts {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    us: i64,
+}
+
+fn parts(t: i64) -> Parts {
+    let days = t / US_DAY;
+    let rest = t % US_DAY;
+    let (y, m, d) = ord_to_ymd(days + 1);
+    let secs = rest / US_SEC;
+    Parts {
+        year: y,
+        month: m,
+        day: d,
+        hour: secs / 3600,
+        minute: secs / 60 % 60,
+        second: secs % 60,
+        us: rest % US_SEC,
+    }
+}
+
+fn make_dt(y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64, us: i64) -> i64 {
+    (ymd_to_ord(y, m, d) - 1) * US_DAY + hh * US_HOUR + mm * US_MIN + ss * US_SEC + us
+}
+
+// datetime(...) with its checks; None where it raises ValueError.
+fn checked_dt(y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64) -> Option[i64] {
+    if y < 1 or y > 9999 or m < 1 or m > 12 or d < 1 or d > days_in_month(y, m) {
+        return None;
+    }
+    if hh > 23 or mm > 59 or ss > 59 {
+        return None;
+    }
+    Some(make_dt(y, m, d, hh, mm, ss, 0))
+}
+
+// weekday(): Monday is 0.
+fn weekday(t: i64) -> i64 {
+    (t / US_DAY + 1 + 6) % 7
+}
+
+fn date_str(p: ref Parts) -> String {
+    f"{pad_num(p.year, 4)}-{pad2(p.month)}-{pad2(p.day)}"
+}
+
+fn hms(h: i64, m: i64, s: i64) -> String {
+    f"{pad2(h)}:{pad2(m)}:{pad2(s)}"
+}
+
+// str(datetime)
+fn dt_str(t: i64) -> String {
+    let p = parts(t);
+    let mut s = f"{date_str(p)} {hms(p.hour, p.minute, p.second)}";
+    if p.us != 0 {
+        s.push_str(f".{pad_num(p.us, 6)}");
+    }
+    s
+}
+
+fn opt_dt_str(t: ref Option[i64]) -> String {
+    match t {
+        Some(v) => dt_str(*v),
+        None => "None".to_string(),
+    }
+}
+
+// strftime("%Y-%m-%d %H:%M:%S")
+fn dt_strftime(t: i64) -> String {
+    let p = parts(t);
+    f"{date_str(p)} {hms(p.hour, p.minute, p.second)}"
+}
+
+// str(timedelta)
+fn td_str(us: i64) -> String {
+    let mut days = us / US_DAY;
+    let mut rest = us % US_DAY;
+    if rest < 0 {
+        rest += US_DAY;
+        days -= 1;
+    }
+    let secs = rest / US_SEC;
+    let mut s = String.new();
+    if days != 0 {
+        let plural = if days == 1 or days == -1 { "" } else { "s" };
+        s.push_str(f"{days} day{plural}, ");
+    }
+    s.push_str(f"{secs / 3600}:{pad2(secs / 60 % 60)}:{pad2(secs % 60)}");
+    if rest % US_SEC != 0 {
+        s.push_str(f".{pad_num(rest % US_SEC, 6)}");
+    }
+    s
+}
+
+// timedelta.total_seconds()
+fn total_seconds(us: i64) -> f64 {
+    us as f64 / 1000000.0
+}
+
+fn digits_at(c: ref Vec[i64], i: i64, n: i64) -> i64 {
+    let mut v = 0;
+    for k in 0..n {
+        v = v * 10 + (c[i + k] - 48);
+    }
+    v
+}
+
+// datetime.fromisoformat() for "YYYY-MM-DD HH:MM:SS[.f...]", as the job
+// files give times.
+fn parse_iso(s: ref String) -> i64 {
+    let c = cps(s);
+    let y = digits_at(c, 0, 4);
+    let m = digits_at(c, 5, 2);
+    let d = digits_at(c, 8, 2);
+    let hh = digits_at(c, 11, 2);
+    let mm = digits_at(c, 14, 2);
+    let ss = digits_at(c, 17, 2);
+    let mut us = 0;
+    if c.len() > 20 {
+        let mut k = 20;
+        let mut scale = 100000;
+        while k < c.len() and scale > 0 {
+            us += (c[k] - 48) * scale;
+            scale = scale / 10;
+            k += 1;
+        }
+    }
+    make_dt(y, m, d, hh, mm, ss, us)
+}
+
+// time.fromisoformat("HH:MM:SS") as seconds into the day.
+fn parse_time(s: ref String) -> (i64, i64, i64) {
+    let c = cps(s);
+    (digits_at(c, 0, 2), digits_at(c, 3, 2), digits_at(c, 6, 2))
+}
+
+// timedelta(**{unit: x}) for a float x, as delta_new and accum do it:
+// the whole part exactly, the fraction through a double, and what is left
+// rounded half to even.
+fn td_from_float(x: f64, factor: i64) -> i64 {
+    let ip = x.trunc();
+    let frac = x - ip;
+    let mut sum = (ip as i64) * factor;
+    if frac == 0.0 {
+        return sum;
+    }
+    let d = (factor as f64) * frac;
+    let ip2 = d.trunc();
+    let leftover = d - ip2;
+    sum += ip2 as i64;
+    if leftover != 0.0 {
+        let mut whole = leftover.round();
+        if (whole - leftover).abs() == 0.5 {
+            let odd = if sum % 2 != 0 { 1.0 } else { 0.0 };
+            whole = 2.0 * ((leftover + odd) * 0.5).round() - odd;
+        }
+        sum += whole as i64;
+    }
+    sum
+}
+
+fn unit_factor(unit: ref String) -> i64 {
+    if unit == "seconds" {
+        US_SEC
+    } else if unit == "minutes" {
+        US_MIN
+    } else if unit == "hours" {
+        US_HOUR
+    } else if unit == "days" {
+        US_DAY
+    } else {
+        US_WEEK
+    }
+}
+
+// timedelta(**{unit: v})
+fn timedelta_of(unit: ref String, v: ref J) -> Result[i64, Exc] {
+    match v {
+        J.Int(d) => Ok(i64.parse(d).unwrap_or(0) * unit_factor(unit)),
+        J.Bool(b) => Ok(if *b { unit_factor(unit) } else { 0 }),
+        J.Float(x) => Ok(td_from_float(*x, unit_factor(unit))),
+        _ => Err(exc("TypeError", f"unsupported type for timedelta {unit} component: {type_name(v)}")),
+    }
+}
+
+fn seconds_td(v: ref J) -> i64 {
+    timedelta_of("seconds".to_string(), v).unwrap_or(0)
+}
+
+// ------------------------------------------------------------ strptime
+//
+// The five formats until() tries, as _strptime's regexes: each element
+// is a group of alternatives tried in order, or a literal, or \s+.
+
+#[derive(Clone)]
+enum Elem {
+    Group(String, Vec[Str]),
+    Lit(i64),
+    Space,
+}
+
+// An alternative is a string of classes: "d" any digit, "a-b" a range of
+// ASCII digits written as two characters, or a literal character.
+fn alt_classes(alt: Str) -> Vec[(i64, i64)] {
+    let c = cps(alt.to_string());
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == 100 {
+            out.push((-1, -1));
+            i += 1;
+        } else if c[i] == 91 {
+            out.push((c[i + 1], c[i + 3]));
+            i += 5;
+        } else {
+            out.push((c[i], c[i]));
+            i += 1;
+        }
+    }
+    out
+}
+
+fn group(name: Str) -> Elem {
+    let alts: Str = if name == "Y" {
+        "dddd"
+    } else if name == "m" {
+        "1[0-2]|0[1-9]|[1-9]"
+    } else if name == "d" {
+        "3[0-1]|[1-2]d|0[1-9]|[1-9]| [1-9]"
+    } else if name == "H" {
+        "2[0-3]|[0-1]d|d"
+    } else if name == "M" {
+        "[0-5]d|d"
+    } else {
+        "6[0-1]|[0-5]d|d"
+    };
+    Elem.Group(name.to_string(), alts.split("|").collect())
+}
+
+fn format_elems(fmt: Str) -> Vec[Elem] {
+    let c = cps(fmt.to_string());
+    let mut out: Vec[Elem] = Vec.new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == 37 {
+            let name: Str = if c[i + 1] == 89 {
+                "Y"
+            } else if c[i + 1] == 109 {
+                "m"
+            } else if c[i + 1] == 100 {
+                "d"
+            } else if c[i + 1] == 72 {
+                "H"
+            } else if c[i + 1] == 77 {
+                "M"
+            } else {
+                "S"
+            };
+            out.push(group(name));
+            i += 2;
+        } else if c[i] == 32 {
+            out.push(Elem.Space);
+            i += 1;
+        } else {
+            out.push(Elem.Lit(c[i]));
+            i += 1;
+        }
+    }
+    out
+}
+
+fn class_ok(cl: (i64, i64), c: i64) -> bool {
+    let (lo, hi) = cl;
+    if lo < 0 {
+        is_digit_cp(c)
+    } else {
+        c >= lo and c <= hi
+    }
+}
+
+#[derive(Clone)]
+struct Cap {
+    name: String,
+    text: Vec[i64],
+}
+
+// The first match by the regex's order from element k at position pos:
+// where it ends, with each group's text.
+fn match_from(elems: ref Vec[Elem], k: i64, s: ref Vec[i64], pos: i64, caps: ref Vec[Cap]) -> Option[(i64, Vec[Cap])] {
+    if k == elems.len() {
+        return Some((pos, caps.clone()));
+    }
+    match ref elems[k] {
+        Elem.Lit(ch) => {
+            if pos < s.len() and s[pos] == *ch {
+                return match_from(elems, k + 1, s, pos + 1, caps);
+            }
+            None
+        }
+        Elem.Space => {
+            let mut n = 0;
+            while pos + n < s.len() and is_py_space(s[pos + n]) {
+                n += 1;
+            }
+            while n >= 1 {
+                if let Some(r) = match_from(elems, k + 1, s, pos + n, caps) {
+                    return Some(r);
+                }
+                n -= 1;
+            }
+            None
+        }
+        Elem.Group(name, alts) => {
+            for alt in alts.iter() {
+                let cls = alt_classes(*alt);
+                let mut ok = pos + cls.len() <= s.len();
+                let mut i = 0;
+                while ok and i < cls.len() {
+                    ok = class_ok(cls[i], s[pos + i]);
+                    i += 1;
+                }
+                if ok {
+                    let mut text: Vec[i64] = Vec.new();
+                    for q in pos..(pos + cls.len()) {
+                        text.push(s[q]);
+                    }
+                    let mut next = caps.clone();
+                    next.push(Cap { name: name.clone(), text: text });
+                    if let Some(r) = match_from(elems, k + 1, s, pos + cls.len(), next) {
+                        return Some(r);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+fn cap_int(caps: ref Vec[Cap], name: Str, default: i64) -> i64 {
+    for i in 0..caps.len() {
+        let c = ref caps[i];
+        if c.name == name {
+            return py_int_cps(c.text, c.name).unwrap_or(default);
+        }
+    }
+    default
+}
+
+// datetime.strptime(s, fmt), or None where it raises ValueError.
+fn strptime(s: ref String, fmt: Str) -> Option[i64] {
+    let c = cps(s);
+    let elems = format_elems(fmt);
+    let empty: Vec[Cap] = Vec.new();
+    match match_from(elems, 0, c, 0, empty) {
+        Some((end, caps)) => {
+            if end != c.len() {
+                return None;
+            }
+            checked_dt(cap_int(caps, "Y", 1900), cap_int(caps, "m", 1), cap_int(caps, "d", 1),
+                cap_int(caps, "H", 0), cap_int(caps, "M", 0), cap_int(caps, "S", 0))
+        }
+        None => None,
+    }
+}
+// ------------------------------------------------------------ random
+
+// MT19937 as random.seed() and random.randint() use it.
+const MT_N: i64 = 624;
+const MT_M: i64 = 397;
+const MATRIX_A: u32 = 0x9908b0df;
+const UPPER_MASK: u32 = 0x80000000;
+const LOWER_MASK: u32 = 0x7fffffff;
+
+struct Random {
+    mt: Vec[u32],
+    index: i64,
+}
+
+// random.seed(n) for a small n >= 0: init_by_array with one 32-bit word.
+fn seeded(n: i64) -> Random {
+    let mut r = Random { mt: Vec.filled(MT_N, 0u32), index: MT_N };
+    let mut key: Vec[u32] = Vec.new();
+    key.push(n as u32);
+    init_by_array(mut r, key);
+    r
+}
+
+fn init_genrand(r: mut ref Random, s: u32) {
+    r.mt[0] = s;
+    for i in 1..MT_N {
+        let p = r.mt[i - 1];
+        r.mt[i] = 1812433253u32.wrapping_mul(p ^ (p >> 30)).wrapping_add(i as u32);
+    }
+    r.index = MT_N;
+}
+
+fn init_by_array(r: mut ref Random, key: ref Vec[u32]) {
+    init_genrand(mut r, 19650218u32);
+    let mut i: i64 = 1;
+    let mut j: i64 = 0;
+    let mut k = if MT_N > key.len() { MT_N } else { key.len() };
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1664525u32)).wrapping_add(key[j]).wrapping_add(j as u32);
+        i += 1;
+        j += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        if j >= key.len() {
+            j = 0;
+        }
+        k -= 1;
+    }
+    k = MT_N - 1;
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1566083941u32)).wrapping_sub(i as u32);
+        i += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        k -= 1;
+    }
+    r.mt[0] = 0x80000000u32;
+}
+
+fn mag01(y: u32) -> u32 {
+    if y & 1 == 1 { MATRIX_A } else { 0 }
+}
+
+fn genrand_uint32(r: mut ref Random) -> u32 {
+    if r.index >= MT_N {
+        for kk in 0..(MT_N - MT_M) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M] ^ (y >> 1) ^ mag01(y);
+        }
+        for kk in (MT_N - MT_M)..(MT_N - 1) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M - MT_N] ^ (y >> 1) ^ mag01(y);
+        }
+        let y = (r.mt[MT_N - 1] & UPPER_MASK) | (r.mt[0] & LOWER_MASK);
+        r.mt[MT_N - 1] = r.mt[MT_M - 1] ^ (y >> 1) ^ mag01(y);
+        r.index = 0;
+    }
+    let mut y = r.mt[r.index];
+    r.index += 1;
+    y ^= y >> 11;
+    y ^= (y << 7) & 0x9d2c5680u32;
+    y ^= (y << 15) & 0xefc60000u32;
+    y ^= y >> 18;
+    y
+}
+
+fn getrandbits_small(r: mut ref Random, k: i64) -> i64 {
+    if k == 0 {
+        return 0;
+    }
+    if k <= 32 {
+        return (genrand_uint32(mut r) >> ((32 - k) as u32)) as i64;
+    }
+    let lo = genrand_uint32(mut r) as i64;
+    let hi = (genrand_uint32(mut r) >> ((64 - k) as u32)) as i64;
+    lo | (hi << 32)
+}
+
+fn bit_length_i(n: i64) -> i64 {
+    let mut k = 0;
+    let mut t = n;
+    while t > 0 {
+        k += 1;
+        t = t >> 1;
+    }
+    k
+}
+
+// _randbelow_with_getrandbits(n), n > 0
+fn randbelow(r: mut ref Random, n: i64) -> i64 {
+    let k = bit_length_i(n);
+    let mut x = getrandbits_small(mut r, k);
+    while x >= n {
+        x = getrandbits_small(mut r, k);
+    }
+    x
+}
+// ------------------------------------------------------------ schedule
+//
+// schedule 1.2.2's Scheduler and Job. Jobs live in one list and a
+// scheduler holds their indexes, so a job can be looked at after it has
+// been cancelled, as a Python object can.
+
+// What a job runs: a job function chosen by name for the jobs, a daemon
+// task, or the monitor's check and retry.
+#[derive(Clone)]
+enum Kind {
+    Plain,
+    Task(bool),
+    Check,
+    Retry,
+}
+
+#[derive(Clone)]
+struct Func {
+    name: String,
+    args: Vec[J],
+    kwargs: Vec[Member],
+    kind: Kind,
+    count: i64,
+}
+
+#[derive(Clone)]
+struct Job {
+    interval: J,
+    latest: Option[J],
+    func: Option[Func],
+    unit: Option[String],
+    at_time: Option[(i64, i64, i64)],
+    last_run: Option[i64],
+    next_run: Option[i64],
+    start_day: Option[String],
+    cancel_after: Option[i64],
+    tags: Vec[J],
+    attached: bool,
+}
+
+// What a job function returns.
+enum Ret {
+    Nothing,
+    Cancel,
+    Value(J),
+}
+
+fn new_job(interval: own J, attached: bool) -> Job {
+    Job {
+        interval: interval,
+        latest: None,
+        func: None,
+        unit: None,
+        at_time: None,
+        last_run: None,
+        next_run: None,
+        start_day: None,
+        cancel_after: None,
+        tags: Vec.new(),
+        attached: attached,
+    }
+}
+
+fn sched_error(kind: Str, msg: Str) -> Exc {
+    exc(kind, msg.to_string())
+}
+
+fn one() -> J {
+    J.Int("1".to_string())
+}
+
+fn is_one(v: ref J) -> bool {
+    py_eq(v, one())
+}
+
+fn unit_is(j: ref Job, u: Str) -> bool {
+    match ref j.unit {
+        Some(x) => x == u,
+        None => false,
+    }
+}
+
+fn unit_text(j: ref Job) -> String {
+    match ref j.unit {
+        Some(x) => x.clone(),
+        None => "None".to_string(),
+    }
+}
+
+fn tuple_repr(items: ref Vec[J]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in items.iter() {
+        parts.push(repr(v));
+    }
+    if parts.len() == 1 {
+        return f"({parts[0]},)";
+    }
+    f"({join(parts, ", ")})"
+}
+
+fn dict_repr(members: ref Vec[Member]) -> String {
+    repr(J.Obj(members.clone()))
+}
+
+// name(args, k=v), as __repr__ writes the call.
+fn call_text(f: ref Func) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in f.args.iter() {
+        parts.push(repr(v));
+    }
+    for m in f.kwargs.iter() {
+        parts.push(f"{m.key}={repr(m.val)}");
+    }
+    f"{f.name}({join(parts, ", ")})"
+}
+
+// Job.__str__
+fn job_str(j: ref Job) -> String {
+    match ref j.func {
+        Some(f) => {
+            let unit = unit_text(j);
+            f"Job(interval={py_str(j.interval)}, unit={unit}, do={f.name}, args={tuple_repr(f.args)}, kwargs={dict_repr(f.kwargs)})"
+        }
+        None => f"Job(interval={py_str(j.interval)}, unit={unit_text(j)}, do=None, args=(), kwargs={{}})",
+    }
+}
+
+fn format_time(t: ref Option[i64]) -> String {
+    match t {
+        Some(v) => dt_strftime(*v),
+        None => "[never]".to_string(),
+    }
+}
+
+// Job.__repr__, which raises TypeError when the unit is None and the
+// interval is 1.
+fn job_repr(j: ref Job) -> Result[String, Exc] {
+    let timestats = f"(last run: {format_time(j.last_run)}, next run: {format_time(j.next_run)})";
+    let call = match ref j.func {
+        Some(f) => call_text(f),
+        None => "[None]".to_string(),
+    };
+    let unit = if is_one(j.interval) {
+        match ref j.unit {
+            Some(u) => {
+                // self.unit[:-1]
+                let mut s = u.clone();
+                let _ = s.pop();
+                s
+            }
+            None => return Err(exc("TypeError", "'NoneType' object is not subscriptable".to_string())),
+        }
+    } else {
+        unit_text(j)
+    };
+    match j.at_time {
+        Some((h, m, s)) => Ok(f"Every {py_str(j.interval)} {unit} at {hms(h, m, s)} do {call} {timestats}"),
+        None => {
+            let to = match ref j.latest {
+                Some(l) => f"to {py_str(l)} ",
+                None => String.new(),
+            };
+            Ok(f"Every {py_str(j.interval)} {to}{unit} do {call} {timestats}")
+        }
+    }
+}
+
+const WEEKDAYS: Array[Str, 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+fn weekday_index(day: ref String) -> i64 {
+    for i in 0..7 {
+        if WEEKDAYS[i] == day {
+            return i;
+        }
+    }
+    -1
+}
+
+// The unit properties: .second / .seconds and the rest, and the days of
+// the week.
+fn unit_prop(j: mut ref Job, name: ref String) -> Result[(), Exc] {
+    let singular = name == "second" or name == "minute" or name == "hour" or name == "day" or name == "week";
+    if singular {
+        if not is_one(j.interval) {
+            return Err(exc("IntervalError", f"Use {name}s instead of {name}"));
+        }
+        j.unit = Some(f"{name}s");
+    } else if weekday_index(name) >= 0 {
+        if not is_one(j.interval) {
+            return Err(exc("IntervalError", f"Scheduling .{name}() jobs is only allowed for weekly jobs. Using .{name}() on a job scheduled to run every 2 or more weeks is not supported."));
+        }
+        j.start_day = Some(name.clone());
+        j.unit = Some("weeks".to_string());
+    } else {
+        j.unit = Some(name.clone());
+    }
+    Ok(())
+}
+
+// re.match(pattern, s) for a pattern ending in $, which also matches
+// before a final newline: is pattern matched by the whole of s, or by s
+// without that newline?
+fn full_or_before_newline(c: ref Vec[i64], shape: Str) -> bool {
+    if has_shape(c, shape) {
+        return true;
+    }
+    if c.len() > 0 and c[c.len() - 1] == 10 {
+        let mut body = c.clone();
+        let _ = body.pop();
+        return has_shape(body, shape);
+    }
+    false
+}
+
+fn has_shape(c: ref Vec[i64], shape: Str) -> bool {
+    if shape == "daily" {
+        daily_shape(c)
+    } else if shape == "hourly" {
+        hourly_shape(c)
+    } else {
+        minutely_shape(c)
+    }
+}
+
+fn in_range(c: i64, lo: i64, hi: i64) -> bool {
+    c >= lo and c <= hi
+}
+
+// ^[0-2]\d:[0-5]\d(:[0-5]\d)?$
+fn daily_shape(c: ref Vec[i64]) -> bool {
+    if c.len() != 5 and c.len() != 8 {
+        return false;
+    }
+    let head = in_range(c[0], 48, 50) and is_digit_cp(c[1]) and c[2] == 58 and in_range(c[3], 48, 53) and is_digit_cp(c[4]);
+    if c.len() == 5 {
+        return head;
+    }
+    head and c[5] == 58 and in_range(c[6], 48, 53) and is_digit_cp(c[7])
+}
+
+// ^([0-5]\d)?:[0-5]\d$
+fn hourly_shape(c: ref Vec[i64]) -> bool {
+    if c.len() == 3 {
+        return c[0] == 58 and in_range(c[1], 48, 53) and is_digit_cp(c[2]);
+    }
+    if c.len() == 5 {
+        return in_range(c[0], 48, 53) and is_digit_cp(c[1]) and c[2] == 58 and in_range(c[3], 48, 53) and is_digit_cp(c[4]);
+    }
+    false
+}
+
+// ^:[0-5]\d$
+fn minutely_shape(c: ref Vec[i64]) -> bool {
+    c.len() == 3 and c[0] == 58 and in_range(c[1], 48, 53) and is_digit_cp(c[2])
+}
+
+fn value_error(msg: Str) -> Exc {
+    exc("ScheduleValueError", msg.to_string())
+}
+
+// Job.at(time_str, tz)
+fn at(j: mut ref Job, time: ref J, tz: ref Option[J]) -> Result[(), Exc] {
+    let daily = unit_is(j, "days") or j.start_day.is_some();
+    if not (unit_is(j, "days") or unit_is(j, "hours") or unit_is(j, "minutes")) and j.start_day.is_none() {
+        return Err(value_error("Invalid unit (valid units are `days`, `hours`, and `minutes`)"));
+    }
+    if tz.is_some() {
+        // import pytz, on a machine without it
+        return Err(exc("ModuleNotFoundError", "No module named 'pytz'".to_string()));
+    }
+    let s = match time {
+        J.Str(s) => s.clone(),
+        _ => return Err(exc("TypeError", "at() should be passed a string".to_string())),
+    };
+    let c = cps(s);
+    if daily and not full_or_before_newline(c, "daily") {
+        return Err(value_error("Invalid time format for a daily job (valid format is HH:MM(:SS)?)"));
+    }
+    if unit_is(j, "hours") and not full_or_before_newline(c, "hourly") {
+        return Err(value_error("Invalid time format for an hourly job (valid format is (MM)?:SS)"));
+    }
+    if unit_is(j, "minutes") and not full_or_before_newline(c, "minutely") {
+        return Err(value_error("Invalid time format for a minutely job (valid format is :SS)"));
+    }
+    let values: Vec[String] = s.split(":").map(|p| p.to_string()).collect();
+    let mut hour = "0".to_string();
+    let mut minute = "0".to_string();
+    let mut second = "0".to_string();
+    if values.len() == 3 {
+        hour = values[0].clone();
+        minute = values[1].clone();
+        second = values[2].clone();
+    } else if values.len() == 2 and unit_is(j, "minutes") {
+        second = values[1].clone();
+    } else if values.len() == 2 and unit_is(j, "hours") and values[0].len() > 0 {
+        minute = values[0].clone();
+        second = values[1].clone();
+    } else {
+        hour = values[0].clone();
+        minute = values[1].clone();
+    }
+    if daily {
+        let h = py_int(hour)?;
+        if h < 0 or h > 23 {
+            return Err(value_error("Invalid number of hours ({} is not between 0 and 23)"));
+        }
+    } else if unit_is(j, "hours") {
+        hour = "0".to_string();
+    } else if unit_is(j, "minutes") {
+        hour = "0".to_string();
+        minute = "0".to_string();
+    }
+    j.at_time = Some((py_int(hour)?, py_int(minute)?, py_int(second)?));
+    Ok(())
+}
+
+fn hashable(v: ref J) -> bool {
+    match v {
+        J.Arr(_) => false,
+        J.Obj(_) => false,
+        _ => true,
+    }
+}
+
+// Job.tag(*tags): a set, so an equal tag (1, 1.0 and True) is kept once.
+fn tag(j: mut ref Job, tags: ref Vec[J]) -> Result[(), Exc] {
+    for t in tags.iter() {
+        if not hashable(t) {
+            return Err(exc("TypeError", "Tags must be hashable".to_string()));
+        }
+    }
+    for t in tags.iter() {
+        if not has_tag(j, t) {
+            j.tags.push(t.clone());
+        }
+    }
+    Ok(())
+}
+
+fn has_tag(j: ref Job, t: ref J) -> bool {
+    for x in j.tags.iter() {
+        if py_eq(x, t) {
+            return true;
+        }
+    }
+    false
+}
+
+// What until() was handed: the jobs write a datetime, timedelta or time
+// as a one-key dict.
+enum Until {
+    DateTime(i64),
+    Delta(i64),
+    Time((i64, i64, i64)),
+    Text(String),
+    Other,
+}
+
+fn until_arg(v: ref J) -> Until {
+    if let J.Str(s) = v {
+        return Until.Text(s.clone());
+    }
+    if let Some(d) = j_get(v, "dt") {
+        return Until.DateTime(parse_iso(py_str(d)));
+    }
+    if let Some(d) = j_get(v, "td") {
+        return Until.Delta(seconds_td(d));
+    }
+    if let Some(d) = j_get(v, "time") {
+        return Until.Time(parse_time(py_str(d)));
+    }
+    Until.Other
+}
+
+const UNTIL_FORMATS: Array[Str, 5] = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%H:%M:%S", "%H:%M"];
+
+fn date_of(t: i64) -> i64 {
+    t - t % US_DAY
+}
+
+// Job.until()
+fn until(j: mut ref Job, arg: ref Until, now: i64) -> Result[(), Exc] {
+    let cancel_after = match arg {
+        Until.DateTime(t) => *t,
+        Until.Delta(d) => now + *d,
+        Until.Time((h, m, s)) => date_of(now) + *h * US_HOUR + *m * US_MIN + *s * US_SEC,
+        Until.Text(s) => {
+            let mut found: Option[i64] = None;
+            let mut k = 0;
+            while found.is_none() and k < 5 {
+                found = strptime(s, UNTIL_FORMATS[k]);
+                k += 1;
+            }
+            let t = match found {
+                Some(t) => t,
+                None => return Err(value_error("Invalid string format for until()")),
+            };
+            if s.contains("-") { t } else { date_of(now) + t % US_DAY }
+        }
+        Until.Other => return Err(exc("TypeError", "until() takes a string, datetime.datetime, datetime.timedelta, datetime.time parameter".to_string())),
+    };
+    j.cancel_after = Some(cancel_after);
+    if cancel_after < now {
+        return Err(value_error("Cannot schedule a job to run until a time in the past"));
+    }
+    Ok(())
+}
+
+fn is_overdue(j: ref Job, when: i64) -> bool {
+    match j.cancel_after {
+        Some(c) => when > c,
+        None => false,
+    }
+}
+
+// operator.index(v), as randrange() calls it.
+fn index_of(v: ref J) -> Result[i64, Exc] {
+    match v {
+        J.Int(d) => Ok(i64.parse(d).unwrap_or(0)),
+        J.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(exc("TypeError", f"'{type_name(v)}' object cannot be interpreted as an integer")),
+    }
+}
+
+// b + 1, for randint(a, b) = randrange(a, b + 1)
+fn plus_one(v: ref J) -> J {
+    match v {
+        J.Int(d) => J.Int(f"{i64.parse(d).unwrap_or(0) + 1}"),
+        J.Bool(b) => J.Int(if *b { "2".to_string() } else { "1".to_string() }),
+        J.Float(x) => J.Float(*x + 1.0),
+        _ => v.clone(),
+    }
+}
+
+fn randint(r: mut ref Random, a: ref J, b: ref J) -> Result[J, Exc] {
+    let stop = plus_one(b);
+    let lo = index_of(a)?;
+    let hi = index_of(stop)?;
+    Ok(J.Int(f"{lo + randbelow(mut r, hi - lo)}"))
+}
+
+fn ge(a: ref J, b: ref J) -> bool {
+    num_of(a).unwrap_or(0.0) >= num_of(b).unwrap_or(0.0)
+}
+
+fn move_to_at_time(j: ref Job, moment: i64) -> i64 {
+    let (ah, am, asec) = j.at_time.unwrap();
+    let p = parts(moment);
+    let mut h = p.hour;
+    let mut m = p.minute;
+    if unit_is(j, "days") or j.start_day.is_some() {
+        h = ah;
+    }
+    if unit_is(j, "days") or unit_is(j, "hours") or j.start_day.is_some() {
+        m = am;
+    }
+    make_dt(p.year, p.month, p.day, h, m, asec, 0)
+}
+
+// Job._schedule_next_run()
+fn schedule_next_run(j: mut ref Job, r: mut ref Random, now: i64) -> Result[(), Exc] {
+    let ok = unit_is(j, "seconds") or unit_is(j, "minutes") or unit_is(j, "hours") or unit_is(j, "days") or unit_is(j, "weeks");
+    if not ok {
+        return Err(value_error("Invalid unit (valid units are `seconds`, `minutes`, `hours`, `days`, and `weeks`)"));
+    }
+    let interval = match ref j.latest {
+        Some(l) => {
+            if not ge(l, j.interval) {
+                return Err(exc("ScheduleError", "`latest` is greater than `interval`".to_string()));
+            }
+            randint(mut r, j.interval, l)?
+        }
+        None => j.interval.clone(),
+    };
+    let mut next = now;
+    if let Some(day) = j.start_day.clone() {
+        if not unit_is(j, "weeks") {
+            return Err(value_error("`unit` should be 'weeks'"));
+        }
+        let mut ahead = weekday_index(day) - weekday(next);
+        if ahead < 0 {
+            ahead += 7;
+        }
+        next += ahead * US_DAY;
+    }
+    if j.at_time.is_some() {
+        next = move_to_at_time(j, next);
+    }
+    let period = timedelta_of(unit_text(j), interval)?;
+    if not is_one(interval) {
+        next += period;
+    }
+    while next <= now {
+        next += period;
+    }
+    j.next_run = Some(next);
+    Ok(())
+}
+
+// ------------------------------------------------------------ the world
+
+#[derive(Clone)]
+struct Stat {
+    name: String,
+    runs: i64,
+    failed: i64,
+    last: String,
+}
+
+struct Monitor {
+    start: i64,
+    rows: Vec[Row],
+    down_since: Option[i64],
+    delay: i64,
+    checks: i64,
+    retries: i64,
+    outages: i64,
+    alerts: Vec[String],
+}
+
+#[derive(Clone)]
+struct Label {
+    name: String,
+    id: i64,
+}
+
+#[derive(Clone)]
+struct Row {
+    at: i64,
+    status: String,
+}
+
+struct World {
+    jobs: Vec[Job],
+    sched: Vec[i64],
+    labels: Vec[Label],
+    now: i64,
+    rng: Random,
+    debug: bool,
+    children: i64,
+    log_lines: Vec[String],
+    stats: Vec[Stat],
+    mon: Monitor,
+}
+
+fn new_monitor() -> Monitor {
+    Monitor {
+        start: 0,
+        rows: Vec.new(),
+        down_since: None,
+        delay: 10,
+        checks: 0,
+        retries: 0,
+        outages: 0,
+        alerts: Vec.new(),
+    }
+}
+
+fn debug(w: ref World, msg: ref String) {
+    if w.debug {
+        println(f"  log: {msg}");
+    }
+}
+
+fn show(w: ref World, id: i64) -> String {
+    match job_repr(w.jobs[id]) {
+        Ok(s) => s,
+        Err(e) => f"<repr raised {failure(e)}>",
+    }
+}
+
+fn label_of(w: ref World, id: i64) -> String {
+    for l in w.labels.iter() {
+        if l.id == id {
+            return l.name.clone();
+        }
+    }
+    "?".to_string()
+}
+
+fn label_id(w: ref World, name: ref String) -> i64 {
+    for l in w.labels.iter() {
+        if l.name == name {
+            return l.id;
+        }
+    }
+    -1
+}
+
+fn set_label(w: mut ref World, name: ref String, id: i64) {
+    for i in 0..w.labels.len() {
+        if w.labels[i].name == name {
+            w.labels[i].id = id;
+            return;
+        }
+    }
+    w.labels.push(Label { name: name.clone(), id: id });
+}
+
+fn add_job(w: mut ref World, interval: own J, attached: bool) -> i64 {
+    w.jobs.push(new_job(interval, attached));
+    w.jobs.len() - 1
+}
+
+fn reschedule(w: mut ref World, id: i64) -> Result[(), Exc] {
+    let now = w.now;
+    let mut job = w.jobs[id].clone();
+    let r = schedule_next_run(mut job, mut w.rng, now);
+    w.jobs[id] = job;
+    r
+}
+
+// Job.do(func, *args, **kwargs)
+fn do_job(w: mut ref World, id: i64, f: own Func) -> Result[(), Exc] {
+    w.jobs[id].func = Some(f);
+    reschedule(mut w, id)?;
+    if not w.jobs[id].attached {
+        return Err(exc("ScheduleError", "Unable to a add job to schedule. Job is not associated with an scheduler".to_string()));
+    }
+    w.sched.push(id);
+    Ok(())
+}
+
+fn plain(name: ref String, args: own Vec[J], kwargs: own Vec[Member]) -> Func {
+    Func { name: name.clone(), args: args, kwargs: kwargs, kind: Kind.Plain, count: 0 }
+}
+
+fn advance(w: mut ref World, us: i64) {
+    w.now += us;
+}
+
+// Job.run()
+fn run_job_once(w: mut ref World, id: i64) -> Result[Ret, Exc] {
+    if is_overdue(w.jobs[id], w.now) {
+        debug(w, f"Cancelling job {job_str(w.jobs[id])}");
+        return Ok(Ret.Cancel);
+    }
+    debug(w, f"Running job {job_str(w.jobs[id])}");
+    let ret = call_func(mut w, id)?;
+    w.jobs[id].last_run = Some(w.now);
+    reschedule(mut w, id)?;
+    if is_overdue(w.jobs[id], w.jobs[id].next_run.unwrap()) {
+        debug(w, f"Cancelling job {job_str(w.jobs[id])}");
+        return Ok(Ret.Cancel);
+    }
+    Ok(ret)
+}
+
+// Scheduler._run_job()
+fn run_job(w: mut ref World, id: i64) -> Result[(), Exc] {
+    let ret = run_job_once(mut w, id)?;
+    if let Ret.Cancel = ret {
+        cancel_job(mut w, id);
+    }
+    Ok(())
+}
+
+fn cancel_job(w: mut ref World, id: i64) {
+    debug(w, f"Cancelling job \"{job_str(w.jobs[id])}\"");
+    for i in 0..w.sched.len() {
+        if w.sched[i] == id {
+            w.sched.remove(i);
+            return;
+        }
+    }
+    debug(w, f"Cancelling not-scheduled job \"{job_str(w.jobs[id])}\"");
+}
+
+fn should_run(w: ref World, id: i64) -> Result[bool, Exc] {
+    match w.jobs[id].next_run {
+        Some(t) => Ok(w.now >= t),
+        None => Err(exc("AssertionError", "must run _schedule_next_run before".to_string())),
+    }
+}
+
+// Scheduler.run_pending(): the due jobs, sorted (stably) by next run.
+fn run_pending(w: mut ref World) -> Result[(), Exc] {
+    let mut due: Vec[i64] = Vec.new();
+    for id in w.sched.iter() {
+        if should_run(w, *id).unwrap_or(false) {
+            due.push(*id);
+        }
+    }
+    let mut k = 1;
+    while k < due.len() {
+        let cur = due[k];
+        let t = w.jobs[cur].next_run.unwrap();
+        let mut i = k;
+        while i > 0 and w.jobs[due[i - 1]].next_run.unwrap() > t {
+            due[i] = due[i - 1];
+            i -= 1;
+        }
+        due[i] = cur;
+        k += 1;
+    }
+    for id in due {
+        run_job(mut w, id)?;
+    }
+    Ok(())
+}
+
+// Scheduler.run_all(delay_seconds), with time.sleep moving the clock.
+fn run_all(w: mut ref World, delay: ref J) -> Result[(), Exc] {
+    let shown = match delay {
+        J.Float(x) => x.trunc() as i64,
+        _ => index_of(delay).unwrap_or(0),
+    };
+    debug(w, f"Running *all* {w.sched.len()} jobs with {shown}s delay in between");
+    let snapshot = w.sched.clone();
+    for id in snapshot {
+        run_job(mut w, id)?;
+        advance(mut w, seconds_td(delay));
+    }
+    Ok(())
+}
+
+// A tag of None is no tag: `if tag is None`.
+fn tag_or_none(t: ref Option[J]) -> Option[J] {
+    match t {
+        Some(J.Null) => None,
+        _ => t.clone(),
+    }
+}
+
+fn get_jobs(w: ref World, t: ref Option[J]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for id in w.sched.iter() {
+        match tag_or_none(t) {
+            Some(x) => {
+                if has_tag(w.jobs[*id], x) {
+                    out.push(*id);
+                }
+            }
+            None => out.push(*id),
+        }
+    }
+    out
+}
+
+fn clear(w: mut ref World, t: ref Option[J]) {
+    match tag_or_none(t) {
+        Some(x) => {
+            debug(w, f"Deleting all jobs tagged \"{py_str(x)}\"");
+            let mut kept: Vec[i64] = Vec.new();
+            for id in w.sched.iter() {
+                if not has_tag(w.jobs[*id], x) {
+                    kept.push(*id);
+                }
+            }
+            w.sched = kept;
+        }
+        None => {
+            debug(w, "Deleting *all* jobs".to_string());
+            w.sched = Vec.new();
+        }
+    }
+}
+
+// Scheduler.get_next_run(tag): min() keeps the first of equal jobs.
+fn next_run(w: ref World, t: ref Option[J]) -> Option[i64] {
+    if w.sched.len() == 0 {
+        return None;
+    }
+    let mut best: Option[i64] = None;
+    for id in get_jobs(w, t) {
+        let n = w.jobs[id].next_run.unwrap();
+        match best {
+            Some(b) => {
+                if n < b {
+                    best = Some(n);
+                }
+            }
+            None => best = Some(n),
+        }
+    }
+    best
+}
+
+fn idle_seconds(w: ref World) -> Option[f64] {
+    match next_run(w, None) {
+        Some(t) => Some(total_seconds(t - w.now)),
+        None => None,
+    }
+}
+// ------------------------------------------------------------ job functions
+
+fn call_func(w: mut ref World, id: i64) -> Result[Ret, Exc] {
+    let mut f = w.jobs[id].func.clone().unwrap();
+    f.count += 1;
+    w.jobs[id].func = Some(f.clone());
+    match f.kind {
+        Kind.Plain => plain_call(mut w, f),
+        Kind.Task(cancel) => task_call(mut w, f, cancel),
+        Kind.Check => check(mut w),
+        Kind.Retry => retry(mut w),
+    }
+}
+
+fn arg(f: ref Func, i: i64) -> J {
+    if i < f.args.len() {
+        f.args[i].clone()
+    } else {
+        J.Null
+    }
+}
+
+// The jobs' functions print their call, then do what their name says.
+fn plain_call(w: mut ref World, f: ref Func) -> Result[Ret, Exc] {
+    println(f"  run {call_text(f)} at {dt_str(w.now)}");
+    let name = f.name.as_str();
+    if name == "once" or name == "once_obj" {
+        return Ok(Ret.Cancel);
+    }
+    if name == "limited" {
+        let times = match j_get(J.Obj(f.kwargs.clone()), "times") {
+            Some(v) => index_of(v).unwrap_or(0),
+            None => 0,
+        };
+        if f.count >= times {
+            return Ok(Ret.Cancel);
+        }
+        return Ok(Ret.Nothing);
+    }
+    if name == "returns" {
+        return Ok(Ret.Value(arg(f, 0)));
+    }
+    if name == "slow" {
+        advance(mut w, seconds_td(arg(f, 0)));
+    } else if name == "boom" {
+        return Err(exc("RuntimeError", py_str(arg(f, 0))));
+    } else if name == "boom_type" {
+        return Err(exc("TypeError", "unsupported operand type(s) for +: 'int' and 'str'".to_string()));
+    } else if name == "clear_all" {
+        clear(mut w, None);
+    } else if name == "clear_tag" {
+        clear(mut w, Some(arg(f, 0)));
+    } else if name == "spawn" {
+        w.children += 1;
+        let lab = f"{py_str(arg(f, 1))}{w.children}";
+        let child = add_job(mut w, arg(f, 0), true);
+        w.jobs[child].unit = Some("seconds".to_string());
+        do_job(mut w, child, plain(lab, Vec.new(), Vec.new()))?;
+        set_label(mut w, lab, child);
+        println(f"  spawned {lab} = {show(w, child)}");
+    }
+    Ok(Ret.Nothing)
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn opt(op: ref J, key: Str) -> J {
+    match j_get(op, key) {
+        Some(v) => v,
+        None => J.Null,
+    }
+}
+
+fn text_of(op: ref J, key: Str) -> String {
+    py_str(opt(op, key))
+}
+
+fn list_of(v: ref J) -> Vec[J] {
+    match v {
+        J.Arr(items) => items.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn members_of(v: ref J) -> Vec[Member] {
+    match v {
+        J.Obj(members) => members.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn apply(w: mut ref World, id: i64, item: ref J) -> Result[(), Exc] {
+    if let J.Str(name) = item {
+        return unit_prop(mut w.jobs[id], name);
+    }
+    if let Some(t) = j_get(item, "at") {
+        return at(mut w.jobs[id], t, j_get(item, "tz"));
+    }
+    if let Some(l) = j_get(item, "to") {
+        w.jobs[id].latest = Some(l);
+        return Ok(());
+    }
+    if let Some(tags) = j_get(item, "tag") {
+        return tag(mut w.jobs[id], list_of(tags));
+    }
+    if let Some(u) = j_get(item, "until") {
+        let now = w.now;
+        return until(mut w.jobs[id], until_arg(u), now);
+    }
+    let name = text_of(item, "do");
+    let f = plain(name, list_of(opt(item, "args")), members_of(opt(item, "kwargs")));
+    do_job(mut w, id, f)
+}
+
+fn op_every(w: mut ref World, op: ref J, attached: bool) {
+    let lab = text_of(op, "job");
+    let interval = match j_get(op, "n") {
+        Some(n) => n,
+        None => one(),
+    };
+    let id = add_job(mut w, interval, attached);
+    set_label(mut w, lab, id);
+    for item in list_of(opt(op, "chain")).iter() {
+        if let Err(e) = apply(mut w, id, item) {
+            println(f"{lab}: {failure(e)}");
+            return;
+        }
+    }
+    println(f"{lab} = {show(w, id)}");
+}
+
+fn pending(w: mut ref World) {
+    if let Err(e) = run_pending(mut w) {
+        println(f"  error: {failure(e)}");
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn tag_arg(op: ref J) -> Option[J] {
+    if j_has(op, "tag") { Some(opt(op, "tag")) } else { None }
+}
+
+fn run_op(w: mut ref World, op: ref J) -> Result[(), Exc] {
+    let kind = text_of(op, "op");
+    if kind == "every" {
+        op_every(mut w, op, true);
+    } else if kind == "detached" {
+        op_every(mut w, op, false);
+    } else if kind == "tick" {
+        advance(mut w, seconds_td(opt(op, "s")));
+        println(f"@ {dt_str(w.now)}");
+        pending(mut w);
+    } else if kind == "clock" {
+        w.now = parse_iso(text_of(op, "t"));
+        println(f"@ {dt_str(w.now)}");
+        pending(mut w);
+    } else if kind == "jobs" {
+        println(f"jobs at {dt_str(w.now)}:");
+        for id in w.sched.iter() {
+            println(f"  {label_of(w, *id)}: {show(w, *id)}");
+        }
+    } else if kind == "str" {
+        let lab = text_of(op, "job");
+        println(f"str {lab}: {job_str(w.jobs[label_id(w, lab)])}");
+    } else if kind == "tags" {
+        let lab = text_of(op, "job");
+        let mut reprs: Vec[String] = Vec.new();
+        for t in w.jobs[label_id(w, lab)].tags.iter() {
+            reprs.push(repr(t));
+        }
+        reprs.sort();
+        println(f"tags {lab}: [{join(reprs, ", ")}]");
+    } else if kind == "should_run" {
+        let lab = text_of(op, "job");
+        match should_run(w, label_id(w, lab)) {
+            Ok(b) => println(f"should_run {lab}: {py_bool(b)}"),
+            Err(e) => println(f"should_run {lab}: {failure(e)}"),
+        }
+    } else if kind == "last_run" {
+        let lab = text_of(op, "job");
+        println(f"last_run {lab}: {opt_dt_str(w.jobs[label_id(w, lab)].last_run)}");
+    } else if kind == "get_jobs" {
+        let t = tag_arg(op);
+        let what = match ref t {
+            Some(x) => repr(x),
+            None => "(all)".to_string(),
+        };
+        let mut names: Vec[String] = Vec.new();
+        for id in get_jobs(w, t) {
+            names.push(label_of(w, id));
+        }
+        println(f"get_jobs {what}: [{join(names, ", ")}]");
+    } else if kind == "next_run" {
+        let t = tag_arg(op);
+        match ref t {
+            Some(x) => println(f"next_run {repr(x)}: {opt_dt_str(next_run(w, t))}"),
+            None => println(f"next_run: {opt_dt_str(next_run(w, t))}"),
+        }
+    } else if kind == "idle" {
+        let shown = match idle_seconds(w) {
+            Some(x) => float_repr(x),
+            None => "None".to_string(),
+        };
+        println(f"idle_seconds: {shown}");
+    } else if kind == "clear" {
+        let t = tag_arg(op);
+        match ref t {
+            Some(x) => println(f"clear {repr(x)}"),
+            None => println("clear"),
+        }
+        clear(mut w, t);
+    } else if kind == "cancel" {
+        let lab = text_of(op, "job");
+        println(f"cancel {lab}");
+        cancel_job(mut w, label_id(w, lab));
+    } else if kind == "run_all" {
+        let delay = match j_get(op, "delay") {
+            Some(d) => {
+                println(f"run_all delay={repr(d)}");
+                d
+            }
+            None => {
+                println("run_all");
+                J.Int("0".to_string())
+            }
+        };
+        if let Err(e) = run_all(mut w, delay) {
+            println(f"  error: {failure(e)}");
+        }
+        println(f"  now {dt_str(w.now)}");
+    } else if kind == "daemon" {
+        // The programs log at INFO, so the scheduler's DEBUG lines are
+        // not shown.
+        w.debug = false;
+        daemon(mut w, op)?;
+        w.debug = true;
+    } else if kind == "monitor" {
+        w.debug = false;
+        monitor(mut w, op)?;
+        w.debug = true;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ files
+
+fn read_text(path: ref String) -> Result[String, Exc] {
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(exc("OSError", f"{path}: {e}")),
+    }
+}
+
+// str.splitlines() for text with \n line ends.
+fn split_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in text.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1].len() == 0 {
+        let _ = out.pop();
+    }
+    out
+}
+
+fn write_lines(path: Str, lines: ref Vec[String]) -> Result[(), Exc] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(exc("OSError", f"data/out: {e}"));
+    }
+    let mut text = String.new();
+    for l in lines.iter() {
+        text.push_str(l);
+        text.push('\n');
+    }
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(exc("OSError", f"{path}: {e}"));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the daemon
+//
+// An ops daemon that reads its tasks from a config file and runs them
+// the way the schedule docs suggest: run_pending(), then sleep for
+// idle_seconds(). Each task goes through the docs' catch_exceptions
+// decorator, which logs a failure and, with !cancel, cancels the task.
+// It logs to data/out/daemon.log and summarizes that log.
+
+const TASKS: Array[Str, 9] = ["rotate_logs", "backup", "poll_feed", "weekly_report", "healthcheck",
+    "refresh_certs", "heartbeat", "compact_db", "send_digest"];
+
+const UNITS: Array[Str, 17] = ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days",
+    "week", "weeks", "monday", "tuesday", "wednesday", "thursday", "friday",
+    "saturday", "sunday"];
+
+fn is_unit(w: ref String) -> bool {
+    for i in 0..17 {
+        if UNITS[i] == w {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_task(w: ref String) -> bool {
+    for i in 0..9 {
+        if TASKS[i] == w {
+            return true;
+        }
+    }
+    false
+}
+
+fn conf_value(s: ref String) -> J {
+    let c = cps(s);
+    let mut digits = c.len() > 0;
+    for x in c.iter() {
+        if not is_digit_cp(*x) {
+            digits = false;
+        }
+    }
+    if digits {
+        J.Int(f"{py_int(s).unwrap_or(0)}")
+    } else {
+        J.Str(s.clone())
+    }
+}
+
+fn logline(w: mut ref World, msg: ref String) {
+    let line = f"{dt_str(w.now)} {msg}";
+    w.log_lines.push(line);
+}
+
+fn stat_index(w: ref World, name: ref String) -> i64 {
+    for i in 0..w.stats.len() {
+        if w.stats[i].name == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn word(words: ref Vec[String], i: i64) -> Result[String, Exc] {
+    if i < words.len() {
+        Ok(words[i].clone())
+    } else {
+        Err(exc("IndexError", "list index out of range".to_string()))
+    }
+}
+
+fn parse_task(w: mut ref World, line: ref String) -> Result[i64, Exc] {
+    let words = split_ws(line);
+    if words[0] != "every" {
+        return Err(exc("ValueError", "a task starts with 'every'".to_string()));
+    }
+    let mut i = 1;
+    let id = if i < words.len() and not is_unit(words[i]) {
+        let n = py_int(words[i])?;
+        i += 1;
+        let id = add_job(mut w, J.Int(f"{n}"), true);
+        if i < words.len() and words[i] == "to" {
+            w.jobs[id].latest = Some(J.Int(f"{py_int(word(words, i + 1)?)?}"));
+            i += 2;
+        }
+        id
+    } else {
+        add_job(mut w, one(), true)
+    };
+    if i >= words.len() {
+        return Err(exc("ValueError", "no unit".to_string()));
+    }
+    if not is_unit(words[i]) {
+        return Err(exc("ValueError", f"unknown unit {str_repr(words[i])}"));
+    }
+    unit_prop(mut w.jobs[id], words[i])?;
+    i += 1;
+    if i < words.len() and words[i] == "at" {
+        at(mut w.jobs[id], J.Str(word(words, i + 1)?), None)?;
+        i += 2;
+    }
+    if i < words.len() and words[i] == "until" {
+        let when = word(words, i + 1)?.replace("_", " ");
+        let now = w.now;
+        until(mut w.jobs[id], Until.Text(when), now)?;
+        i += 2;
+    }
+    if i >= words.len() or words[i] != "do" {
+        return Err(exc("ValueError", "no 'do'".to_string()));
+    }
+    let name = word(words, i + 1)?;
+    if not is_task(name) {
+        return Err(exc("ValueError", f"no task named {str_repr(name)}"));
+    }
+    let mut args: Vec[J] = Vec.new();
+    let mut kwargs: Vec[Member] = Vec.new();
+    let mut tags: Vec[J] = Vec.new();
+    let mut cancel = false;
+    let mut k = i + 2;
+    while k < words.len() {
+        let wd = words[k].clone();
+        if wd.starts_with("#") {
+            tags.push(J.Str(wd[1..wd.len()].to_string()));
+        } else if wd == "!cancel" {
+            cancel = true;
+        } else if wd == "until" {
+            return Err(exc("ValueError", "'until' goes before 'do'".to_string()));
+        } else if wd.contains("=") {
+            let eq = wd.find("=").unwrap();
+            let key = wd[0..eq].to_string();
+            let val = wd[(eq + 1)..wd.len()].to_string();
+            put_member(mut kwargs, key, conf_value(val));
+        } else {
+            args.push(conf_value(wd));
+        }
+        k += 1;
+    }
+    if tags.len() > 0 {
+        tag(mut w.jobs[id], tags)?;
+    }
+    if stat_index(w, name) < 0 {
+        w.stats.push(Stat { name: name.clone(), runs: 0, failed: 0, last: "never".to_string() });
+    }
+    let f = Func { name: name, args: args, kwargs: kwargs, kind: Kind.Task(cancel), count: 0 };
+    do_job(mut w, id, f)?;
+    Ok(id)
+}
+
+// A daemon task, through catch_exceptions.
+fn task_call(w: mut ref World, f: ref Func, cancel: bool) -> Result[Ret, Exc] {
+    let k = stat_index(w, f.name);
+    w.stats[k].runs += 1;
+    w.stats[k].last = dt_str(w.now);
+    let n = w.stats[k].runs;
+    let mut words: Vec[String] = Vec.new();
+    for a in f.args.iter() {
+        words.push(py_str(a));
+    }
+    for m in f.kwargs.iter() {
+        words.push(f"{m.key}={py_str(m.val)}");
+    }
+    let detail = join(words, " ");
+    let first = py_str(arg(f, 0));
+    let err = if f.name == "backup" and first == "media" and n % 2 == 0 {
+        Some(exc("OSError", "No space left on device: '/backup/media'".to_string()))
+    } else if f.name == "backup" and first == "db" and n == 3 {
+        Some(exc("OSError", "connection refused".to_string()))
+    } else if f.name == "poll_feed" and n % 4 == 0 {
+        Some(exc("TimeoutError", "timed out after 10s".to_string()))
+    } else if f.name == "heartbeat" and n == 40 {
+        Some(exc("ConnectionError", "collector gone".to_string()))
+    } else {
+        None
+    };
+    match err {
+        Some(e) => {
+            w.stats[k].failed += 1;
+            logline(mut w, f"{f.name} FAILED: {e.kind}: {e.msg}");
+            if cancel {
+                logline(mut w, f"{f.name} cancelled");
+                return Ok(Ret.Cancel);
+            }
+            Ok(Ret.Nothing)
+        }
+        None => {
+            let msg = if detail.len() > 0 { f"{f.name} {detail}" } else { f.name.clone() };
+            logline(mut w, msg);
+            Ok(Ret.Nothing)
+        }
+    }
+}
+
+fn daemon(w: mut ref World, op: ref J) -> Result[(), Exc] {
+    let conf = text_of(op, "conf");
+    let end = parse_iso(text_of(op, "until"));
+    let text = read_text(f"data/{conf}")?;
+    println(f"daemon: {conf}");
+    let lines = split_lines(text);
+    for no in 0..lines.len() {
+        let line = lines[no].trim().to_string();
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        match parse_task(mut w, line) {
+            Ok(id) => println(f"  line {no + 1}: {show(w, id)}"),
+            Err(e) => println(f"  line {no + 1}: {failure(e)}"),
+        }
+    }
+    println(f"  {w.sched.len()} tasks scheduled at {dt_str(w.now)}");
+    let mut wakeups = 0;
+    loop {
+        run_pending(mut w)?;
+        let idle = match idle_seconds(w) {
+            Some(x) => x,
+            None => break,
+        };
+        let step = if idle > 0.0 { td_from_float(idle, US_SEC) } else { 0 };
+        if w.now + step > end {
+            break;
+        }
+        advance(mut w, step);
+        wakeups += 1;
+    }
+    println(f"  stopped at {dt_str(w.now)} after {wakeups} wakeups");
+    write_lines("data/out/daemon.log", w.log_lines)?;
+    let back = split_lines(read_text("data/out/daemon.log".to_string())?);
+    println(f"  daemon.log: {back.len()} lines");
+    for i in 0..12 {
+        if i < back.len() {
+            println(f"    {back[i]}");
+        }
+    }
+    println("    ...");
+    let from = if back.len() > 6 { back.len() - 6 } else { 0 };
+    for i in from..back.len() {
+        println(f"    {back[i]}");
+    }
+    println("  failures:");
+    for l in back.iter() {
+        if l.contains(" FAILED: ") or l.ends_with(" cancelled") {
+            println(f"    {l}");
+        }
+    }
+    println("  by task:");
+    let mut names: Vec[String] = Vec.new();
+    for s in w.stats.iter() {
+        names.push(s.name.clone());
+    }
+    names.sort();
+    for name in names.iter() {
+        let s = ref w.stats[stat_index(w, name)];
+        println(f"    {ljust(s.name, 14)} runs={ljust(f"{s.runs}", 4)} failed={ljust(f"{s.failed}", 2)} last={s.last}");
+    }
+    println("  still scheduled:");
+    for id in w.sched.iter() {
+        println(f"    {show(w, *id)}");
+    }
+    let nightly = Some(J.Str("nightly".to_string()));
+    println(f"  next: {opt_dt_str(next_run(w, None))}; nightly: {opt_dt_str(next_run(w, nightly))}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ the monitor
+//
+// A health monitor: a check every 30 seconds reads the service's state
+// (data/health.csv gives it by seconds since the start). When it goes
+// down, a one-off retry job is scheduled with exponential backoff from
+// 10 s up to 120 s, each retry cancelling itself and scheduling the
+// next; recovery clears the retries by tag. Alerts go to
+// data/out/alerts.txt.
+
+fn alert(w: mut ref World, msg: ref String) {
+    let line = f"{dt_str(w.now)} {msg}";
+    w.mon.alerts.push(line);
+}
+
+fn status(w: ref World) -> String {
+    let elapsed = total_seconds(w.now - w.mon.start);
+    let mut cur = w.mon.rows[0].status.clone();
+    for r in w.mon.rows.iter() {
+        if (r.at as f64) <= elapsed {
+            cur = r.status.clone();
+        }
+    }
+    cur
+}
+
+fn schedule_retry(w: mut ref World) -> Result[(), Exc] {
+    let id = add_job(mut w, J.Int(f"{w.mon.delay}"), true);
+    w.jobs[id].unit = Some("seconds".to_string());
+    let f = Func { name: "retry".to_string(), args: Vec.new(), kwargs: Vec.new(), kind: Kind.Retry, count: 0 };
+    do_job(mut w, id, f)?;
+    let mut tags: Vec[J] = Vec.new();
+    tags.push(J.Str("retry".to_string()));
+    tag(mut w.jobs[id], tags)?;
+    let msg = f"retry in {w.mon.delay}s (next run {opt_dt_str(w.jobs[id].next_run)})";
+    alert(mut w, msg);
+    Ok(())
+}
+
+fn check(w: mut ref World) -> Result[Ret, Exc] {
+    w.mon.checks += 1;
+    let s = status(w);
+    if s == "up" {
+        if let Some(since) = w.mon.down_since {
+            let retry_tag = Some(J.Str("retry".to_string()));
+            let took = td_str(w.now - since);
+            let msg = f"RECOVERED after {took}; dropping {get_jobs(w, retry_tag).len()} retries";
+            alert(mut w, msg);
+            clear(mut w, retry_tag);
+            w.mon.down_since = None;
+            w.mon.delay = 10;
+        }
+    } else if w.mon.down_since.is_none() {
+        w.mon.down_since = Some(w.now);
+        w.mon.outages += 1;
+        alert(mut w, f"DOWN ({s})");
+        schedule_retry(mut w)?;
+    }
+    Ok(Ret.Nothing)
+}
+
+fn retry(w: mut ref World) -> Result[Ret, Exc] {
+    w.mon.retries += 1;
+    let s = status(w);
+    if s == "up" {
+        alert(mut w, "retry: up again".to_string());
+    } else {
+        w.mon.delay = if w.mon.delay * 2 < 120 { w.mon.delay * 2 } else { 120 };
+        alert(mut w, f"retry: still {s}");
+        schedule_retry(mut w)?;
+    }
+    Ok(Ret.Cancel)
+}
+
+fn monitor(w: mut ref World, op: ref J) -> Result[(), Exc] {
+    let csv = text_of(op, "csv");
+    let end = parse_iso(text_of(op, "until"));
+    w.mon = new_monitor();
+    w.mon.start = w.now;
+    let lines = split_lines(read_text(f"data/{csv}")?);
+    for i in 1..lines.len() {
+        let cells: Vec[String] = lines[i].split(",").map(|c| c.to_string()).collect();
+        w.mon.rows.push(Row { at: py_int(cells[0])?, status: cells[1].clone() });
+    }
+    let id = add_job(mut w, J.Int("30".to_string()), true);
+    w.jobs[id].unit = Some("seconds".to_string());
+    let f = Func { name: "check".to_string(), args: Vec.new(), kwargs: Vec.new(), kind: Kind.Check, count: 0 };
+    do_job(mut w, id, f)?;
+    let mut tags: Vec[J] = Vec.new();
+    tags.push(J.Str("health".to_string()));
+    tag(mut w.jobs[id], tags)?;
+    println(f"monitor: {csv} from {dt_str(w.now)}");
+    loop {
+        run_pending(mut w)?;
+        match next_run(w, None) {
+            Some(t) => {
+                if t > end {
+                    break;
+                }
+                w.now = t;
+            }
+            None => break,
+        }
+    }
+    write_lines("data/out/alerts.txt", w.mon.alerts)?;
+    for line in split_lines(read_text("data/out/alerts.txt".to_string())?).iter() {
+        println(f"  {line}");
+    }
+    println(f"  checks={w.mon.checks} retries={w.mon.retries} outages={w.mon.outages} at {dt_str(w.now)}");
+    for id in w.sched.iter() {
+        println(f"  left: {show(w, *id)}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.jsonl") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.jsonl: {e}"),
+    };
+    for line in split_lines(text).iter() {
+        let spec = match loads_str(line) {
+            Ok(v) => v,
+            Err(e) => return Err(failure(e)),
+        };
+        println(f"== {text_of(spec, "name")}");
+        let seed = index_of(opt(spec, "seed")).unwrap_or(0);
+        let mut w = World {
+            jobs: Vec.new(),
+            sched: Vec.new(),
+            labels: Vec.new(),
+            now: parse_iso(text_of(spec, "start")),
+            rng: seeded(seed),
+            debug: true,
+            children: 0,
+            log_lines: Vec.new(),
+            stats: Vec.new(),
+            mon: new_monitor(),
+        };
+        for op in list_of(opt(spec, "ops")).iter() {
+            if let Err(e) = run_op(mut w, op) {
+                return Err(failure(e));
+            }
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# ops daemon tasks: every [N [to M]] UNIT [at T] [until DATE_TIME] do TASK ARGS...\n");
+    t.push_str("# key=value args are keyword arguments, #name is a tag, !cancel cancels a\n");
+    t.push_str("# task when it fails (otherwise a failure is logged and it runs again).\n");
+    t.push_str("\n");
+    t.push_str("every 15 minutes do rotate_logs /var/log/app.log keep=5 #maint\n");
+    t.push_str("every day at 02:30 do backup db #maint #nightly\n");
+    t.push_str("every day at 02:30 do backup media #nightly !cancel\n");
+    t.push_str("every 10 to 20 minutes do poll_feed https://status.example.com/feed.xml #net\n");
+    t.push_str("every monday at 09:00 do weekly_report team=ops\n");
+    t.push_str("every wednesday at 17:00 do weekly_report team=web\n");
+    t.push_str("every hour at :05 do healthcheck api\n");
+    t.push_str("every 6 hours until 2026-10-22_06:00 do refresh_certs #maint\n");
+    t.push_str("every 90 seconds do heartbeat !cancel\n");
+    t.push_str("every 2 days at 23:45:10 do compact_db shards=4\n");
+    t.push_str("every hour at 30 do healthcheck web\n");
+    t.push_str("every 5 fortnights do nothing\n");
+    t.push_str("every day at 25:00 do backup oops\n");
+    t.push_str("every minute do no_such_task\n");
+    t.push_str("every x minutes do heartbeat\n");
+    t.push_str("every 2 minute do heartbeat\n");
+    t.push_str("every 3 to 1 hours do poll_feed http://x\n");
+    t.push_str("every day at 07:00 do backup logs until 2026-10-20_00:00\n");
+    t.push_str("every 1 to 3 days do send_digest #mail\n");
+    t.push_str("every\n");
+    v.push(DataFile { path: "daemon.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("seconds,status\n");
+    t.push_str("0,up\n");
+    t.push_str("1200,up\n");
+    t.push_str("1830,down\n");
+    t.push_str("2100,down\n");
+    t.push_str("2400,degraded\n");
+    t.push_str("2700,down\n");
+    t.push_str("3000,up\n");
+    t.push_str("6000,down\n");
+    t.push_str("6020,up\n");
+    t.push_str("9000,down\n");
+    t.push_str("12000,up\n");
+    v.push(DataFile { path: "health.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"units\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"j1\", \"chain\": [\"seconds\", {\"do\": \"ping\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"j2\", \"chain\": [\"minute\", {\"do\": \"sync\", \"args\": [\"inbox\"]}]}, {\"op\": \"every\", \"job\": \"j3\", \"chain\": [\"hours\", {\"do\": \"report\", \"args\": [\"hourly\"], \"kwargs\": {\"fmt\": \"csv\"}}], \"n\": 2}, {\"op\": \"every\", \"job\": \"j4\", \"chain\": [\"day\", {\"at\": \"10:30\"}, {\"do\": \"backup\", \"args\": [\"db\"]}]}, {\"op\": \"every\", \"job\": \"j5\", \"chain\": [\"days\", {\"at\": \"08:00:15\"}, {\"do\": \"vacuum\"}], \"n\": 3}, {\"op\": \"every\", \"job\": \"j6\", \"chain\": [\"week\", {\"do\": \"digest\"}]}, {\"op\": \"every\", \"job\": \"j7\", \"chain\": [\"monday\", {\"do\": \"standup\"}]}, {\"op\": \"every\", \"job\": \"j8\", \"chain\": [\"wednesday\", {\"at\": \"09:00\"}, {\"do\": \"review\"}]}, {\"op\": \"every\", \"job\": \"j9\", \"chain\": [\"wednesday\", {\"at\": \"13:45\"}, {\"do\": \"demo\"}]}, {\"op\": \"every\", \"job\": \"j10\", \"chain\": [\"sunday\", {\"at\": \"23:59:59\"}, {\"do\": \"rollover\"}]}, {\"op\": \"every\", \"job\": \"j11\", \"chain\": [\"weeks\", {\"do\": \"audit\"}], \"n\": 2}, {\"op\": \"jobs\"}, {\"op\": \"next_run\"}, {\"op\": \"idle\"}, {\"op\": \"tick\", \"s\": 9.75}, {\"op\": \"tick\", \"s\": 0.25}, {\"op\": \"tick\", \"s\": 50}, {\"op\": \"tick\", \"s\": 10}, {\"op\": \"idle\"}, {\"op\": \"clock\", \"t\": \"2026-10-21 10:30:00\"}, {\"op\": \"clock\", \"t\": \"2026-10-21 11:15:27.25\"}, {\"op\": \"clock\", \"t\": \"2026-10-21 13:45:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"intervals\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"a\", \"chain\": [\"minute\", {\"do\": \"x\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"b\", \"chain\": [\"second\", {\"do\": \"x\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"c\", \"chain\": [\"hour\", {\"do\": \"x\"}], \"n\": 0.5}, {\"op\": \"every\", \"job\": \"d\", \"chain\": [\"day\", {\"do\": \"x\"}], \"n\": 7}, {\"op\": \"every\", \"job\": \"e\", \"chain\": [\"week\", {\"do\": \"x\"}], \"n\": 3}, {\"op\": \"every\", \"job\": \"f\", \"chain\": [\"monday\", {\"do\": \"x\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"g\", \"chain\": [\"sunday\", {\"at\": \"10:00\"}], \"n\": 4}, {\"op\": \"every\", \"job\": \"h\", \"chain\": [\"minute\", {\"do\": \"one_float\"}], \"n\": 1.0}, {\"op\": \"every\", \"job\": \"i\", \"chain\": [\"hour\", {\"do\": \"one_bool\"}], \"n\": true}, {\"op\": \"every\", \"job\": \"k\", \"chain\": [\"minutes\", {\"do\": \"ninety_s\"}], \"n\": 1.5}, {\"op\": \"every\", \"job\": \"l\", \"chain\": [\"seconds\", {\"do\": \"quarter\"}], \"n\": 0.25}, {\"op\": \"every\", \"job\": \"m\", \"chain\": [\"hours\", {\"do\": \"tiny\"}], \"n\": 0.0001}, {\"op\": \"every\", \"job\": \"n\", \"chain\": [\"minutes\", {\"do\": \"text\"}], \"n\": \"5\"}, {\"op\": \"every\", \"job\": \"o\", \"chain\": [\"minute\"], \"n\": \"5\"}, {\"op\": \"every\", \"job\": \"p\", \"chain\": [{\"do\": \"nounit\"}], \"n\": 3}, {\"op\": \"every\", \"job\": \"q\", \"chain\": [], \"n\": 3}, {\"op\": \"every\", \"job\": \"r\", \"chain\": []}, {\"op\": \"every\", \"job\": \"s\", \"chain\": [\"minutes\"], \"n\": 2}, {\"op\": \"str\", \"job\": \"q\"}, {\"op\": \"str\", \"job\": \"r\"}, {\"op\": \"str\", \"job\": \"s\"}, {\"op\": \"str\", \"job\": \"n\"}, {\"op\": \"should_run\", \"job\": \"q\"}, {\"op\": \"should_run\", \"job\": \"h\"}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 0.25}, {\"op\": \"tick\", \"s\": 0.5}, {\"op\": \"tick\", \"s\": 59.25}, {\"op\": \"tick\", \"s\": 30}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"at_daily\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"d1\", \"chain\": [\"day\", {\"at\": \"10:30\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d2\", \"chain\": [\"day\", {\"at\": \"1030\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d3\", \"chain\": [\"day\", {\"at\": \"24:00\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d4\", \"chain\": [\"day\", {\"at\": \"29:59:59\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d5\", \"chain\": [\"day\", {\"at\": \"10:60\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d6\", \"chain\": [\"day\", {\"at\": \"10:30:60\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d7\", \"chain\": [\"day\", {\"at\": \"7:30\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d8\", \"chain\": [\"day\", {\"at\": \"07:30\\n\"}, {\"do\": \"newline\"}]}, {\"op\": \"every\", \"job\": \"d9\", \"chain\": [\"day\", {\"at\": \"09:15:27\"}, {\"do\": \"this_second\"}]}, {\"op\": \"every\", \"job\": \"d10\", \"chain\": [\"day\", {\"at\": \"09:15:28\"}, {\"do\": \"next_second\"}]}, {\"op\": \"every\", \"job\": \"d11\", \"chain\": [\"day\", {\"at\": \"1０:3０\"}, {\"do\": \"fullwidth\"}]}, {\"op\": \"every\", \"job\": \"d12\", \"chain\": [\"day\", {\"at\": \"١٢:٠٥\"}, {\"do\": \"arabic_indic\"}]}, {\"op\": \"every\", \"job\": \"d13\", \"chain\": [\"day\", {\"at\": \"10:30 \"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d14\", \"chain\": [\"day\", {\"at\": \" 10:30\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d15\", \"chain\": [\"day\", {\"at\": 1030}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d16\", \"chain\": [\"day\", {\"at\": \"10:30\", \"tz\": \"Europe/Berlin\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d17\", \"chain\": [\"day\", {\"at\": \"10:30\", \"tz\": 5}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"d18\", \"chain\": [\"days\", {\"at\": \"06:00\"}, {\"do\": \"every_other\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"d19\", \"chain\": [\"days\", {\"at\": \"23:00\"}, {\"do\": \"every_other_late\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"d20\", \"chain\": [\"day\", {\"at\": \"00:00\"}, {\"do\": \"midnight\"}]}, {\"op\": \"every\", \"job\": \"d21\", \"chain\": [\"day\", {\"at\": \"23:59:59\"}, {\"do\": \"last_second\"}]}, {\"op\": \"every\", \"job\": \"d22\", \"chain\": [\"day\", {\"at\": \"10:30\"}, {\"at\": \"11:45\"}, {\"do\": \"twice_at\"}]}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 1}, {\"op\": \"clock\", \"t\": \"2026-10-22 00:00:00\"}, {\"op\": \"clock\", \"t\": \"2026-10-22 09:30:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"at_hourly_minutely\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"h1\", \"chain\": [\"hour\", {\"at\": \":30\"}, {\"do\": \"half_past\"}]}, {\"op\": \"every\", \"job\": \"h2\", \"chain\": [\"hour\", {\"at\": \"15:30\"}, {\"do\": \"m15s30\"}]}, {\"op\": \"every\", \"job\": \"h3\", \"chain\": [\"hour\", {\"at\": \"15\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"h4\", \"chain\": [\"hour\", {\"at\": \"5:30\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"h5\", \"chain\": [\"hour\", {\"at\": \"60:00\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"h6\", \"chain\": [\"hours\", {\"at\": \":00\"}, {\"do\": \"on_the_hour\"}], \"n\": 3}, {\"op\": \"every\", \"job\": \"h7\", \"chain\": [\"hour\", {\"at\": \"15:27\"}, {\"do\": \"this_minute\"}]}, {\"op\": \"every\", \"job\": \"m1\", \"chain\": [\"minute\", {\"at\": \":15\"}, {\"do\": \"sec15\"}]}, {\"op\": \"every\", \"job\": \"m2\", \"chain\": [\"minute\", {\"at\": \"00:15\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"m3\", \"chain\": [\"minutes\", {\"at\": \":45\"}, {\"do\": \"every5_at45\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"m4\", \"chain\": [\"minute\", {\"at\": \":27\"}, {\"do\": \"now_second\"}]}, {\"op\": \"every\", \"job\": \"s1\", \"chain\": [\"second\", {\"at\": \":15\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"s2\", \"chain\": [\"week\", {\"at\": \"10:00\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"s3\", \"chain\": [\"weeks\", {\"at\": \"10:00\", \"tz\": \"UTC\"}, {\"do\": \"t\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"s4\", \"chain\": [\"monday\", {\"at\": \"25:00\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"s5\", \"chain\": [\"monday\", {\"at\": \":30\"}, {\"do\": \"t\"}]}, {\"op\": \"every\", \"job\": \"s6\", \"chain\": [{\"at\": \"10:00\"}, {\"do\": \"t\"}]}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 32.75}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"clock\", \"t\": \"2026-10-21 09:30:00\"}, {\"op\": \"clock\", \"t\": \"2026-10-21 10:15:30\"}, {\"op\": \"clock\", \"t\": \"2026-10-21 12:00:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"random_to\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 42, \"ops\": [{\"op\": \"every\", \"job\": \"r1\", \"chain\": [{\"to\": 10}, \"minutes\", {\"do\": \"jitter\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"r2\", \"chain\": [{\"to\": 3}, \"hours\", {\"do\": \"hourly_jitter\"}], \"n\": 1}, {\"op\": \"every\", \"job\": \"r3\", \"chain\": [\"seconds\", {\"to\": 30}, {\"do\": \"sec_jitter\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"r4\", \"chain\": [{\"to\": 5}, \"minutes\", {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"r5\", \"chain\": [{\"to\": 3}, \"minutes\", {\"do\": \"t\"}], \"n\": 1.5}, {\"op\": \"every\", \"job\": \"r6\", \"chain\": [{\"to\": 2.5}, \"minutes\", {\"do\": \"t\"}], \"n\": 2}, {\"op\": \"every\", \"job\": \"r7\", \"chain\": [{\"to\": 4}, \"minutes\", {\"do\": \"t\"}], \"n\": 2.0}, {\"op\": \"every\", \"job\": \"r8\", \"chain\": [{\"to\": 1}, \"minute\", {\"do\": \"same\"}], \"n\": 1}, {\"op\": \"every\", \"job\": \"r9\", \"chain\": [{\"to\": 3}, \"day\", {\"at\": \"12:00\"}, {\"do\": \"noonish\"}], \"n\": 1}, {\"op\": \"every\", \"job\": \"r10\", \"chain\": [{\"to\": 3}, \"minutes\", {\"do\": \"bool_low\"}], \"n\": true}, {\"op\": \"every\", \"job\": \"r11\", \"chain\": [{\"to\": 2}, \"minutes\"], \"n\": 1}, {\"op\": \"str\", \"job\": \"r11\"}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 600}, {\"op\": \"tick\", \"s\": 1800}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"random_seeds\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 2026, \"ops\": [{\"op\": \"every\", \"job\": \"x\", \"chain\": [{\"to\": 1000}, \"seconds\", {\"do\": \"wide\"}], \"n\": 1}, {\"op\": \"tick\", \"s\": 1000}, {\"op\": \"tick\", \"s\": 1000}, {\"op\": \"tick\", \"s\": 1000}, {\"op\": \"tick\", \"s\": 1000}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"until\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"u1\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 09:30:00\"}, {\"do\": \"t1\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"u2\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 09:40\"}, {\"do\": \"t2\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"u3\", \"chain\": [\"hours\", {\"until\": \"2026-10-22\"}, {\"do\": \"t3\"}], \"n\": 6}, {\"op\": \"every\", \"job\": \"u4\", \"chain\": [\"minutes\", {\"until\": \"09:31:00\"}, {\"do\": \"t4\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u5\", \"chain\": [\"minutes\", {\"until\": \"10:00\"}, {\"do\": \"t5\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u6\", \"chain\": [\"minutes\", {\"until\": \"08:00\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u7\", \"chain\": [\"minutes\", {\"until\": \"2026-02-30\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u8\", \"chain\": [\"minutes\", {\"until\": \"2026-10-23 18:00:61\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u9\", \"chain\": [\"minutes\", {\"until\": \"2026-10-23 18:00:7\"}, {\"do\": \"t9\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u10\", \"chain\": [\"minutes\", {\"until\": \"tomorrow\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u11\", \"chain\": [\"minutes\", {\"until\": \"2026-1-5\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u12\", \"chain\": [\"minutes\", {\"until\": \"2026-10-23   18:00\"}, {\"do\": \"t12\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u13\", \"chain\": [\"minutes\", {\"until\": \"2026-10- 9\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u14\", \"chain\": [\"minutes\", {\"until\": \"2026-11- 9 9:5\"}, {\"do\": \"t14\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u15\", \"chain\": [\"minutes\", {\"until\": \"2026-10-23 18:00 \"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u16\", \"chain\": [\"minutes\", {\"until\": \"２０２６-10-23\"}, {\"do\": \"t16\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u17\", \"chain\": [\"minutes\", {\"until\": {\"dt\": \"2026-10-21 09:45:00\"}}, {\"do\": \"t17\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u18\", \"chain\": [\"minutes\", {\"until\": {\"td\": 1800.5}}, {\"do\": \"t18\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u19\", \"chain\": [\"minutes\", {\"until\": {\"time\": \"09:50:30\"}}, {\"do\": \"t19\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u20\", \"chain\": [\"minutes\", {\"until\": {\"time\": \"09:00:00\"}}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u21\", \"chain\": [\"minutes\", {\"until\": 3600}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u22\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 09:15:27\"}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u23\", \"chain\": [\"minutes\", {\"until\": {\"td\": 0}}, {\"do\": \"t\"}], \"n\": 10}, {\"op\": \"every\", \"job\": \"u24\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 9:20\"}, {\"do\": \"t24\"}], \"n\": 1}, {\"op\": \"every\", \"job\": \"u25\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 09:35\"}, {\"do\": \"t25\"}], \"n\": 20}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 300}, {\"op\": \"tick\", \"s\": 600}, {\"op\": \"tick\", \"s\": 1200}, {\"op\": \"jobs\"}, {\"op\": \"run_all\"}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-10-22 12:00:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"tags\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"t1\", \"chain\": [\"minutes\", {\"tag\": [\"db\", \"nightly\"]}, {\"do\": \"a\"}], \"n\": 5}, {\"op\": \"every\", \"job\": \"t2\", \"chain\": [\"minutes\", {\"tag\": [1]}, {\"do\": \"b\"}], \"n\": 7}, {\"op\": \"every\", \"job\": \"t3\", \"chain\": [\"minutes\", {\"tag\": [true, \"db\"]}, {\"do\": \"c\"}], \"n\": 9}, {\"op\": \"every\", \"job\": \"t4\", \"chain\": [\"minutes\", {\"tag\": [1.0, \"1\"]}, {\"do\": \"d\"}], \"n\": 11}, {\"op\": \"every\", \"job\": \"t5\", \"chain\": [\"minutes\", {\"tag\": [[\"x\"]]}, {\"do\": \"e\"}], \"n\": 13}, {\"op\": \"every\", \"job\": \"t6\", \"chain\": [\"minutes\", {\"tag\": [\"web\", {\"k\": 1}]}, {\"do\": \"f\"}], \"n\": 15}, {\"op\": \"every\", \"job\": \"t7\", \"chain\": [\"minutes\", {\"tag\": []}, {\"tag\": [\"web\"]}, {\"tag\": [\"web\", null]}, {\"do\": \"g\"}], \"n\": 17}, {\"op\": \"every\", \"job\": \"t8\", \"chain\": [{\"tag\": [\"early\"]}, \"minutes\", {\"do\": \"h\"}], \"n\": 19}, {\"op\": \"str\", \"job\": \"t5\"}, {\"op\": \"tags\", \"job\": \"t1\"}, {\"op\": \"tags\", \"job\": \"t3\"}, {\"op\": \"tags\", \"job\": \"t4\"}, {\"op\": \"tags\", \"job\": \"t7\"}, {\"op\": \"get_jobs\", \"tag\": \"db\"}, {\"op\": \"get_jobs\", \"tag\": 1}, {\"op\": \"get_jobs\", \"tag\": true}, {\"op\": \"get_jobs\", \"tag\": 1.0}, {\"op\": \"get_jobs\", \"tag\": \"1\"}, {\"op\": \"get_jobs\", \"tag\": null}, {\"op\": \"get_jobs\", \"tag\": \"nope\"}, {\"op\": \"get_jobs\"}, {\"op\": \"next_run\", \"tag\": \"db\"}, {\"op\": \"next_run\", \"tag\": \"web\"}, {\"op\": \"next_run\", \"tag\": \"nope\"}, {\"op\": \"clear\", \"tag\": 1.0}, {\"op\": \"get_jobs\"}, {\"op\": \"clear\", \"tag\": \"db\"}, {\"op\": \"get_jobs\"}, {\"op\": \"clear\", \"tag\": \"nope\"}, {\"op\": \"clear\"}, {\"op\": \"get_jobs\"}, {\"op\": \"next_run\"}, {\"op\": \"idle\"}, {\"op\": \"tick\", \"s\": 60}]}\n");
+    t.push_str("{\"name\": \"returns\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"o1\", \"chain\": [\"minute\", {\"do\": \"once\"}]}, {\"op\": \"every\", \"job\": \"o2\", \"chain\": [\"minute\", {\"do\": \"once_obj\"}]}, {\"op\": \"every\", \"job\": \"l1\", \"chain\": [\"minutes\", {\"do\": \"limited\", \"kwargs\": {\"times\": 3}}], \"n\": 2}, {\"op\": \"every\", \"job\": \"v1\", \"chain\": [\"minute\", {\"do\": \"returns\", \"args\": [42]}]}, {\"op\": \"every\", \"job\": \"v2\", \"chain\": [\"minute\", {\"do\": \"returns\", \"args\": [\"CancelJob\"]}]}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"tick\", \"s\": 120}, {\"op\": \"jobs\"}, {\"op\": \"cancel\", \"job\": \"o1\"}, {\"op\": \"cancel\", \"job\": \"v1\"}, {\"op\": \"cancel\", \"job\": \"v1\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"failures\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"f1\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"a\"]}]}, {\"op\": \"every\", \"job\": \"f2\", \"chain\": [\"seconds\", {\"do\": \"boom\", \"args\": [\"disk full\"]}], \"n\": 30}, {\"op\": \"every\", \"job\": \"f3\", \"chain\": [\"minutes\", {\"do\": \"ping\", \"args\": [\"c\"]}], \"n\": 2}, {\"op\": \"tick\", \"s\": 30}, {\"op\": \"tick\", \"s\": 30}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 1}, {\"op\": \"cancel\", \"job\": \"f2\"}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"every\", \"job\": \"f4\", \"chain\": [\"minute\", {\"do\": \"boom\", \"args\": [\"\"]}]}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"every\", \"job\": \"f5\", \"chain\": [\"minute\", {\"do\": \"boom_type\"}]}, {\"op\": \"clear\"}, {\"op\": \"every\", \"job\": \"f6\", \"chain\": [\"minute\", {\"do\": \"boom_type\"}]}, {\"op\": \"tick\", \"s\": 60}]}\n");
+    t.push_str("{\"name\": \"slow_jobs\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"w1\", \"chain\": [\"minute\", {\"do\": \"slow\", \"args\": [90]}]}, {\"op\": \"every\", \"job\": \"w2\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"after\"]}]}, {\"op\": \"every\", \"job\": \"w3\", \"chain\": [\"minutes\", {\"do\": \"slow\", \"args\": [0.5]}], \"n\": 3}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"idle\"}, {\"op\": \"tick\", \"s\": 30}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"run_all\", \"delay\": 5}, {\"op\": \"jobs\"}, {\"op\": \"run_all\", \"delay\": 2.5}, {\"op\": \"last_run\", \"job\": \"w1\"}, {\"op\": \"last_run\", \"job\": \"w2\"}]}\n");
+    t.push_str("{\"name\": \"run_all\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"run_all\", \"delay\": 3}, {\"op\": \"every\", \"job\": \"a1\", \"chain\": [\"hour\", {\"do\": \"ping\", \"args\": [\"a1\"]}]}, {\"op\": \"every\", \"job\": \"a2\", \"chain\": [\"day\", {\"at\": \"18:00\"}, {\"do\": \"ping\", \"args\": [\"a2\"]}]}, {\"op\": \"every\", \"job\": \"a3\", \"chain\": [\"minutes\", {\"until\": \"2026-10-21 09:20\"}, {\"do\": \"ping\", \"args\": [\"a3\"]}], \"n\": 3}, {\"op\": \"every\", \"job\": \"a4\", \"chain\": [\"minute\", {\"do\": \"once\"}]}, {\"op\": \"run_all\", \"delay\": 60}, {\"op\": \"jobs\"}, {\"op\": \"run_all\"}, {\"op\": \"jobs\"}, {\"op\": \"run_all\", \"delay\": 0.75}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"inside_jobs\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"c1\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"c1\"]}]}, {\"op\": \"every\", \"job\": \"c2\", \"chain\": [\"minute\", {\"do\": \"clear_all\"}]}, {\"op\": \"every\", \"job\": \"c3\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"c3\"]}]}, {\"op\": \"every\", \"job\": \"c4\", \"chain\": [\"minute\", {\"do\": \"once\"}]}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"every\", \"job\": \"s1\", \"chain\": [\"minutes\", {\"do\": \"spawn\", \"args\": [15, \"child\"]}], \"n\": 1}, {\"op\": \"every\", \"job\": \"s2\", \"chain\": [\"minutes\", {\"tag\": [\"keep\"]}, {\"do\": \"ping\", \"args\": [\"s2\"]}], \"n\": 2}, {\"op\": \"tick\", \"s\": 60}, {\"op\": \"jobs\"}, {\"op\": \"tick\", \"s\": 15}, {\"op\": \"tick\", \"s\": 45}, {\"op\": \"jobs\"}, {\"op\": \"every\", \"job\": \"x1\", \"chain\": [\"seconds\", {\"tag\": [\"spawned\"]}, {\"do\": \"clear_tag\", \"args\": [\"spawned\"]}], \"n\": 20}, {\"op\": \"tick\", \"s\": 20}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"clock_moves\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"k1\", \"chain\": [\"day\", {\"at\": \"06:00\"}, {\"do\": \"daily\"}]}, {\"op\": \"every\", \"job\": \"k2\", \"chain\": [\"minutes\", {\"do\": \"tick15\"}], \"n\": 15}, {\"op\": \"every\", \"job\": \"k3\", \"chain\": [\"hours\", {\"do\": \"every4h\"}], \"n\": 4}, {\"op\": \"clock\", \"t\": \"2026-10-24 12:00:00\"}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-10-24 11:00:00\"}, {\"op\": \"should_run\", \"job\": \"k2\"}, {\"op\": \"idle\"}, {\"op\": \"clock\", \"t\": \"2026-10-24 12:16:00\"}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-10-25 05:59:59.999999\"}, {\"op\": \"idle\"}, {\"op\": \"tick\", \"s\": 1e-06}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-12-31 23:59:59\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"weekdays\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"w0\", \"chain\": [\"monday\", {\"at\": \"09:00\"}, {\"do\": \"mon\"}]}, {\"op\": \"every\", \"job\": \"w1\", \"chain\": [\"tuesday\", {\"do\": \"tue\"}]}, {\"op\": \"every\", \"job\": \"w2\", \"chain\": [\"wednesday\", {\"do\": \"wed_now\"}]}, {\"op\": \"every\", \"job\": \"w3\", \"chain\": [\"wednesday\", {\"at\": \"09:15:27\"}, {\"do\": \"wed_this_second\"}]}, {\"op\": \"every\", \"job\": \"w4\", \"chain\": [\"thursday\", {\"at\": \"00:00\"}, {\"do\": \"thu\"}]}, {\"op\": \"every\", \"job\": \"w5\", \"chain\": [\"friday\", {\"at\": \"17:30:45\"}, {\"do\": \"fri\"}]}, {\"op\": \"every\", \"job\": \"w6\", \"chain\": [\"saturday\", {\"at\": \"10:00\"}, {\"do\": \"sat\"}]}, {\"op\": \"every\", \"job\": \"w7\", \"chain\": [\"sunday\", {\"do\": \"sun\"}]}, {\"op\": \"every\", \"job\": \"w8\", \"chain\": [\"monday\", \"tuesday\", {\"do\": \"both_days\"}]}, {\"op\": \"every\", \"job\": \"w9\", \"chain\": [\"friday\", \"day\", {\"do\": \"fri_then_day\"}]}, {\"op\": \"every\", \"job\": \"w10\", \"chain\": [\"day\", \"friday\", {\"at\": \"08:00\"}, {\"do\": \"day_then_fri\"}]}, {\"op\": \"every\", \"job\": \"w11\", \"chain\": [\"wednesday\", \"hours\", {\"at\": \":30\"}, {\"do\": \"wed_hours\"}]}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-10-23 17:30:45\"}, {\"op\": \"clock\", \"t\": \"2026-10-26 09:00:00\"}, {\"op\": \"clock\", \"t\": \"2026-11-02 10:00:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"weekdays_sunday_start\", \"start\": \"2026-11-01 08:00:00\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"w0\", \"chain\": [\"monday\", {\"at\": \"09:00\"}, {\"do\": \"mon\"}]}, {\"op\": \"every\", \"job\": \"w6\", \"chain\": [\"saturday\", {\"at\": \"23:00\"}, {\"do\": \"sat\"}]}, {\"op\": \"every\", \"job\": \"w7\", \"chain\": [\"sunday\", {\"at\": \"07:00\"}, {\"do\": \"sun_morning\"}]}, {\"op\": \"every\", \"job\": \"w8\", \"chain\": [\"sunday\", {\"at\": \"21:00\"}, {\"do\": \"sun_evening\"}]}, {\"op\": \"jobs\"}, {\"op\": \"clock\", \"t\": \"2026-11-01 21:00:00\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"detached\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"detached\", \"job\": \"d1\", \"chain\": [\"minutes\", {\"do\": \"lonely\"}], \"n\": 5}, {\"op\": \"str\", \"job\": \"d1\"}, {\"op\": \"should_run\", \"job\": \"d1\"}, {\"op\": \"detached\", \"job\": \"d2\", \"chain\": [\"minute\"]}, {\"op\": \"str\", \"job\": \"d2\"}, {\"op\": \"should_run\", \"job\": \"d2\"}, {\"op\": \"cancel\", \"job\": \"d1\"}, {\"op\": \"jobs\"}]}\n");
+    t.push_str("{\"name\": \"arg_reprs\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"p1\", \"chain\": [\"minute\", {\"do\": \"echo\", \"args\": [\"it's\", \"say \\\"hi\\\"\", \"both ' and \\\"\", \"tab\\there\", \"back\\\\slash\"]}]}, {\"op\": \"every\", \"job\": \"p2\", \"chain\": [\"minute\", {\"do\": \"echo\", \"args\": [1, -2.5, 1e+100, 1e-07, 0.1, true, false, null]}]}, {\"op\": \"every\", \"job\": \"p3\", \"chain\": [\"minute\", {\"do\": \"echo\", \"args\": [[1, \"a\", [null]], {\"k\": [1.5]}, {}]}]}, {\"op\": \"every\", \"job\": \"p4\", \"chain\": [\"minute\", {\"do\": \"echo\", \"kwargs\": {\"name\": \"café\", \"n\": 0, \"flag\": null}}]}, {\"op\": \"every\", \"job\": \"p5\", \"chain\": [\"minute\", {\"do\": \"echo\", \"args\": [\"é中😀\", \"\\u0001\", \"​\", \" ");
+    t.push_str("\"]}]}, {\"op\": \"every\", \"job\": \"p6\", \"chain\": [\"minute\", {\"do\": \"echo\", \"args\": [12345678901234567890, -0.0, 100.0, 1.5e+16]}]}, {\"op\": \"jobs\"}, {\"op\": \"str\", \"job\": \"p1\"}, {\"op\": \"str\", \"job\": \"p2\"}, {\"op\": \"str\", \"job\": \"p3\"}, {\"op\": \"str\", \"job\": \"p4\"}, {\"op\": \"str\", \"job\": \"p5\"}, {\"op\": \"str\", \"job\": \"p6\"}, {\"op\": \"tick\", \"s\": 60}]}\n");
+    t.push_str("{\"name\": \"sort_order\", \"start\": \"2026-10-21 09:15:27.250000\", \"seed\": 1, \"ops\": [{\"op\": \"every\", \"job\": \"e1\", \"chain\": [\"minutes\", {\"do\": \"ping\", \"args\": [\"e1\"]}], \"n\": 3}, {\"op\": \"every\", \"job\": \"e2\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"e2\"]}]}, {\"op\": \"every\", \"job\": \"e3\", \"chain\": [\"minutes\", {\"do\": \"ping\", \"args\": [\"e3\"]}], \"n\": 2}, {\"op\": \"every\", \"job\": \"e4\", \"chain\": [\"seconds\", {\"do\": \"ping\", \"args\": [\"e4\"]}], \"n\": 90}, {\"op\": \"every\", \"job\": \"e5\", \"chain\": [\"minute\", {\"do\": \"ping\", \"args\": [\"e5\"]}]}, {\"op\": \"clock\", \"t\": \"2026-10-21 09:25:00\"}, {\"op\": \"jobs\"}, {\"op\": \"next_run\"}, {\"op\": \"tick\", \"s\": 30}, {\"op\": \"tick\", \"s\": 30}]}\n");
+    t.push_str("{\"name\": \"daemon\", \"start\": \"2026-10-21 08:59:30\", \"seed\": 1, \"ops\": [{\"op\": \"daemon\", \"conf\": \"daemon.conf\", \"until\": \"2026-10-23 12:00:00\"}]}\n");
+    t.push_str("{\"name\": \"monitor\", \"start\": \"2026-10-21 13:00:00\", \"seed\": 1, \"ops\": [{\"op\": \"monitor\", \"csv\": \"health.csv\", \"until\": \"2026-10-21 17:00:00\"}]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), body: t });
+}
