@@ -1,0 +1,2998 @@
+// mini_tenacity: tenacity 9.0.0, the retry library ("retry this call
+// until it works, waiting longer each time"):
+// - Retrying and the @retry decorator, with copy() and retry_with(), and
+//   the `for attempt in Retrying(...)` form;
+// - every stop (after_attempt, after_delay, before_delay, when an event
+//   is set) and their | and & combinations;
+// - every wait: fixed, random, incrementing, exponential, full jitter,
+//   exponential jitter, chains, and waits added with + and sum(), with
+//   Python 3.13's compensated float sum and the ints max(0, ...) gives;
+// - every retry condition: exception types, causes and messages, results
+//   and their negations, TryAgain, any and all;
+// - before/after/before_sleep logs, retry_error_callback, reraise,
+//   RetryError and the statistics dict;
+// - a webhook delivery worker and a chunked backup uploader.
+//
+// The inputs are data/jobs.jsonl and the files beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through tenacity itself (the copy in tenacity/) on a fake clock.
+
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+// ------------------------------------------------------------ Python values
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// str.isprintable outside ASCII: controls, format characters, separators
+// other than space, surrogates and private use are not printable.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x8E2 or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for ch in s.chars() {
+        let c = ch as i64;
+        if ch == quote or ch == '\\' {
+            out.push('\\');
+            out.push(ch);
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c < 0x20 or c == 0x7F {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c < 0x7F or is_printable(c) {
+            out.push(ch);
+        } else if c <= 0xFF {
+            out.push_str(f"\\x{hex_n(c, 2)}");
+        } else if c <= 0xFFFF {
+            out.push_str(f"\\u{hex_n(c, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_n(c, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn repr(v: ref J) -> String {
+    match v {
+        J.Null => "None".to_string(),
+        J.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        J.Int(digits) => digits.clone(),
+        J.Float(x) => float_repr(*x),
+        J.Str(s) => str_repr(s),
+        J.Arr(items) => {
+            let mut out = "[".to_string();
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr(items[i]));
+            }
+            out.push(']');
+            out
+        }
+        J.Obj(members) => {
+            let mut out = "{".to_string();
+            for i in 0..members.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(str_repr(members[i].key));
+                out.push_str(": ");
+                out.push_str(repr(members[i].val));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
+// str(v)
+fn py_str(v: ref J) -> String {
+    match v {
+        J.Str(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+fn type_name(v: ref J) -> String {
+    let n = match v {
+        J.Null => "NoneType",
+        J.Bool(_) => "bool",
+        J.Int(_) => "int",
+        J.Float(_) => "float",
+        J.Str(_) => "str",
+        J.Arr(_) => "list",
+        J.Obj(_) => "dict",
+    };
+    n.to_string()
+}
+
+// The number a bool, int or float compares as.
+fn num_of(v: ref J) -> Option[f64] {
+    match v {
+        J.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        J.Int(d) => Some(f64.parse(d).unwrap_or(0.0)),
+        J.Float(x) => Some(*x),
+        _ => None,
+    }
+}
+
+fn is_number(v: ref J) -> bool {
+    num_of(v).is_some()
+}
+
+// a == b, with Python's rules: True == 1 == 1.0, and dicts compare by
+// their members, not their order.
+fn py_eq(a: ref J, b: ref J) -> bool {
+    if let J.Int(x) = a {
+        if let J.Int(y) = b {
+            return x == y;
+        }
+    }
+    if is_number(a) and is_number(b) {
+        return num_of(a).unwrap() == num_of(b).unwrap();
+    }
+    match a {
+        J.Null => match b {
+            J.Null => true,
+            _ => false,
+        },
+        J.Str(x) => match b {
+            J.Str(y) => x == y,
+            _ => false,
+        },
+        J.Arr(xs) => match b {
+            J.Arr(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for i in 0..xs.len() {
+                    if not py_eq(xs[i], ys[i]) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        J.Obj(xs) => match b {
+            J.Obj(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                for m in xs.iter() {
+                    match j_get(b, m.key.as_str()) {
+                        Some(v) => {
+                            if not py_eq(m.val, v) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// d.get(key) on a dict; None for anything else.
+fn j_get(d: ref J, key: Str) -> Option[J] {
+    if let J.Obj(members) = d {
+        for m in members.iter() {
+            if m.key == key {
+                return Some(m.val.clone());
+            }
+        }
+    }
+    None
+}
+
+fn j_has(d: ref J, key: Str) -> bool {
+    j_get(d, key).is_some()
+}
+// ------------------------------------------------------------ numbers
+
+// random.random(): 53 random bits, as genrand_res53 makes them.
+fn random_float(r: mut ref Random) -> f64 {
+    let a = (genrand_uint32(mut r) >> 5) as i64;
+    let b = (genrand_uint32(mut r) >> 6) as i64;
+    ((a * 67108864 + b) as f64) / 9007199254740992.0
+}
+
+// An int or a float, as tenacity passes waits around. wait_fixed makes
+// floats, but wait_exponential's defaults and max(0, ...) can hand back
+// an int, and that int shows in the statistics.
+#[derive(Clone)]
+enum Num {
+    I(i64),
+    F(f64),
+}
+
+fn num_f(n: ref Num) -> f64 {
+    match n {
+        Num.I(i) => *i as f64,
+        Num.F(x) => *x,
+    }
+}
+
+fn num_repr(n: ref Num) -> String {
+    match n {
+        Num.I(i) => f"{i}",
+        Num.F(x) => float_repr(*x),
+    }
+}
+
+fn num_add(a: ref Num, b: ref Num) -> Num {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return Num.I(*x + *y);
+        }
+    }
+    Num.F(num_f(a) + num_f(b))
+}
+
+fn num_sub(a: ref Num, b: ref Num) -> Num {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return Num.I(*x - *y);
+        }
+    }
+    Num.F(num_f(a) - num_f(b))
+}
+
+fn num_mul(a: ref Num, b: ref Num) -> Num {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return Num.I(*x * *y);
+        }
+    }
+    Num.F(num_f(a) * num_f(b))
+}
+
+fn num_lt(a: ref Num, b: ref Num) -> bool {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return *x < *y;
+        }
+    }
+    num_f(a) < num_f(b)
+}
+
+// min(a, b) and max(a, b): the first argument wins a tie, so
+// max(0, 0.0) is the int 0.
+fn py_min(a: ref Num, b: ref Num) -> Num {
+    if num_lt(b, a) { b.clone() } else { a.clone() }
+}
+
+fn py_max(a: ref Num, b: ref Num) -> Num {
+    if num_lt(a, b) { b.clone() } else { a.clone() }
+}
+
+// base ** e for e >= 0. A float result that overflows is
+// OverflowError, which None stands for here.
+fn num_pow(base: ref Num, e: i64) -> Option[Num] {
+    match base {
+        Num.I(b) => {
+            let mut p: i64 = 1;
+            for _ in 0..e {
+                p = p * *b;
+            }
+            Some(Num.I(p))
+        }
+        Num.F(x) => {
+            let y = x.pow(e as f64);
+            if y.is_infinite() and not x.is_infinite() {
+                return None;
+            }
+            Some(Num.F(y))
+        }
+    }
+}
+
+// sum(items) with start 0, as Python 3.13 adds: ints exactly while
+// they last, then floats with Neumaier's compensation. An int met
+// among the floats is added plainly.
+fn py_sum(items: ref Vec[Num]) -> Num {
+    let mut i = 0;
+    let mut isum: i64 = 0;
+    while i < items.len() {
+        match items[i] {
+            Num.I(v) => isum += *v,
+            Num.F(_) => break,
+        }
+        i += 1;
+    }
+    if i == items.len() {
+        return Num.I(isum);
+    }
+    let mut f = isum as f64 + num_f(items[i]);
+    let mut c = 0.0;
+    i += 1;
+    while i < items.len() {
+        match items[i] {
+            Num.F(x) => {
+                let t = f + *x;
+                if f.abs() >= x.abs() {
+                    c += (f - t) + *x;
+                } else {
+                    c += (*x - t) + f;
+                }
+                f = t;
+            }
+            Num.I(v) => f += *v as f64,
+        }
+        i += 1;
+    }
+    if c != 0.0 and not c.is_infinite() and not c.is_nan() {
+        f += c;
+    }
+    Num.F(f)
+}
+
+// round(|x| * 10**d), ties to even, on x's exact binary value: what
+// "%.*f" and round() both start from.
+fn scaled_round(x: f64, d: i64) -> u128 {
+    let bits = x.to_bits();
+    let exp = ((bits >> 52) & 0x7ff) as i64;
+    let frac = bits & 0xfffffffffffffu64;
+    let mut m = frac;
+    let mut e: i64 = -1074;
+    if exp != 0 {
+        m = frac | 0x10000000000000u64;
+        e = exp - 1075;
+    }
+    let mut num = m as u128;
+    for _ in 0..d {
+        num = num * 10;
+    }
+    if e >= 0 {
+        return num << e;
+    }
+    let s = -e;
+    if s >= 127 {
+        return 0;
+    }
+    let q = num >> s;
+    let r = num - (q << s);
+    let half = 1u128 << (s - 1);
+    if r > half or (r == half and q % 2 == 1) { q + 1 } else { q }
+}
+
+// "%.{d}f" % x
+fn fixed(x: f64, d: i64) -> String {
+    let n = scaled_round(x, d);
+    let mut p: u128 = 1;
+    for _ in 0..d {
+        p = p * 10;
+    }
+    let mut out = String.new();
+    if x.to_bits() >> 63 == 1 {
+        out.push('-');
+    }
+    out.push_str(f"{n / p}");
+    if d > 0 {
+        let mut frac = f"{n % p}";
+        while frac.len() < d {
+            frac = f"0{frac}";
+        }
+        out.push('.');
+        out.push_str(frac);
+    }
+    out
+}
+
+// float(round(x, 2)) for x >= 0
+fn round2(x: f64) -> f64 {
+    let n = scaled_round(x, 2);
+    (n as i64) as f64 / 100.0
+}
+
+// sec_format % x for the formats after_log is given here.
+fn sec_format(fmt: ref String, x: f64) -> String {
+    if fmt == "%s" or fmt == "%r" {
+        return float_repr(x);
+    }
+    if fmt == "%d" {
+        return f"{x.trunc() as i64}";
+    }
+    let mut digits = 6;
+    let parts: Vec[String] = fmt.split(".").map(|p| p.to_string()).collect();
+    if parts.len() == 2 {
+        digits = i64.parse(parts[1][0..parts[1].len() - 1]).unwrap_or(6);
+    }
+    fixed(x, digits)
+}
+
+fn ordinal(n: i64) -> String {
+    f"{n}{ordinal_suffix(n)}"
+}
+
+fn ordinal_suffix(n: i64) -> Str {
+    if n == 0 {
+        return "th";
+    }
+    if n == 1 {
+        return "st";
+    }
+    if n == 2 {
+        return "nd";
+    }
+    if n == 3 {
+        return "rd";
+    }
+    if n >= 4 and n <= 20 {
+        return "th";
+    }
+    ordinal_suffix(n % 10)
+}
+// ------------------------------------------------------------ random
+
+// MT19937 as random.seed() and random.randint() use it.
+const MT_N: i64 = 624;
+const MT_M: i64 = 397;
+const MATRIX_A: u32 = 0x9908b0df;
+const UPPER_MASK: u32 = 0x80000000;
+const LOWER_MASK: u32 = 0x7fffffff;
+
+struct Random {
+    mt: Vec[u32],
+    index: i64,
+}
+
+// random.seed(n) for a small n >= 0: init_by_array with one 32-bit word.
+fn seeded(n: i64) -> Random {
+    let mut r = Random { mt: Vec.filled(MT_N, 0u32), index: MT_N };
+    let mut key: Vec[u32] = Vec.new();
+    key.push(n as u32);
+    init_by_array(mut r, key);
+    r
+}
+
+fn init_genrand(r: mut ref Random, s: u32) {
+    r.mt[0] = s;
+    for i in 1..MT_N {
+        let p = r.mt[i - 1];
+        r.mt[i] = 1812433253u32.wrapping_mul(p ^ (p >> 30)).wrapping_add(i as u32);
+    }
+    r.index = MT_N;
+}
+
+fn init_by_array(r: mut ref Random, key: ref Vec[u32]) {
+    init_genrand(mut r, 19650218u32);
+    let mut i: i64 = 1;
+    let mut j: i64 = 0;
+    let mut k = if MT_N > key.len() { MT_N } else { key.len() };
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1664525u32)).wrapping_add(key[j]).wrapping_add(j as u32);
+        i += 1;
+        j += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        if j >= key.len() {
+            j = 0;
+        }
+        k -= 1;
+    }
+    k = MT_N - 1;
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1566083941u32)).wrapping_sub(i as u32);
+        i += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        k -= 1;
+    }
+    r.mt[0] = 0x80000000u32;
+}
+
+fn mag01(y: u32) -> u32 {
+    if y & 1 == 1 { MATRIX_A } else { 0 }
+}
+
+fn genrand_uint32(r: mut ref Random) -> u32 {
+    if r.index >= MT_N {
+        for kk in 0..(MT_N - MT_M) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M] ^ (y >> 1) ^ mag01(y);
+        }
+        for kk in (MT_N - MT_M)..(MT_N - 1) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M - MT_N] ^ (y >> 1) ^ mag01(y);
+        }
+        let y = (r.mt[MT_N - 1] & UPPER_MASK) | (r.mt[0] & LOWER_MASK);
+        r.mt[MT_N - 1] = r.mt[MT_M - 1] ^ (y >> 1) ^ mag01(y);
+        r.index = 0;
+    }
+    let mut y = r.mt[r.index];
+    r.index += 1;
+    y ^= y >> 11;
+    y ^= (y << 7) & 0x9d2c5680u32;
+    y ^= (y << 15) & 0xefc60000u32;
+    y ^= y >> 18;
+    y
+}
+
+fn getrandbits_small(r: mut ref Random, k: i64) -> i64 {
+    if k == 0 {
+        return 0;
+    }
+    if k <= 32 {
+        return (genrand_uint32(mut r) >> ((32 - k) as u32)) as i64;
+    }
+    let lo = genrand_uint32(mut r) as i64;
+    let hi = (genrand_uint32(mut r) >> ((64 - k) as u32)) as i64;
+    lo | (hi << 32)
+}
+
+fn bit_length_i(n: i64) -> i64 {
+    let mut k = 0;
+    let mut t = n;
+    while t > 0 {
+        k += 1;
+        t = t >> 1;
+    }
+    k
+}
+
+// _randbelow_with_getrandbits(n), n > 0
+fn randbelow(r: mut ref Random, n: i64) -> i64 {
+    let k = bit_length_i(n);
+    let mut x = getrandbits_small(mut r, k);
+    while x >= n {
+        x = getrandbits_small(mut r, k);
+    }
+    x
+}
+// ------------------------------------------------------------ exceptions
+
+// An exception the code under retry raises: its class, its message and
+// an errno for OSError's two-argument form.
+#[derive(Clone)]
+struct Ex {
+    kind: String,
+    msg: Option[String],
+    errno: Option[i64],
+}
+
+// A raised exception with its __cause__ chain, nearest cause first.
+#[derive(Clone)]
+struct Raised {
+    ex: Ex,
+    causes: Vec[Ex],
+}
+
+fn plain_exc(kind: Str, msg: own String) -> Raised {
+    Raised { ex: Ex { kind: kind.to_string(), msg: Some(msg), errno: None }, causes: Vec.new() }
+}
+
+fn bare_exc(kind: Str) -> Raised {
+    Raised { ex: Ex { kind: kind.to_string(), msg: None, errno: None }, causes: Vec.new() }
+}
+
+fn os_exc(kind: Str, errno: i64, msg: own String) -> Raised {
+    Raised { ex: Ex { kind: kind.to_string(), msg: Some(msg), errno: Some(errno) }, causes: Vec.new() }
+}
+
+fn parent_class(kind: ref String) -> Str {
+    if kind == "Exception" or kind == "KeyboardInterrupt" {
+        return "BaseException";
+    }
+    if kind == "ConnectionError" or kind == "TimeoutError" or kind == "PermissionError" {
+        return "OSError";
+    }
+    if kind == "ConnectionResetError" or kind == "ConnectionRefusedError" {
+        return "ConnectionError";
+    }
+    if kind == "KeyError" {
+        return "LookupError";
+    }
+    if kind == "RateLimited" or kind == "ServerError" {
+        return "TransientError";
+    }
+    if kind == "BaseException" {
+        return "";
+    }
+    "Exception"
+}
+
+// isinstance(e, cls)
+fn is_a(ex: ref Ex, cls: ref String) -> bool {
+    let mut k = ex.kind.clone();
+    while k.len() > 0 {
+        if k == *cls {
+            return true;
+        }
+        k = parent_class(k).to_string();
+    }
+    false
+}
+
+fn is_any(ex: ref Ex, classes: ref Vec[String]) -> bool {
+    for c in classes.iter() {
+        if is_a(ex, c) {
+            return true;
+        }
+    }
+    false
+}
+
+// str(e)
+fn ex_str(ex: ref Ex) -> String {
+    match ex.msg {
+        None => String.new(),
+        Some(m) => match ex.errno {
+            Some(n) => f"[Errno {n}] {m}",
+            None => if ex.kind == "KeyError" { str_repr(m) } else { m.clone() },
+        },
+    }
+}
+
+fn ex_fail(ex: ref Ex) -> String {
+    f"{ex.kind}: {ex_str(ex)}"
+}
+
+// What one attempt left behind: the Future's result or exception.
+#[derive(Clone)]
+enum Outcome {
+    Val(J),
+    Exc(Raised),
+}
+
+fn outcome_failed(o: ref Outcome) -> bool {
+    match o {
+        Outcome.Exc(_) => true,
+        Outcome.Val(_) => false,
+    }
+}
+
+// A RetryError: the last attempt and the exception it was raised from.
+#[derive(Clone)]
+struct RetryErr {
+    last: Outcome,
+    attempt: i64,
+    cause: Option[Ex],
+}
+
+// What leaves a Retrying call instead of a value.
+#[derive(Clone)]
+enum Thrown {
+    Exc(Raised),
+    Retry(RetryErr),
+}
+
+fn future_repr(o: ref Outcome) -> String {
+    match o {
+        Outcome.Exc(r) => f"<Future at 0x? state=finished raised {r.ex.kind}>",
+        Outcome.Val(v) => f"<Future at 0x? state=finished returned {type_name(v)}>",
+    }
+}
+
+fn thrown_fail(t: ref Thrown) -> String {
+    match t {
+        Thrown.Exc(r) => ex_fail(r.ex),
+        Thrown.Retry(e) => f"RetryError: RetryError[{future_repr(e.last)}]",
+    }
+}
+
+// ------------------------------------------------------------ strategies
+
+#[derive(Clone)]
+enum Stop {
+    AfterAttempt(i64),
+    AfterDelay(f64),
+    BeforeDelay(f64),
+    Never,
+    EventSet,
+    Any(Vec[Stop]),
+    All(Vec[Stop]),
+}
+
+// wait_exponential's and wait_exponential_jitter's settings. For the
+// jitter wait, multiplier is `initial` and min is `jitter`.
+#[derive(Clone)]
+struct ExpCfg {
+    multiplier: Num,
+    max: Num,
+    exp_base: Num,
+    min: Num,
+}
+
+#[derive(Clone)]
+enum Wait {
+    Fixed(f64),
+    Random(f64, f64),
+    Incr(f64, f64, f64),
+    Exp(ExpCfg),
+    RandExp(ExpCfg),
+    Jitter(ExpCfg),
+    Chain(Vec[Wait]),
+    Combine(Vec[Wait]),
+    // A plain number that ended up in a wait_combine through __radd__.
+    NotCallable(Num),
+}
+
+#[derive(Clone)]
+enum Pred {
+    Falsy,
+    Eq(J),
+    Ge(J),
+    Lt(J),
+    IsNone,
+    // st >= 500 or st == 429
+    Http,
+    // isinstance(e, (TransientError, TimeoutError))
+    Transient,
+}
+
+#[derive(Clone)]
+enum MsgPred {
+    Equal(String),
+    Prefix(String),
+}
+
+#[derive(Clone)]
+enum Retry {
+    ExcType(Vec[String]),
+    NotExcType(Vec[String]),
+    UnlessExcType(Vec[String]),
+    CauseType(Vec[String]),
+    IfExc(Pred),
+    Result(Pred),
+    NotResult(Pred),
+    Message(MsgPred),
+    NotMessage(MsgPred),
+    Always,
+    Never,
+    Any(Vec[Retry]),
+    All(Vec[Retry]),
+}
+
+// before, after and before_sleep: a log line at a level, or one of the
+// job's own callbacks that print the retry state or the statistics.
+#[derive(Clone)]
+enum Cb {
+    Nothing,
+    BeforeLog(String, i64),
+    AfterLog(String, i64, String),
+    SleepLog(String, i64),
+    Trace,
+    Stats,
+}
+
+#[derive(Clone)]
+enum ErrCb {
+    Unset,
+    Attempts,
+    LastResult,
+    Fallback(J),
+}
+
+#[derive(Clone)]
+struct Config {
+    stop: Stop,
+    wait: Wait,
+    retry: Retry,
+    before: Cb,
+    after: Cb,
+    before_sleep: Cb,
+    reraise: bool,
+    err_cb: ErrCb,
+}
+
+fn default_config() -> Config {
+    let mut exc: Vec[String] = Vec.new();
+    exc.push("Exception".to_string());
+    Config {
+        stop: Stop.Never,
+        wait: Wait.Fixed(0.0),
+        retry: Retry.ExcType(exc),
+        before: Cb.Nothing,
+        after: Cb.Nothing,
+        before_sleep: Cb.Nothing,
+        reraise: false,
+        err_cb: ErrCb.Unset,
+    }
+}
+
+// RetryCallState
+#[derive(Clone)]
+struct State {
+    start: f64,
+    attempt: i64,
+    outcome: Option[Outcome],
+    ts: Option[f64],
+    idle_for: f64,
+    next_action: Option[f64],
+    upcoming: Num,
+}
+
+// The statistics dict: empty until a call begins; the delay key comes
+// with the first stop check.
+#[derive(Clone)]
+struct RetryStats {
+    set: bool,
+    start_time: f64,
+    attempt_number: i64,
+    idle_for: Num,
+    delay: Option[f64],
+}
+
+fn new_stats() -> RetryStats {
+    RetryStats { set: false, start_time: 0.0, attempt_number: 0, idle_for: Num.I(0), delay: None }
+}
+
+fn stats_repr(s: ref RetryStats) -> String {
+    if not s.set {
+        return "{}".to_string();
+    }
+    let mut out = f"{{'start_time': {float_repr(s.start_time)}, 'attempt_number': {s.attempt_number}, 'idle_for': {num_repr(s.idle_for)}";
+    if let Some(d) = s.delay {
+        out.push_str(f", 'delay_since_first_attempt': {float_repr(d)}");
+    }
+    out.push('}');
+    out
+}
+
+fn seconds_since_start(rs: ref State) -> f64 {
+    match rs.ts {
+        Some(t) => t - rs.start,
+        None => 0.0,
+    }
+}
+
+fn state_repr(rs: ref State) -> String {
+    let result = match rs.outcome {
+        None => "none yet".to_string(),
+        Some(o) => match o {
+            Outcome.Exc(r) => f"failed ({r.ex.kind} {ex_str(r.ex)})",
+            Outcome.Val(v) => f"returned {py_str(v)}",
+        },
+    };
+    f"<RetryCallState ?: attempt #{rs.attempt}; slept for {float_repr(round2(rs.idle_for))}; last result: {result}>"
+}
+
+// ------------------------------------------------------------ the world
+
+#[derive(Clone)]
+struct LogLevel {
+    name: String,
+    level: i64,
+}
+
+#[derive(Clone)]
+struct Endpoint {
+    name: String,
+    url: String,
+    replies: Vec[String],
+    secs: Vec[f64],
+    n: i64,
+}
+
+// What a job's function is: the job's script, a webhook post or an
+// upload of one part of a backup file.
+#[derive(Clone)]
+enum Callee {
+    Script,
+    Post(i64),
+    Upload(i64, i64),
+}
+
+struct World {
+    out: Vec[String],
+    clock: f64,
+    rng: Random,
+    event: bool,
+    root_level: i64,
+    levels: Vec[LogLevel],
+    to_file: bool,
+    file_lines: Vec[String],
+    script: Vec[J],
+    calls: i64,
+    endpoints: Vec[Endpoint],
+    hooks: Vec[J],
+    part_path: String,
+    part_script: Vec[String],
+    part_calls: i64,
+}
+
+fn new_world(clock: f64, seed: i64) -> World {
+    World {
+        out: Vec.new(),
+        clock: clock,
+        rng: seeded(seed),
+        event: false,
+        root_level: 30,
+        levels: Vec.new(),
+        to_file: false,
+        file_lines: Vec.new(),
+        script: Vec.new(),
+        calls: 0,
+        endpoints: Vec.new(),
+        hooks: Vec.new(),
+        part_path: String.new(),
+        part_script: Vec.new(),
+        part_calls: 0,
+    }
+}
+
+fn out(w: mut ref World, line: own String) {
+    w.out.push(line);
+}
+
+fn level_name(level: i64) -> String {
+    if level == 10 {
+        return "DEBUG".to_string();
+    }
+    if level == 20 {
+        return "INFO".to_string();
+    }
+    if level == 30 {
+        return "WARNING".to_string();
+    }
+    if level == 40 {
+        return "ERROR".to_string();
+    }
+    if level == 50 {
+        return "CRITICAL".to_string();
+    }
+    if level == 0 {
+        return "NOTSET".to_string();
+    }
+    f"Level {level}"
+}
+
+// logger.log(level, msg) with a handler on the root logger.
+fn log(w: mut ref World, name: ref String, level: i64, msg: ref String) {
+    let mut effective = w.root_level;
+    for l in w.levels.iter() {
+        if l.name == *name and l.level != 0 {
+            effective = l.level;
+        }
+    }
+    if level < effective {
+        return;
+    }
+    if w.to_file {
+        let line = f"[{fixed(w.clock, 3)}] {level_name(level)} {name}: {msg}";
+        w.file_lines.push(line);
+    } else {
+        let line = f"  {level_name(level)}:{name}:{msg}";
+        w.out.push(line);
+    }
+}
+
+// time.sleep() on the fake clock
+fn sleep(w: mut ref World, secs: f64) {
+    let line = f"  [{float_repr(w.clock)}] sleep {float_repr(secs)}";
+    w.out.push(line);
+    w.clock += secs;
+}
+
+// ------------------------------------------------------------ evaluation
+
+fn eval_stop(w: ref World, s: ref Stop, rs: ref State) -> bool {
+    match s {
+        Stop.AfterAttempt(n) => rs.attempt >= *n,
+        Stop.AfterDelay(d) => seconds_since_start(rs) >= *d,
+        Stop.BeforeDelay(d) => num_f(num_add(Num.F(seconds_since_start(rs)), rs.upcoming)) >= *d,
+        Stop.Never => false,
+        Stop.EventSet => w.event,
+        Stop.Any(items) => {
+            for x in items.iter() {
+                if eval_stop(w, x, rs) {
+                    return true;
+                }
+            }
+            false
+        }
+        Stop.All(items) => {
+            for x in items.iter() {
+                if not eval_stop(w, x, rs) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+fn exp_of(c: ref ExpCfg, attempt: i64) -> Option[Num] {
+    match num_pow(c.exp_base, attempt - 1) {
+        Some(p) => Some(num_mul(c.multiplier, p)),
+        None => None,
+    }
+}
+
+// wait_exponential.__call__
+fn exponential(c: ref ExpCfg, attempt: i64) -> Num {
+    match exp_of(c, attempt) {
+        None => c.max.clone(),
+        Some(result) => py_max(py_max(Num.I(0), c.min), py_min(result, c.max)),
+    }
+}
+
+fn eval_wait(w: mut ref World, wt: ref Wait, rs: ref State) -> Result[Num, Thrown] {
+    match wt {
+        Wait.Fixed(x) => Ok(Num.F(*x)),
+        Wait.Random(lo, hi) => {
+            let r = random_float(mut w.rng);
+            Ok(Num.F(*lo + r * (*hi - *lo)))
+        }
+        Wait.Incr(start, inc, max) => {
+            let result = *start + *inc * ((rs.attempt - 1) as f64);
+            Ok(py_max(Num.I(0), py_min(Num.F(result), Num.F(*max))))
+        }
+        Wait.Exp(c) => Ok(exponential(c, rs.attempt)),
+        Wait.RandExp(c) => {
+            let high = exponential(c, rs.attempt);
+            let r = random_float(mut w.rng);
+            let lo = num_f(c.min);
+            Ok(Num.F(lo + num_f(num_sub(high, c.min)) * r))
+        }
+        Wait.Jitter(c) => {
+            let r = random_float(mut w.rng);
+            let jitter = num_add(Num.I(0), num_mul(num_sub(c.min, Num.I(0)), Num.F(r)));
+            let result = match num_pow(c.exp_base, rs.attempt - 1) {
+                Some(p) => num_add(num_mul(c.multiplier, p), jitter),
+                None => c.max.clone(),
+            };
+            Ok(py_max(Num.I(0), py_min(result, c.max)))
+        }
+        Wait.Chain(items) => {
+            let mut k = rs.attempt;
+            if k < 1 {
+                k = 1;
+            }
+            if k > items.len() {
+                k = items.len();
+            }
+            eval_wait(mut w, items[k - 1], rs)
+        }
+        Wait.Combine(items) => {
+            let mut vals: Vec[Num] = Vec.new();
+            for x in items.iter() {
+                vals.push(eval_wait(mut w, x, rs)?);
+            }
+            Ok(py_sum(vals))
+        }
+        Wait.NotCallable(n) => {
+            let _ = n;
+            Err(Thrown.Exc(plain_exc("TypeError", "'int' object is not callable".to_string())))
+        }
+    }
+}
+
+fn truthy(v: ref J) -> bool {
+    match v {
+        J.Null => false,
+        J.Bool(b) => *b,
+        J.Int(d) => i64.parse(d).unwrap_or(1) != 0,
+        J.Float(x) => *x != 0.0,
+        J.Str(s) => s.len() > 0,
+        J.Arr(items) => items.len() > 0,
+        J.Obj(members) => members.len() > 0,
+    }
+}
+
+fn eval_pred(p: ref Pred, v: ref J) -> bool {
+    match p {
+        Pred.Falsy => not truthy(v),
+        Pred.Eq(x) => py_eq(v, x),
+        Pred.Ge(x) => num_of(v).unwrap_or(0.0) >= num_of(x).unwrap_or(0.0),
+        Pred.Lt(x) => num_of(v).unwrap_or(0.0) < num_of(x).unwrap_or(0.0),
+        Pred.IsNone => match v {
+            J.Null => true,
+            _ => false,
+        },
+        Pred.Http => {
+            let st = num_of(v).unwrap_or(0.0);
+            st >= 500.0 or st == 429.0
+        }
+        Pred.Transient => false,
+    }
+}
+
+fn eval_exc_pred(p: ref Pred, ex: ref Ex) -> bool {
+    match p {
+        Pred.Transient => is_a(ex, "TransientError".to_string()) or is_a(ex, "TimeoutError".to_string()),
+        _ => false,
+    }
+}
+
+fn eval_msg(m: ref MsgPred, ex: ref Ex) -> bool {
+    let s = ex_str(ex);
+    match m {
+        MsgPred.Equal(t) => s == *t,
+        MsgPred.Prefix(t) => s.starts_with(t.as_str()),
+    }
+}
+
+fn eval_retry(r: ref Retry, o: ref Outcome) -> bool {
+    match r {
+        Retry.ExcType(types) => match o {
+            Outcome.Exc(e) => is_any(e.ex, types),
+            Outcome.Val(_) => false,
+        },
+        Retry.NotExcType(types) => match o {
+            Outcome.Exc(e) => not is_any(e.ex, types),
+            Outcome.Val(_) => false,
+        },
+        Retry.UnlessExcType(types) => match o {
+            Outcome.Exc(e) => not is_any(e.ex, types),
+            Outcome.Val(_) => true,
+        },
+        Retry.CauseType(types) => match o {
+            Outcome.Exc(e) => {
+                for c in e.causes.iter() {
+                    if is_any(c, types) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Outcome.Val(_) => false,
+        },
+        Retry.IfExc(p) => match o {
+            Outcome.Exc(e) => eval_exc_pred(p, e.ex),
+            Outcome.Val(_) => false,
+        },
+        Retry.Result(p) => match o {
+            Outcome.Val(v) => eval_pred(p, v),
+            Outcome.Exc(_) => false,
+        },
+        Retry.NotResult(p) => match o {
+            Outcome.Val(v) => not eval_pred(p, v),
+            Outcome.Exc(_) => false,
+        },
+        Retry.Message(m) => match o {
+            Outcome.Exc(e) => eval_msg(m, e.ex),
+            Outcome.Val(_) => false,
+        },
+        Retry.NotMessage(m) => match o {
+            Outcome.Exc(e) => not eval_msg(m, e.ex),
+            Outcome.Val(_) => true,
+        },
+        Retry.Always => true,
+        Retry.Never => false,
+        Retry.Any(items) => {
+            for x in items.iter() {
+                if eval_retry(x, o) {
+                    return true;
+                }
+            }
+            false
+        }
+        Retry.All(items) => {
+            for x in items.iter() {
+                if not eval_retry(x, o) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+// ------------------------------------------------------------ callbacks
+
+fn fn_name(name: ref Option[String]) -> String {
+    match name {
+        Some(n) => n.clone(),
+        None => "<unknown>".to_string(),
+    }
+}
+
+fn next_action_repr(rs: ref State) -> String {
+    match rs.next_action {
+        Some(s) => f"RetryAction(sleep={float_repr(s)})",
+        None => "None".to_string(),
+    }
+}
+
+fn run_cb(w: mut ref World, cb: ref Cb, rs: ref State, stats: ref RetryStats, name: ref Option[String]) {
+    match cb {
+        Cb.Nothing => {}
+        Cb.BeforeLog(lg, level) => {
+            let msg = f"Starting call to '{fn_name(name)}', this is the {ordinal(rs.attempt)} time calling it.";
+            log(mut w, lg, *level, msg);
+        }
+        Cb.AfterLog(lg, level, fmt) => {
+            let msg = f"Finished call to '{fn_name(name)}' after {sec_format(fmt, seconds_since_start(rs))}(s), this was the {ordinal(rs.attempt)} time calling it.";
+            log(mut w, lg, *level, msg);
+        }
+        Cb.SleepLog(lg, level) => {
+            let what = match rs.outcome {
+                Some(o) => match o {
+                    Outcome.Exc(e) => f"raised {ex_fail(e.ex)}",
+                    Outcome.Val(v) => f"returned {py_str(v)}",
+                },
+                None => String.new(),
+            };
+            let sleep_s = match rs.next_action {
+                Some(s) => float_repr(s),
+                None => String.new(),
+            };
+            let msg = f"Retrying {fn_name(name)} in {sleep_s} seconds as it {what}.";
+            log(mut w, lg, *level, msg);
+        }
+        Cb.Trace => {
+            let line = f"  trace: {state_repr(rs)}; next_action={next_action_repr(rs)}; upcoming_sleep={num_repr(rs.upcoming)}";
+            out(mut w, line);
+        }
+        Cb.Stats => {
+            let line = f"  stats: {stats_repr(stats)}";
+            out(mut w, line);
+        }
+    }
+}
+
+// ------------------------------------------------------------ calls
+
+fn script_step(w: ref World, i: i64) -> J {
+    let k = if i < w.script.len() { i } else { w.script.len() - 1 };
+    w.script[k].clone()
+}
+
+fn exc_of(step: ref J) -> Raised {
+    let kind = text_of(step, "raise");
+    let msg = match j_get(step, "msg") {
+        Some(m) => Some(py_str(m)),
+        None => None,
+    };
+    let errno = match j_get(step, "errno") {
+        Some(n) => Some(index_of(n).unwrap_or(0)),
+        None => None,
+    };
+    let mut causes: Vec[Ex] = Vec.new();
+    if let Some(c) = j_get(step, "cause") {
+        let inner = exc_of(c);
+        causes.push(inner.ex);
+        for x in inner.causes.iter() {
+            causes.push(x.clone());
+        }
+    }
+    Raised { ex: Ex { kind: kind, msg: msg, errno: errno }, causes: causes }
+}
+
+fn call_script(w: mut ref World) -> Outcome {
+    let i = w.calls;
+    w.calls += 1;
+    let step = script_step(w, i);
+    if let Some(c) = num_of(opt(step, "cost")) {
+        w.clock += c;
+    }
+    if truthy(opt(step, "set_event")) {
+        w.event = true;
+    }
+    if j_has(step, "raise") {
+        let e = exc_of(step);
+        let line = f"  [{float_repr(w.clock)}] call {i + 1}: raise {ex_fail(e.ex)}";
+        out(mut w, line);
+        return Outcome.Exc(e);
+    }
+    let v = opt(step, "return");
+    let line = f"  [{float_repr(w.clock)}] call {i + 1}: return {repr(v)}";
+    out(mut w, line);
+    Outcome.Val(v)
+}
+
+fn call(w: mut ref World, callee: ref Callee) -> Outcome {
+    match callee {
+        Callee.Script => call_script(mut w),
+        Callee.Post(i) => post_hook(mut w, *i),
+        Callee.Upload(k, length) => upload_part(mut w, *k, *length),
+    }
+}
+
+fn error_callback(cfg: ref Config, rs: ref State) -> Result[J, Thrown] {
+    match cfg.err_cb {
+        ErrCb.Unset => Ok(J.Null),
+        ErrCb.Attempts => Ok(J.Int(f"{rs.attempt}")),
+        ErrCb.LastResult => match rs.outcome {
+            Some(o) => match o {
+                Outcome.Val(v) => Ok(v.clone()),
+                Outcome.Exc(e) => Err(Thrown.Exc(e.clone())),
+            },
+            None => Ok(J.Null),
+        },
+        ErrCb.Fallback(v) => Ok(v.clone()),
+    }
+}
+
+// Retrying.__call__, or the for loop over a Retrying object when iter
+// is set: then the function has no name, a success is a None result,
+// and announce prints each attempt the loop body sees. The last
+// RetryCallState is left in last.
+fn run_retrying(w: mut ref World, cfg: ref Config, stats: mut ref RetryStats, callee: ref Callee,
+                name: ref Option[String], iter: bool, announce: bool, last: mut ref State) -> Result[J, Thrown] {
+    stats.set = true;
+    stats.start_time = w.clock;
+    stats.attempt_number = 1;
+    stats.idle_for = Num.I(0);
+    stats.delay = None;
+    let mut rs = State {
+        start: w.clock,
+        attempt: 1,
+        outcome: None,
+        ts: None,
+        idle_for: 0.0,
+        next_action: None,
+        upcoming: Num.F(0.0),
+    };
+    let result = retry_loop(mut w, cfg, mut stats, callee, name, iter, announce, mut rs);
+    *last = rs;
+    result
+}
+
+fn retry_loop(w: mut ref World, cfg: ref Config, stats: mut ref RetryStats, callee: ref Callee,
+              name: ref Option[String], iter: bool, announce: bool, rs: mut ref State) -> Result[J, Thrown] {
+    loop {
+        let fut = match rs.outcome {
+            None => {
+                run_cb(mut w, cfg.before, rs, stats, name);
+                if announce {
+                    let line = f"  attempt #{rs.attempt}";
+                    out(mut w, line);
+                }
+                let mut o = call(mut w, callee);
+                if iter and not outcome_failed(o) {
+                    o = Outcome.Val(J.Null);
+                }
+                rs.outcome = Some(o);
+                rs.ts = Some(w.clock);
+                continue;
+            }
+            Some(o) => o.clone(),
+        };
+        let explicit = match ref fut {
+            Outcome.Exc(e) => e.ex.kind == "TryAgain",
+            Outcome.Val(_) => false,
+        };
+        let mut retry_ok = false;
+        if not explicit {
+            retry_ok = eval_retry(cfg.retry, fut);
+        }
+        if not (explicit or retry_ok) {
+            return match fut {
+                Outcome.Val(v) => Ok(v),
+                Outcome.Exc(e) => Err(Thrown.Exc(e)),
+            };
+        }
+        run_cb(mut w, cfg.after, rs, stats, name);
+        let sleep_n = eval_wait(mut w, cfg.wait, rs)?;
+        rs.upcoming = sleep_n.clone();
+        stats.delay = Some(seconds_since_start(rs));
+        if eval_stop(w, cfg.stop, rs) {
+            if let ErrCb.Unset = cfg.err_cb {
+                let raised: Option[Raised] = match ref fut {
+                    Outcome.Exc(e) => Some(e.clone()),
+                    Outcome.Val(_) => None,
+                };
+                if cfg.reraise {
+                    if let Some(e) = raised {
+                        return Err(Thrown.Exc(e));
+                    }
+                    return Err(Thrown.Retry(RetryErr { last: fut, attempt: rs.attempt, cause: None }));
+                }
+                let cause = match raised {
+                    Some(e) => Some(e.ex),
+                    None => None,
+                };
+                return Err(Thrown.Retry(RetryErr { last: fut, attempt: rs.attempt, cause: cause }));
+            }
+            return error_callback(cfg, rs);
+        }
+        let secs = num_f(sleep_n);
+        rs.next_action = Some(secs);
+        rs.idle_for = num_f(num_add(Num.F(rs.idle_for), sleep_n));
+        stats.idle_for = num_add(stats.idle_for, sleep_n);
+        stats.attempt_number += 1;
+        run_cb(mut w, cfg.before_sleep, rs, stats, name);
+        rs.outcome = None;
+        rs.ts = None;
+        rs.attempt += 1;
+        rs.next_action = None;
+        sleep(mut w, secs);
+    }
+}
+// ------------------------------------------------------------ reading jobs
+
+fn opt(op: ref J, key: Str) -> J {
+    match j_get(op, key) {
+        Some(v) => v,
+        None => J.Null,
+    }
+}
+
+fn text_of(op: ref J, key: Str) -> String {
+    py_str(opt(op, key))
+}
+
+fn list_of(v: ref J) -> Vec[J] {
+    match v {
+        J.Arr(items) => items.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn members_of(v: ref J) -> Vec[Member] {
+    match v {
+        J.Obj(members) => members.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn index_of(v: ref J) -> Result[i64, Exc] {
+    match v {
+        J.Int(d) => Ok(i64.parse(d).unwrap_or(0)),
+        J.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(exc("TypeError", f"'{type_name(v)}' object cannot be interpreted as an integer")),
+    }
+}
+
+fn num_from(v: ref J) -> Num {
+    match v {
+        J.Int(d) => Num.I(i64.parse(d).unwrap_or(0)),
+        J.Bool(b) => Num.I(if *b { 1 } else { 0 }),
+        J.Float(x) => Num.F(*x),
+        _ => Num.I(0),
+    }
+}
+
+const MAX_WAIT: f64 = 4611686018427387904.0;
+
+// _utils.to_seconds: a number or a timedelta, as a float.
+fn to_seconds(v: ref J) -> f64 {
+    if let Some(td) = j_get(v, "td") {
+        let mut us: i64 = 0;
+        if let Some(s) = j_get(td, "seconds") {
+            us += index_of(s).unwrap_or(0) * 1000000;
+        }
+        if let Some(ms) = j_get(td, "milliseconds") {
+            us += index_of(ms).unwrap_or(0) * 1000;
+        }
+        return us as f64 / 1000000.0;
+    }
+    num_f(num_from(v))
+}
+
+fn key_of(v: ref J) -> String {
+    let ms = members_of(v);
+    if ms.len() == 0 {
+        return String.new();
+    }
+    ms[0].key.clone()
+}
+
+fn val_of(v: ref J) -> J {
+    let ms = members_of(v);
+    if ms.len() == 0 {
+        return J.Null;
+    }
+    ms[0].val.clone()
+}
+
+fn stops_of(v: ref J) -> Vec[Stop] {
+    let mut out: Vec[Stop] = Vec.new();
+    for x in list_of(v).iter() {
+        out.push(build_stop(x));
+    }
+    out
+}
+
+fn build_stop(s: ref J) -> Stop {
+    let k = key_of(s);
+    let v = val_of(s);
+    if k == "after_attempt" {
+        return Stop.AfterAttempt(index_of(v).unwrap_or(0));
+    }
+    if k == "after_delay" {
+        return Stop.AfterDelay(to_seconds(v));
+    }
+    if k == "before_delay" {
+        return Stop.BeforeDelay(to_seconds(v));
+    }
+    if k == "event_set" {
+        return Stop.EventSet;
+    }
+    if k == "or" or k == "any" {
+        return Stop.Any(stops_of(v));
+    }
+    if k == "and" or k == "all" {
+        return Stop.All(stops_of(v));
+    }
+    Stop.Never
+}
+
+fn kw_num(v: ref J, key: Str, default: own Num) -> Num {
+    match j_get(v, key) {
+        Some(x) => num_from(x),
+        None => default,
+    }
+}
+
+fn kw_secs(v: ref J, key: Str, default: f64) -> Num {
+    match j_get(v, key) {
+        Some(x) => Num.F(to_seconds(x)),
+        None => Num.F(default),
+    }
+}
+
+fn exp_cfg(v: ref J) -> ExpCfg {
+    ExpCfg {
+        multiplier: kw_num(v, "multiplier", Num.I(1)),
+        max: kw_secs(v, "max", MAX_WAIT),
+        exp_base: kw_num(v, "exp_base", Num.I(2)),
+        min: kw_secs(v, "min", 0.0),
+    }
+}
+
+fn waits_of(v: ref J) -> Vec[Wait] {
+    let mut out: Vec[Wait] = Vec.new();
+    for x in list_of(v).iter() {
+        out.push(build_wait(x));
+    }
+    out
+}
+
+// a + b on waits: wait_combine(a, b)
+fn plus(a: own Wait, b: own Wait) -> Wait {
+    let mut items: Vec[Wait] = Vec.new();
+    items.push(a);
+    items.push(b);
+    Wait.Combine(items)
+}
+
+fn build_wait(wt: ref J) -> Wait {
+    let k = key_of(wt);
+    let v = val_of(wt);
+    if k == "fixed" {
+        return Wait.Fixed(to_seconds(v));
+    }
+    if k == "random" {
+        let a = list_of(v);
+        return Wait.Random(to_seconds(a[0]), to_seconds(a[1]));
+    }
+    if k == "incrementing" {
+        let a = list_of(v);
+        let start = if a.len() > 0 { to_seconds(a[0]) } else { 0.0 };
+        let inc = if a.len() > 1 { to_seconds(a[1]) } else { 100.0 };
+        let max = if a.len() > 2 { to_seconds(a[2]) } else { MAX_WAIT };
+        return Wait.Incr(start, inc, max);
+    }
+    if k == "exponential" {
+        return Wait.Exp(exp_cfg(v));
+    }
+    if k == "random_exponential" {
+        return Wait.RandExp(exp_cfg(v));
+    }
+    if k == "exp_jitter" {
+        return Wait.Jitter(ExpCfg {
+            multiplier: kw_num(v, "initial", Num.I(1)),
+            max: kw_num(v, "max", Num.F(MAX_WAIT)),
+            exp_base: kw_num(v, "exp_base", Num.I(2)),
+            min: kw_num(v, "jitter", Num.I(1)),
+        });
+    }
+    if k == "chain" {
+        return Wait.Chain(waits_of(v));
+    }
+    if k == "combine" {
+        return Wait.Combine(waits_of(v));
+    }
+    if k == "plus" {
+        let a = list_of(v);
+        return plus(build_wait(a[0]), build_wait(a[1]));
+    }
+    if k == "sum" {
+        // sum() starts at 0, and 0 + w is w through __radd__.
+        let mut ws = waits_of(v);
+        let mut acc = ws.remove(0);
+        for x in ws.iter() {
+            acc = plus(acc, x.clone());
+        }
+        return acc;
+    }
+    if k == "radd" {
+        let a = list_of(v);
+        let n = num_from(a[0]);
+        let w = build_wait(a[1]);
+        if num_f(n) == 0.0 {
+            return w;
+        }
+        return plus(w, Wait.NotCallable(n));
+    }
+    Wait.Fixed(0.0)
+}
+
+fn build_pred(p: ref J) -> Pred {
+    let k = key_of(p);
+    let v = val_of(p);
+    if k == "falsy" {
+        return Pred.Falsy;
+    }
+    if k == "eq" {
+        return Pred.Eq(v);
+    }
+    if k == "ge" {
+        return Pred.Ge(v);
+    }
+    if k == "lt" {
+        return Pred.Lt(v);
+    }
+    Pred.IsNone
+}
+
+fn types_of(v: ref J) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    match v {
+        J.Null => out.push("Exception".to_string()),
+        _ => {
+            for x in list_of(v).iter() {
+                out.push(py_str(x));
+            }
+        }
+    }
+    out
+}
+
+fn type_error(msg: own String) -> Raised {
+    plain_exc("TypeError", msg)
+}
+
+// retry_if_exception_message(message=..., match=...): a match pattern
+// here is plain text, so re.match is a prefix test.
+fn msg_pred(v: ref J, cls: Str) -> Result[MsgPred, Raised] {
+    let message = match j_get(v, "message") {
+        Some(m) => py_str(m),
+        None => String.new(),
+    };
+    let pattern = match j_get(v, "match") {
+        Some(m) => py_str(m),
+        None => String.new(),
+    };
+    if message.len() > 0 and pattern.len() > 0 {
+        return Err(type_error(f"{cls}() takes either 'message' or 'match', not both"));
+    }
+    if message.len() > 0 {
+        return Ok(MsgPred.Equal(message));
+    }
+    if pattern.len() > 0 {
+        return Ok(MsgPred.Prefix(pattern));
+    }
+    Err(type_error(f"{cls}() missing 1 required argument 'message' or 'match'"))
+}
+
+fn retries_of(v: ref J) -> Result[Vec[Retry], Raised] {
+    let mut out: Vec[Retry] = Vec.new();
+    for x in list_of(v).iter() {
+        out.push(build_retry(x)?);
+    }
+    Ok(out)
+}
+
+fn build_retry(r: ref J) -> Result[Retry, Raised] {
+    let k = key_of(r);
+    let v = val_of(r);
+    if k == "exc_type" {
+        return Ok(Retry.ExcType(types_of(v)));
+    }
+    if k == "not_exc_type" {
+        return Ok(Retry.NotExcType(types_of(v)));
+    }
+    if k == "unless_exc_type" {
+        return Ok(Retry.UnlessExcType(types_of(v)));
+    }
+    if k == "exc_cause_type" {
+        return Ok(Retry.CauseType(types_of(v)));
+    }
+    if k == "result" {
+        return Ok(Retry.Result(build_pred(v)));
+    }
+    if k == "not_result" {
+        return Ok(Retry.NotResult(build_pred(v)));
+    }
+    if k == "exc_message" {
+        return Ok(Retry.Message(msg_pred(v, "retry_if_exception_message")?));
+    }
+    if k == "not_exc_message" {
+        return Ok(Retry.NotMessage(msg_pred(v, "retry_if_not_exception_message")?));
+    }
+    if k == "always" {
+        return Ok(Retry.Always);
+    }
+    if k == "never" {
+        return Ok(Retry.Never);
+    }
+    if k == "or" or k == "any" {
+        return Ok(Retry.Any(retries_of(v)?));
+    }
+    Ok(Retry.All(retries_of(v)?))
+}
+
+fn build_cb(c: ref J, kind: Str) -> Cb {
+    if let J.Str(s) = c {
+        if s == "trace" {
+            return Cb.Trace;
+        }
+        return Cb.Stats;
+    }
+    let spec = list_of(opt(c, "log"));
+    let name = py_str(spec[0]);
+    let level = index_of(spec[1]).unwrap_or(0);
+    if kind == "before" {
+        return Cb.BeforeLog(name, level);
+    }
+    if kind == "after" {
+        let fmt = if j_has(c, "fmt") { text_of(c, "fmt") } else { "%0.3f".to_string() };
+        return Cb.AfterLog(name, level, fmt);
+    }
+    Cb.SleepLog(name, level)
+}
+
+fn build_config(base: ref Config, cfg: ref J) -> Result[Config, Raised] {
+    let mut c = base.clone();
+    if let Some(s) = j_get(cfg, "stop") {
+        c.stop = build_stop(s);
+    }
+    if let Some(wt) = j_get(cfg, "wait") {
+        c.wait = build_wait(wt);
+    }
+    if let Some(r) = j_get(cfg, "retry") {
+        c.retry = build_retry(r)?;
+    }
+    if let Some(b) = j_get(cfg, "before") {
+        c.before = build_cb(b, "before");
+    }
+    if let Some(a) = j_get(cfg, "after") {
+        c.after = build_cb(a, "after");
+    }
+    if let Some(b) = j_get(cfg, "before_sleep") {
+        c.before_sleep = build_cb(b, "before_sleep");
+    }
+    if let Some(r) = j_get(cfg, "reraise") {
+        c.reraise = truthy(r);
+    }
+    if let Some(e) = j_get(cfg, "error_callback") {
+        c.err_cb = match e {
+            J.Str(s) => if s == "attempts" { ErrCb.Attempts } else { ErrCb.LastResult },
+            _ => ErrCb.Fallback(opt(e, "fallback")),
+        };
+    }
+    Ok(c)
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn show_result(w: mut ref World, r: ref Result[J, Thrown]) {
+    match r {
+        Ok(v) => {
+            let line = f"  -> returned {repr(v)}";
+            out(mut w, line);
+        }
+        Err(t) => {
+            let line = f"  -> raised {thrown_fail(t)}";
+            out(mut w, line);
+            if let Thrown.Retry(e) = t {
+                let what = match e.last {
+                    Outcome.Exc(x) => f"raised {ex_fail(x.ex)}",
+                    Outcome.Val(v) => f"returned {repr(v)}",
+                };
+                let l2 = f"  last attempt: #{e.attempt} {what}";
+                out(mut w, l2);
+                let cause = match e.cause {
+                    Some(c) => ex_fail(c),
+                    None => "None".to_string(),
+                };
+                let l3 = f"  cause: {cause}";
+                out(mut w, l3);
+            }
+        }
+    }
+}
+
+fn empty_state() -> State {
+    State { start: 0.0, attempt: 1, outcome: None, ts: None, idle_for: 0.0, next_action: None, upcoming: Num.F(0.0) }
+}
+
+fn show_stats(w: mut ref World, label: Str, s: ref RetryStats) {
+    let line = f"  {label}: {stats_repr(s)}";
+    out(mut w, line);
+}
+
+fn callee_name(spec: ref J) -> Option[String] {
+    let f = opt(spec, "fn");
+    let qual = text_of(f, "qualname");
+    let module = opt(f, "module");
+    if truthy(module) {
+        return Some(f"{py_str(module)}.{qual}");
+    }
+    Some(qual)
+}
+
+fn run_job(w: mut ref World, spec: ref J) {
+    w.root_level = index_of(opt(spec, "log_level")).unwrap_or(30);
+    for m in members_of(opt(spec, "loggers")).iter() {
+        w.levels.push(LogLevel { name: m.key.clone(), level: index_of(m.val).unwrap_or(0) });
+    }
+    let cfg = match build_config(default_config(), opt(spec, "config")) {
+        Ok(c) => c,
+        Err(e) => {
+            let line = f"  config: {ex_fail(e.ex)}";
+            out(mut w, line);
+            return;
+        }
+    };
+    w.script = list_of(opt(spec, "script"));
+    let mode = text_of(spec, "mode");
+    let calls = match j_get(spec, "calls") {
+        Some(n) => index_of(n).unwrap_or(1),
+        None => 1,
+    };
+    let name = callee_name(spec);
+    let mut last = empty_state();
+    if mode == "call" {
+        let mut stats = new_stats();
+        for i in 0..calls {
+            let line = f"  call #{i + 1}";
+            out(mut w, line);
+            let r = run_retrying(mut w, cfg, mut stats, Callee.Script, name, false, false, mut last);
+            show_result(mut w, r);
+            show_stats(mut w, "statistics", stats);
+        }
+    } else if mode == "decorated" or mode == "bare" {
+        let used = if mode == "bare" { default_config() } else { cfg.clone() };
+        let mut stats = new_stats();
+        show_stats(mut w, "statistics before", stats);
+        for i in 0..calls {
+            let line = f"  call #{i + 1}";
+            out(mut w, line);
+            // Each call runs on a copy, and f.statistics becomes the
+            // copy's.
+            stats = new_stats();
+            let r = run_retrying(mut w, used, mut stats, Callee.Script, name, false, false, mut last);
+            show_result(mut w, r);
+            show_stats(mut w, "statistics", stats);
+        }
+        if let Some(rw) = j_get(spec, "retry_with") {
+            match build_config(used, rw) {
+                Ok(other) => {
+                    out(mut w, "  retry_with".to_string());
+                    let mut g = new_stats();
+                    let r = run_retrying(mut w, other, mut g, Callee.Script, name, false, false, mut last);
+                    show_result(mut w, r);
+                    show_stats(mut w, "statistics", g);
+                    show_stats(mut w, "original statistics", stats);
+                }
+                Err(e) => {
+                    let line = f"  config: {ex_fail(e.ex)}";
+                    out(mut w, line);
+                }
+            }
+        }
+    } else {
+        let mut stats = new_stats();
+        let r = run_retrying(mut w, cfg, mut stats, Callee.Script, None, true, true, mut last);
+        let shown = match r {
+            Ok(_) => Ok(J.Str(f"loop ended after {last.attempt} attempts")),
+            Err(t) => Err(t),
+        };
+        show_result(mut w, shown);
+        show_stats(mut w, "statistics", stats);
+    }
+}
+
+// ------------------------------------------------------------ files
+
+fn read_text(path: Str) -> Result[String, Exc] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(exc("OSError", f"{path}: {e}")),
+    }
+}
+
+// str.splitlines() for text with \n line ends.
+fn split_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in text.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1].len() == 0 {
+        let _ = out.pop();
+    }
+    out
+}
+
+fn split_on(s: ref String, sep: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(sep) {
+        out.push(p.to_string());
+    }
+    out
+}
+
+// str.split() with no separator
+fn words(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(" ") {
+        if p.len() > 0 {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+fn write_lines(path: Str, lines: ref Vec[String]) -> Result[(), Exc] {
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(exc("OSError", f"data/out: {e}"));
+    }
+    let mut text = String.new();
+    for l in lines.iter() {
+        text.push_str(l);
+        text.push('\n');
+    }
+    if let Err(e) = fs.write(path.to_string(), text) {
+        return Err(exc("OSError", f"{path}: {e}"));
+    }
+    Ok(())
+}
+
+fn print_back(w: mut ref World, path: Str) -> Result[(), Exc] {
+    let head = f"  == {path}";
+    out(mut w, head);
+    let text = read_text(path)?;
+    for l in split_lines(text).iter() {
+        let line = f"  {l}";
+        out(mut w, line);
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ webhooks
+//
+// A webhook worker: each event in the outbox is POSTed to its endpoint
+// through a @retry with exponential backoff and jitter, retrying
+// connection errors, timeouts, 5xx and 429, and giving up after five
+// attempts or 20 seconds. A 4xx is a rejection; what gives up goes to a
+// dead-letter file. The log goes to data/out/delivery.log.
+
+fn post_hook(w: mut ref World, i: i64) -> Outcome {
+    let ep_name = text_of(w.hooks[i], "endpoint");
+    let mut k = 0;
+    for j in 0..w.endpoints.len() {
+        if w.endpoints[j].name == ep_name {
+            k = j;
+        }
+    }
+    let n = w.endpoints[k].n;
+    w.endpoints[k].n += 1;
+    let last = w.endpoints[k].replies.len() - 1;
+    let r = if n < last { n } else { last };
+    let what = w.endpoints[k].replies[r].clone();
+    let secs = w.endpoints[k].secs[r];
+    w.clock += secs;
+    if what == "reset" {
+        return Outcome.Exc(os_exc("ConnectionResetError", 104, "Connection reset by peer".to_string()));
+    }
+    if what == "refused" {
+        return Outcome.Exc(os_exc("ConnectionRefusedError", 111, "Connection refused".to_string()));
+    }
+    if what == "timeout" {
+        let url = w.endpoints[k].url.clone();
+        return Outcome.Exc(plain_exc("TimeoutError", f"POST {url} timed out after {float_repr(secs)}s"));
+    }
+    Outcome.Val(J.Int(what))
+}
+
+fn webhook_config() -> Config {
+    let mut stops: Vec[Stop] = Vec.new();
+    stops.push(Stop.AfterAttempt(5));
+    stops.push(Stop.AfterDelay(20.0));
+    let mut types: Vec[String] = Vec.new();
+    types.push("ConnectionError".to_string());
+    types.push("TimeoutError".to_string());
+    let mut retries: Vec[Retry] = Vec.new();
+    retries.push(Retry.ExcType(types));
+    retries.push(Retry.Result(Pred.Http));
+    let mut c = default_config();
+    c.stop = Stop.Any(stops);
+    c.wait = Wait.Jitter(ExpCfg { multiplier: Num.F(0.5), max: Num.I(8), exp_base: Num.I(2), min: Num.F(0.25) });
+    c.retry = Retry.Any(retries);
+    c.before_sleep = Cb.SleepLog("webhooks".to_string(), 30);
+    c.after = Cb.AfterLog("webhooks".to_string(), 10, "%0.3f".to_string());
+    c.reraise = true;
+    c
+}
+
+fn webhooks(w: mut ref World) -> Result[(), Exc] {
+    w.to_file = true;
+    w.root_level = 10;
+    let lg = "webhooks".to_string();
+    let csv = read_text("data/endpoints.csv")?;
+    let rows = split_lines(csv);
+    for i in 1..rows.len() {
+        let f = split_on(rows[i], ",");
+        let mut replies: Vec[String] = Vec.new();
+        let mut secs: Vec[f64] = Vec.new();
+        for item in words(f[2]).iter() {
+            let p = split_on(item, ":");
+            replies.push(p[0].clone());
+            secs.push(f64.parse(p[1]).unwrap_or(0.0));
+        }
+        w.endpoints.push(Endpoint { name: f[0].clone(), url: f[1].clone(), replies: replies, secs: secs, n: 0 });
+    }
+    let outbox = read_text("data/outbox.jsonl")?;
+    for line in split_lines(outbox).iter() {
+        w.hooks.push(loads_str(line)?);
+    }
+    let cfg = webhook_config();
+    let name = Some("webhooks.delivery.post".to_string());
+    let mut dead: Vec[String] = Vec.new();
+    let mut delivered = 0;
+    let mut rejected = 0;
+    let mut dead_n = 0;
+    let mut total_attempts = 0;
+    let mut total_idle = Num.I(0);
+    let mut last = empty_state();
+    for i in 0..w.hooks.len() {
+        let hook = w.hooks[i].clone();
+        let start = w.clock;
+        let mut stats = new_stats();
+        let r = run_retrying(mut w, cfg, mut stats, Callee.Post(i), name, false, false, mut last);
+        let mut status = "dead".to_string();
+        let mut why = String.new();
+        match r {
+            Ok(v) => {
+                let st = index_of(v).unwrap_or(0);
+                status = if st >= 200 and st < 300 { "delivered".to_string() } else { "rejected".to_string() };
+                why = f"status {st}";
+            }
+            Err(t) => match t {
+                Thrown.Retry(e) => {
+                    let st = match e.last {
+                        Outcome.Val(v) => index_of(v).unwrap_or(0),
+                        Outcome.Exc(_) => 0,
+                    };
+                    why = f"gave up on status {st}";
+                }
+                Thrown.Exc(e) => why = ex_fail(e.ex),
+            },
+        }
+        total_attempts += stats.attempt_number;
+        total_idle = num_add(total_idle, stats.idle_for);
+        if status == "delivered" {
+            delivered += 1;
+        } else if status == "rejected" {
+            rejected += 1;
+        } else {
+            dead_n += 1;
+        }
+        let line = f"  {text_of(hook, "id")} {text_of(hook, "type")} {text_of(hook, "endpoint")} -> {status} ({why}) after {stats.attempt_number} attempt(s), idle {fixed(num_f(stats.idle_for), 3)}s, took {fixed(w.clock - start, 3)}s";
+        out(mut w, line);
+        if status == "dead" {
+            dead.push(f"{text_of(hook, "id")},{text_of(hook, "endpoint")},{text_of(hook, "type")},{stats.attempt_number},{why}");
+            let msg = f"dead-lettered {text_of(hook, "id")} for tenant {text_of(hook, "tenant")}";
+            log(mut w, lg, 40, msg);
+        }
+    }
+    let line = f"  delivered {delivered}, rejected {rejected}, dead {dead_n}; {total_attempts} attempts, idle {num_repr(total_idle)}";
+    out(mut w, line);
+    let mut csv_out: Vec[String] = Vec.new();
+    csv_out.push("id,endpoint,type,attempts,reason".to_string());
+    for d in dead.iter() {
+        csv_out.push(d.clone());
+    }
+    write_lines("data/out/dead_letter.csv", csv_out)?;
+    let log_lines = w.file_lines.clone();
+    write_lines("data/out/delivery.log", log_lines)?;
+    w.to_file = false;
+    print_back(mut w, "data/out/dead_letter.csv")?;
+    print_back(mut w, "data/out/delivery.log")?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ backups
+//
+// A backup uploader: each file goes up in 4 MiB parts, each part in a
+// `for attempt in Retrying(...)` loop that stops before a 60 s budget
+// would run out, with full-jitter backoff. "Busy" raises TryAgain;
+// transient errors and timeouts are retried; a part that runs out of
+// budget is skipped through retry_error_callback; a permission error
+// aborts its file.
+
+const CHUNK: i64 = 4194304;
+
+fn upload_part(w: mut ref World, k: i64, length: i64) -> Outcome {
+    let i = w.part_calls;
+    w.part_calls += 1;
+    let last = w.part_script.len() - 1;
+    let what = w.part_script[if i < last { i } else { last }].clone();
+    if what == "ok" {
+        w.clock += length as f64 / CHUNK as f64 * 1.5;
+        return Outcome.Val(J.Null);
+    }
+    if what == "busy" {
+        w.clock += 0.05;
+        return Outcome.Exc(bare_exc("TryAgain"));
+    }
+    if what == "5xx" {
+        w.clock += 0.2;
+        return Outcome.Exc(plain_exc("ServerError", "503 Slow Down".to_string()));
+    }
+    let path = w.part_path.clone();
+    if what == "denied" {
+        w.clock += 0.1;
+        return Outcome.Exc(os_exc("PermissionError", 13, f"Permission denied: {path}"));
+    }
+    w.clock += 20.0;
+    Outcome.Exc(plain_exc("TimeoutError", f"upload of {path} part {k} timed out"))
+}
+
+fn backup_config() -> Config {
+    let mut c = default_config();
+    c.stop = Stop.BeforeDelay(60.0);
+    c.wait = Wait.RandExp(ExpCfg { multiplier: Num.F(0.5), max: Num.F(10.0), exp_base: Num.I(2), min: Num.F(0.0) });
+    c.retry = Retry.IfExc(Pred.Transient);
+    c.before_sleep = Cb.SleepLog("backup".to_string(), 20);
+    c.err_cb = ErrCb.Fallback(J.Null);
+    c
+}
+
+fn backup(w: mut ref World) -> Result[(), Exc] {
+    w.to_file = true;
+    w.root_level = 20;
+    let lg = "backup".to_string();
+    let csv = read_text("data/backup.csv")?;
+    let rows = split_lines(csv);
+    let cfg = backup_config();
+    let mut manifest: Vec[String] = Vec.new();
+    let mut sent = 0;
+    let mut last = empty_state();
+    for i in 1..rows.len() {
+        let f = split_on(rows[i], ",");
+        let path = f[0].clone();
+        let size = i64.parse(f[1]).unwrap_or(0);
+        w.part_path = path.clone();
+        w.part_script = words(f[2]);
+        w.part_calls = 0;
+        let chunks = (size + CHUNK - 1) / CHUNK;
+        let head = f"  {path} ({size} bytes, {chunks} chunk(s))";
+        out(mut w, head);
+        let mut done = 0;
+        let mut status = "ok".to_string();
+        for k in 1..(chunks + 1) {
+            let rest = size - (k - 1) * CHUNK;
+            let length = if rest < CHUNK { rest } else { CHUNK };
+            let mut stats = new_stats();
+            let r = run_retrying(mut w, cfg, mut stats, Callee.Upload(k, length), None, true, false, mut last);
+            if let Err(t) = r {
+                let line = f"    aborted: {thrown_fail(t)}";
+                out(mut w, line);
+                let detail = match t {
+                    Thrown.Exc(e) => ex_str(e.ex),
+                    Thrown.Retry(_) => String.new(),
+                };
+                let msg = f"aborted {path}: {detail}";
+                log(mut w, lg, 40, msg);
+                status = "aborted".to_string();
+                break;
+            }
+            let failed = match ref last.outcome {
+                Some(o) => match o {
+                    Outcome.Exc(e) => Some(ex_fail(e.ex)),
+                    Outcome.Val(_) => None,
+                },
+                None => None,
+            };
+            match failed {
+                Some(text) => {
+                    let line = f"    chunk {k}/{chunks}: skipped after {stats.attempt_number} attempt(s), idle {fixed(num_f(stats.idle_for), 3)}s: {text}";
+                    out(mut w, line);
+                    let msg = f"skipped part {k} of {path}";
+                    log(mut w, lg, 30, msg);
+                    status = "partial".to_string();
+                }
+                None => {
+                    done += 1;
+                    sent += length;
+                    let line = f"    chunk {k}/{chunks}: {length} bytes after {stats.attempt_number} attempt(s), idle {fixed(num_f(stats.idle_for), 3)}s";
+                    out(mut w, line);
+                }
+            }
+        }
+        manifest.push(f"{path},{size},{chunks},{done},{status}");
+    }
+    let line = f"  sent {sent} bytes; clock {float_repr(w.clock)}";
+    out(mut w, line);
+    let mut csv_out: Vec[String] = Vec.new();
+    csv_out.push("path,bytes,chunks,uploaded,status".to_string());
+    for m in manifest.iter() {
+        csv_out.push(m.clone());
+    }
+    write_lines("data/out/manifest.csv", csv_out)?;
+    let log_lines = w.file_lines.clone();
+    write_lines("data/out/backup.log", log_lines)?;
+    w.to_file = false;
+    print_back(mut w, "data/out/manifest.csv")?;
+    print_back(mut w, "data/out/backup.log")?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn run() -> Result[(), String] {
+    let text = match read_text("data/jobs.jsonl") {
+        Ok(t) => t,
+        Err(e) => return Err(failure(e)),
+    };
+    for line in split_lines(text).iter() {
+        let spec = match loads_str(line) {
+            Ok(v) => v,
+            Err(e) => return Err(failure(e)),
+        };
+        println(f"== {text_of(spec, "name")}");
+        let clock = num_of(opt(spec, "clock")).unwrap_or(0.0);
+        let seed = index_of(opt(spec, "seed")).unwrap_or(0);
+        let mut w = new_world(clock, seed);
+        if j_has(spec, "program") {
+            let program = text_of(spec, "program");
+            let r = if program == "webhooks" { webhooks(mut w) } else { backup(mut w) };
+            if let Err(e) = r {
+                return Err(failure(e));
+            }
+        } else {
+            run_job(mut w, spec);
+        }
+        for l in w.out.iter() {
+            println(l);
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("path,bytes,replies\n");
+    t.push_str("db/2026-10-21.sql.gz,9437184,ok ok ok\n");
+    t.push_str("media/photos.tar,16777216,ok 5xx ok busy busy ok ok\n");
+    t.push_str("logs/app.log.1,1048576,5xx 5xx 5xx ok\n");
+    t.push_str("etc/secrets.env,4096,denied\n");
+    t.push_str("media/video.mp4,12582912,slow slow 5xx slow 5xx 5xx 5xx 5xx 5xx 5xx 5xx\n");
+    t.push_str("home/notes.md,0,ok\n");
+    t.push_str("db/2026-10-20.sql.gz,8388608,busy busy busy busy ok ok\n");
+    v.push(DataFile { path: "backup.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,url,replies\n");
+    t.push_str("orders,https://orders.internal/hooks,200:0.08\n");
+    t.push_str("billing,https://billing.example.com/webhook,503:0.2 503:0.2 202:0.1\n");
+    t.push_str("crm,https://crm.example.org/in,reset:0.05 timeout:5 200:0.3\n");
+    t.push_str("legacy,http://10.0.4.7:8080/notify,refused:0.01\n");
+    t.push_str("slack,https://hooks.slack.example/T0/B0,429:0.1 429:0.1 429:0.1 200:0.1\n");
+    t.push_str("gone,https://old.example.net/hook,410:0.05\n");
+    t.push_str("flaky,https://flaky.example.io/h,500:1 timeout:5 502:1 timeout:5 200:0.5\n");
+    t.push_str("slowpoke,https://slow.example.com/hook,timeout:9 timeout:9 timeout:9 timeout:9\n");
+    t.push_str("ratelimited,https://rl.example.com/h,429:0.5\n");
+    v.push(DataFile { path: "endpoints.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"default retries until it works\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"connection refused\"}, {\"raise\": \"TimeoutError\", \"cost\": 1.5, \"msg\": \"read timed out\"}, {\"return\": {\"id\": 7, \"total\": 12.5}, \"cost\": 0.25}], \"config\": {}}\n");
+    t.push_str("{\"name\": \"stop after three attempts\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"connection refused\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"wait\": {\"fixed\": 2}, \"before\": {\"log\": [\"billing\", 20]}, \"after\": {\"log\": [\"billing\", 30]}, \"before_sleep\": {\"log\": [\"billing\", 30]}}}\n");
+    t.push_str("{\"name\": \"reraise the last exception\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionResetError\", \"cost\": 0.25, \"msg\": \"Connection reset by peer\", \"errno\": 104}, {\"raise\": \"ConnectionRefusedError\", \"cost\": 0.25, \"msg\": \"Connection refused\", \"errno\": 111}], \"config\": {\"stop\": {\"after_attempt\": 2}, \"reraise\": true, \"before_sleep\": {\"log\": [\"net\", 30]}}}\n");
+    t.push_str("{\"name\": \"a non-retryable exception goes straight out\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"refused\"}, {\"raise\": \"ValueError\", \"cost\": 0.25, \"msg\": \"bad invoice id 'x9'\"}, {\"return\": \"never reached\", \"cost\": 0.25}], \"config\": {\"retry\": {\"exc_type\": [\"ConnectionError\", \"TimeoutError\"]}, \"wait\": {\"fixed\": 0.5}, \"before_sleep\": {\"log\": [\"billing\", 20]}}}\n");
+    t.push_str("{\"name\": \"KeyboardInterrupt is not an Exception\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"refused\"}, {\"raise\": \"KeyboardInterrupt\", \"cost\": 0.25}], \"config\": {\"before_sleep\": {\"log\": [\"billing\", 20]}}}\n");
+    t.push_str("{\"name\": \"KeyError's str is its repr\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"KeyError\", \"cost\": 0.25, \"msg\": \"user:41\"}, {\"raise\": \"KeyError\", \"cost\": 0.25}, {\"return\": null, \"cost\": 0.25}], \"config\": {\"before_sleep\": {\"log\": [\"cache\", 20]}, \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"retry on a result\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": null, \"cost\": 0.25}, {\"return\": [], \"cost\": 0.25}, {\"return\": 0, \"cost\": 0.25}, {\"return\": {\"rows\": 3}, \"cost\": 0.25}], \"config\": {\"retry\": {\"result\": {\"falsy\": 1}}, \"wait\": {\"fixed\": 1}, \"before_sleep\": {\"log\": [\"poller\", 20]}, \"after\": {\"log\": [\"poller\", 10]}}}\n");
+    t.push_str("{\"name\": \"give up on a result: RetryError\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": \"pending\", \"cost\": 0.25}], \"config\": {\"retry\": {\"result\": {\"eq\": \"pending\"}}, \"stop\": {\"after_attempt\": 3}, \"wait\": {\"incrementing\": [1, 2, 10]}}}\n");
+    t.push_str("{\"name\": \"give up on a result with reraise\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": 503, \"cost\": 0.25}], \"config\": {\"retry\": {\"result\": {\"ge\": 500}}, \"stop\": {\"after_attempt\": 2}, \"reraise\": true}}\n");
+    t.push_str("{\"name\": \"TryAgain retries without asking retry\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TryAgain\", \"cost\": 0.25}, {\"raise\": \"TryAgain\", \"cost\": 0.25, \"msg\": \"busy\"}, {\"raise\": \"ValueError\", \"cost\": 0.25, \"msg\": \"nope\"}], \"config\": {\"retry\": {\"never\": 1}, \"before_sleep\": {\"log\": [\"jobs\", 20]}, \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"retry_if_not_result and the unless type\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": \"queued\", \"cost\": 0.25}, {\"return\": \"running\", \"cost\": 0.25}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"worker died\"}, {\"return\": \"done\", \"cost\": 0.25}], \"config\": {\"retry\": {\"or\": [{\"not_result\": {\"eq\": \"done\"}}, {\"exc_type\": [\"RuntimeError\"]}]}, \"before_sleep\": {\"log\": [\"jobs\", 20]}}}\n");
+    t.push_str("{\"name\": \"retry_unless_exception_type retries on results\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": 1, \"cost\": 0.25}, {\"return\": 2, \"cost\": 0.25}, {\"raise\": \"FatalError\", \"cost\": 0.25, \"msg\": \"disk full\"}], \"config\": {\"retry\": {\"unless_exc_type\": [\"FatalError\"]}, \"stop\": {\"after_attempt\": 5}, \"before_sleep\": {\"log\": [\"jobs\", 20]}}}\n");
+    t.push_str("{\"name\": \"retry_if_not_exception_type\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TransientError\", \"cost\": 0.25, \"msg\": \"flaky\"}, {\"raise\": \"RateLimited\", \"cost\": 0.25, \"msg\": \"slow down\"}, {\"raise\": \"FatalError\", \"cost\": 0.25, \"msg\": \"no such bucket\"}], \"config\": {\"retry\": {\"not_exc_type\": [\"FatalError\"]}, \"stop\": {\"after_attempt\": 9}, \"before_sleep\": {\"log\": [\"s3\", 20]}}}\n");
+    t.push_str("{\"name\": \"the cause chain\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"query failed\", \"cause\": {\"raise\": \"ConnectionResetError\", \"msg\": \"reset\", \"errno\": 104}}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"query failed\", \"cause\": {\"raise\": \"ValueError\", \"msg\": \"x\", \"cause\": {\"raise\": \"TimeoutError\", \"msg\": \"slow\"}}}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"query failed\", \"cause\": {\"raise\": \"ValueError\", \"msg\": \"bad sql\"}}], \"config\": {\"retry\": {\"exc_cause_type\": [\"ConnectionError\", \"TimeoutError\"]}, \"before_sleep\": {\"log\": [\"db\", 20]}}}\n");
+    t.push_str("{\"name\": \"exception messages\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock busy\"}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock busy\"}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock busy: owner 7\"}, {\"return\": \"ok\", \"cost\": 0.25}], \"config\": {\"retry\": {\"exc_message\": {\"message\": \"lock busy\"}}, \"before_sleep\": {\"log\": [\"lock\", 20]}}}\n");
+    t.push_str("{\"name\": \"exception message prefixes\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock busy: owner 7\"}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock timeout\"}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"lock busy\"}], \"config\": {\"retry\": {\"exc_message\": {\"match\": \"lock busy\"}}, \"before_sleep\": {\"log\": [\"lock\", 20]}}}\n");
+    t.push_str("{\"name\": \"not exception message retries on results too\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": \"ok\", \"cost\": 0.25}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"retry me\"}, {\"raise\": \"RuntimeError\", \"cost\": 0.25, \"msg\": \"fatal\"}], \"config\": {\"retry\": {\"not_exc_message\": {\"message\": \"fatal\"}}, \"stop\": {\"after_attempt\": 5}, \"before_sleep\": {\"log\": [\"lock\", 20]}}}\n");
+    t.push_str("{\"name\": \"message and match together\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": 1, \"cost\": 0.25}], \"config\": {\"retry\": {\"exc_message\": {\"message\": \"a\", \"match\": \"b\"}}}}\n");
+    t.push_str("{\"name\": \"neither message nor match\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": 1, \"cost\": 0.25}], \"config\": {\"retry\": {\"not_exc_message\": {}}}}\n");
+    t.push_str("{\"name\": \"an empty message is no message\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": 1, \"cost\": 0.25}], \"config\": {\"retry\": {\"exc_message\": {\"message\": \"\", \"match\": \"busy\"}}}}\n");
+    t.push_str("{\"name\": \"retry_all and retry_any, short-circuited\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"x\"}, {\"return\": -1, \"cost\": 0.25}, {\"return\": 5, \"cost\": 0.25}, {\"return\": 42, \"cost\": 0.25}], \"config\": {\"retry\": {\"and\": [{\"or\": [{\"exc_type\": null}, {\"result\": {\"lt\": 10}}]}, {\"not_result\": {\"eq\": 5}}]}, \"before_sleep\": {\"log\": [\"calc\", 20]}}}\n");
+    t.push_str("{\"name\": \"retry_always and stop_never with a stop\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": \"x\", \"cost\": 0.25}], \"config\": {\"retry\": {\"always\": 1}, \"stop\": {\"any\": [{\"never\": 1}, {\"after_attempt\": 4}]}, \"before_sleep\": {\"log\": [\"calc\", 20]}}}\n");
+    t.push_str("{\"name\": \"stop after a delay\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TimeoutError\", \"cost\": 4, \"msg\": \"slow\"}], \"config\": {\"stop\": {\"after_delay\": 10}, \"wait\": {\"fixed\": 1.5}, \"before_sleep\": {\"log\": [\"api\", 20]}, \"after\": {\"log\": [\"api\", 20], \"fmt\": \"%.1f\"}}}\n");
+    t.push_str("{\"name\": \"stop before a delay\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TimeoutError\", \"cost\": 4, \"msg\": \"slow\"}], \"config\": {\"stop\": {\"before_delay\": 10}, \"wait\": {\"fixed\": 1.5}, \"before_sleep\": {\"log\": [\"api\", 20]}, \"after\": {\"log\": [\"api\", 20], \"fmt\": \"%d\"}}}\n");
+    t.push_str("{\"name\": \"stop delays as timedeltas\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TimeoutError\", \"cost\": 0.75, \"msg\": \"slow\"}], \"config\": {\"stop\": {\"or\": [{\"after_delay\": {\"td\": {\"seconds\": 2, \"milliseconds\": 500}}}, {\"after_attempt\": 10}]}, \"wait\": {\"fixed\": {\"td\": {\"milliseconds\": 250}}}, \"after\": {\"log\": [\"api\", 20], \"fmt\": \"%s\"}, \"before_sleep\": {\"log\": [\"api\", 20]}}}\n");
+    t.push_str("{\"name\": \"stop when an event is set\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\", \"set_event\": true}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"or\": [{\"event_set\": 1}, {\"after_attempt\": 9}]}, \"wait\": {\"fixed\": 3}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"stop_all needs every stop\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 2, \"msg\": \"down\"}], \"config\": {\"stop\": {\"and\": [{\"after_attempt\": 2}, {\"after_delay\": 9}]}, \"wait\": {\"fixed\": 1}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"stop_all of nested stops\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 1, \"msg\": \"down\"}], \"config\": {\"stop\": {\"all\": [{\"or\": [{\"after_attempt\": 6}, {\"after_delay\": 100}]}, {\"any\": [{\"after_delay\": 4}]}]}, \"wait\": {\"fixed\": 0.5}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"wait_exponential with its defaults\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 6}, \"wait\": {\"exponential\": {}}, \"before_sleep\": {\"log\": [\"svc\", 20]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"wait_exponential with a multiplier and limits\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 8}, \"wait\": {\"exponential\": {\"multiplier\": 0.5, \"min\": 1, \"max\": 10}}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"wait_exponential with a float base\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 7}, \"wait\": {\"exponential\": {\"multiplier\": 3, \"exp_base\": 1.5, \"max\": 20.25}}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"an exponent that overflows\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 34}, \"wait\": {\"exponential\": {\"multiplier\": 1e-300, \"exp_base\": 10000000000.0}}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"wait_incrementing\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 7}, \"wait\": {\"incrementing\": [-3, 2, 4.5]}, \"before_sleep\": {\"log\": [\"svc\", 20]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"wait_incrementing from zero\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"wait\": {\"incrementing\": [0, 0.1]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"wait_random\", \"seed\": 42, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 5}, \"wait\": {\"random\": [1, 3]}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"wait_random_exponential\", \"seed\": 7, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 7}, \"wait\": {\"random_exponential\": {\"multiplier\": 0.5, \"max\": 8}}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"wait_exponential_jitter\", \"seed\": 2026, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.125, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 7}, \"wait\": {\"exp_jitter\": {\"initial\": 1, \"max\": 20, \"jitter\": 2}}, \"before_sleep\": {\"log\": [\"svc\", 20]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"wait_exponential_jitter with float settings\", \"seed\": 3, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 5}, \"wait\": {\"exp_jitter\": {\"initial\": 0.1, \"exp_base\": 3, \"jitter\": 0.5}}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"wait_chain\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 8}, \"wait\": {\"chain\": [{\"fixed\": 1}, {\"fixed\": 1}, {\"fixed\": 2}, {\"exponential\": {\"multiplier\": 5}}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"waits added together\", \"seed\": 11, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 5}, \"wait\": {\"plus\": [{\"fixed\": 3}, {\"random\": [0, 2]}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"sum() of waits\", \"seed\": 5, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 5}, \"wait\": {\"sum\": [{\"fixed\": 0.1}, {\"exponential\": {}}, {\"fixed\": 0.2}, {\"random\": [0, 0.3]}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"sum() of one wait is that wait\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"wait\": {\"sum\": [{\"exponential\": {}}]}, \"after\": \"stats\"}}\n");
+    t.push_str("{\"name\": \"compensated sums of floats\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 4}, \"wait\": {\"combine\": [{\"fixed\": 0.1}, {\"fixed\": 0.2}, {\"fixed\": 0.3}, {\"fixed\": 1e+16}, {\"fixed\": 1}, {\"fixed\": -1e+16}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"an int added to a wait\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"wait\": {\"radd\": [5, {\"fixed\": 1}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"zero added to a wait\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"wait\": {\"radd\": [0, {\"fixed\": 1}]}, \"before_sleep\": {\"log\": [\"svc\", 20]}}}\n");
+    t.push_str("{\"name\": \"retry_error_callback gets the last attempt\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"error_callback\": \"attempts\", \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"retry_error_callback with a fallback\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": null, \"cost\": 0.25}], \"config\": {\"stop\": {\"after_attempt\": 2}, \"retry\": {\"result\": {\"is_none\": 1}}, \"error_callback\": {\"fallback\": {\"cached\": true, \"rows\": []}}}}\n");
+    t.push_str("{\"name\": \"retry_error_callback that re-raises\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"TimeoutError\", \"cost\": 0.25, \"msg\": \"slow\"}], \"config\": {\"stop\": {\"after_attempt\": 2}, \"error_callback\": \"last_result\"}}\n");
+    t.push_str("{\"name\": \"before, after and before_sleep logs\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"\", \"qualname\": \"fetch_profile\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.3333, \"msg\": \"down\"}, {\"return\": {\"ok\": true}, \"cost\": 0.0625}], \"config\": {\"wait\": {\"fixed\": 1.25}, \"before\": {\"log\": [\"http\", 10]}, \"after\": {\"log\": [\"http\", 10]}, \"before_sleep\": {\"log\": [\"http\", 30]}}}\n");
+    t.push_str("{\"name\": \"logger levels filter\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 30, \"mode\": \"call\", \"fn\": {\"module\": \"worker.tasks\", \"qualname\": \"sync_inventory\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": 1, \"cost\": 0.25}], \"config\": {\"before\": {\"log\": [\"quiet\", 10]}, \"after\": {\"log\": [\"loud\", 25]}, \"before_sleep\": {\"log\": [\"quiet\", 40]}}, \"loggers\": {\"loud\": 20}}\n");
+    t.push_str("{\"name\": \"a function with no module\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": null, \"qualname\": \"Outer.<locals>.inner\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": 2, \"cost\": 0.25}], \"config\": {\"before\": {\"log\": [\"x\", 20]}, \"before_sleep\": {\"log\": [\"x\", 20]}}}\n");
+    t.push_str("{\"name\": \"trace and stats callbacks\", \"seed\": 99, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.1, \"msg\": \"down\"}, {\"raise\": \"ConnectionError\", \"cost\": 0.2, \"msg\": \"down\"}, {\"return\": \"ok\", \"cost\": 0.3}], \"config\": {\"wait\": {\"random\": [0.01, 0.03]}, \"before\": \"stats\", \"after\": \"trace\", \"before_sleep\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"slept rounds to two places\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 6}, \"wait\": {\"chain\": [{\"fixed\": 0.125}, {\"fixed\": 0.005}, {\"fixed\": 0.0049}, {\"fixed\": 1.115}, {\"fixed\": 2.675}]}, \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"one Retrying called twice\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"call\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": \"a\", \"cost\": 0.25}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": \"b\", \"cost\": 0.25}], \"config\": {\"wait\": {\"fixed\": 1}}, \"calls\": 2}\n");
+    t.push_str("{\"name\": \"the decorator\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"decorated\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": \"first\", \"cost\": 0.25}, {\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"return\": \"second\", \"cost\": 0.25}], \"config\": {\"wait\": {\"fixed\": 2}, \"before_sleep\": {\"log\": [\"deco\", 20]}}, \"calls\": 2}\n");
+    t.push_str("{\"name\": \"the bare decorator\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"bare\", \"fn\": {\"module\": \"reports\", \"qualname\": \"monthly\"}, \"script\": [{\"raise\": \"ValueError\", \"cost\": 0.25, \"msg\": \"x\"}, {\"raise\": \"ValueError\", \"cost\": 0.25, \"msg\": \"y\"}, {\"return\": 3, \"cost\": 0.25}], \"config\": {}}\n");
+    t.push_str("{\"name\": \"retry_with\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"decorated\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"wait\": {\"fixed\": 2}, \"stop\": {\"after_attempt\": 4}, \"before_sleep\": {\"log\": [\"deco\", 20]}}, \"retry_with\": {\"stop\": {\"after_attempt\": 2}, \"wait\": {\"fixed\": 0.5}}}\n");
+    t.push_str("{\"name\": \"the iterator\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"iter\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"TimeoutError\", \"cost\": 0.25, \"msg\": \"slow\"}, {\"return\": \"ok\", \"cost\": 0.25}], \"config\": {\"stop\": {\"after_attempt\": 5}, \"wait\": {\"fixed\": 1}, \"before\": {\"log\": [\"loop\", 20]}, \"after\": {\"log\": [\"loop\", 20]}, \"before_sleep\": {\"log\": [\"loop\", 20]}}}\n");
+    t.push_str("{\"name\": \"the iterator gives up\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"iter\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 2}, \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"the iterator with reraise\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"iter\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}], \"config\": {\"stop\": {\"after_attempt\": 2}, \"reraise\": true}}\n");
+    t.push_str("{\"name\": \"the iterator retries a None result\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"iter\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"return\": \"ignored\", \"cost\": 0.25}], \"config\": {\"stop\": {\"after_attempt\": 3}, \"retry\": {\"result\": {\"is_none\": 1}}, \"after\": \"trace\"}}\n");
+    t.push_str("{\"name\": \"the iterator lets a ValueError out\", \"seed\": 1, \"clock\": 1000.0, \"log_level\": 10, \"mode\": \"iter\", \"fn\": {\"module\": \"billing.client\", \"qualname\": \"Client.fetch\"}, \"script\": [{\"raise\": \"ConnectionError\", \"cost\": 0.25, \"msg\": \"down\"}, {\"raise\": \"ValueError\", \"cost\": 0.25, \"msg\": \"bad\"}], \"config\": {\"retry\": {\"exc_type\": [\"ConnectionError\"]}}}\n");
+    t.push_str("{\"name\": \"webhook delivery\", \"program\": \"webhooks\", \"seed\": 404, \"clock\": 5000.0}\n");
+    t.push_str("{\"name\": \"backup upload\", \"program\": \"backup\", \"seed\": 77, \"clock\": 86400.0}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("{\"id\": \"evt_001\", \"endpoint\": \"orders\", \"type\": \"order.created\", \"tenant\": 1}\n");
+    t.push_str("{\"id\": \"evt_002\", \"endpoint\": \"billing\", \"type\": \"invoice.paid\", \"tenant\": 2}\n");
+    t.push_str("{\"id\": \"evt_003\", \"endpoint\": \"crm\", \"type\": \"contact.updated\", \"tenant\": 3}\n");
+    t.push_str("{\"id\": \"evt_004\", \"endpoint\": \"orders\", \"type\": \"order.shipped\", \"tenant\": 1}\n");
+    t.push_str("{\"id\": \"evt_005\", \"endpoint\": \"legacy\", \"type\": \"order.created\", \"tenant\": 4}\n");
+    t.push_str("{\"id\": \"evt_006\", \"endpoint\": \"slack\", \"type\": \"alert.fired\", \"tenant\": 5}\n");
+    t.push_str("{\"id\": \"evt_007\", \"endpoint\": \"billing\", \"type\": \"invoice.voided\", \"tenant\": 2}\n");
+    t.push_str("{\"id\": \"evt_008\", \"endpoint\": \"gone\", \"type\": \"contact.deleted\", \"tenant\": 6}\n");
+    t.push_str("{\"id\": \"evt_009\", \"endpoint\": \"flaky\", \"type\": \"order.created\", \"tenant\": 1}\n");
+    t.push_str("{\"id\": \"evt_010\", \"endpoint\": \"slowpoke\", \"type\": \"report.ready\", \"tenant\": 7}\n");
+    t.push_str("{\"id\": \"evt_011\", \"endpoint\": \"crm\", \"type\": \"contact.created\", \"tenant\": 3}\n");
+    t.push_str("{\"id\": \"evt_012\", \"endpoint\": \"ratelimited\", \"type\": \"alert.fired\", \"tenant\": 5}\n");
+    v.push(DataFile { path: "outbox.jsonl".to_string(), body: t });
+}

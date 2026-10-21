@@ -1,0 +1,1213 @@
+== default retries until it works
+  call #1
+  [1000.25] call 1: raise ConnectionError: connection refused
+  [1000.25] sleep 0.0
+  [1001.75] call 2: raise TimeoutError: read timed out
+  [1001.75] sleep 0.0
+  [1002.0] call 3: return {'id': 7, 'total': 12.5}
+  -> returned {'id': 7, 'total': 12.5}
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 1.75}
+== stop after three attempts
+  call #1
+  INFO:billing:Starting call to 'billing.client.Client.fetch', this is the 1st time calling it.
+  [1000.25] call 1: raise ConnectionError: connection refused
+  WARNING:billing:Finished call to 'billing.client.Client.fetch' after 0.250(s), this was the 1st time calling it.
+  WARNING:billing:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: connection refused.
+  [1000.25] sleep 2.0
+  INFO:billing:Starting call to 'billing.client.Client.fetch', this is the 2nd time calling it.
+  [1002.5] call 2: raise ConnectionError: connection refused
+  WARNING:billing:Finished call to 'billing.client.Client.fetch' after 2.500(s), this was the 2nd time calling it.
+  WARNING:billing:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: connection refused.
+  [1002.5] sleep 2.0
+  INFO:billing:Starting call to 'billing.client.Client.fetch', this is the 3rd time calling it.
+  [1004.75] call 3: raise ConnectionError: connection refused
+  WARNING:billing:Finished call to 'billing.client.Client.fetch' after 4.750(s), this was the 3rd time calling it.
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #3 raised ConnectionError: connection refused
+  cause: ConnectionError: connection refused
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 4.0, 'delay_since_first_attempt': 4.75}
+== reraise the last exception
+  call #1
+  [1000.25] call 1: raise ConnectionResetError: [Errno 104] Connection reset by peer
+  WARNING:net:Retrying billing.client.Client.fetch in 0.0 seconds as it raised ConnectionResetError: [Errno 104] Connection reset by peer.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise ConnectionRefusedError: [Errno 111] Connection refused
+  -> raised ConnectionRefusedError: [Errno 111] Connection refused
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== a non-retryable exception goes straight out
+  call #1
+  [1000.25] call 1: raise ConnectionError: refused
+  INFO:billing:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: refused.
+  [1000.25] sleep 0.5
+  [1001.0] call 2: raise ValueError: bad invoice id 'x9'
+  -> raised ValueError: bad invoice id 'x9'
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.5, 'delay_since_first_attempt': 0.25}
+== KeyboardInterrupt is not an Exception
+  call #1
+  [1000.25] call 1: raise ConnectionError: refused
+  INFO:billing:Retrying billing.client.Client.fetch in 0.0 seconds as it raised ConnectionError: refused.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise KeyboardInterrupt: 
+  -> raised KeyboardInterrupt: 
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.25}
+== KeyError's str is its repr
+  call #1
+  [1000.25] call 1: raise KeyError: 'user:41'
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (KeyError 'user:41')>; next_action=None; upcoming_sleep=0.0
+  INFO:cache:Retrying billing.client.Client.fetch in 0.0 seconds as it raised KeyError: 'user:41'.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise KeyError: 
+  trace: <RetryCallState ?: attempt #2; slept for 0.0; last result: failed (KeyError )>; next_action=None; upcoming_sleep=0.0
+  INFO:cache:Retrying billing.client.Client.fetch in 0.0 seconds as it raised KeyError: .
+  [1000.5] sleep 0.0
+  [1000.75] call 3: return None
+  -> returned None
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== retry on a result
+  call #1
+  [1000.25] call 1: return None
+  DEBUG:poller:Finished call to 'billing.client.Client.fetch' after 0.250(s), this was the 1st time calling it.
+  INFO:poller:Retrying billing.client.Client.fetch in 1.0 seconds as it returned None.
+  [1000.25] sleep 1.0
+  [1001.5] call 2: return []
+  DEBUG:poller:Finished call to 'billing.client.Client.fetch' after 1.500(s), this was the 2nd time calling it.
+  INFO:poller:Retrying billing.client.Client.fetch in 1.0 seconds as it returned [].
+  [1001.5] sleep 1.0
+  [1002.75] call 3: return 0
+  DEBUG:poller:Finished call to 'billing.client.Client.fetch' after 2.750(s), this was the 3rd time calling it.
+  INFO:poller:Retrying billing.client.Client.fetch in 1.0 seconds as it returned 0.
+  [1002.75] sleep 1.0
+  [1004.0] call 4: return {'rows': 3}
+  -> returned {'rows': 3}
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 3.0, 'delay_since_first_attempt': 2.75}
+== give up on a result: RetryError
+  call #1
+  [1000.25] call 1: return 'pending'
+  [1000.25] sleep 1.0
+  [1001.5] call 2: return 'pending'
+  [1001.5] sleep 3.0
+  [1004.75] call 3: return 'pending'
+  -> raised RetryError: RetryError[<Future at 0x? state=finished returned str>]
+  last attempt: #3 returned 'pending'
+  cause: None
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 4.0, 'delay_since_first_attempt': 4.75}
+== give up on a result with reraise
+  call #1
+  [1000.25] call 1: return 503
+  [1000.25] sleep 0.0
+  [1000.5] call 2: return 503
+  -> raised RetryError: RetryError[<Future at 0x? state=finished returned int>]
+  last attempt: #2 returned 503
+  cause: None
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== TryAgain retries without asking retry
+  call #1
+  [1000.25] call 1: raise TryAgain: 
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (TryAgain )>; next_action=None; upcoming_sleep=0.0
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it raised TryAgain: .
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise TryAgain: busy
+  trace: <RetryCallState ?: attempt #2; slept for 0.0; last result: failed (TryAgain busy)>; next_action=None; upcoming_sleep=0.0
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it raised TryAgain: busy.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise ValueError: nope
+  -> raised ValueError: nope
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== retry_if_not_result and the unless type
+  call #1
+  [1000.25] call 1: return 'queued'
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it returned queued.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: return 'running'
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it returned running.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise RuntimeError: worker died
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: worker died.
+  [1000.75] sleep 0.0
+  [1001.0] call 4: return 'done'
+  -> returned 'done'
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 0.0, 'delay_since_first_attempt': 0.75}
+== retry_unless_exception_type retries on results
+  call #1
+  [1000.25] call 1: return 1
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it returned 1.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: return 2
+  INFO:jobs:Retrying billing.client.Client.fetch in 0.0 seconds as it returned 2.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise FatalError: disk full
+  -> raised FatalError: disk full
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== retry_if_not_exception_type
+  call #1
+  [1000.25] call 1: raise TransientError: flaky
+  INFO:s3:Retrying billing.client.Client.fetch in 0.0 seconds as it raised TransientError: flaky.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise RateLimited: slow down
+  INFO:s3:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RateLimited: slow down.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise FatalError: no such bucket
+  -> raised FatalError: no such bucket
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== the cause chain
+  call #1
+  [1000.25] call 1: raise RuntimeError: query failed
+  INFO:db:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: query failed.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise RuntimeError: query failed
+  INFO:db:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: query failed.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise RuntimeError: query failed
+  -> raised RuntimeError: query failed
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== exception messages
+  call #1
+  [1000.25] call 1: raise RuntimeError: lock busy
+  INFO:lock:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: lock busy.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise RuntimeError: lock busy
+  INFO:lock:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: lock busy.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise RuntimeError: lock busy: owner 7
+  -> raised RuntimeError: lock busy: owner 7
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== exception message prefixes
+  call #1
+  [1000.25] call 1: raise RuntimeError: lock busy: owner 7
+  INFO:lock:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: lock busy: owner 7.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise RuntimeError: lock timeout
+  -> raised RuntimeError: lock timeout
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.25}
+== not exception message retries on results too
+  call #1
+  [1000.25] call 1: return 'ok'
+  INFO:lock:Retrying billing.client.Client.fetch in 0.0 seconds as it returned ok.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise RuntimeError: retry me
+  INFO:lock:Retrying billing.client.Client.fetch in 0.0 seconds as it raised RuntimeError: retry me.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise RuntimeError: fatal
+  -> raised RuntimeError: fatal
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== message and match together
+  config: TypeError: retry_if_exception_message() takes either 'message' or 'match', not both
+== neither message nor match
+  config: TypeError: retry_if_not_exception_message() missing 1 required argument 'message' or 'match'
+== an empty message is no message
+  call #1
+  [1000.25] call 1: return 1
+  -> returned 1
+  statistics: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+== retry_all and retry_any, short-circuited
+  call #1
+  [1000.25] call 1: raise ConnectionError: x
+  -> raised ConnectionError: x
+  statistics: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+== retry_always and stop_never with a stop
+  call #1
+  [1000.25] call 1: return 'x'
+  INFO:calc:Retrying billing.client.Client.fetch in 0.0 seconds as it returned x.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: return 'x'
+  INFO:calc:Retrying billing.client.Client.fetch in 0.0 seconds as it returned x.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: return 'x'
+  INFO:calc:Retrying billing.client.Client.fetch in 0.0 seconds as it returned x.
+  [1000.75] sleep 0.0
+  [1001.0] call 4: return 'x'
+  -> raised RetryError: RetryError[<Future at 0x? state=finished returned str>]
+  last attempt: #4 returned 'x'
+  cause: None
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 0.0, 'delay_since_first_attempt': 1.0}
+== stop after a delay
+  call #1
+  [1004.0] call 1: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 4.0(s), this was the 1st time calling it.
+  INFO:api:Retrying billing.client.Client.fetch in 1.5 seconds as it raised TimeoutError: slow.
+  [1004.0] sleep 1.5
+  [1009.5] call 2: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 9.5(s), this was the 2nd time calling it.
+  INFO:api:Retrying billing.client.Client.fetch in 1.5 seconds as it raised TimeoutError: slow.
+  [1009.5] sleep 1.5
+  [1015.0] call 3: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 15.0(s), this was the 3rd time calling it.
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised TimeoutError>]
+  last attempt: #3 raised TimeoutError: slow
+  cause: TimeoutError: slow
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 3.0, 'delay_since_first_attempt': 15.0}
+== stop before a delay
+  call #1
+  [1004.0] call 1: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 4(s), this was the 1st time calling it.
+  INFO:api:Retrying billing.client.Client.fetch in 1.5 seconds as it raised TimeoutError: slow.
+  [1004.0] sleep 1.5
+  [1009.5] call 2: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 9(s), this was the 2nd time calling it.
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised TimeoutError>]
+  last attempt: #2 raised TimeoutError: slow
+  cause: TimeoutError: slow
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1.5, 'delay_since_first_attempt': 9.5}
+== stop delays as timedeltas
+  call #1
+  [1000.75] call 1: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 0.75(s), this was the 1st time calling it.
+  INFO:api:Retrying billing.client.Client.fetch in 0.25 seconds as it raised TimeoutError: slow.
+  [1000.75] sleep 0.25
+  [1001.75] call 2: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 1.75(s), this was the 2nd time calling it.
+  INFO:api:Retrying billing.client.Client.fetch in 0.25 seconds as it raised TimeoutError: slow.
+  [1001.75] sleep 0.25
+  [1002.75] call 3: raise TimeoutError: slow
+  INFO:api:Finished call to 'billing.client.Client.fetch' after 2.75(s), this was the 3rd time calling it.
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised TimeoutError>]
+  last attempt: #3 raised TimeoutError: slow
+  cause: TimeoutError: slow
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.5, 'delay_since_first_attempt': 2.75}
+== stop when an event is set
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 3.0
+  [1003.5] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0 seconds as it raised ConnectionError: down.
+  [1003.5] sleep 3.0
+  [1006.75] call 3: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #3 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 6.0, 'delay_since_first_attempt': 6.75}
+== stop_all needs every stop
+  call #1
+  [1002.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1002.0] sleep 1.0
+  [1005.0] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1005.0] sleep 1.0
+  [1008.0] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1008.0] sleep 1.0
+  [1011.0] call 4: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #4 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 3.0, 'delay_since_first_attempt': 11.0}
+== stop_all of nested stops
+  call #1
+  [1001.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1001.0] sleep 0.5
+  [1002.5] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1002.5] sleep 0.5
+  [1004.0] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1004.0] sleep 0.5
+  [1005.5] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1005.5] sleep 0.5
+  [1007.0] call 5: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1007.0] sleep 0.5
+  [1008.5] call 6: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #6 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 2.5, 'delay_since_first_attempt': 8.5}
+== wait_exponential with its defaults
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 1.0
+  [1001.5] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1, 'delay_since_first_attempt': 0.25}
+  INFO:svc:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1001.5] sleep 2.0
+  [1003.75] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 3, 'delay_since_first_attempt': 1.5}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.0 seconds as it raised ConnectionError: down.
+  [1003.75] sleep 4.0
+  [1008.0] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 7, 'delay_since_first_attempt': 3.75}
+  INFO:svc:Retrying billing.client.Client.fetch in 8.0 seconds as it raised ConnectionError: down.
+  [1008.0] sleep 8.0
+  [1016.25] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 15, 'delay_since_first_attempt': 8.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 16.0 seconds as it raised ConnectionError: down.
+  [1016.25] sleep 16.0
+  [1032.5] call 6: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 31, 'delay_since_first_attempt': 16.25}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #6 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 31, 'delay_since_first_attempt': 32.5}
+== wait_exponential with a multiplier and limits
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 1.0
+  [1001.5] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1001.5] sleep 1.0
+  [1002.75] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1002.75] sleep 2.0
+  [1005.0] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 4.0 seconds as it raised ConnectionError: down.
+  [1005.0] sleep 4.0
+  [1009.25] call 5: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 8.0 seconds as it raised ConnectionError: down.
+  [1009.25] sleep 8.0
+  [1017.5] call 6: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 10.0 seconds as it raised ConnectionError: down.
+  [1017.5] sleep 10.0
+  [1027.75] call 7: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 10.0 seconds as it raised ConnectionError: down.
+  [1027.75] sleep 10.0
+  [1038.0] call 8: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #8 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 8, 'idle_for': 36.0, 'delay_since_first_attempt': 38.0}
+== wait_exponential with a float base
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 3.0
+  [1003.0] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 4.5 seconds as it raised ConnectionError: down.
+  [1003.0] sleep 4.5
+  [1007.5] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 6.75 seconds as it raised ConnectionError: down.
+  [1007.5] sleep 6.75
+  [1014.25] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 10.125 seconds as it raised ConnectionError: down.
+  [1014.25] sleep 10.125
+  [1024.375] call 5: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 15.1875 seconds as it raised ConnectionError: down.
+  [1024.375] sleep 15.1875
+  [1039.5625] call 6: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 20.25 seconds as it raised ConnectionError: down.
+  [1039.5625] sleep 20.25
+  [1059.8125] call 7: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #7 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 59.8125, 'delay_since_first_attempt': 59.8125}
+== an exponent that overflows
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  [1000.0] sleep 1e-300
+  [1000.0] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1e-300, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-290
+  [1000.0] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 1.0000000001000001e-290, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000001e-280
+  [1000.0] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 1.0000000001e-280, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-270
+  [1000.0] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 1.0000000001e-270, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000001e-260
+  [1000.0] call 6: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 1.0000000001000001e-260, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-250
+  [1000.0] call 7: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 1.0000000001000001e-250, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-240
+  [1000.0] call 8: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 8, 'idle_for': 1.0000000001e-240, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-230
+  [1000.0] call 9: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 9, 'idle_for': 1.0000000001e-230, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-220
+  [1000.0] call 10: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 10, 'idle_for': 1.0000000001e-220, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-210
+  [1000.0] call 11: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 11, 'idle_for': 1.0000000001000001e-210, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-200
+  [1000.0] call 12: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 12, 'idle_for': 1.0000000001e-200, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-190
+  [1000.0] call 13: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 13, 'idle_for': 1.0000000001e-190, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-180
+  [1000.0] call 14: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 14, 'idle_for': 1.0000000001e-180, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000002e-170
+  [1000.0] call 15: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 15, 'idle_for': 1.0000000001000001e-170, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000001e-160
+  [1000.0] call 16: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 16, 'idle_for': 1.0000000001000002e-160, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-150
+  [1000.0] call 17: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 17, 'idle_for': 1.0000000001e-150, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-140
+  [1000.0] call 18: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 18, 'idle_for': 1.0000000001e-140, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-130
+  [1000.0] call 19: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 19, 'idle_for': 1.0000000001000001e-130, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-120
+  [1000.0] call 20: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 20, 'idle_for': 1.0000000001e-120, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-110
+  [1000.0] call 21: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 21, 'idle_for': 1.0000000001e-110, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-100
+  [1000.0] call 22: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 22, 'idle_for': 1.0000000001e-100, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-90
+  [1000.0] call 23: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 23, 'idle_for': 1.0000000001e-90, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-80
+  [1000.0] call 24: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 24, 'idle_for': 1.0000000001e-80, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000002e-70
+  [1000.0] call 25: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 25, 'idle_for': 1.0000000001000001e-70, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-60
+  [1000.0] call 26: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 26, 'idle_for': 1.0000000001e-60, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 9.999999999999999e-51
+  [1000.0] call 27: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 27, 'idle_for': 1.0000000000999998e-50, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000001e-40
+  [1000.0] call 28: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 28, 'idle_for': 1.0000000001000002e-40, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-30
+  [1000.0] call 29: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 29, 'idle_for': 1.0000000001e-30, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1.0000000000000001e-20
+  [1000.0] call 30: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 30, 'idle_for': 1.0000000001000001e-20, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 1e-10
+  [1000.0000000001] call 31: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 31, 'idle_for': 1.0000000001000001e-10, 'delay_since_first_attempt': 0.0}
+  [1000.0000000001] sleep 1.0
+  [1001.0000000001] call 32: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 32, 'idle_for': 1.0000000001, 'delay_since_first_attempt': 1.000444171950221e-10}
+  [1001.0000000001] sleep 4.611686018427388e+18
+  [4.611686018427389e+18] call 33: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 33, 'idle_for': 4.611686018427388e+18, 'delay_since_first_attempt': 1.0000000001000444}
+  [4.611686018427389e+18] sleep 4.611686018427388e+18
+  [9.223372036854776e+18] call 34: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 34, 'idle_for': 9.223372036854776e+18, 'delay_since_first_attempt': 4.611686018427388e+18}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #34 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 34, 'idle_for': 9.223372036854776e+18, 'delay_since_first_attempt': 9.223372036854775e+18}
+== wait_incrementing
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  INFO:svc:Retrying billing.client.Client.fetch in 0.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 0.0
+  [1000.0] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0, 'delay_since_first_attempt': 0.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 0.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 0.0
+  [1000.0] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0, 'delay_since_first_attempt': 0.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 1.0
+  [1001.0] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 1.0, 'delay_since_first_attempt': 0.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0 seconds as it raised ConnectionError: down.
+  [1001.0] sleep 3.0
+  [1004.0] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 4.0, 'delay_since_first_attempt': 1.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.5 seconds as it raised ConnectionError: down.
+  [1004.0] sleep 4.5
+  [1008.5] call 6: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 8.5, 'delay_since_first_attempt': 4.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.5 seconds as it raised ConnectionError: down.
+  [1008.5] sleep 4.5
+  [1013.0] call 7: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 13.0, 'delay_since_first_attempt': 8.5}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #7 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 13.0, 'delay_since_first_attempt': 13.0}
+== wait_incrementing from zero
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  [1000.0] sleep 0.0
+  [1000.0] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0, 'delay_since_first_attempt': 0.0}
+  [1000.0] sleep 0.1
+  [1000.1] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.1, 'delay_since_first_attempt': 0.0}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #3 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.1, 'delay_since_first_attempt': 0.10000000000002274}
+== wait_random
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 2.2788535969157673 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 2.2788535969157673
+  [1002.2788535969157] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0500215104453339 seconds as it raised ConnectionError: down.
+  [1002.2788535969157] sleep 1.0500215104453339
+  [1003.3288751073611] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.5500586367382385 seconds as it raised ConnectionError: down.
+  [1003.3288751073611] sleep 1.5500586367382385
+  [1004.8789337440993] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.4464214762976455 seconds as it raised ConnectionError: down.
+  [1004.8789337440993] sleep 1.4464214762976455
+  [1006.325355220397] call 5: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #5 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 6.325355220396986, 'delay_since_first_attempt': 6.325355220397}
+== wait_random_exponential
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.16191638241658118 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 0.16191638241658118
+  [1000.1619163824166] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.15084917392450192 seconds as it raised ConnectionError: down.
+  [1000.1619163824166] sleep 0.15084917392450192
+  [1000.3127655563411] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.3018689460797075 seconds as it raised ConnectionError: down.
+  [1000.3127655563411] sleep 1.3018689460797075
+  [1001.6146345024208] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.28974514667017104 seconds as it raised ConnectionError: down.
+  [1001.6146345024208] sleep 0.28974514667017104
+  [1001.904379649091] call 5: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 4.287056034453514 seconds as it raised ConnectionError: down.
+  [1001.904379649091] sleep 4.287056034453514
+  [1006.1914356835445] call 6: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 2.9255113353006843 seconds as it raised ConnectionError: down.
+  [1006.1914356835445] sleep 2.9255113353006843
+  [1009.1169470188452] call 7: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #7 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 9.11694701884516, 'delay_since_first_attempt': 9.116947018845167}
+== wait_exponential_jitter
+  call #1
+  [1000.125] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  INFO:svc:Retrying billing.client.Client.fetch in 1.2382397699279262 seconds as it raised ConnectionError: down.
+  [1000.125] sleep 1.2382397699279262
+  [1001.4882397699279] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1.2382397699279262, 'delay_since_first_attempt': 0.125}
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0050315104625014 seconds as it raised ConnectionError: down.
+  [1001.4882397699279] sleep 3.0050315104625014
+  [1004.6182712803903] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 4.243271280390427, 'delay_since_first_attempt': 1.4882397699278727}
+  INFO:svc:Retrying billing.client.Client.fetch in 5.0236454255461425 seconds as it raised ConnectionError: down.
+  [1004.6182712803903] sleep 5.0236454255461425
+  [1009.7669167059365] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 9.26691670593657, 'delay_since_first_attempt': 4.618271280390331}
+  INFO:svc:Retrying billing.client.Client.fetch in 9.72000117529855 seconds as it raised ConnectionError: down.
+  [1009.7669167059365] sleep 9.72000117529855
+  [1019.6119178812351] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 18.986917881235122, 'delay_since_first_attempt': 9.766916705936524}
+  INFO:svc:Retrying billing.client.Client.fetch in 16.20527370101392 seconds as it raised ConnectionError: down.
+  [1019.6119178812351] sleep 16.20527370101392
+  [1035.942191582249] call 6: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 35.19219158224904, 'delay_since_first_attempt': 19.61191788123506}
+  INFO:svc:Retrying billing.client.Client.fetch in 20.0 seconds as it raised ConnectionError: down.
+  [1035.942191582249] sleep 20.0
+  [1056.067191582249] call 7: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 55.19219158224904, 'delay_since_first_attempt': 35.94219158224905}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #7 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 7, 'idle_for': 55.19219158224904, 'delay_since_first_attempt': 56.06719158224905}
+== wait_exponential_jitter with float settings
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.2189823135459457 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 0.2189823135459457
+  [1000.2189823135459] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 0.5721146126479759 seconds as it raised ConnectionError: down.
+  [1000.2189823135459] sleep 0.5721146126479759
+  [1000.7910969261939] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0849775832740396 seconds as it raised ConnectionError: down.
+  [1000.7910969261939] sleep 1.0849775832740396
+  [1001.8760745094679] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 3.0019600192980973 seconds as it raised ConnectionError: down.
+  [1001.8760745094679] sleep 3.0019600192980973
+  [1004.878034528766] call 5: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #5 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 4.878034528766058, 'delay_since_first_attempt': 4.878034528765966}
+== wait_chain
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 1.0
+  [1001.0] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1001.0] sleep 1.0
+  [1002.0] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1002.0] sleep 2.0
+  [1004.0] call 4: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 40.0 seconds as it raised ConnectionError: down.
+  [1004.0] sleep 40.0
+  [1044.0] call 5: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 80.0 seconds as it raised ConnectionError: down.
+  [1044.0] sleep 80.0
+  [1124.0] call 6: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 160.0 seconds as it raised ConnectionError: down.
+  [1124.0] sleep 160.0
+  [1284.0] call 7: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 320.0 seconds as it raised ConnectionError: down.
+  [1284.0] sleep 320.0
+  [1604.0] call 8: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #8 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 8, 'idle_for': 604.0, 'delay_since_first_attempt': 604.0}
+== waits added together
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  INFO:svc:Retrying billing.client.Client.fetch in 3.904759107019637 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 3.904759107019637
+  [1003.9047591070197] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 3.904759107019637, 'delay_since_first_attempt': 0.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.119544772160992 seconds as it raised ConnectionError: down.
+  [1003.9047591070197] sleep 4.119544772160992
+  [1008.0243038791807] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 8.024303879180628, 'delay_since_first_attempt': 3.904759107019686}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.848421168047459 seconds as it raised ConnectionError: down.
+  [1008.0243038791807] sleep 4.848421168047459
+  [1012.8727250472282] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 12.872725047228087, 'delay_since_first_attempt': 8.024303879180707}
+  INFO:svc:Retrying billing.client.Client.fetch in 3.9313001401995464 seconds as it raised ConnectionError: down.
+  [1012.8727250472282] sleep 3.9313001401995464
+  [1016.8040251874278] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 16.804025187427634, 'delay_since_first_attempt': 12.872725047228187}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #5 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 16.804025187427634, 'delay_since_first_attempt': 16.804025187427783}
+== sum() of waits
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  INFO:svc:Retrying billing.client.Client.fetch in 1.4868705084669107 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 1.4868705084669107
+  [1001.486870508467] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1.4868705084669107, 'delay_since_first_attempt': 0.0}
+  INFO:svc:Retrying billing.client.Client.fetch in 2.522536096778219 seconds as it raised ConnectionError: down.
+  [1001.486870508467] sleep 2.522536096778219
+  [1004.0094066052452] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 4.00940660524513, 'delay_since_first_attempt': 1.48687050846695}
+  INFO:svc:Retrying billing.client.Client.fetch in 4.538558069669709 seconds as it raised ConnectionError: down.
+  [1004.0094066052452] sleep 4.538558069669709
+  [1008.547964674915] call 4: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 8.547964674914839, 'delay_since_first_attempt': 4.0094066052452035}
+  INFO:svc:Retrying billing.client.Client.fetch in 8.582735085133114 seconds as it raised ConnectionError: down.
+  [1008.547964674915] sleep 8.582735085133114
+  [1017.1306997600481] call 5: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 17.130699760047953, 'delay_since_first_attempt': 8.547964674914965}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #5 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 5, 'idle_for': 17.130699760047953, 'delay_since_first_attempt': 17.13069976004806}
+== sum() of one wait is that wait
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  [1000.0] sleep 1.0
+  [1001.0] call 2: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1, 'delay_since_first_attempt': 0.0}
+  [1001.0] sleep 2.0
+  [1003.0] call 3: raise ConnectionError: down
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 3, 'delay_since_first_attempt': 1.0}
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #3 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 3, 'delay_since_first_attempt': 3.0}
+== compensated sums of floats
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.6 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 1.6
+  [1001.6] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.6 seconds as it raised ConnectionError: down.
+  [1001.6] sleep 1.6
+  [1003.2] call 3: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.6 seconds as it raised ConnectionError: down.
+  [1003.2] sleep 1.6
+  [1004.8000000000001] call 4: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #4 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 4.800000000000001, 'delay_since_first_attempt': 4.800000000000068}
+== an int added to a wait
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  -> raised TypeError: 'int' object is not callable
+  statistics: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+== zero added to a wait
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1000.0] sleep 1.0
+  [1001.0] call 2: raise ConnectionError: down
+  INFO:svc:Retrying billing.client.Client.fetch in 1.0 seconds as it raised ConnectionError: down.
+  [1001.0] sleep 1.0
+  [1002.0] call 3: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #3 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 2.0, 'delay_since_first_attempt': 2.0}
+== retry_error_callback gets the last attempt
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #2; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  [1000.5] sleep 0.0
+  [1000.75] call 3: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #3; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  -> returned 3
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.75}
+== retry_error_callback with a fallback
+  call #1
+  [1000.25] call 1: return None
+  [1000.25] sleep 0.0
+  [1000.5] call 2: return None
+  -> returned {'cached': True, 'rows': []}
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== retry_error_callback that re-raises
+  call #1
+  [1000.25] call 1: raise TimeoutError: slow
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise TimeoutError: slow
+  -> raised TimeoutError: slow
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== before, after and before_sleep logs
+  call #1
+  DEBUG:http:Starting call to 'fetch_profile', this is the 1st time calling it.
+  [1000.3333] call 1: raise ConnectionError: down
+  DEBUG:http:Finished call to 'fetch_profile' after 0.333(s), this was the 1st time calling it.
+  WARNING:http:Retrying fetch_profile in 1.25 seconds as it raised ConnectionError: down.
+  [1000.3333] sleep 1.25
+  DEBUG:http:Starting call to 'fetch_profile', this is the 2nd time calling it.
+  [1001.6458] call 2: return {'ok': True}
+  -> returned {'ok': True}
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1.25, 'delay_since_first_attempt': 0.33330000000000837}
+== logger levels filter
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  Level 25:loud:Finished call to 'worker.tasks.sync_inventory' after 0.250(s), this was the 1st time calling it.
+  ERROR:quiet:Retrying worker.tasks.sync_inventory in 0.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise ConnectionError: down
+  Level 25:loud:Finished call to 'worker.tasks.sync_inventory' after 0.500(s), this was the 2nd time calling it.
+  ERROR:quiet:Retrying worker.tasks.sync_inventory in 0.0 seconds as it raised ConnectionError: down.
+  [1000.5] sleep 0.0
+  [1000.75] call 3: return 1
+  -> returned 1
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== a function with no module
+  call #1
+  INFO:x:Starting call to 'Outer.<locals>.inner', this is the 1st time calling it.
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:x:Retrying Outer.<locals>.inner in 0.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 0.0
+  INFO:x:Starting call to 'Outer.<locals>.inner', this is the 2nd time calling it.
+  [1000.5] call 2: return 2
+  -> returned 2
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.25}
+== trace and stats callbacks
+  call #1
+  stats: {'start_time': 1000.0, 'attempt_number': 1, 'idle_for': 0}
+  [1000.1] call 1: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  trace: <RetryCallState ?: attempt #1; slept for 0.02; last result: failed (ConnectionError down)>; next_action=RetryAction(sleep=0.018079561498873326); upcoming_sleep=0.018079561498873326
+  [1000.1] sleep 0.018079561498873326
+  stats: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.018079561498873326, 'delay_since_first_attempt': 0.10000000000002274}
+  [1000.318079561499] call 2: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #2; slept for 0.02; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.018079561498873326
+  trace: <RetryCallState ?: attempt #2; slept for 0.03; last result: failed (ConnectionError down)>; next_action=RetryAction(sleep=0.014001508891498909); upcoming_sleep=0.014001508891498909
+  [1000.318079561499] sleep 0.014001508891498909
+  stats: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.03208107039037224, 'delay_since_first_attempt': 0.318079561498962}
+  [1000.6320810703904] call 3: return 'ok'
+  -> returned 'ok'
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.03208107039037224, 'delay_since_first_attempt': 0.318079561498962}
+== slept rounds to two places
+  call #1
+  [1000.0] call 1: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  [1000.0] sleep 0.125
+  [1000.125] call 2: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #2; slept for 0.12; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.125
+  [1000.125] sleep 0.005
+  [1000.13] call 3: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #3; slept for 0.13; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.005
+  [1000.13] sleep 0.0049
+  [1000.1349] call 4: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #4; slept for 0.13; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0049
+  [1000.1349] sleep 1.115
+  [1001.2499] call 5: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #5; slept for 1.25; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=1.115
+  [1001.2499] sleep 2.675
+  [1003.9249] call 6: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #6; slept for 3.92; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=2.675
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #6 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 6, 'idle_for': 3.9249, 'delay_since_first_attempt': 3.9248999999999796}
+== one Retrying called twice
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  [1000.25] sleep 1.0
+  [1001.5] call 2: return 'a'
+  -> returned 'a'
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 1.0, 'delay_since_first_attempt': 0.25}
+  call #2
+  [1001.75] call 3: raise ConnectionError: down
+  [1001.75] sleep 1.0
+  [1003.0] call 4: raise ConnectionError: down
+  [1003.0] sleep 1.0
+  [1004.25] call 5: return 'b'
+  -> returned 'b'
+  statistics: {'start_time': 1001.5, 'attempt_number': 3, 'idle_for': 2.0, 'delay_since_first_attempt': 1.5}
+== the decorator
+  statistics before: {}
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 2.0
+  [1002.5] call 2: return 'first'
+  -> returned 'first'
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 2.0, 'delay_since_first_attempt': 0.25}
+  call #2
+  [1002.75] call 3: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1002.75] sleep 2.0
+  [1005.0] call 4: return 'second'
+  -> returned 'second'
+  statistics: {'start_time': 1002.5, 'attempt_number': 2, 'idle_for': 2.0, 'delay_since_first_attempt': 0.25}
+== the bare decorator
+  statistics before: {}
+  call #1
+  [1000.25] call 1: raise ValueError: x
+  [1000.25] sleep 0.0
+  [1000.5] call 2: raise ValueError: y
+  [1000.5] sleep 0.0
+  [1000.75] call 3: return 3
+  -> returned 3
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== retry_with
+  statistics before: {}
+  call #1
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 2.0
+  [1002.5] call 2: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1002.5] sleep 2.0
+  [1004.75] call 3: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 2.0 seconds as it raised ConnectionError: down.
+  [1004.75] sleep 2.0
+  [1007.0] call 4: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #4 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 6.0, 'delay_since_first_attempt': 7.0}
+  retry_with
+  [1007.25] call 5: raise ConnectionError: down
+  INFO:deco:Retrying billing.client.Client.fetch in 0.5 seconds as it raised ConnectionError: down.
+  [1007.25] sleep 0.5
+  [1008.0] call 6: raise ConnectionError: down
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #2 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1007.0, 'attempt_number': 2, 'idle_for': 0.5, 'delay_since_first_attempt': 1.0}
+  original statistics: {'start_time': 1000.0, 'attempt_number': 4, 'idle_for': 6.0, 'delay_since_first_attempt': 7.0}
+== the iterator
+  INFO:loop:Starting call to '<unknown>', this is the 1st time calling it.
+  attempt #1
+  [1000.25] call 1: raise ConnectionError: down
+  INFO:loop:Finished call to '<unknown>' after 0.250(s), this was the 1st time calling it.
+  INFO:loop:Retrying <unknown> in 1.0 seconds as it raised ConnectionError: down.
+  [1000.25] sleep 1.0
+  INFO:loop:Starting call to '<unknown>', this is the 2nd time calling it.
+  attempt #2
+  [1001.5] call 2: raise TimeoutError: slow
+  INFO:loop:Finished call to '<unknown>' after 1.500(s), this was the 2nd time calling it.
+  INFO:loop:Retrying <unknown> in 1.0 seconds as it raised TimeoutError: slow.
+  [1001.5] sleep 1.0
+  INFO:loop:Starting call to '<unknown>', this is the 3rd time calling it.
+  attempt #3
+  [1002.75] call 3: return 'ok'
+  -> returned 'loop ended after 3 attempts'
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 2.0, 'delay_since_first_attempt': 1.5}
+== the iterator gives up
+  attempt #1
+  [1000.25] call 1: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  [1000.25] sleep 0.0
+  attempt #2
+  [1000.5] call 2: raise ConnectionError: down
+  trace: <RetryCallState ?: attempt #2; slept for 0.0; last result: failed (ConnectionError down)>; next_action=None; upcoming_sleep=0.0
+  -> raised RetryError: RetryError[<Future at 0x? state=finished raised ConnectionError>]
+  last attempt: #2 raised ConnectionError: down
+  cause: ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== the iterator with reraise
+  attempt #1
+  [1000.25] call 1: raise ConnectionError: down
+  [1000.25] sleep 0.0
+  attempt #2
+  [1000.5] call 2: raise ConnectionError: down
+  -> raised ConnectionError: down
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.5}
+== the iterator retries a None result
+  attempt #1
+  [1000.25] call 1: return 'ignored'
+  trace: <RetryCallState ?: attempt #1; slept for 0.0; last result: returned None>; next_action=None; upcoming_sleep=0.0
+  [1000.25] sleep 0.0
+  attempt #2
+  [1000.5] call 2: return 'ignored'
+  trace: <RetryCallState ?: attempt #2; slept for 0.0; last result: returned None>; next_action=None; upcoming_sleep=0.0
+  [1000.5] sleep 0.0
+  attempt #3
+  [1000.75] call 3: return 'ignored'
+  trace: <RetryCallState ?: attempt #3; slept for 0.0; last result: returned None>; next_action=None; upcoming_sleep=0.0
+  -> raised RetryError: RetryError[<Future at 0x? state=finished returned NoneType>]
+  last attempt: #3 returned None
+  cause: None
+  statistics: {'start_time': 1000.0, 'attempt_number': 3, 'idle_for': 0.0, 'delay_since_first_attempt': 0.75}
+== the iterator lets a ValueError out
+  attempt #1
+  [1000.25] call 1: raise ConnectionError: down
+  [1000.25] sleep 0.0
+  attempt #2
+  [1000.5] call 2: raise ValueError: bad
+  -> raised ValueError: bad
+  statistics: {'start_time': 1000.0, 'attempt_number': 2, 'idle_for': 0.0, 'delay_since_first_attempt': 0.25}
+== webhook delivery
+  evt_001 order.created orders -> delivered (status 200) after 1 attempt(s), idle 0.000s, took 0.080s
+  [5000.28] sleep 0.5218615959052844
+  [5001.001861595905] sleep 1.1014600375493613
+  evt_002 invoice.paid billing -> delivered (status 202) after 3 attempt(s), idle 1.623s, took 2.123s
+  [5002.253321633455] sleep 0.5008127326477309
+  [5007.754134366102] sleep 1.0233646494925848
+  evt_003 contact.updated crm -> delivered (status 200) after 3 attempt(s), idle 1.524s, took 6.874s
+  evt_004 order.shipped orders -> delivered (status 200) after 1 attempt(s), idle 0.000s, took 0.080s
+  [5009.167499015595] sleep 0.6491877159014896
+  [5009.826686731497] sleep 1.0831843542567567
+  [5010.919871085754] sleep 2.0990064273859157
+  [5013.028877513139] sleep 4.025020241777114
+  evt_005 order.created legacy -> dead (ConnectionRefusedError: [Errno 111] Connection refused) after 5 attempt(s), idle 7.856s, took 7.906s
+  [5017.163897754917] sleep 0.6669406273278408
+  [5017.930838382245] sleep 1.1199966242363375
+  [5019.150835006482] sleep 2.1330102943025206
+  evt_006 alert.fired slack -> delivered (status 200) after 4 attempt(s), idle 3.920s, took 4.320s
+  evt_007 invoice.voided billing -> delivered (status 202) after 1 attempt(s), idle 0.000s, took 0.100s
+  evt_008 contact.deleted gone -> rejected (status 410) after 1 attempt(s), idle 0.000s, took 0.050s
+  [5022.533845300786] sleep 0.5447709870702003
+  [5028.078616287857] sleep 1.146403960869617
+  [5030.225020248727] sleep 2.1874470052543216
+  [5037.412467253981] sleep 4.045927795005261
+  evt_009 order.created flaky -> delivered (status 200) after 5 attempt(s), idle 7.925s, took 20.425s
+  [5050.958395048986] sleep 0.5353205407356026
+  [5060.493715589721] sleep 1.1265215309908698
+  evt_010 report.ready slowpoke -> dead (TimeoutError: POST https://slow.example.com/hook timed out after 9.0s) after 3 attempt(s), idle 1.662s, took 28.662s
+  evt_011 contact.created crm -> delivered (status 200) after 1 attempt(s), idle 0.000s, took 0.300s
+  [5071.420237120712] sleep 0.6020992095482214
+  [5072.52233633026] sleep 1.0667657545883587
+  [5074.0891020848485] sleep 2.011468284348397
+  [5076.600570369197] sleep 4.084916503977468
+  evt_012 alert.fired ratelimited -> dead (gave up on status 429) after 5 attempt(s), idle 7.765s, took 10.265s
+  delivered 8, rejected 1, dead 3; 33 attempts, idle 32.27548687317125
+  == data/out/dead_letter.csv
+  id,endpoint,type,attempts,reason
+  evt_005,legacy,order.created,5,ConnectionRefusedError: [Errno 111] Connection refused
+  evt_010,slowpoke,report.ready,3,TimeoutError: POST https://slow.example.com/hook timed out after 9.0s
+  evt_012,ratelimited,alert.fired,5,gave up on status 429
+  == data/out/delivery.log
+  [5000.280] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.200(s), this was the 1st time calling it.
+  [5000.280] WARNING webhooks: Retrying webhooks.delivery.post in 0.5218615959052844 seconds as it returned 503.
+  [5001.002] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.922(s), this was the 2nd time calling it.
+  [5001.002] WARNING webhooks: Retrying webhooks.delivery.post in 1.1014600375493613 seconds as it returned 503.
+  [5002.253] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.050(s), this was the 1st time calling it.
+  [5002.253] WARNING webhooks: Retrying webhooks.delivery.post in 0.5008127326477309 seconds as it raised ConnectionResetError: [Errno 104] Connection reset by peer.
+  [5007.754] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 5.551(s), this was the 2nd time calling it.
+  [5007.754] WARNING webhooks: Retrying webhooks.delivery.post in 1.0233646494925848 seconds as it raised TimeoutError: POST https://crm.example.org/in timed out after 5.0s.
+  [5009.167] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.010(s), this was the 1st time calling it.
+  [5009.167] WARNING webhooks: Retrying webhooks.delivery.post in 0.6491877159014896 seconds as it raised ConnectionRefusedError: [Errno 111] Connection refused.
+  [5009.827] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.669(s), this was the 2nd time calling it.
+  [5009.827] WARNING webhooks: Retrying webhooks.delivery.post in 1.0831843542567567 seconds as it raised ConnectionRefusedError: [Errno 111] Connection refused.
+  [5010.920] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 1.762(s), this was the 3rd time calling it.
+  [5010.920] WARNING webhooks: Retrying webhooks.delivery.post in 2.0990064273859157 seconds as it raised ConnectionRefusedError: [Errno 111] Connection refused.
+  [5013.029] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 3.871(s), this was the 4th time calling it.
+  [5013.029] WARNING webhooks: Retrying webhooks.delivery.post in 4.025020241777114 seconds as it raised ConnectionRefusedError: [Errno 111] Connection refused.
+  [5017.064] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 7.906(s), this was the 5th time calling it.
+  [5017.064] ERROR webhooks: dead-lettered evt_005 for tenant 4
+  [5017.164] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.100(s), this was the 1st time calling it.
+  [5017.164] WARNING webhooks: Retrying webhooks.delivery.post in 0.6669406273278408 seconds as it returned 429.
+  [5017.931] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.867(s), this was the 2nd time calling it.
+  [5017.931] WARNING webhooks: Retrying webhooks.delivery.post in 1.1199966242363375 seconds as it returned 429.
+  [5019.151] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 2.087(s), this was the 3rd time calling it.
+  [5019.151] WARNING webhooks: Retrying webhooks.delivery.post in 2.1330102943025206 seconds as it returned 429.
+  [5022.534] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 1.000(s), this was the 1st time calling it.
+  [5022.534] WARNING webhooks: Retrying webhooks.delivery.post in 0.5447709870702003 seconds as it returned 500.
+  [5028.079] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 6.545(s), this was the 2nd time calling it.
+  [5028.079] WARNING webhooks: Retrying webhooks.delivery.post in 1.146403960869617 seconds as it raised TimeoutError: POST https://flaky.example.io/h timed out after 5.0s.
+  [5030.225] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 8.691(s), this was the 3rd time calling it.
+  [5030.225] WARNING webhooks: Retrying webhooks.delivery.post in 2.1874470052543216 seconds as it returned 502.
+  [5037.412] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 15.879(s), this was the 4th time calling it.
+  [5037.412] WARNING webhooks: Retrying webhooks.delivery.post in 4.045927795005261 seconds as it raised TimeoutError: POST https://flaky.example.io/h timed out after 5.0s.
+  [5050.958] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 9.000(s), this was the 1st time calling it.
+  [5050.958] WARNING webhooks: Retrying webhooks.delivery.post in 0.5353205407356026 seconds as it raised TimeoutError: POST https://slow.example.com/hook timed out after 9.0s.
+  [5060.494] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 18.535(s), this was the 2nd time calling it.
+  [5060.494] WARNING webhooks: Retrying webhooks.delivery.post in 1.1265215309908698 seconds as it raised TimeoutError: POST https://slow.example.com/hook timed out after 9.0s.
+  [5070.620] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 28.662(s), this was the 3rd time calling it.
+  [5070.620] ERROR webhooks: dead-lettered evt_010 for tenant 7
+  [5071.420] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 0.500(s), this was the 1st time calling it.
+  [5071.420] WARNING webhooks: Retrying webhooks.delivery.post in 0.6020992095482214 seconds as it returned 429.
+  [5072.522] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 1.602(s), this was the 2nd time calling it.
+  [5072.522] WARNING webhooks: Retrying webhooks.delivery.post in 1.0667657545883587 seconds as it returned 429.
+  [5074.089] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 3.169(s), this was the 3rd time calling it.
+  [5074.089] WARNING webhooks: Retrying webhooks.delivery.post in 2.011468284348397 seconds as it returned 429.
+  [5076.601] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 5.680(s), this was the 4th time calling it.
+  [5076.601] WARNING webhooks: Retrying webhooks.delivery.post in 4.084916503977468 seconds as it returned 429.
+  [5081.185] DEBUG webhooks: Finished call to 'webhooks.delivery.post' after 10.265(s), this was the 5th time calling it.
+  [5081.185] ERROR webhooks: dead-lettered evt_012 for tenant 5
+== backup upload
+  db/2026-10-21.sql.gz (9437184 bytes, 3 chunk(s))
+    chunk 1/3: 4194304 bytes after 1 attempt(s), idle 0.000s
+    chunk 2/3: 4194304 bytes after 1 attempt(s), idle 0.000s
+    chunk 3/3: 1048576 bytes after 1 attempt(s), idle 0.000s
+  media/photos.tar (16777216 bytes, 4 chunk(s))
+    chunk 1/4: 4194304 bytes after 1 attempt(s), idle 0.000s
+  [86405.075] sleep 0.3995576845583635
+    chunk 2/4: 4194304 bytes after 2 attempt(s), idle 0.400s
+  [86407.02455768456] sleep 0.1629530720312682
+  [86407.2375107566] sleep 0.24049351508267347
+    chunk 3/4: 4194304 bytes after 3 attempt(s), idle 0.403s
+    chunk 4/4: 4194304 bytes after 1 attempt(s), idle 0.000s
+  logs/app.log.1 (1048576 bytes, 1 chunk(s))
+  [86410.67800427169] sleep 0.4112779346840907
+  [86411.28928220637] sleep 0.11506253698710345
+  [86411.60434474336] sleep 0.9524735503352211
+    chunk 1/1: 1048576 bytes after 4 attempt(s), idle 1.479s
+  etc/secrets.env (4096 bytes, 1 chunk(s))
+    aborted: PermissionError: [Errno 13] Permission denied: etc/secrets.env
+  media/video.mp4 (12582912 bytes, 3 chunk(s))
+  [86433.0318182937] sleep 0.2789473645377853
+  [86453.31076565824] sleep 0.6113330665067622
+  [86454.12209872475] sleep 0.29094293051795406
+    chunk 1/3: skipped after 4 attempt(s), idle 1.181s: TimeoutError: upload of media/video.mp4 part 1 timed out
+  [86474.61304165526] sleep 0.25030988828251566
+  [86475.06335154355] sleep 0.8511188349123333
+  [86476.11447037845] sleep 0.056702492168922536
+  [86476.37117287061] sleep 3.8287037163123507
+  [86480.39987658692] sleep 1.3814387793802352
+  [86481.9813153663] sleep 8.133552610220814
+  [86490.31486797651] sleep 5.073148980567305
+  [86495.58801695707] sleep 8.356936602931707
+  [86504.14495356] sleep 1.828740263841231
+  [86506.17369382383] sleep 3.2148227183005416
+  [86509.58851654214] sleep 0.8718235456189227
+  [86510.66034008775] sleep 7.787191738214644
+  [86518.64753182596] sleep 5.339682658736723
+  [86524.1872144847] sleep 2.0497627724407863
+  [86526.43697725714] sleep 1.9168793463619915
+  [86528.5538566035] sleep 0.8094897006000101
+  [86529.56334630409] sleep 2.0013196540795586
+    chunk 2/3: skipped after 18 attempt(s), idle 53.752s: ServerError: 503 Slow Down
+  [86531.96466595816] sleep 0.2188204884354797
+  [86532.38348644659] sleep 0.7042609642352532
+  [86533.28774741082] sleep 0.15259762257105924
+  [86533.64034503339] sleep 3.357947462839022
+  [86537.19829249622] sleep 7.856674415313912
+  [86545.25496691153] sleep 7.396986127796542
+  [86552.85195303932] sleep 7.4313359952625735
+  [86560.48328903459] sleep 8.497443056685155
+  [86569.18073209126] sleep 0.9492412639326819
+  [86570.3299733552] sleep 4.612384351146352
+  [86575.14235770634] sleep 0.7933112916991791
+  [86576.13566899803] sleep 7.815682648434295
+  [86584.15135164646] sleep 5.379738060626819
+  [86589.73108970709] sleep 1.0647656971159392
+    chunk 3/3: skipped after 15 attempt(s), idle 56.231s: ServerError: 503 Slow Down
+  home/notes.md (0 bytes, 0 chunk(s))
+  db/2026-10-20.sql.gz (8388608 bytes, 2 chunk(s))
+  [86591.0458554042] sleep 0.3884208907176902
+  [86591.48427629491] sleep 0.5520540101467354
+  [86592.08633030506] sleep 0.2429600708397246
+  [86592.3792903759] sleep 3.7474112966574054
+    chunk 1/2: 4194304 bytes after 5 attempt(s), idle 4.931s
+    chunk 2/2: 4194304 bytes after 1 attempt(s), idle 0.000s
+  sent 35651584 bytes; clock 86599.12670167256
+  == data/out/manifest.csv
+  path,bytes,chunks,uploaded,status
+  db/2026-10-21.sql.gz,9437184,3,3,ok
+  media/photos.tar,16777216,4,4,ok
+  logs/app.log.1,1048576,1,1,ok
+  etc/secrets.env,4096,1,0,aborted
+  media/video.mp4,12582912,3,0,partial
+  home/notes.md,0,0,0,ok
+  db/2026-10-20.sql.gz,8388608,2,2,ok
+  == data/out/backup.log
+  [86405.075] INFO backup: Retrying <unknown> in 0.3995576845583635 seconds as it raised ServerError: 503 Slow Down.
+  [86407.025] INFO backup: Retrying <unknown> in 0.1629530720312682 seconds as it raised TryAgain: .
+  [86407.238] INFO backup: Retrying <unknown> in 0.24049351508267347 seconds as it raised TryAgain: .
+  [86410.678] INFO backup: Retrying <unknown> in 0.4112779346840907 seconds as it raised ServerError: 503 Slow Down.
+  [86411.289] INFO backup: Retrying <unknown> in 0.11506253698710345 seconds as it raised ServerError: 503 Slow Down.
+  [86411.604] INFO backup: Retrying <unknown> in 0.9524735503352211 seconds as it raised ServerError: 503 Slow Down.
+  [86413.032] ERROR backup: aborted etc/secrets.env: [Errno 13] Permission denied: etc/secrets.env
+  [86433.032] INFO backup: Retrying <unknown> in 0.2789473645377853 seconds as it raised TimeoutError: upload of media/video.mp4 part 1 timed out.
+  [86453.311] INFO backup: Retrying <unknown> in 0.6113330665067622 seconds as it raised TimeoutError: upload of media/video.mp4 part 1 timed out.
+  [86454.122] INFO backup: Retrying <unknown> in 0.29094293051795406 seconds as it raised ServerError: 503 Slow Down.
+  [86474.413] WARNING backup: skipped part 1 of media/video.mp4
+  [86474.613] INFO backup: Retrying <unknown> in 0.25030988828251566 seconds as it raised ServerError: 503 Slow Down.
+  [86475.063] INFO backup: Retrying <unknown> in 0.8511188349123333 seconds as it raised ServerError: 503 Slow Down.
+  [86476.114] INFO backup: Retrying <unknown> in 0.056702492168922536 seconds as it raised ServerError: 503 Slow Down.
+  [86476.371] INFO backup: Retrying <unknown> in 3.8287037163123507 seconds as it raised ServerError: 503 Slow Down.
+  [86480.400] INFO backup: Retrying <unknown> in 1.3814387793802352 seconds as it raised ServerError: 503 Slow Down.
+  [86481.981] INFO backup: Retrying <unknown> in 8.133552610220814 seconds as it raised ServerError: 503 Slow Down.
+  [86490.315] INFO backup: Retrying <unknown> in 5.073148980567305 seconds as it raised ServerError: 503 Slow Down.
+  [86495.588] INFO backup: Retrying <unknown> in 8.356936602931707 seconds as it raised ServerError: 503 Slow Down.
+  [86504.145] INFO backup: Retrying <unknown> in 1.828740263841231 seconds as it raised ServerError: 503 Slow Down.
+  [86506.174] INFO backup: Retrying <unknown> in 3.2148227183005416 seconds as it raised ServerError: 503 Slow Down.
+  [86509.589] INFO backup: Retrying <unknown> in 0.8718235456189227 seconds as it raised ServerError: 503 Slow Down.
+  [86510.660] INFO backup: Retrying <unknown> in 7.787191738214644 seconds as it raised ServerError: 503 Slow Down.
+  [86518.648] INFO backup: Retrying <unknown> in 5.339682658736723 seconds as it raised ServerError: 503 Slow Down.
+  [86524.187] INFO backup: Retrying <unknown> in 2.0497627724407863 seconds as it raised ServerError: 503 Slow Down.
+  [86526.437] INFO backup: Retrying <unknown> in 1.9168793463619915 seconds as it raised ServerError: 503 Slow Down.
+  [86528.554] INFO backup: Retrying <unknown> in 0.8094897006000101 seconds as it raised ServerError: 503 Slow Down.
+  [86529.563] INFO backup: Retrying <unknown> in 2.0013196540795586 seconds as it raised ServerError: 503 Slow Down.
+  [86531.765] WARNING backup: skipped part 2 of media/video.mp4
+  [86531.965] INFO backup: Retrying <unknown> in 0.2188204884354797 seconds as it raised ServerError: 503 Slow Down.
+  [86532.383] INFO backup: Retrying <unknown> in 0.7042609642352532 seconds as it raised ServerError: 503 Slow Down.
+  [86533.288] INFO backup: Retrying <unknown> in 0.15259762257105924 seconds as it raised ServerError: 503 Slow Down.
+  [86533.640] INFO backup: Retrying <unknown> in 3.357947462839022 seconds as it raised ServerError: 503 Slow Down.
+  [86537.198] INFO backup: Retrying <unknown> in 7.856674415313912 seconds as it raised ServerError: 503 Slow Down.
+  [86545.255] INFO backup: Retrying <unknown> in 7.396986127796542 seconds as it raised ServerError: 503 Slow Down.
+  [86552.852] INFO backup: Retrying <unknown> in 7.4313359952625735 seconds as it raised ServerError: 503 Slow Down.
+  [86560.483] INFO backup: Retrying <unknown> in 8.497443056685155 seconds as it raised ServerError: 503 Slow Down.
+  [86569.181] INFO backup: Retrying <unknown> in 0.9492412639326819 seconds as it raised ServerError: 503 Slow Down.
+  [86570.330] INFO backup: Retrying <unknown> in 4.612384351146352 seconds as it raised ServerError: 503 Slow Down.
+  [86575.142] INFO backup: Retrying <unknown> in 0.7933112916991791 seconds as it raised ServerError: 503 Slow Down.
+  [86576.136] INFO backup: Retrying <unknown> in 7.815682648434295 seconds as it raised ServerError: 503 Slow Down.
+  [86584.151] INFO backup: Retrying <unknown> in 5.379738060626819 seconds as it raised ServerError: 503 Slow Down.
+  [86589.731] INFO backup: Retrying <unknown> in 1.0647656971159392 seconds as it raised ServerError: 503 Slow Down.
+  [86590.996] WARNING backup: skipped part 3 of media/video.mp4
+  [86591.046] INFO backup: Retrying <unknown> in 0.3884208907176902 seconds as it raised TryAgain: .
+  [86591.484] INFO backup: Retrying <unknown> in 0.5520540101467354 seconds as it raised TryAgain: .
+  [86592.086] INFO backup: Retrying <unknown> in 0.2429600708397246 seconds as it raised TryAgain: .
+  [86592.379] INFO backup: Retrying <unknown> in 3.7474112966574054 seconds as it raised TryAgain: .
