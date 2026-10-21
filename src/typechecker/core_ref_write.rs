@@ -591,6 +591,16 @@ impl Walk<'_, '_> {
     fn iterated_place(&self, iterable: &Expr) -> Option<Borrowed> {
         let mut e = iterable;
         while let ExprKind::MethodCall { object, method, .. } = &e.kind {
+            // A call that hands back an owned collection (a user `keys`
+            // returning a cloned `Vec[i64]`) borrows nothing, whatever its
+            // name (B-2026-10-21-2).
+            if self
+                .node_types
+                .get(&e.id)
+                .is_some_and(|(t, _)| owned_collection(t))
+            {
+                return None;
+            }
             match method.as_str() {
                 "iter" | "iter_mut" | "keys" | "values" | "values_mut" | "enumerate" | "rev"
                 | "skip" | "take" | "step_by" | "filter" | "peekable" | "skip_while"
@@ -1887,5 +1897,31 @@ fn place_root(e: &Expr) -> Option<&str> {
         | ExprKind::TupleIndex { object, .. }
         | ExprKind::Index { object, .. } => place_root(object),
         _ => None,
+    }
+}
+
+/// An owned `Vec` / `VecDeque` / `Set` / `Map` / `String` whose type mentions
+/// no reference, so no part of it can borrow from anything (B-2026-10-21-2).
+fn owned_collection(t: &Type) -> bool {
+    fn ref_free(t: &Type) -> bool {
+        match t {
+            Type::Ref(_) | Type::MutRef(_) => false,
+            Type::Named { name, args } => name != "StringSlice" && args.iter().all(ref_free),
+            Type::Tuple(ts) => ts.iter().all(ref_free),
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char | Type::Str => {
+                true
+            }
+            _ => false,
+        }
+    }
+    match t {
+        Type::Str => true,
+        Type::Named { name, args } => {
+            matches!(
+                name.as_str(),
+                "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap"
+            ) && args.iter().all(ref_free)
+        }
+        _ => false,
     }
 }

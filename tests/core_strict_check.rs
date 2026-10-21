@@ -10654,3 +10654,34 @@ fn a_closure_moves_out_of_its_own_local_freely() {
         "was moved into a closure",
     );
 }
+
+/// B-2026-10-21-2: a `for` over a method that returns an owned collection
+/// borrows nothing, whatever the method is called, so the body may write the
+/// receiver; a builtin `iter()` / `keys()` view still holds it.
+#[test]
+fn a_loop_over_an_owned_result_borrows_nothing() {
+    accepted(
+        "user-keys-returns-a-vec",
+        "struct Bag { xs: Vec[i64], n: i64 }\n\
+         impl Bag {\n\
+             fn keys(ref self) -> Vec[i64] { self.xs.clone() }\n\
+             fn values(ref self) -> Vec[i64] { self.xs.clone() }\n\
+             fn bump(mut ref self, k: i64) { self.n = self.n + k; }\n\
+         }\n\
+         fn main() {\n\
+             let mut b = Bag { xs: vec![1, 2, 3], n: 0 };\n\
+             for k in b.keys() { b.bump(k); }\n\
+             for v in b.values() { b.bump(v); }\n\
+             println(f\"{b.n}\");\n\
+         }\n",
+    );
+    rejected(
+        "builtin-keys-is-a-view",
+        "fn main() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m[1] = 2;\n\
+             for k in m.keys() { m.insert(k + 10, 0); }\n\
+         }\n",
+        "while the `for` loop",
+    );
+}
