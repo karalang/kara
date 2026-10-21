@@ -1,8 +1,10 @@
 # Regular expressions: `std.regex`
 
-`std.regex` holds `Regex`, a compiled pattern; `RegexError`, why a pattern did not compile; `Match`, one match; and `Captures`, the groups of one match.
+`std.regex` holds `Regex`, a compiled pattern; `RegexError`, why a pattern did not compile; `Match`, one match; and `Captures`, the groups of one match. They are not in the prelude: import the ones a program names. **Not yet implemented**: the compiler does not know `std.regex` yet, and these types are reached without an import today (B-2026-10-21-56).
 
 ```kara
+import std.regex.{Regex};
+
 match Regex.compile("(?P<key>\\w+)=(?P<value>\\d+)") {
     Ok(re) => {
         for c in re.captures_all("a=1, b=22") {

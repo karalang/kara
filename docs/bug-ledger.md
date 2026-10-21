@@ -96,9 +96,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 610 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 322 |
-| codegen-gap | 283 |
-| false-positive | 267 |
+| missing-feature | 323 |
+| codegen-gap | 284 |
+| false-positive | 270 |
 | other | 191 |
 | diagnostics | 184 |
 | perf | 181 |
@@ -110,17 +110,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3008 |
+| codegen | 3009 |
 | interp | 1028 |
-| typecheck | 540 |
+| typecheck | 544 |
 | ownership | 128 |
 | other | 123 |
 | runtime | 85 |
 | cli | 82 |
 | parser | 77 |
 | autopar | 59 |
-| resolver | 50 |
-| effect | 40 |
+| resolver | 51 |
+| effect | 41 |
 | lexer | 12 |
 ## Current state
 
@@ -187,6 +187,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-49 | 2026-10-21 | interp+codegen | medium | A program's own `struct Env` breaks `karac __mir-run` with "'Env' is not an effect resource (it is a struct)", the span in the library's cli.kara: the clash renaming of B-2026-10-12-21 skips `effect resource` items, so the library's `reads(Env)` resolves to the program's struct (`karac check` and `karac run` pass) | — |
 | B-2026-10-21-50 | 2026-10-21 | interp+codegen | medium | A `collect()` inside a `map` closure still does not build on the MIR backends when the outer `collect()` takes its type from the function's RETURN type rather than a `let` annotation: `fn f(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] { image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect() }` fails with "an expression whose type does not lower (Type(UnknownParam("C")))"; the remainder of B-2026-10-14-6 | — |
 | B-2026-10-21-51 | 2026-10-21 | interp+codegen | medium | `v.iter_mut()` on a `Vec` takes no adaptor on either MIR backend: `for x in v.iter_mut().skip(1) { *x += 10; }` and the same with `take(2)`, `rev()` or `step_by(2)`, and `let mut it = v.iter_mut().enumerate()` (or any of those) driven by `while let Some(x) = it.next()`, all pass `karac check` and exit 3 under `karac __mir-run` and `karac __mir-llvm-run` with "an iterator value is not lowered yet". Only the two shapes the `for` lowering peels work: `for x in v.iter_mut()` and `for (i, x) in v.iter_mut().enumerate()`. collections.md says `iter_mut()` returns `impl Iterator` (item `mut ref T`), so every adaptor applies; `iter()` takes them all since `SliceIter`/`VecIter` (B-2026-10-13-3). | — |
+| B-2026-10-21-52 | 2026-10-21 | typecheck | high | `karac check` refuses most of regex.md's surface unless the program contains the word `captures`: `re.replace(..)`, `re.split(..)` and `re.captures_all(..)` are "no method on type 'Regex'" and `is_match` of a `Str` is "expected String, found Str", because check tells the v2 `std.regex` from the legacy four-method surface by probing for a `captures` method, which library pruning drops from a program that never names it; regex.md's own first example is refused | — |
+| B-2026-10-21-53 | 2026-10-21 | typecheck | medium | A `pub fn` cannot mention any type from the appended v2 library sources: `pub fn f(x: Option[TcpStream]) -> bool`, and the same with `Command`, `Regex`, `Match` or `VecIter[i64]`, is refused with "private type 'TcpStream' leaks through parameter of 'f'", because runtime/stdlib/source/*.kara declares its structs without `pub`; a library cannot expose a socket, a process, a regex or an iterator in its API | — |
+| B-2026-10-21-54 | 2026-10-21 | effect | medium | `karac check` demands `with panics` on a `pub fn` that can panic, contradicting design.md § Default-permitted effects ("`allocates(Heap)` and `panics` are default-permitted: inferred and shown, but never required in a declaration") and docs/library/README.md: `pub fn first(v: Vec[i64]) -> i64 { v[0] }` is refused with "public function 'first' performs effects [panics] but has no effect declaration", and so is a `pub fn` calling `Json.parse` | — |
+| B-2026-10-21-55 | 2026-10-21 | typecheck+codegen | medium | A generic fixed only by its return type does not lower on MIR when the call is unwrapped into an annotated binding: `fn make[T: Default]() -> Option[T]` with `let x: i64 = make().unwrap()` checks, but both MIR backends refuse it ("an expression whose type does not lower (Type(UnknownParam(\"T\")))"); the same blocks design.md's `let back: User = Json.deserialize(json).unwrap()` example | — |
+| B-2026-10-21-56 | 2026-10-21 | resolver+typecheck | low | `std.regex` and `std.json` do not exist as modules: `import std.regex.{Regex}` is "unknown module `std.regex`", and `Regex`, `Match`, `Captures`, `RegexError` and `Json` are reached without any import, where docs/library/README.md (and design.md:626, "everything else is under `std.*`") requires `import std.regex.{...}` and `import std.json.{Json}` | — |
 
 ### Relocated
 
