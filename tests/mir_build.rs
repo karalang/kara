@@ -7481,3 +7481,35 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-21-64: `Result.or_else` whose closure changes the error type
+/// fixes the new error type from the binding or from the closure's `Err`.
+#[test]
+fn mir_or_else_may_change_the_error_type() {
+    let src = r#"
+fn chk(x: i64) -> Result[i64, String] { if x > 0 { Ok(x) } else { Err("neg".to_string()) } }
+
+fn main() {
+    let a: Result[i64, String] = Ok(-1);
+    let r = a.and_then(chk);
+    match r { Ok(x) => println(f"ok {x}"), Err(e) => println(f"err {e}") }
+    let b: Result[i64, String] = Err("x".to_string());
+    let s: Result[i64, i64] = b.or_else(|e| if e == "x" { Ok(0) } else { Err(1) });
+    match s { Ok(x) => println(f"ok {x}"), Err(e) => println(f"err {e}") }
+    let c: Result[i64, String] = Ok(5);
+    let t: Result[i64, i64] = c.or_else(|e| Err(e.len()));
+    match t { Ok(x) => println(f"ok {x}"), Err(e) => println(f"err {e}") }
+    let d: Result[i64, String] = Err("abc".to_string());
+    let u = d.or_else(|e| Err(e.len()));
+    match u { Ok(x) => println(f"ok {x}"), Err(e) => println(f"err {e}") }
+}
+"#;
+    let want = "err neg\nok 0\nok 5\nerr 3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -611,6 +611,72 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `ty` with each part that names a parameter from some other signature
+    /// taken from `expected` where `expected`'s part does not, matching
+    /// structurally; where the shapes differ, `ty`'s part stays.
+    fn merge_foreign_params(&self, ty: &Type, expected: &Type) -> Type {
+        if !self.mentions_foreign_param(ty) {
+            return ty.clone();
+        }
+        if !self.mentions_foreign_param(expected) {
+            return expected.clone();
+        }
+        let merge_all = |a: &[Type], b: &[Type]| -> Vec<Type> {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| self.merge_foreign_params(x, y))
+                .collect()
+        };
+        match (ty, expected) {
+            (Type::Named { name, args }, Type::Named { name: n2, args: a2 })
+                if name == n2 && args.len() == a2.len() =>
+            {
+                Type::Named {
+                    name: name.clone(),
+                    args: merge_all(args, a2),
+                }
+            }
+            (Type::Tuple(ts), Type::Tuple(t2)) if ts.len() == t2.len() => {
+                Type::Tuple(merge_all(ts, t2))
+            }
+            (
+                Type::Function {
+                    params,
+                    return_type,
+                },
+                Type::Function {
+                    params: p2,
+                    return_type: r2,
+                }
+                | Type::OnceFunction {
+                    params: p2,
+                    return_type: r2,
+                },
+            ) if params.len() == p2.len() => Type::Function {
+                params: merge_all(params, p2),
+                return_type: Box::new(self.merge_foreign_params(return_type, r2)),
+            },
+            (
+                Type::OnceFunction {
+                    params,
+                    return_type,
+                },
+                Type::Function {
+                    params: p2,
+                    return_type: r2,
+                }
+                | Type::OnceFunction {
+                    params: p2,
+                    return_type: r2,
+                },
+            ) if params.len() == p2.len() => Type::OnceFunction {
+                params: merge_all(params, p2),
+                return_type: Box::new(self.merge_foreign_params(return_type, r2)),
+            },
+            _ => ty.clone(),
+        }
+    }
+
     /// Is `e` arithmetic whose leaves are all unsuffixed float literals?
     fn float_literal_arith(e: &Expr) -> bool {
         match &e.kind {
@@ -1056,6 +1122,12 @@ impl<'a> super::TypeChecker<'a> {
             && !self.mentions_foreign_param(expected)
         {
             self.record_node_type(expr.id, expected);
+        } else if self.mentions_foreign_param(&ty) && self.mentions_foreign_param(expected) {
+            // Each side knows part of it: a closure `|e| Err(e.len())`
+            // checked against `OnceFn(E) -> Result[T, F]` knows the error,
+            // the slot knows the value (B-2026-10-21-64).
+            let merged = self.merge_foreign_params(&ty, expected);
+            self.record_node_type(expr.id, &merged);
         } else if matches!(Self::peel_borrow(expected), Type::Float(size)
                 if !matches!(size, crate::typechecker::types::FloatSize::F64))
             && Self::float_literal_arith(expr)
@@ -3032,20 +3104,22 @@ impl<'a> super::TypeChecker<'a> {
                 ExprKind::Call { callee, .. }
                     if matches!(&callee.kind, ExprKind::Path { .. } | ExprKind::Identifier(_))
             );
-            if unwraps
-                && seedable_receiver
-                && self.library_methods_from_source
-                && *expected != Type::Error
+            let fixed = *expected != Type::Error
                 && (expectation_is_concrete(expected)
-                    || (!contains_type_var(expected) && !self.mentions_foreign_param(expected)))
-            {
+                    || (!contains_type_var(expected) && !self.mentions_foreign_param(expected)));
+            if unwraps && seedable_receiver && self.library_methods_from_source && fixed {
                 self.pending_expected_call_payload =
                     Some((SpanKey::from_span(&object.span), expected.clone()));
+            }
+            if self.library_methods_from_source && fixed {
+                self.pending_expected_method_return =
+                    Some((SpanKey::from_span(&expr.span), expected.clone()));
             }
         }
         let actual = self.infer_expr(expr);
         self.pending_expected_call_return = None;
         self.pending_expected_call_payload = None;
+        self.pending_expected_method_return = None;
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
         // information to fix `T`), `expected` lets us bind `T` to a concrete
@@ -3723,6 +3797,27 @@ impl<'a> super::TypeChecker<'a> {
             // is precisely the case this seeding exists for. Measured: gating on
             // the formals list left `Box.new(5)` unseeded.
             if contains_type_var(&sub_ret) {
+                unify_types(
+                    &sub_ret,
+                    &expected_ret,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+                seeded_from_expectation = true;
+            }
+        }
+        if self
+            .pending_expected_method_return
+            .as_ref()
+            .is_some_and(|(key, _)| *key == SpanKey::from_span(record_subs_for_span))
+        {
+            let (_, expected_ret) = self.pending_expected_method_return.take().expect("checked");
+            let same_shape = matches!(
+                (&sub_ret, &expected_ret),
+                (Type::Named { name, args }, Type::Named { name: n2, args: a2 })
+                    if name == n2 && args.len() == a2.len()
+            );
+            if same_shape && contains_type_var(&sub_ret) {
                 unify_types(
                     &sub_ret,
                     &expected_ret,

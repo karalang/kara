@@ -2945,6 +2945,13 @@ pub struct TypeChecker<'a> {
     /// type does (`pending_expected_call_return`). Keyed so a call nested in
     /// the receiver's arguments cannot take it.
     pub(super) pending_expected_call_payload: Option<(SpanKey, Type)>,
+    /// B-2026-10-21-64 — the expected type of a library method call (the
+    /// binding's `Result[i64, i64]` for `b.or_else(|e| Ok(0))`), keyed by the
+    /// call's span: a return of the same type constructor takes it before
+    /// the arguments are solved, so a method generic fixed only by the
+    /// context (`or_else`'s `F`) is fixed. The method-call twin of
+    /// `pending_expected_call_return`.
+    pub(super) pending_expected_method_return: Option<(SpanKey, Type)>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: FxHashMap<SpanKey, TypeExpr>,
@@ -3485,6 +3492,7 @@ impl<'a> TypeChecker<'a> {
             pending_expected_call_return: None,
             pending_unwrap_receiver_expectation: None,
             pending_expected_call_payload: None,
+            pending_expected_method_return: None,
             temp_recv_elem_types: FxHashMap::default(),
             tensor_index_recv_types: FxHashMap::default(),
             index_recv_vec_types: FxHashMap::default(),
