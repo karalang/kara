@@ -1,7 +1,8 @@
 //! The standard streams and the io.md conformance fixes on the MIR backend
 //! (ADR-3 phase 2, B-2026-10-21-8 to -15): `stdin.lines()`, text that is
 //! not UTF-8, `stdout.flush()` and the order of a program's output against
-//! a child's, `IoError.from`, `env.var` of a `Str`, `File.append` of a
+//! a child's, `IoError.from`, `env.var` of a `Str` (and its
+//! `NotUnicode`, B-2026-10-21-20), `File.append` of a
 //! `String` path, and the HTTP client's five redirects. Each program runs on
 //! the MIR interpreter (`karac __mir-run`) and as a binary built with
 //! `karac build --mir`, with stdout on a pipe; the expected output is
@@ -47,6 +48,10 @@ fn run_with(mut cmd: Command, input: &[u8], what: &str) -> String {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("KARA_STD_STREAMS_SET", "hello")
+        .env(
+            "KARA_STD_STREAMS_BAD",
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"\xff\xfe"),
+        )
         .spawn()
         .expect("spawn");
     child
@@ -222,6 +227,7 @@ fn main() {
     println(show(IoError.from(VarError.NotUnicode)));
     println(present("KARA_STD_STREAMS_SET"));
     println(present("KARA_STD_STREAMS_UNSET"));
+    println(present("KARA_STD_STREAMS_BAD"));
     let p: String = "DIR/appended.txt".to_string();
     let _ = fs.remove_file(p);
     match File.append(p) {
@@ -251,7 +257,7 @@ fn conversions_and_str_parameters_match_io_md() {
         "conversions",
         CONVERSIONS,
         b"",
-        "NotFound\nInvalidUtf8\nhello\nunset\nabcd true\n",
+        "NotFound\nInvalidUtf8\nhello\nunset\nnot unicode\nabcd true\n",
     );
 }
 

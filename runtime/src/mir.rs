@@ -1119,53 +1119,6 @@ pub extern "C" fn karac_mir_span_top() -> i64 {
     SPANS.with(|s| s.borrow().last().copied().unwrap_or(0))
 }
 
-/// `Env.var(name)`: writes the variable's value to the `String` at `out`
-/// and returns 1, or returns 0 when it is unset (or not UTF-8).
-///
-/// # Safety
-/// `p` is readable for `n` bytes; `out` is writable for a `String`.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: usize) -> u8 {
-    // SAFETY: the caller's contract.
-    let name = unsafe { bytes(p, n) };
-    let Ok(name) = std::str::from_utf8(name) else {
-        return 0;
-    };
-    match std::env::var(name) {
-        Ok(v) => {
-            // SAFETY: as above.
-            unsafe { string_of(out, v.as_bytes()) };
-            1
-        }
-        Err(_) => 0,
-    }
-}
-
-/// `Stdin.read_line` (op 0) or `read_to_string` (op 1): writes what was
-/// read to the `String` at `out` and returns 1, or returns 0 on an I/O
-/// error.
-///
-/// # Safety
-/// `out` is writable for a `String`.
-#[no_mangle]
-pub unsafe extern "C" fn karac_mir_stdin_read(out: *mut RawVec, op: i32) -> u8 {
-    use std::io::Read;
-    let mut buf = String::new();
-    let r = if op == 0 {
-        std::io::stdin().read_line(&mut buf).map(|_| ())
-    } else {
-        std::io::stdin().read_to_string(&mut buf).map(|_| ())
-    };
-    match r {
-        Ok(()) => {
-            // SAFETY: the caller's contract.
-            unsafe { string_of(out, buf.as_bytes()) };
-            1
-        }
-        Err(_) => 0,
-    }
-}
-
 thread_local! {
     static RAND: std::cell::Cell<u64> = std::cell::Cell::new(
         std::time::SystemTime::now()

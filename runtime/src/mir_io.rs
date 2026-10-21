@@ -467,6 +467,34 @@ pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mu
     }
 }
 
+/// `Env.var(name)`: 0 with the variable's value as a fresh `String` at
+/// `out`, 1 when it is unset, 2 when its value is not UTF-8
+/// (`VarError.NotPresent` / `NotUnicode`, docs/library/time-random-env.md).
+///
+/// # Safety
+/// `p` is readable for `n` bytes; `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: usize) -> i32 {
+    let name = if n == 0 {
+        &[][..]
+    } else {
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts(p, n) }
+    };
+    let Ok(name) = std::str::from_utf8(name) else {
+        return 1;
+    };
+    match std::env::var(name) {
+        Ok(v) => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, v.as_bytes()) };
+            0
+        }
+        Err(std::env::VarError::NotUnicode(_)) => 2,
+        Err(std::env::VarError::NotPresent) => 1,
+    }
+}
+
 /// Drops a `BufReader` or `BufWriter`, closing its file; a writer flushes
 /// first and ignores a failure, as io.md has it.
 ///

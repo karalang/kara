@@ -13,7 +13,7 @@ In `std.time`:
 | `Instant.now()` | `reads(Clock)` | An `Instant`: a reading of the monotonic clock, which never goes backwards |
 | `Clock.now()` | `reads(Clock)` | An `i64`: whole seconds since the Unix epoch, read from the wall clock, so it can jump when the system clock is set. It is for protocols that count epoch seconds, such as a JWT `exp` claim |
 | `SystemTime.now()` | `reads(Clock)` | A `SystemTime`: the current wall-clock time |
-| `sleep(d: Duration)` | `blocks`, `suspends`, `reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
+| `sleep(d: Duration)` | `blocks suspends reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
 
 Never measure elapsed time with `Clock.now()`: a wall-clock reading can jump, and whole seconds are too coarse. Use `Instant.now()`.
 
@@ -58,7 +58,7 @@ fn timed(work: Fn()) -> Duration {
 | `std.random.next_u64()` | `writes(RandomSource)` | 64 random bits |
 | `std.uuid.v4()` | `writes(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
 
-A draw advances the source, so it writes `RandomSource`: two draws keep their order, and two `par` branches that both draw conflict. Cryptographic nonces draw too. A pseudo-random generator seeded from a constant does not touch `RandomSource`: it is deterministic, and its state is an ordinary value passed as an argument.
+A draw advances the source, so it writes `RandomSource`: two draws keep their order, and two `par` branches that both draw conflict, which is a compile error. Cryptographic nonces draw too. A pseudo-random generator seeded from a constant does not touch `RandomSource`: it is deterministic, and its state is an ordinary value passed as an argument.
 
 ## `Env`
 
@@ -67,10 +67,10 @@ A draw advances the source, so it writes `RandomSource`: two draws keep their or
 ```kara
 fn env.args() -> Vec[String] with reads(Env)
 fn env.var(name: Str) -> Result[String, VarError] with reads(Env)
-fn env.set_var(name: Str, value: Str) with writes(Env)
+fn env.set(name: Str, value: Str) with writes(Env)
 ```
 
-`env.args()` returns the command-line arguments, the program name first. `env.var(name)` returns `Err(VarError.NotPresent)` when the variable is unset and `Err(VarError.NotUnicode)` when its value is not valid UTF-8. `VarError` and its conversion into `IoError` are in [io.md](io.md#errors).
+`env.args()` returns the command-line arguments, the program name first. `env.set(name, value)` sets a variable for the rest of the process and for the children it starts. `env.var(name)` returns `Err(VarError.NotPresent)` when the variable is unset and `Err(VarError.NotUnicode)` when its value is not valid UTF-8. `VarError` and its conversion into `IoError` are in [io.md](io.md#errors).
 
 ```kara
 fn port() -> i64 {

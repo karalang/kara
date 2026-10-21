@@ -75,6 +75,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.buf_native(base, method, args, dest)
             }
             ("Stdio", _) => self.stdio_native(method, args, dest),
+            ("Env", "var") if args.len() == 1 => self.env_var_native(args, dest).map(Some),
             ("Stdin" | "StdinLines" | "Stdout" | "Stderr", _) => {
                 self.std_stream_native(base, method, args, dest)
             }
@@ -423,6 +424,39 @@ impl<'ctx> Cx<'ctx, '_> {
             cx.store_io_result_at(q, rt, code, value, msg, None)?;
             cx.store_tag(d, dty, some)
         })
+    }
+
+    /// `Env.var(name)`: `Ok(value)`, or `Err` of `NotPresent` for an unset
+    /// variable and `NotUnicode` for a value that is not UTF-8, through
+    /// `karac_mir_env_var(out, ptr, len)`.
+    fn env_var_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.str_parts(&args[0])?;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
+        let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+        let et = self
+            .tys
+            .field_ty(dty, Some(er), 0)
+            .ok_or("Result.Err has no payload")?;
+        let ep = self.offset(d, self.field_offset(dty, Some(er), 0)?)?;
+        let code = self.rt_int("env_var", &[q.into(), p.into(), n.into()], 32)?;
+        let i32t = self.llcx.i32_type();
+        self.store_tag(d, dty, er)?;
+        for (k, name) in [(1, "NotPresent"), (2, "NotUnicode")] {
+            let v = self.variant_of(et, name)?;
+            let is = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, code, i32t.const_int(k, false), "")
+                .map_err(e)?;
+            self.if_then(is, |cx| cx.store_tag(ep, et, v))?;
+        }
+        let found = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, code, i32t.const_zero(), "")
+            .map_err(e)?;
+        self.if_then(found, |cx| cx.store_tag(d, dty, ok))?;
+        self.drop_moved(args)
     }
 
     /// The standard streams' reads and flushes, through

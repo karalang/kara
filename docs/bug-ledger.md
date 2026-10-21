@@ -96,23 +96,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 605 |
 | double-free | 427 |
-| missing-feature | 308 |
+| missing-feature | 309 |
 | codegen-gap | 280 |
 | false-positive | 262 |
-| other | 190 |
+| other | 191 |
 | diagnostics | 184 |
 | perf | 180 |
+| soundness | 126 |
 | crash | 126 |
-| soundness | 125 |
 | use-after-free | 92 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2989 |
-| interp | 1008 |
-| typecheck | 527 |
+| codegen | 2990 |
+| interp | 1009 |
+| typecheck | 528 |
 | ownership | 125 |
 | other | 123 |
 | runtime | 82 |
@@ -120,7 +120,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 76 |
 | autopar | 59 |
 | resolver | 49 |
-| effect | 39 |
+| effect | 40 |
 | lexer | 12 |
 ## Current state
 
@@ -170,18 +170,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` replaced by the method's own type parameter, also named `K` (the key the closure returns): `SortedMap[String, i64].iter().max_by_key(|(w, n)| *n)` runs as `SortedMapIter[i64, i64].max_by_key[i64]` and answers with the wrong entry, and a String key on an i64-keyed map exits 101; `__mir-run` is right, and a key of the map's own key type is right | — |
 | B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
 | B-2026-10-21-7 | 2026-10-21 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All checks passed." when the name is not used | — |
-| B-2026-10-21-8 | 2026-10-21 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check refuses `.next()` on `StdinLines`, so a v2 program cannot read standard input by line | — |
-| B-2026-10-21-9 | 2026-10-21 | codegen | medium | On the compiled MIR backend `stdin.read_line()` and `stdin.read_to_string()` fail with `IoError.NotFound`, not `InvalidUtf8`, on input that is not UTF-8 | — |
-| B-2026-10-21-10 | 2026-10-21 | interp+codegen | medium | `stdout.flush()` does not push out a partial line on either MIR backend: after `print("x"); stdout.flush();` a child process's output appears before the `x` | — |
-| B-2026-10-21-11 | 2026-10-21 | codegen | medium | On the compiled MIR backend stdout on a pipe is not line-buffered: a finished `println` line comes out after a later child process's output | — |
-| B-2026-10-21-12 | 2026-10-21 | interp | low | The MIR interpreter's HTTP client follows four redirects, not five: a chain of five fails with "Too Many Redirects" | — |
-| B-2026-10-21-13 | 2026-10-21 | interp+codegen | medium | `IoError.from(VarError.NotPresent)` passes check but fails on both MIR backends: "call of unknown function IoError.from" | — |
-| B-2026-10-21-14 | 2026-10-21 | typecheck | medium | `env.var(name)` with `name: Str` is refused ("expected 'ref String', found 'Str'"): runtime/stdlib/io.kara declares `Env.var(name: ref String)` where time-random-env.md says `name: Str` | — |
-| B-2026-10-21-15 | 2026-10-21 | interp+codegen | medium | `File.append(p)` with `p: String` moves `p` on the MIR backends ("use of _1, which may have been moved") though it takes `path: Str` like `File.open` and `File.create`, which do not | — |
 | B-2026-10-21-16 | 2026-10-21 | typecheck | low | `VarError.NotUnicode.into()` is refused by check ("no method 'into' on type 'VarError'") though the library provides `impl From[VarError] for IoError` | — |
 | B-2026-10-21-17 | 2026-10-21 | typecheck | low | A let-bound array of string literals is typed `Vec[String]`, so `Command.args(a)` refuses it ("expected 'Slice[StringSlice]', found 'Vec[String]'") while the same literal written in the call is accepted | — |
 | B-2026-10-21-18 | 2026-10-21 | interp+codegen | medium | A user `struct Err` breaks the prelude `Err(..)` constructor in the MIR builder: `return Err(Err { msg: .. })` in a `Result[i64, Err]` fn passes `karac check` but `__mir-run` fails "call of unknown function Err" and `__mir-llvm-run` fails "native `Err` is not lowered yet"; `run --interp` prints the right answer. The struct sibling of the enum-variant case B-2026-10-15-3 | — |
 | B-2026-10-21-19 | 2026-10-21 | typecheck | low | An un-annotated `if`/`else` whose branches are tuples fails to unify when one branch leaves an inference variable (`Vec.new()`) and the other has a bare `None`: `if/else branches have incompatible types: '(Vec[?T0], Option[i64])' and '(Vec[i64], Option[T])'` | — |
+| B-2026-10-21-20 | 2026-10-21 | interp+codegen | medium | `env.var(name)` returns `Err(VarError.NotPresent)` for a variable whose value is not UTF-8, on both MIR backends, where time-random-env.md says `NotUnicode` | — |
+| B-2026-10-21-21 | 2026-10-21 | effect | medium | A random draw is still `reads(RandomSource)` in the library and the effect checker, though core semantics §14.7 (ruled 2026-10-20) says a draw writes `RandomSource`: `pub fn f() -> u64 with writes(RandomSource) { next_u64() }` is refused and `with reads(RandomSource)` is accepted | — |
+| B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
 
 ### Relocated
 
@@ -4310,6 +4305,14 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-1 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = \|\| { let o = Opts { sub: Some(s) }; match o.sub { Some(s)… | bd9d84960b |
 | B-2026-10-21-2 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receive… | 4dee76dc4f |
 | B-2026-10-21-6 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | 06cddc56a9 |
+| B-2026-10-21-8 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check ref… | 3749d30728 |
+| B-2026-10-21-9 | codegen | medium | On the compiled MIR backend `stdin.read_line()` and `stdin.read_to_string()` fail with `IoError.NotFound`, not `InvalidUtf8`, on input that is not UT… | 3749d30728 |
+| B-2026-10-21-10 | interp+codegen | medium | `stdout.flush()` does not push out a partial line on either MIR backend: after `print("x"); stdout.flush();` a child process's output appears before… | 3749d30728 |
+| B-2026-10-21-11 | codegen | medium | On the compiled MIR backend stdout on a pipe is not line-buffered: a finished `println` line comes out after a later child process's output | 3749d30728 |
+| B-2026-10-21-12 | interp | low | The MIR interpreter's HTTP client follows four redirects, not five: a chain of five fails with "Too Many Redirects" | 3749d30728 |
+| B-2026-10-21-13 | interp+codegen | medium | `IoError.from(VarError.NotPresent)` passes check but fails on both MIR backends: "call of unknown function IoError.from" | 3749d30728 |
+| B-2026-10-21-14 | typecheck | medium | `env.var(name)` with `name: Str` is refused ("expected 'ref String', found 'Str'"): runtime/stdlib/io.kara declares `Env.var(name: ref String)` where… | 3749d30728 |
+| B-2026-10-21-15 | interp+codegen | medium | `File.append(p)` with `p: String` moves `p` on the MIR backends ("use of _1, which may have been moved") though it takes `path: Str` like `File.open`… | 3749d30728 |
 
 </details>
 

@@ -1392,8 +1392,12 @@ impl<'a> Interp<'a> {
                         let v = self.alloc_box("String", Value::Str(v));
                         self.variant_named(ret, None, "Ok", vec![v])
                     }
-                    Err(_) => {
-                        let e = self.variant_named(ret, Some("Err"), "NotPresent", Vec::new())?;
+                    Err(e) => {
+                        let kind = match e {
+                            std::env::VarError::NotUnicode(_) => "NotUnicode",
+                            std::env::VarError::NotPresent => "NotPresent",
+                        };
+                        let e = self.variant_named(ret, Some("Err"), kind, Vec::new())?;
                         self.variant_named(ret, None, "Err", vec![e])
                     }
                 }

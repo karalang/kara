@@ -704,16 +704,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store_bool(dest, yes)?;
                 self.drop_moved(args)
             }
-            ("Env", "var") if args.len() == 1 => {
-                // `Ok(value)`, or `Err(NotPresent)` for an unset variable.
-                let (p, n) = self.str_parts(&args[0])?;
-                let d = self.place_ptr(dest)?;
-                let ok = self.variant_of(dty, "Ok")?;
-                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
-                let found = self.rt_flag("env_var", &[q.into(), p.into(), n.into()])?;
-                self.store_result_flag(d, dty, found, Some("NotPresent"))?;
-                self.drop_moved(args)
-            }
             ("Env", "set") if args.len() == 2 => {
                 let (p, n) = self.str_parts(&args[0])?;
                 let (v, vn) = self.str_parts(&args[1])?;
@@ -788,20 +778,6 @@ impl<'ctx> Cx<'ctx, '_> {
                     let f = self.llcx.i32_type().const_int(flags, false);
                     self.rt("print_end", &[f.into()])?;
                 }
-                self.drop_moved(args)
-            }
-            ("Stdin", "read_line" | "read_to_string") => {
-                // `Ok(text)`; an I/O error is an `Err` whose payload is
-                // zeroed, not the interpreter's `IoError` for the error.
-                let d = self.place_ptr(dest)?;
-                let ok = self.variant_of(dty, "Ok")?;
-                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
-                let op = self
-                    .llcx
-                    .i32_type()
-                    .const_int(u64::from(method == "read_to_string"), false);
-                let found = self.rt_flag("stdin_read", &[q.into(), op.into()])?;
-                self.store_result_flag(d, dty, found, None)?;
                 self.drop_moved(args)
             }
             ("RandomSource", "next_u64") => {
