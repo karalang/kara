@@ -934,8 +934,10 @@ struct Interp<'a> {
     /// The running hashes and MACs behind `std.crypto`'s `Sha256` and the
     /// rest, by handle.
     crypto: CryptoStates,
-    /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
-    /// does: `Pool` values are handles, and copies share it.
+    /// The `Pool[T]`s, by handle - 1. Every `Pool` value and checked-out
+    /// connection holds a reference, as the compiled backend's
+    /// `karac_mir_pool_*` do; the last one gone drops the idle values and
+    /// the functions, and the entry stays as a dead handle.
     pools: Vec<PoolEntry>,
     /// The `Semaphore`s, by handle - 1: permits available and the budget.
     semaphores: Vec<(i128, i128)>,
@@ -3658,7 +3660,7 @@ impl<'a> Interp<'a> {
                 std::mem::forget(val);
                 return Ok(Value::Unit);
             }
-            return self.return_conn(handle, conn, val, name);
+            return self.return_conn(handle, true, conn, val, name);
         }
         match method {
             "new" => {
@@ -3686,10 +3688,15 @@ impl<'a> Interp<'a> {
                     max,
                     out: Default::default(),
                     next_conn: 1,
+                    refs: 1,
                 });
                 Ok(Value::Agg(vec![Value::Int(self.pools.len() as i128)]))
             }
-            "drop" => Ok(Value::Unit),
+            "drop" => {
+                let id = self.handle_field(args.next().as_ref(), name)?;
+                self.pool_unref(id)?;
+                Ok(Value::Unit)
+            }
             "with_health_check" => {
                 let recv = args.next();
                 let id = self.handle_field(recv.as_ref(), name)?;
@@ -3701,17 +3708,16 @@ impl<'a> Interp<'a> {
                     None => check,
                 };
                 let check = self.alloc_box("Fn", check);
-                match self.pool(id) {
+                // The pool returned is another reference on it.
+                let old = match self.pool(id) {
                     Some(p) => {
-                        if let Some(Value::Box(old)) = p.check.replace(check) {
-                            self.free_slot(old);
-                        }
+                        p.refs += 1;
+                        p.check.replace(check)
                     }
-                    None => {
-                        if let Value::Box(a) = check {
-                            self.free_slot(a);
-                        }
-                    }
+                    None => Some(check),
+                };
+                if let Some(Value::Box(f)) = old {
+                    self.drop_held_fn(f)?;
                 }
                 Ok(Value::Agg(vec![Value::Int(id)]))
             }
@@ -3799,8 +3805,7 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} of a malformed connection"));
                 };
                 // A connection from another pool is not this pool's to keep.
-                let h = if h == id { h } else { 0 };
-                self.return_conn(h, c, val, name)?;
+                self.return_conn(h, h == id, c, val, name)?;
                 Ok(Value::Unit)
             }
             _ => err(format!("call of unknown function {name}")),
@@ -3819,18 +3824,28 @@ impl<'a> Interp<'a> {
         let conn = p.next_conn;
         p.next_conn += 1;
         p.out.insert(conn);
+        p.refs += 1;
         let c = Value::Agg(vec![Value::Int(id), Value::Int(conn), val]);
         self.variant_named(ret, None, "Ok", vec![c])
     }
 
-    /// Puts a checked-out connection's value back in its pool; one that is
-    /// not checked out there (another pool's, or returned already) drops.
-    fn return_conn(&mut self, handle: i128, conn: i128, val: Value, name: &str) -> R<Value> {
+    /// Puts a checked-out connection's value back in its pool (`keep`
+    /// false: to another pool, which drops it); one that is not checked
+    /// out there (returned already) drops. The connection's reference on
+    /// its pool is gone either way.
+    fn return_conn(
+        &mut self,
+        handle: i128,
+        keep: bool,
+        conn: i128,
+        val: Value,
+        name: &str,
+    ) -> R<Value> {
         let elem = match self.pool(handle) {
             Some(p) => {
-                if p.out.remove(&conn) {
+                if p.out.remove(&conn) && keep {
                     p.slots.push(val);
-                    return Ok(Value::Unit);
+                    return self.pool_unref(handle).map(|()| Value::Unit);
                 }
                 p.elem
             }
@@ -3839,7 +3854,54 @@ impl<'a> Interp<'a> {
             None => return err(format!("{name}: a connection from no pool")),
         };
         self.drop_value(val, elem)?;
+        self.pool_unref(handle)?;
         Ok(Value::Unit)
+    }
+
+    /// A `Pool` value or a connection's reference on pool `id` is gone;
+    /// with the last one, the idle values and the functions drop.
+    fn pool_unref(&mut self, id: i128) -> R<()> {
+        let Some(p) = self.pool(id) else {
+            return Ok(());
+        };
+        p.refs -= 1;
+        if p.refs > 0 {
+            return Ok(());
+        }
+        let elem = p.elem;
+        let slots = std::mem::take(&mut p.slots);
+        let create = std::mem::replace(&mut p.create, Value::Unit);
+        let check = p.check.take();
+        for v in slots {
+            self.drop_value(v, elem)?;
+        }
+        for f in std::iter::once(create).chain(check) {
+            if let Value::Box(f) = f {
+                self.drop_held_fn(f)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Drops the function value held in box `f` (its closure's captures)
+    /// and frees the box.
+    fn drop_held_fn(&mut self, f: AllocId) -> R<()> {
+        let at = Addr {
+            root: Root::Heap(f),
+            path: Path::new(),
+        };
+        let v = std::mem::replace(self.slot_mut(&at)?, Value::Unit);
+        let unit = self.tys.unit();
+        let fn_ty = self.tys.intern(TyKind::Fn {
+            params: vec![],
+            ret: unit,
+            kind: super::ty::FnKind::Fn,
+        });
+        if matches!(v, Value::Erased { .. }) {
+            self.drop_value(v, fn_ty)?;
+        }
+        self.free_slot(f);
+        Ok(())
     }
 
     /// Calls the function value held in box `f` through a reference, so
@@ -12879,6 +12941,8 @@ struct PoolEntry {
     max: i128,
     out: rustc_hash::FxHashSet<i128>,
     next_conn: i128,
+    /// `Pool` values and checked-out connections holding the pool.
+    refs: i128,
 }
 
 struct Callee<'a> {

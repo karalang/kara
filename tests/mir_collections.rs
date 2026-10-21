@@ -285,3 +285,47 @@ fn fallible_twins_report_out_of_memory() {
         0,
     );
 }
+
+/// B-2026-10-21-37: a pool's idle values drop when its last `Pool` value and loan are gone,
+/// on both backends: a pool going out of scope, one handed a connection
+/// from another pool, and a closure factory with a capture.
+const POOL_DROP: &str = r#"struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn scoped() {
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: 3 }, 2, 4);
+    match pool.acquire(10) { Ok(c) => println(f"use {c.val.id}"), Err(_) => println("err") }
+    println("end of scope");
+}
+fn main() {
+    scoped();
+    println("after");
+    let tag = "db".to_string();
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: tag.len() as i64 }, 2, 4).with_health_check(|c| c.id > 0);
+    let other: Pool[Conn] = Pool.new(|| Conn { id: 40 }, 1, 1);
+    match pool.acquire(10) {
+        Ok(c) => {
+            other.release(c);
+            println("released to other");
+        }
+        Err(_) => println("err"),
+    }
+    match pool.acquire(10) { Ok(c) => println(f"next {c.val.id}"), Err(_) => println("err2") }
+    match other.acquire(10) { Ok(c) => println(f"other {c.val.id}"), Err(_) => println("err3") }
+    println("end");
+}
+"#;
+
+const WANT_POOL_DROP: &str = "use 3\nend of scope\nclose 3\nafter\nclose 2\nreleased to other\n\
+                              next 2\nother 40\nend\nclose 40\nclose 2\n";
+
+#[test]
+fn pool_drops_its_idle_values_on_both_backends() {
+    agrees(POOL_DROP, WANT_POOL_DROP, 0);
+}
+
+#[test]
+fn pool_drop_is_clean_under_asan() {
+    if let Some(out) = under_asan(POOL_DROP) {
+        assert_eq!(out, WANT_POOL_DROP);
+    }
+}
