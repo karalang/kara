@@ -11110,3 +11110,61 @@ fn option_unwrap_or_default_needs_default() {
     assert!(err.contains("`P` does not implement `Default`"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-21-61: `Iterator.max` / `min` need `Self.Item: Ord`
+/// (iterators.md), so float items are refused, with `total_cmp` as the way
+/// to compare them; ordered items, viewed or owned, still work.
+#[test]
+fn iterator_max_and_min_need_ord_items() {
+    let src = "#[derive(PartialEq, Eq, PartialOrd, Ord)]\n\
+         struct P { x: i64 }\n\
+         fn main() {\n\
+         \x20   let v: Vec[i64] = [3, 1, 2];\n\
+         \x20   let ps: Vec[P] = [P { x: 2 }, P { x: 5 }];\n\
+         \x20   let fs: Vec[f64] = [1.0, 2.0];\n\
+         \x20   let a = v.iter().max() ?? 0;\n\
+         \x20   let b = v.into_iter().min() ?? 0;\n\
+         \x20   let c = match ps.iter().max() { Some(p) => p.x, None => 0 };\n\
+         \x20   let d = (1..5).max() ?? 0;\n\
+         \x20   let e = fs.iter().max_by(|a, b| a.total_cmp(b)) ?? 0.0;\n\
+         \x20   println(f\"{a} {b} {c} {d} {e}\");\n\
+         }\n";
+    let want = "3 1 5 4 2.0\n";
+    accepted("iter-max-ord", src);
+    let (dir, path) = fixture("iter-max-ord", src);
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    for (tag, call) in [
+        ("iter-max-f64", "v.iter().max()"),
+        ("iter-min-f64", "v.into_iter().min()"),
+    ] {
+        let (dir, path) = fixture(
+            tag,
+            &format!(
+                "fn main() {{\n\
+                 \x20   let v: Vec[f64] = [1.0, 2.0];\n\
+                 \x20   let m = {call};\n\
+                 }}\n"
+            ),
+        );
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must refuse: {err}");
+        assert!(err.contains("has no total order (`Ord`)"), "{tag}: {err}");
+        assert!(err.contains("total_cmp"), "{tag}: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

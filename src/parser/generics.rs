@@ -299,9 +299,18 @@ impl super::Parser {
             }
             let cstart = self.current_span();
             let saved = self.pos;
-            let type_name = match self.expect_identifier() {
-                Some(name) => name,
-                None => break,
+            // `Self.Item: Ord` on a trait method (iterators.md's `min` /
+            // `max`, B-2026-10-21-61) bounds a projection of `Self`.
+            let type_name = if self.check(&Token::SelfType)
+                && matches!(self.peek_token_ref_at(1), Token::Dot)
+            {
+                self.advance();
+                "Self".to_string()
+            } else {
+                match self.expect_identifier() {
+                    Some(name) => name,
+                    None => break,
+                }
             };
 
             // Check for projection-based constraints: `T.Assoc[...]` either

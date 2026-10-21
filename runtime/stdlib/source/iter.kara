@@ -229,7 +229,7 @@ trait Iterator {
 
     /// The smallest item, the first of several equal ones; `None` if there
     /// are none.
-    fn min(own self) -> Option[Self.Item] {
+    fn min(own self) -> Option[Self.Item] where Self.Item: Ord {
         let mut it = self;
         let mut best: Option[Self.Item] = None;
         while let Some(x) = it.next() {
@@ -243,7 +243,7 @@ trait Iterator {
 
     /// The largest item, the last of several equal ones; `None` if there are
     /// none.
-    fn max(own self) -> Option[Self.Item] {
+    fn max(own self) -> Option[Self.Item] where Self.Item: Ord {
         let mut it = self;
         let mut best: Option[Self.Item] = None;
         while let Some(x) = it.next() {

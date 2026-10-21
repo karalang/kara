@@ -5778,10 +5778,22 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         // Build a substitution map for the call's solutions. Wrapped in
         // `SubstValue::Type` to feed `substitute_type_params`.
-        let subs: HashMap<String, SubstValue> = solutions
+        let mut subs: HashMap<String, SubstValue> = solutions
             .iter()
             .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
             .collect();
+        // A method's `where Self.Item: Ord` (iterators.md's `min` / `max`,
+        // B-2026-10-21-61) names the receiver, which the method dispatch
+        // hands over as `Self`.
+        let mut scope: Vec<String> = solutions.keys().cloned().collect();
+        if let Some(recv) = &self.call_bound_receiver_subs {
+            for (k, v) in recv {
+                if !subs.contains_key(k) {
+                    scope.push(k.clone());
+                    subs.insert(k.clone(), v.clone());
+                }
+            }
+        }
         for constraint in &where_clause.constraints {
             let WhereConstraint::ProjectionBound {
                 projection, bounds, ..
@@ -5795,7 +5807,6 @@ impl<'a> super::TypeChecker<'a> {
             // call-site discharge already has these in hand). Lowering
             // produces a `Type::AssocProjection { param, args, .. }`
             // with `param` as the receiver's type-param name.
-            let scope: Vec<String> = solutions.keys().cloned().collect();
             let lowered = self.lower_type_expr(projection, &scope);
             // Substitute the call's solutions in for the receiver +
             // any type-param args inside the projection's `args` list.
@@ -5827,6 +5838,26 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 };
                 if self.type_satisfies_bound(&resolved, trait_name) {
+                    continue;
+                }
+                // A float item has no total order (`v.iter().max()` over a
+                // `Vec[f64]`, B-2026-10-21-61): say what compares floats.
+                let item = match &resolved {
+                    Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+                    t => t,
+                };
+                if trait_name == "Ord" && matches!(item, Type::Float(_)) {
+                    self.type_error(
+                        format!(
+                            "the items are `{}`, and `{}` has no total order (`Ord`), \
+                             which `max` and `min` need: compare with `total_cmp`, as \
+                             in `.max_by(|a, b| a.total_cmp(b))`",
+                            type_display(&resolved),
+                            type_display(item),
+                        ),
+                        *discharge_span,
+                        TypeErrorKind::TypeMismatch,
+                    );
                     continue;
                 }
                 self.type_error(
