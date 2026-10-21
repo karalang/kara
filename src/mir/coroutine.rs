@@ -336,7 +336,8 @@ fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String)>
         bodies.iter().find(|b| {
             b.instance.def == def && b.arg_count >= 1 && {
                 let first = b.local(Local(1)).ty;
-                first == env || matches!(tys.kind(first), TyKind::Ref(t) if t == env)
+                first == env
+                    || matches!(tys.kind(first), TyKind::Ref(t) | TyKind::MutRef(t) if t == env)
             }
         })
     };
@@ -390,9 +391,11 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
         scope: SourceScope(0),
     };
     let env_ref = c.local(Local(1)).ty;
-    let (env, by_ref) = match tys.kind(env_ref) {
-        TyKind::Ref(t) => (t, true),
-        _ => (env_ref, false),
+    // A closure that mutates a capture takes its environment `mut ref`.
+    let (env, by_ref, kind) = match tys.kind(env_ref) {
+        TyKind::Ref(t) => (t, true, BorrowKind::Shared),
+        TyKind::MutRef(t) => (t, true, BorrowKind::Mut),
+        _ => (env_ref, false, BorrowKind::Shared),
     };
     let decl = |ty, kind| LocalDecl {
         ty,
@@ -423,7 +426,7 @@ fn task_body(c: &Body, tys: &TyInterner) -> Result<Body, String> {
                 statements: vec![Statement {
                     kind: StatementKind::Assign(
                         Place::local(Local(2)),
-                        Rvalue::Ref(BorrowKind::Shared, Place::local(Local(1))),
+                        Rvalue::Ref(kind, Place::local(Local(1))),
                     ),
                     source_info: si,
                 }],

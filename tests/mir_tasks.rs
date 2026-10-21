@@ -208,6 +208,38 @@ fn main() {
     );
 }
 
+/// A spawned closure that mutates a capture takes its environment `mut ref`
+/// and is still a task: it parks on a full channel and its sibling runs
+/// (what Thread B's `par` lowering of B-2026-10-21-68 needs).
+#[test]
+fn mir_tasks_spawn_a_closure_that_mutates_a_capture() {
+    let src = r#"
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let mut log: Vec[i64] = Vec.new();
+    let names: Vec[String] = vec!["a".to_string(), "b".to_string()];
+    let g = TaskGroup.new();
+    let h1 = g.spawn(|| {
+        let mut s = 0;
+        loop {
+            let v = rx.recv().unwrap();
+            if v < 0 { break; }
+            s = s + v;
+        }
+        s + names.len() as i64
+    });
+    let h2 = g.spawn(|| {
+        for i in 1..=5 { tx.send(i).unwrap(); log.push(i); }
+        tx.send(-1).unwrap();
+        log.len() as i64
+    });
+    let total = h1.join() + h2.join();
+    println(f"{total} {names[0]}");
+}
+"#;
+    assert_eq!(stdout_on_both("mut_env", src), "22 a\n");
+}
+
 /// Owned results move through their handles; a handle dropped while its
 /// task runs leaves the task to drop the result and free the handle.
 #[test]
