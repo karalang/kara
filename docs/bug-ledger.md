@@ -170,7 +170,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
 | B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` replaced by the method's own type parameter, also named `K` (the key the closure returns): `SortedMap[String, i64].iter().max_by_key(|(w, n)| *n)` runs as `SortedMapIter[i64, i64].max_by_key[i64]` and answers with the wrong entry, and a String key on an i64-keyed map exits 101; `__mir-run` is right, and a key of the map's own key type is right | — |
 | B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
-| B-2026-10-21-6 | 2026-10-21 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | — |
 | B-2026-10-21-7 | 2026-10-21 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All checks passed." when the name is not used | — |
 | B-2026-10-21-8 | 2026-10-21 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check refuses `.next()` on `StdinLines`, so a v2 program cannot read standard input by line | — |
 | B-2026-10-21-9 | 2026-10-21 | codegen | medium | On the compiled MIR backend `stdin.read_line()` and `stdin.read_to_string()` fail with `IoError.NotFound`, not `InvalidUtf8`, on input that is not UTF-8 | — |
@@ -4309,6 +4308,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-39 | interp+codegen | medium | The prelude's dynamic `Json` value passes `karac check` but neither v2 backend runs `Json.parse` or `j.stringify()`: `__mir-run` stops with "call of… | 8a5fbc89f1 |
 | B-2026-10-21-1 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = \|\| { let o = Opts { sub: Some(s) }; match o.sub { Some(s)… | bd9d84960b |
 | B-2026-10-21-2 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receive… | 4dee76dc4f |
+| B-2026-10-21-6 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | 06cddc56a9 |
 
 </details>
 
