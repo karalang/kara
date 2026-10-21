@@ -1807,6 +1807,36 @@ pub unsafe extern "C" fn karac_mir_deque_push(
     unsafe { std::ptr::copy_nonoverlapping(elem, q.slot(at, size), size) };
 }
 
+/// Inserts the `size` bytes at `elem` as element `i`, moving the ones
+/// after it back one, and returns 1; returns 0, inserting nothing, when
+/// `i` is past the end.
+///
+/// # Safety
+/// `q` is a live deque of `size`-byte elements; `elem` is readable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_deque_insert(
+    q: *mut RawDeque,
+    i: usize,
+    elem: *const u8,
+    size: usize,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let q = unsafe { &mut *q };
+    if i > q.len {
+        return 0;
+    }
+    q.grow(size);
+    for j in (i..q.len).rev() {
+        // SAFETY: element `j` is live and slot `j + 1` is free or already
+        // moved from; `grow` left room for one more.
+        unsafe { std::ptr::copy_nonoverlapping(q.slot(j, size), q.slot(j + 1, size), size) };
+    }
+    q.len += 1;
+    // SAFETY: slot `i` was vacated above.
+    unsafe { std::ptr::copy_nonoverlapping(elem, q.slot(i, size), size) };
+    1
+}
+
 /// Moves the back element, or the front one when `front`, to `out` and
 /// returns 1, or returns 0 when the deque is empty.
 ///

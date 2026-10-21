@@ -120,6 +120,34 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store_ref(d, at, el)?;
             }
+            ("clear", []) => {
+                if self.tys.needs_drop(el) {
+                    self.drop_ring(q, el)?;
+                }
+                self.store(self.offset(q, 8)?, self.i64(0).into())?;
+                self.store(self.offset(q, 16)?, self.i64(0).into())?;
+            }
+            // Element `i` becomes `x`; `i` may be the length. An allocation
+            // here does not fail, so `try_insert` is always `Ok`.
+            ("insert" | "try_insert", [i, x]) => {
+                let i = self.int_arg(i)?;
+                let x = self.operand_ptr(x)?;
+                let ok = self.rt_int(
+                    "deque_insert",
+                    &[q.into(), i.into(), x.into(), self.i64(size).into()],
+                    8,
+                )?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, ok, ok.get_type().const_zero(), "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                if method == "try_insert" {
+                    let tag = self.variant_of(dty, "Ok")?;
+                    let d = self.place_ptr(dest)?;
+                    self.store_tag(d, dty, tag)?;
+                }
+            }
             _ => return Ok(None),
         }
         Ok(Some(()))

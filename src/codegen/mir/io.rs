@@ -91,6 +91,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.http_native(base, method, args, dest)
             }
             ("RegexEngine", _) => self.regex_native(method, args, dest),
+            ("StableHash", "siphash24") => self.siphash_native(args, dest).map(Some),
             ("String" | "str", "normalize") => self.normalize_native(args, dest).map(Some),
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_native(base, method, args, dest)
@@ -1743,6 +1744,23 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => self.copy(d, out, string)?,
         }
         Ok(Some(()))
+    }
+
+    /// `StableHash.siphash24(bytes, k0, k1)` through the
+    /// `karac_stable_siphash24` the `karac-hash` crate backs, which the
+    /// interpreter calls directly.
+    fn siphash_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.view_of(&args[0])?;
+        let k0 = self.operand_scalar(&args[1])?.into_int_value();
+        let k1 = self.operand_scalar(&args[2])?.into_int_value();
+        let h = self.rt_named(
+            "karac_stable_siphash24",
+            &[p.into(), n.into(), k0.into(), k1.into()],
+            64,
+        )?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        self.store(d, h.into())
     }
 
     /// `String.normalize(form)` through `karac_unicode_normalize_mir(form,

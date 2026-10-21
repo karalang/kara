@@ -2186,6 +2186,16 @@ impl<'a> Interp<'a> {
             // whose variant index is the order runtime/src/unicode.rs
             // numbers the forms in. The compiled backend calls the same
             // `icu_normalizer` through `karac_unicode_normalize`.
+            // The `karac-hash` crate the compiled backend reaches through
+            // `karac_stable_siphash24`.
+            ("StableHash", "siphash24") => match args.as_slice() {
+                [bytes, Value::Int(k0), Value::Int(k1)] => {
+                    let bytes = self.bytes_of_view(bytes, name)?;
+                    let h = karac_hash::siphash24(&bytes, *k0 as u64, *k1 as u64);
+                    Ok(Value::Int(i128::from(h)))
+                }
+                _ => err(format!("{name} takes bytes and two keys")),
+            },
             ("String", "normalize") => match args.as_slice() {
                 [s, Value::Variant(form, _)] => {
                     let s = self.string_at(s)?;
@@ -6700,6 +6710,41 @@ impl<'a> Interp<'a> {
                 let t = self.deref_ty(arg_tys.first().copied(), &name)?;
                 let v = Value::Box(id);
                 self.clone_value(&v, t)
+            }
+            ("clear", []) => {
+                let t = self.deref_ty(arg_tys.first().copied(), &name)?;
+                let TyKind::Intrinsic(IntrinsicTy::VecDeque(el)) = self.tys.kind(t) else {
+                    return err(format!("{name}: the receiver is not a VecDeque"));
+                };
+                let n = self.vec_elems(id)?.len();
+                for i in off..n {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: Path::from_slice(&[i as u64]),
+                    };
+                    self.drop_at(&at, el)?;
+                }
+                self.vec_elems(id)?.clear();
+                self.set_deque_off(id, 0);
+                Ok(Value::Unit)
+            }
+            // Element `i` becomes `v`, the ones after it moving back; `i`
+            // may be the length. An allocation here does not fail, so
+            // `try_insert` is always `Ok`.
+            ("insert" | "try_insert", [Value::Int(i), v]) => {
+                let n = (self.vec_elems(id)?.len() - off) as i128;
+                if !(0..=n).contains(i) {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                self.vec_elems(id)?.insert(off + *i as usize, v.clone());
+                if method == "insert" {
+                    Ok(Value::Unit)
+                } else {
+                    self.variant_named(ret, None, "Ok", vec![Value::Unit])
+                }
             }
             _ => err(format!("call of unknown function {name}")),
         }

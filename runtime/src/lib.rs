@@ -328,6 +328,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_deque_slot,
         mir::karac_mir_deque_push,
         mir::karac_mir_deque_pop,
+        mir::karac_mir_deque_insert,
         mir::karac_mir_fmt_str_debug,
         mir::karac_mir_fmt_char_debug,
         mir::karac_mir_char,

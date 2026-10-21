@@ -485,7 +485,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Drops the elements of the `VecDeque` ring at `p`: `len` of them from
     /// slot `head`, wrapping at `cap`, front to back.
-    fn drop_ring(&mut self, p: PointerValue<'ctx>, e: Ty) -> R<()> {
+    pub(super) fn drop_ring(&mut self, p: PointerValue<'ctx>, e: Ty) -> R<()> {
         let size = self.layout(e)?.size;
         let buf = self.load_ptr(p)?;
         let head = self.load_i64(self.offset(p, 8)?)?;
