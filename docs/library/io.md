@@ -26,11 +26,11 @@ fn stderr.println(s: Str) with writes(Stderr)
 fn stderr.flush() with writes(Stderr)
 ```
 
-`stdin.lines()` returns an iterator over the remaining lines of standard input. Making it reads nothing; its `next` has `reads(Stdin)` and `blocks`. The prelude functions `print`, `println` and `eprintln` take any `Display` value and have `writes(Stdout)` or `writes(Stderr)` ([README](README.md#the-prelude)).
+`stdin.read_line()` returns the next line with its `\n`, or the last line without one when the input does not end in a newline; at the end of input it returns `Ok` of an empty string. `stdin.lines()` returns an iterator over the remaining lines of standard input, each a `Result[String, IoError]` without its `\n` or `\r\n`, and it ends at the end of input. Iterate it with `for line in stdin.lines()`: making it reads nothing, and each turn of the loop reads one line with `reads(Stdin)` and `blocks`. It has no adaptor or terminal methods. The reads share one buffer, so `read_line` followed by `lines()` continues where the first read stopped. The prelude functions `print`, `println` and `eprintln` take any `Display` value and have `writes(Stdout)` or `writes(Stderr)` ([README](README.md#the-prelude)).
 
 **UTF-8 and stdin.** `stdin.read_line` and `stdin.read_to_string` return `Result[String, IoError]`: invalid UTF-8 on stdin is `IoError.InvalidUtf8`, which keeps `String`'s UTF-8 invariant. A bytes-level stdin read is deferred ([deferred.md](../deferred.md)).
 
-**Buffering.** Stdin and stdout are line-buffered; file I/O is block-buffered. `stdout.flush()` forces out buffered output, which is needed when a prompt without a newline (`print("Guess: ")`) comes before a stdin read. `stderr.flush()` is the stderr counterpart. Both return `()`, not a `Result`. Typed buffering traits are deferred ([deferred.md](../deferred.md)).
+**Buffering.** Stdin is line-buffered, and so is stdout when it is a terminal. Stdout on a pipe or a file may hold more than a line, but it is written out before a child process starts, before anything is written to stderr, at `stdout.flush()` and at exit, so its order against those is the program's. File I/O is block-buffered. `stdout.flush()` forces out buffered output, including a partial line, which is needed when a prompt without a newline (`print("Guess: ")`) comes before a stdin read. `stderr.flush()` is the stderr counterpart. Both return `()`, not a `Result`. Typed buffering traits are deferred ([deferred.md](../deferred.md)).
 
 ## Files
 
@@ -285,7 +285,7 @@ A URL is `http://` or `https://`. The client follows up to five redirects, and a
 fn exit(code: i32) -> Never
 ```
 
-`std.process.exit` flushes standard output and standard error, then ends the process with `code`. No `Drop` body, `defer` or `errdefer` runs, in any frame. It declares no effects, since ending the process is not a resource access, and it exists on every target. It may be called anywhere, a `Drop` body and the panic handler included.
+`exit` is imported by name, `import std.process.{exit};`. It flushes standard output and standard error, then ends the process with `code`. No `Drop` body, `defer` or `errdefer` runs, in any frame. It declares no effects, since ending the process is not a resource access, and it exists on every target. It may be called anywhere, a `Drop` body and the panic handler included.
 
 Exit codes and `main`'s return value are in [design.md §10](../design.md#the-main-function-and-exit-codes).
 

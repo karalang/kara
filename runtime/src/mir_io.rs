@@ -413,6 +413,60 @@ pub unsafe extern "C" fn karac_mir_buf(
     }
 }
 
+/// The standard streams: `Stdin.read_line` (op 0, the line with its `\n`)
+/// and `read_to_string` (1), each a fresh `String` at `msg`; a
+/// `StdinLines`'s `next` (2), the line without its `\n` / `\r\n`, or `-2`
+/// at the end; `Stdout.flush` (3) and `Stderr.flush` (4). Text that is not
+/// UTF-8 is an `InvalidUtf8` (docs/library/io.md § Standard streams).
+///
+/// # Safety
+/// `value` and `msg` as [`io_code`] has them.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mut RawVec) -> i32 {
+    use std::io::{BufRead, Read, Write};
+    let mut s = Vec::new();
+    let got = match op {
+        0 | 2 => std::io::stdin().lock().read_until(b'\n', &mut s),
+        1 => std::io::stdin().lock().read_to_end(&mut s),
+        3 => {
+            crate::mir::out_flush();
+            std::io::stdout().flush().map(|()| 0)
+        }
+        _ => std::io::stderr().flush().map(|()| 0),
+    };
+    let res = got.and_then(|n| {
+        if op == 2 {
+            if n == 0 {
+                return Ok(None);
+            }
+            if s.last() == Some(&b'\n') {
+                s.pop();
+                if s.last() == Some(&b'\r') {
+                    s.pop();
+                }
+            }
+        }
+        std::str::from_utf8(&s)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(Some(()))
+    });
+    match res {
+        Ok(None) => -2,
+        Ok(Some(())) => {
+            // SAFETY: the caller's contract.
+            unsafe {
+                if op <= 2 {
+                    string_of(msg, &s);
+                }
+                value.write(0);
+            }
+            -1
+        }
+        // SAFETY: the caller's contract.
+        Err(e) => unsafe { io_error_code(&e, msg) },
+    }
+}
+
 /// Drops a `BufReader` or `BufWriter`, closing its file; a writer flushes
 /// first and ignores a failure, as io.md has it.
 ///

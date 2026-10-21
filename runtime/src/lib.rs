@@ -317,6 +317,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_file,
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,
+        mir_io::karac_mir_std_stream,
         mir_process::karac_mir_stdio,
         mir_process::karac_mir_stdio_free,
         mir_process::karac_mir_command,

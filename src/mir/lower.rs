@@ -9542,9 +9542,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Some((d, args, name, ret)))
     }
 
-    /// The library's `LinesIter` (`BufReader.lines()`, docs/library/io.md §
-    /// Buffered I/O): its `next` is the native `LinesIter.next`, typed by
-    /// its `#[compiler_builtin]` signature.
+    /// The library's line iterators, `LinesIter` (`BufReader.lines()`,
+    /// docs/library/io.md § Buffered I/O) and `StdinLines`
+    /// (`stdin.lines()`): `next` is the native `LinesIter.next` /
+    /// `StdinLines.next`, typed by its `#[compiler_builtin]` signature.
     fn native_next(&mut self, iterable: &'a Expr) -> R<Option<NextFn>> {
         let before = self.errors.len();
         let Ok(t) = self.expr_ty(iterable) else {
@@ -9555,9 +9556,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         let HK::Adt { def, .. } = tcx.kind(t) else {
             return Ok(None);
         };
-        if !tcx.adt_of(t).is_some_and(|(a, _)| a.name == "LinesIter") {
+        let Some(iter) = tcx
+            .adt_of(t)
+            .map(|(a, _)| a.name.clone())
+            .filter(|n| matches!(&**n, "LinesIter" | "StdinLines"))
+        else {
             return Ok(None);
-        }
+        };
         if !self
             .lcx
             .defs
@@ -9573,12 +9578,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             .and_then(|io| self.enum_of("Result", &[string, io]))
             .and_then(|r| self.option_of(r));
         let Some(ret) = ret else {
-            return self.unsupported(iterable.span, "a `LinesIter` without its library types");
+            return self.unsupported(iterable.span, "a line iterator without its library types");
         };
         Ok(Some((
             DefId(u32::MAX),
             Vec::new(),
-            "LinesIter.next".into(),
+            format!("{iter}.next"),
             ret,
         )))
     }
@@ -10886,8 +10891,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // interpreter's, by its name qualified with the owning
                     // type and that type's arguments. Copy arguments and a
                     // stored value (`Log.set_exporter(e)`) go by value, the
-                    // rest by reference.
-                    let stores = stores_argument(&name);
+                    // rest by reference. `File.append(path)` opens a file and
+                    // stores nothing: its path is a `Str`.
+                    let stores =
+                        stores_argument(&name) && self.lcx.def_owner(d).as_deref() != Some("File");
                     // A library handle declared `own` moves in, as into a
                     // library method (`BufReader.new(file)` keeps the file).
                     let owns = self
@@ -10908,6 +10915,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // function needs no type argument to run.
                         (None, _) => name,
                     };
+                    if let ("IoError.from", [a]) = (name.as_str(), args) {
+                        // `IoError.from(e)` of a `VarError`: the library's
+                        // variant mapping, as `?` converts one.
+                        let have = self.expr_ty(&a.value)?;
+                        let want = self.place_type(&dest);
+                        let mut ops = vec![self.lib_arg(&a.value, false)?];
+                        if self.variant_from(want, have, &mut ops) {
+                            let op = ops.pop().expect("the converted error");
+                            self.assign(dest, Rvalue::Use(op));
+                            return Ok(());
+                        }
+                    }
                     let mut ops = Vec::new();
                     for (i, a) in args.iter().enumerate() {
                         let t = self.expr_ty(&a.value)?;

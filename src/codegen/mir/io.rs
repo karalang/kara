@@ -75,6 +75,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.buf_native(base, method, args, dest)
             }
             ("Stdio", _) => self.stdio_native(method, args, dest),
+            ("Stdin" | "StdinLines" | "Stdout" | "Stderr", _) => {
+                self.std_stream_native(base, method, args, dest)
+            }
             ("Command", "spawn" | "output") => self.command_native(method, args, dest).map(Some),
             ("Child", _) => self.child_native(method, args, dest),
             ("ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
@@ -383,6 +386,20 @@ impl<'ctx> Cx<'ctx, '_> {
         all.push(value.into());
         all.push(msg.into());
         let code = self.rt_int("buf", &all, 32)?;
+        self.store_next_line(dest, code, value, msg)?;
+        Ok(Some(()))
+    }
+
+    /// A line iterator's `next` at `dest` from the entry's report: `None`
+    /// at the end (`-2`), else `Some` of the line's `Result`.
+    fn store_next_line(
+        &mut self,
+        dest: &Place,
+        code: IntValue<'ctx>,
+        value: PointerValue<'ctx>,
+        msg: PointerValue<'ctx>,
+    ) -> R<()> {
+        let i32t = self.llcx.i32_type();
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
         let (some, none) = self.option_variants(dty)?;
@@ -405,7 +422,50 @@ impl<'ctx> Cx<'ctx, '_> {
             let q = cx.offset(d, off)?;
             cx.store_io_result_at(q, rt, code, value, msg, None)?;
             cx.store_tag(d, dty, some)
-        })?;
+        })
+    }
+
+    /// The standard streams' reads and flushes, through
+    /// `karac_mir_std_stream(op, value, msg)`; `stdin.lines()` is an empty
+    /// marker, so making one does nothing.
+    fn std_stream_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("Stdin", "lines") => return self.drop_moved(args).map(Some),
+            ("Stdin", "read_line") => 0,
+            ("Stdin", "read_to_string") => 1,
+            ("StdinLines", "next") => 2,
+            ("Stdout", "flush") if args.is_empty() => 3,
+            ("Stderr", "flush") if args.is_empty() => 4,
+            _ => return Ok(None),
+        };
+        let opv = self.llcx.i32_type().const_int(op, false);
+        if op >= 3 {
+            let value = self.entry_slot(8, "io.value")?;
+            let msg = self.temp(
+                self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String)),
+                "io.msg",
+            )?;
+            self.rt_int("std_stream", &[opv.into(), value.into(), msg.into()], 32)?;
+            return Ok(Some(()));
+        }
+        if op <= 1 {
+            self.io_call("std_stream", &[opv.into()], args, dest)?;
+            return Ok(Some(()));
+        }
+        let value = self.entry_slot(8, "io.value")?;
+        let msg = self.temp(
+            self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String)),
+            "io.msg",
+        )?;
+        let code = self.rt_int("std_stream", &[opv.into(), value.into(), msg.into()], 32)?;
+        self.drop_moved(args)?;
+        self.store_next_line(dest, code, value, msg)?;
         Ok(Some(()))
     }
 

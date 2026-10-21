@@ -249,6 +249,9 @@ pub unsafe extern "C" fn karac_mir_command(
             _ => cmd.stderr(cfg),
         };
     }
+    // The child writes to the same streams, so what the program printed
+    // before it goes out first (docs/library/io.md § Buffering).
+    crate::mir::out_flush();
     let res = cmd.spawn().and_then(|child| {
         if output == 0 {
             return Ok(Box::into_raw(Box::new(Some(child))) as i64);

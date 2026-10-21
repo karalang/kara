@@ -37,6 +37,15 @@ struct Stdin { }
 // prefix is not a wired module alias for any stdin method).
 struct StdinLines { }
 
+impl StdinLines {
+    // The next line, without its `\n` / `\r\n`, or `None` at EOF. A `for`
+    // loop over `stdin.lines()` calls it once per round (the MIR backends'
+    // native `StdinLines.next`); the legacy interpreter drains the loop
+    // itself.
+    #[compiler_builtin]
+    fn next(mut ref self) -> Option[Result[String, IoError]] with reads(Stdin) blocks { None }
+}
+
 impl Stdin {
     #[compiler_builtin]
     fn read_line() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
@@ -385,7 +394,7 @@ impl Env {
     fn args() -> Vec[String] { Vec.new() }
 
     #[compiler_builtin]
-    fn var(name: ref String) -> Result[String, VarError] { Err(VarError.NotPresent) }
+    fn var(name: Str) -> Result[String, VarError] { Err(VarError.NotPresent) }
 
     #[compiler_builtin]
     fn set(name: own String, value: own String) { }

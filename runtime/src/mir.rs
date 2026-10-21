@@ -56,7 +56,7 @@ fn fmt_pop<T>(f: impl FnOnce(&[u8]) -> T) -> T {
     })
 }
 
-fn out_flush() {
+pub(crate) fn out_flush() {
     OUT.with(|o| {
         let mut o = o.borrow_mut();
         if !o.is_empty() {
@@ -76,12 +76,21 @@ fn write(stderr: bool, bytes: &[u8]) {
         OUT.with(|o| {
             let mut o = o.borrow_mut();
             o.extend_from_slice(bytes);
-            if o.len() >= OUT_LIMIT {
+            // A terminal sees each line as it ends (docs/library/io.md §
+            // Buffering); a pipe or file gets the block.
+            if o.len() >= OUT_LIMIT || (bytes.contains(&b'\n') && stdout_is_terminal()) {
                 drop(o);
                 out_flush();
             }
         });
     }
+}
+
+/// Whether standard output is a terminal, asked once.
+fn stdout_is_terminal() -> bool {
+    use std::io::IsTerminal;
+    static TERMINAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TERMINAL.get_or_init(|| std::io::stdout().is_terminal())
 }
 
 /// # Safety

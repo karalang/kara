@@ -1419,8 +1419,45 @@ impl<'a> Interp<'a> {
                         text.push('\n');
                     }
                     self.write_out(base == "Stderr", &text);
+                } else if self.stream {
+                    use std::io::Write;
+                    // `stdout.flush()` pushes out a partial line
+                    // (docs/library/io.md § Buffering).
+                    if base == "Stderr" {
+                        let _ = std::io::stderr().flush();
+                    } else {
+                        let _ = std::io::stdout().flush();
+                    }
                 }
                 Ok(Value::Unit)
+            }
+            // `stdin.lines()` is an empty marker; its `next` reads a line
+            // from the shared stdin buffer, as `read_line` does.
+            ("Stdin", "lines") => Ok(Value::Agg(Vec::new())),
+            ("StdinLines", "next") => {
+                let inner = self
+                    .tys
+                    .tcx()
+                    .adt_of(ret)
+                    .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Some"))
+                    .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+                    .ok_or_else(|| Stop::Error(format!("{name} returns no `Option`")))?;
+                let mut s = String::new();
+                let item = match std::io::stdin().read_line(&mut s) {
+                    Ok(0) => return self.option(ret, None),
+                    Ok(_) => {
+                        if s.ends_with('\n') {
+                            s.pop();
+                            if s.ends_with('\r') {
+                                s.pop();
+                            }
+                        }
+                        let line = self.alloc_box("String", Value::Str(s));
+                        self.variant_named(inner, None, "Ok", vec![line])?
+                    }
+                    Err(e) => self.io_err(inner, e)?,
+                };
+                self.option(ret, Some(item))
             }
             ("Stdin", "read_line" | "read_to_string") => {
                 use std::io::Read;
@@ -4584,6 +4621,13 @@ impl<'a> Interp<'a> {
         };
         if base == "Command" {
             let output = method == "output";
+            // The child writes to the same streams, so what the program
+            // printed before it, a partial line included, goes out first
+            // (docs/library/io.md § Buffering).
+            if self.stream {
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
             let res = self
                 .command(name, recv, arg_tys.first().copied(), output)?
                 .and_then(|mut cmd| cmd.spawn());
@@ -13139,8 +13183,11 @@ fn http_agent() -> &'static Result<ureq::Agent, String> {
             .with_root_certificates(roots)
             .with_no_client_auth();
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        // Five redirects, as io.md has it: `ureq` counts the request that
+        // would follow the fifth.
         Ok(ureq::AgentBuilder::new()
             .tls_config(std::sync::Arc::new(config))
+            .redirects(6)
             .build())
     })
 }
