@@ -7448,3 +7448,36 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-21-50: a closure's inner `collect()` takes its target from the
+/// function's return type, at the tail and at a `return`, as it does from
+/// an annotated `let`.
+#[test]
+fn mir_a_mapped_inner_collect_aims_at_the_return_type() {
+    let src = r#"
+fn by_return(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect()
+}
+
+fn by_early(image: Vec[Vec[i64]], early: bool) -> Vec[Vec[i64]] {
+    if early {
+        return image.iter().map(|row| row.iter().map(|x| x * 2).collect()).collect();
+    }
+    Vec.new()
+}
+
+fn main() {
+    let image: Vec[Vec[i64]] = [[1, 1, 0], [0, 0, 1]];
+    println(f"{by_return(image.clone())}");
+    println(f"{by_early(image, true)}");
+}
+"#;
+    let want = "[[1, 0, 0], [0, 1, 1]]\n[[2, 2, 0], [0, 0, 2]]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

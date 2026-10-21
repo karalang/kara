@@ -1902,6 +1902,9 @@ fn walk_fn_body(
     let mut cx = WalkCx::collecting();
     walk_block(block, ret, &mut cx);
     if let (Some(tail), Some(ty)) = (block.final_expr.as_mut(), ret) {
+        // The return type aims a closure's inner `collect()` as an
+        // annotated `let` does (B-2026-10-21-50).
+        desugar_mapped_collect_target(ty, tail);
         desugar_collect_target(ty, tail);
     }
 
@@ -2290,6 +2293,7 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
                 // by-construction backend parity; the only new input is which
                 // type to aim at, and `ret` is `None` inside a closure.
                 if let Some(ty) = ret {
+                    desugar_mapped_collect_target(ty, e);
                     desugar_collect_target(ty, e);
                 }
             }
