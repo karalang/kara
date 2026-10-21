@@ -98,6 +98,22 @@ impl super::Parser {
     /// Whether the cursor is on `par` followed by a parenthesized argument
     /// list and then `for`: `par(limit: n) for ...`. A call `par(..)` is never
     /// followed by `for`, so this cannot misread one.
+    /// After `..`: the range has no upper end. The next token cannot start
+    /// an expression, or it is the `{` that opens an `if` / `while` / `for`
+    /// body, which a condition never reads as an operand (B-2026-10-21-47:
+    /// `for i in 1.. { … }`).
+    fn range_ends_here(&self) -> bool {
+        match self.peek_token_ref() {
+            Token::Semicolon
+            | Token::RightBrace
+            | Token::Comma
+            | Token::RightBracket
+            | Token::RightParen => true,
+            Token::LeftBrace => self.no_struct_literal,
+            _ => false,
+        }
+    }
+
     fn par_limit_then_for(&self) -> bool {
         if !matches!(self.peek_token_ref_at(1), Token::LeftParen) {
             return false;
@@ -758,16 +774,9 @@ impl super::Parser {
                 self.advance();
                 // `expr..` with no RHS → RangeFrom; only when next token cannot
                 // start an expression (semicolon, right-brace, comma, right-bracket,
-                // right-paren, or end-of-input).
-                let has_rhs = !self.is_at_end()
-                    && !matches!(
-                        self.peek_token(),
-                        Token::Semicolon
-                            | Token::RightBrace
-                            | Token::Comma
-                            | Token::RightBracket
-                            | Token::RightParen
-                    );
+                // right-paren, or end-of-input), or is the `{` of a loop or
+                // branch body (`for i in 1.. { … }`, B-2026-10-21-47).
+                let has_rhs = !self.is_at_end() && !self.range_ends_here();
                 let end = if has_rhs {
                     Some(Box::new(self.parse_expr_bp(range_bp + 1)?))
                 } else {
@@ -1116,15 +1125,7 @@ impl super::Parser {
             }
             Token::DotDot => {
                 self.advance();
-                let has_rhs = !self.is_at_end()
-                    && !matches!(
-                        self.peek_token(),
-                        Token::Semicolon
-                            | Token::RightBrace
-                            | Token::Comma
-                            | Token::RightBracket
-                            | Token::RightParen
-                    );
+                let has_rhs = !self.is_at_end() && !self.range_ends_here();
                 let end = if has_rhs {
                     Some(Box::new(self.parse_expr_bp(6)?))
                 } else {

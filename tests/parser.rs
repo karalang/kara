@@ -16856,3 +16856,46 @@ fn rust_array_type_is_rewritten_to_array_and_reported_once() {
     assert!(slice.errors[0].message.contains("`Slice[T]`"));
     assert!(slice.fix_diffs.is_empty());
 }
+
+/// B-2026-10-21-47: in a `for` / `while` / `if` header, a `{` after `..`
+/// opens the body, so `for i in 1.. { … }` is an unbounded range; outside a
+/// header the `{` is still the upper end (`1..{ 5 }`).
+#[test]
+fn range_from_before_a_loop_body() {
+    let prog = parse_ok("fn main() { for i in 1.. { if i > 3 { break; } } }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected a function");
+    };
+    let StmtKind::Expr(e) = &f.body.stmts[0].kind else {
+        panic!("Expected an expression statement");
+    };
+    let ExprKind::For { iterable, body, .. } = &e.kind else {
+        panic!("Expected a for loop, got {:?}", e.kind);
+    };
+    assert!(
+        matches!(
+            &iterable.kind,
+            ExprKind::Range {
+                start: Some(_),
+                end: None,
+                inclusive: false
+            }
+        ),
+        "{:?}",
+        iterable.kind
+    );
+    assert!(body.stmts.len() + usize::from(body.final_expr.is_some()) == 1);
+
+    let prog = parse_ok("fn main() { let r = 1..{ 5 }; }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected a function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("Expected a let");
+    };
+    assert!(
+        matches!(&value.kind, ExprKind::Range { end: Some(_), .. }),
+        "{:?}",
+        value.kind
+    );
+}
