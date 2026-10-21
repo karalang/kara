@@ -134,6 +134,9 @@ struct Walk<'t, 'a> {
     prefix_errors: Vec<(Span, String, FixIt)>,
     /// Calls into a library surface placed in M4a (B-2026-10-20-8).
     m4a_calls: Vec<(Span, String)>,
+    /// `Server.serve*` calls whose handler's `Response` is misshaped: a type
+    /// mismatch, not an M4a deferral.
+    handler_shapes: Vec<(Span, String)>,
     /// Calls of removed library functions (§11.7).
     removed_calls: Vec<(Span, String)>,
     /// Offsets of plain pattern bindings some write goes through.
@@ -290,6 +293,7 @@ impl<'a> TypeChecker<'a> {
             once_calls: FxHashSet::default(),
             removed_calls: Vec::new(),
             m4a_calls: Vec::new(),
+            handler_shapes: Vec::new(),
             written_pattern_bindings: FxHashSet::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
@@ -382,6 +386,7 @@ impl<'a> TypeChecker<'a> {
         let read_conflicts = w.read_conflicts;
         let removed_calls = w.removed_calls;
         let m4a_calls = w.m4a_calls;
+        let handler_shapes = w.handler_shapes;
         // A binding the fix makes `ref` that its arm writes through must be
         // `mut ref` instead (B-2026-10-18-28).
         let written = w.written_pattern_bindings;
@@ -395,6 +400,9 @@ impl<'a> TypeChecker<'a> {
         }
         for (span, message) in m4a_calls {
             self.type_error(message, span, TypeErrorKind::DeferredToM4a);
+        }
+        for (span, message) in handler_shapes {
+            self.type_error(message, span, TypeErrorKind::TypeMismatch);
         }
         for (span, message) in kind_errors {
             self.type_error(message, span, TypeErrorKind::FnKindMismatch);
@@ -1339,7 +1347,7 @@ impl Walk<'_, '_> {
             .map(|(n, t)| format!("{n}: {t}"))
             .collect::<Vec<_>>()
             .join(", ");
-        self.m4a_calls.push((
+        self.handler_shapes.push((
             call.span,
             format!(
                 "a `Server.{method}` handler must return a `Response` with `status: i64` and \

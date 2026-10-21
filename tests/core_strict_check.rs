@@ -10769,3 +10769,45 @@ fn a_collection_where_an_iterator_is_wanted_takes_into_iter() {
         ".zip(b.into_iter())",
     );
 }
+
+/// A misshaped handler `Response` is a type mismatch, not an M4a deferral:
+/// its JSON code is E0200, not `E_DEFERRED_M4A`.
+#[test]
+fn a_misshaped_handler_response_is_a_type_mismatch() {
+    let (dir, path) = fixture(
+        "handler-response-code",
+        "struct Response { status: i64 }\n\
+         fn handle(req: Request) -> Response { Response { status: 200 } }\n\
+         fn main() with sends(Network) receives(Network) {\n\
+             Server.serve(\"127.0.0.1:0\", handle);\n\
+         }\n",
+    );
+    let out = karac()
+        .arg("check")
+        .arg("--output=json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let json = String::from_utf8_lossy(&out.stdout);
+    assert!(json.contains("\"code\":\"E0200\""), "{json}");
+    assert!(!json.contains("E_DEFERRED_M4A"), "{json}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-10-21-19: tuple branches join when one leaves a slot unsolved
+/// (`Vec.new()`) and the other a bare `None`, in either order.
+#[test]
+fn tuple_branches_with_an_empty_vec_and_a_bare_none_join() {
+    accepted(
+        "tuple-branches-vec-new-none",
+        "fn main() {\n\
+             let e: Vec[i64] = vec![3];\n\
+             let flag = true;\n\
+             let p = if flag { (Vec.new(), Some(1)) } else { (e, None) };\n\
+             let e2: Vec[i64] = vec![3, 4];\n\
+             let q = if not flag { (e2, Some(1)) } else { (Vec.new(), None) };\n\
+             let r = match flag { true => (Vec.new(), Some(\"x\".to_string())), false => (vec![1, 2], None) };\n\
+             println(f\"{p.0.len()} {q.1.is_some()} {r.0.len()}\");\n\
+         }\n",
+    );
+}

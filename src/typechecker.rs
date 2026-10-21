@@ -5551,7 +5551,11 @@ impl<'a> TypeChecker<'a> {
             (Type::Ref(ia), Type::Ref(ib)) | (Type::MutRef(ia), Type::MutRef(ib)) => {
                 Self::same_shape_modulo_typevars(ia, ib)
             }
-            _ => a == b,
+            // A leaf the plain join already admits, such as a bare `None`'s
+            // `Option[T]` beside `Option[i64]`, is admitted beside an
+            // unsolved slot elsewhere too: `(Vec.new(), Some(1))` against
+            // `(e, None)` (B-2026-10-21-19).
+            _ => a == b || types_compatible(a, b),
         }
     }
 
