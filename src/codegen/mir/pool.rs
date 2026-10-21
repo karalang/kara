@@ -55,6 +55,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 let h = self.pool_handle(recv)?;
                 let el = self.type_arg(dty)?;
                 let kt = self.check_ty(el);
+                // A check whose parameter takes the connection by value
+                // would own the idle value, which the interpreter refuses
+                // (`pool_check`); every other check is lent it.
+                if self.tys.needs_drop(el) && self.check_takes_value(check)? {
+                    self.abort_with("a health check that takes the connection by value")?;
+                    let f = self.cur_fn()?;
+                    let dead = self.llcx.append_basic_block(f, "pool.dead");
+                    self.builder.position_at_end(dead);
+                }
                 let kp = self.erased_operand(check, kt)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())?;
@@ -214,17 +223,14 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_conditional_branch(unchecked, out, check)
             .map_err(e)?;
         self.builder.position_at_end(check);
+        self.pool_check(kp, check_ty, val, el, out, evict)?;
+        // A failing value is evicted: dropped, and its slot freed.
+        self.builder.position_at_end(evict);
         if self.tys.needs_drop(el) {
-            // The interpreter refuses a check that would take the value.
-            self.abort_with("a health check that takes the connection by value")?;
-            self.builder.position_at_end(evict);
-            self.builder.build_unreachable().map_err(e)?;
-        } else {
-            self.pool_check(kp, check_ty, val, el, out, evict)?;
-            self.builder.position_at_end(evict);
-            self.mrt_i8("pool_count", &[h.into(), self.i64(u64::MAX).into()])?;
-            self.builder.build_unconditional_branch(idle).map_err(e)?;
+            self.call_glue(val, el)?;
         }
+        self.mrt_i8("pool_count", &[h.into(), self.i64(u64::MAX).into()])?;
+        self.builder.build_unconditional_branch(idle).map_err(e)?;
 
         // None idle: a fresh one, below the bound.
         self.builder.position_at_end(mint);
@@ -321,6 +327,26 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_conditional_branch(healthy, pass, fail)
             .map_err(e)?;
         Ok(())
+    }
+
+    /// Whether the health check `op`, a closure or function, takes the
+    /// connection (its last parameter) by value. An already erased check
+    /// says nothing of its body, and is lent the value as a bare closure
+    /// parameter borrows it (D5).
+    fn check_takes_value(&self, op: &Operand) -> R<bool> {
+        let t = self.operand_type(op)?;
+        if !matches!(self.tys.kind(t), TyKind::Closure(..) | TyKind::FnDef(_)) {
+            return Ok(false);
+        }
+        let Ok(body) = self.body_of_def(t) else {
+            return Ok(false);
+        };
+        Ok(body.args().last().is_some_and(|l| {
+            !matches!(
+                self.tys.kind(body.local(l).ty),
+                TyKind::Ref(_) | TyKind::MutRef(_)
+            )
+        }))
     }
 
     /// `Fn(T) -> bool`, a health check's type.

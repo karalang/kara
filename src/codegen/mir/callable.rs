@@ -243,7 +243,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The body a closure or function-item type names.
-    fn body_of_def(&self, ty: Ty) -> R<&'_ Body> {
+    pub(super) fn body_of_def(&self, ty: Ty) -> R<&'_ Body> {
         let def = match self.tys.kind(ty) {
             TyKind::Closure(def, _) | TyKind::FnDef(def) => def,
             _ => return Err(format!("`{}` names no body", self.tys.display(ty))),

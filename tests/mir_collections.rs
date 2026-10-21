@@ -286,6 +286,36 @@ fn fallible_twins_report_out_of_memory() {
     );
 }
 
+/// B-2026-10-21-38: a health check over a connection type with a `Drop`
+/// is lent each idle value (a bare closure parameter borrows it); a failing
+/// one is evicted, dropped, and a fresh one minted, on both backends.
+const POOL_CHECK_DROP: &str = r#"struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn main() {
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5);
+    match pool.acquire(10) { Ok(c) => println(f"a {c.val.id}"), Err(_) => println("err") }
+    match pool.acquire(10) { Ok(c) => println(f"b {c.val.id}"), Err(_) => println("err") }
+    let kept: Pool[Conn] = Pool.new(|| Conn { id: 9 }, 2, 4).with_health_check(|c| c.id > 5);
+    match kept.acquire(10) { Ok(c) => println(f"c {c.val.id}"), Err(_) => println("err") }
+    match kept.acquire(10) { Ok(c) => println(f"d {c.val.id}"), Err(_) => println("err") }
+    println("end");
+}
+"#;
+
+const WANT_POOL_CHECK_DROP: &str = "a 1\nclose 1\nb 1\nc 9\nd 9\nend\nclose 9\nclose 1\n";
+
+#[test]
+fn pool_check_lends_a_dropping_connection_on_both_backends() {
+    agrees(POOL_CHECK_DROP, WANT_POOL_CHECK_DROP, 0);
+}
+
+#[test]
+fn pool_check_of_a_dropping_connection_is_clean_under_asan() {
+    if let Some(out) = under_asan(POOL_CHECK_DROP) {
+        assert_eq!(out, WANT_POOL_CHECK_DROP);
+    }
+}
+
 /// B-2026-10-21-37: a pool's idle values drop when its last `Pool` value and loan are gone,
 /// on both backends: a pool going out of scope, one handed a connection
 /// from another pool, and a closure factory with a capture.
