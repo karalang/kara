@@ -817,6 +817,19 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.store(d, s.into())?;
                     return self.store(self.offset(d, 8)?, n.into());
                 }
+                // A literal into a local nothing but shared borrows and its
+                // drop ever reads borrows the literal's bytes, capacity 0,
+                // instead of copying them out (`KARAC_MIR_BORROW_LITERALS=0`
+                // copies every one).
+                if std::env::var("KARAC_MIR_BORROW_LITERALS").as_deref() != Ok("0")
+                    && matches!(args, [Operand::Const(c)] if matches!(c.kind, ConstKind::Str(_)))
+                    && dest.projection.is_empty()
+                    && self.body.is_some_and(|b| only_borrowed(b, dest.local))
+                {
+                    self.store(d, s.into())?;
+                    self.store(self.offset(d, 8)?, n.into())?;
+                    return self.store(self.offset(d, 16)?, self.i64(0).into());
+                }
                 self.rt("string_from", &[d.into(), s.into(), n.into()])?;
                 self.drop_moved(args)
             }
@@ -1516,4 +1529,70 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => Err(format!("{name}: not a Vec receiver")),
         }
     }
+}
+
+/// Whether `l` is defined by exactly one call and is otherwise only
+/// borrowed shared, dropped, or brought into and out of storage: nothing
+/// can then write to its buffer, grow it, or take it.
+fn only_borrowed(body: &crate::mir::Body, l: crate::mir::Local) -> bool {
+    use crate::mir::{BorrowKind, Rvalue, StatementKind, TerminatorKind};
+    let hit = |p: &Place| p.local == l;
+    let in_op = |o: &Operand| o.place().is_some_and(hit);
+    let mut defs = 0;
+    for b in &body.blocks {
+        for st in &b.statements {
+            match &st.kind {
+                StatementKind::Assign(p, rv) => {
+                    if hit(p) {
+                        return false;
+                    }
+                    let ok = match rv {
+                        Rvalue::Ref(BorrowKind::Shared, q) => !hit(q) || q.projection.is_empty(),
+                        Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => !in_op(o),
+                        Rvalue::BinaryOp(_, a, c) | Rvalue::CheckedBinaryOp(_, a, c) => {
+                            !in_op(a) && !in_op(c)
+                        }
+                        Rvalue::Aggregate(_, os) => !os.iter().any(in_op),
+                        Rvalue::Ref(_, q)
+                        | Rvalue::Retain(q)
+                        | Rvalue::Discriminant(q)
+                        | Rvalue::Len(q) => !hit(q),
+                        Rvalue::NullaryOp(..) => true,
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
+                StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) if hit(p) => {
+                    return false;
+                }
+                StatementKind::BorrowFlag(
+                    crate::mir::FlagOp::Acquire { place, .. }
+                    | crate::mir::FlagOp::Check { place, .. },
+                ) if hit(place) => return false,
+                _ => {}
+            }
+        }
+        match &b.terminator.kind {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                if in_op(func) || args.iter().any(in_op) {
+                    return false;
+                }
+                if hit(destination) {
+                    defs += 1;
+                }
+            }
+            TerminatorKind::SwitchInt { discr, .. } if in_op(discr) => return false,
+            TerminatorKind::Drop { place, .. } if hit(place) && !place.projection.is_empty() => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    defs == 1
 }
