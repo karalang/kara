@@ -1,0 +1,109 @@
+// Benchmark for #840: Magic Squares In Grid -- the ★ arm (the centre first).
+//
+// The numbers 1 to 9 add up to 45, so each of a magic square's three
+// rows adds up to 15, and the four lines through the centre (the middle
+// row and column and the two diagonals) add up to 60 = 45 + 3 times the
+// centre, which is therefore 5. So each 3 by 3 window is looked at only
+// if its centre is 5; then its nine numbers must be 1 to 9, each once,
+// kept as bits of a mask, its rows and columns must add up to 15, and
+// each diagonal's two corners to 10. O(rows cols).
+
+fn is_magic(grid: Vec[Vec[i64]], r: i64, c: i64) -> bool {
+    if grid[r + 1][c + 1] != 5 {
+        return false;
+    }
+    let mut mask = 0;
+    for i in r..r + 3 {
+        for j in c..c + 3 {
+            let v = grid[i][j];
+            if v < 1 or v > 9 {
+                return false;
+            }
+            mask |= 1 << v;
+        }
+    }
+    if mask != 1022 {
+        return false;
+    }
+    for k in 0..3 {
+        if grid[r + k][c] + grid[r + k][c + 1] + grid[r + k][c + 2] != 15 {
+            return false;
+        }
+        if grid[r][c + k] + grid[r + 1][c + k] + grid[r + 2][c + k] != 15 {
+            return false;
+        }
+    }
+    grid[r][c] + grid[r + 2][c + 2] == 10 and grid[r][c + 2] + grid[r + 2][c] == 10
+}
+
+fn num_magic_squares_inside(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut count = 0;
+    for r in 0..rows - 2 {
+        for c in 0..cols - 2 {
+            if is_magic(grid, r, c) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 grids drawn once, each LeetCode's largest, 10 by 10, of numbers
+    // 0 to 15 with 12 squares of 3 by 3 stamped on it: the Lo Shu turned
+    // or mirrored, a square of 5s, or the Lo Shu with 1 added to every
+    // number. Each round changes one cell of the next grid and counts its
+    // magic squares.
+    let count = 64;
+    let rounds = 14000000;
+    let lo_shu = [[4, 9, 2], [3, 5, 7], [8, 1, 6]];
+    let mut seed: i64 = 840;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..count {
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..10 {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..10 {
+                row.push(next_random(mut seed) % 16);
+            }
+            grid.push(row);
+        }
+        for _ in 0..12 {
+            let turn = next_random(mut seed) % 8;
+            let kind = next_random(mut seed) % 3;
+            let r = next_random(mut seed) % 8;
+            let c = next_random(mut seed) % 8;
+            for i in 0..3 {
+                for j in 0..3 {
+                    let mut a = i;
+                    let mut b = if turn >= 4 { 2 - j } else { j };
+                    for _ in 0..turn % 4 {
+                        let t = a;
+                        a = 2 - b;
+                        b = t;
+                    }
+                    grid[r + i][c + j] = if kind == 1 { 5 } else { lo_shu[a][b] + kind / 2 };
+                }
+            }
+        }
+        grids.push(grid);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let cell = round * 7 % 100;
+        grids[g][cell / 10][cell % 10] = round % 16;
+        let magic = num_magic_squares_inside(grids[g]);
+        total += magic;
+        checksum = (checksum * 31 + magic + round) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} grids: {total} magic squares, checksum {checksum}");
+}

@@ -1,0 +1,171 @@
+// LeetCode #840: Magic Squares In Grid -- the ring around the centre.
+//
+// There are only eight magic squares of 1 to 9, the turns and mirror
+// images of one, the Lo Shu: 4 9 2 / 3 5 7 / 8 1 6. All eight have 5 in
+// the centre, and read clockwise from a corner, the ring around it is
+// 4 9 2 7 6 1 8 3 started at a corner and read forwards or backwards. So
+// a window is magic when its centre is 5 and its ring, read clockwise
+// from its top left corner, is that cycle started at one of its four
+// corners in either direction. O(rows cols).
+
+fn ring_matches(grid: Vec[Vec[i64]], r: i64, c: i64) -> bool {
+    let lo_shu = [4, 9, 2, 7, 6, 1, 8, 3];
+    let ring = [
+        grid[r][c], grid[r][c + 1], grid[r][c + 2], grid[r + 1][c + 2],
+        grid[r + 2][c + 2], grid[r + 2][c + 1], grid[r + 2][c], grid[r + 1][c],
+    ];
+    for start in [0, 2, 4, 6] {
+        for step in [1, 7] {
+            let mut all = true;
+            for k in 0..8 {
+                if ring[k] != lo_shu[(start + step * k) % 8] {
+                    all = false;
+                }
+            }
+            if all {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn num_magic_squares_inside(grid: Vec[Vec[i64]]) -> i64 {
+    let mut count = 0;
+    for r in 0..grid.len() - 2 {
+        for c in 0..grid[0].len() - 2 {
+            if grid[r + 1][c + 1] == 5 and ring_matches(grid, r, c) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the Lo Shu turned a quarter `turn % 4` times, mirrored first if turn >= 4
+fn oriented(turn: i64) -> Vec[Vec[i64]] {
+    turned_square([[4, 9, 2], [3, 5, 7], [8, 1, 6]], turn)
+}
+
+// a 3 by 3 square turned a quarter `turn % 4` times, mirrored first if
+// turn >= 4
+fn turned_square(base: Vec[Vec[i64]], turn: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..3 {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..3 {
+            let mut a = i;
+            let mut b = if turn >= 4 { 2 - j } else { j };
+            for _ in 0..turn % 4 {
+                let t = a;
+                a = 2 - b;
+                b = t;
+            }
+            row.push(base[a][b]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// a rows by cols grid of numbers 0 to 15 with `plants` 3 by 3 squares
+// stamped on it: true magic squares, magic squares moved off 1 to 9,
+// squares of 5s, magic squares with two cells swapped or with another
+// centre, and squares of 1 to 9 whose rows and columns add up to 15 but
+// not their diagonals
+fn random_grid(seed: mut ref i64, rows: i64, cols: i64, plants: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(next_random(mut seed) % 16);
+        }
+        grid.push(row);
+    }
+    if rows < 3 or cols < 3 {
+        return grid;
+    }
+    for _ in 0..plants {
+        let turn = next_random(mut seed) % 8;
+        let kind = next_random(mut seed) % 6;
+        let square = if kind == 5 { turned_square([[1, 5, 9], [6, 7, 2], [8, 3, 4]], turn) } else { oriented(turn) };
+        let shift = if kind == 1 { [-1, 1, 2, 6][next_random(mut seed) % 4] } else { 0 };
+        let swap_a = next_random(mut seed) % 9;
+        let swap_b = next_random(mut seed) % 9;
+        let r = next_random(mut seed) % (rows - 2);
+        let c = next_random(mut seed) % (cols - 2);
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut k = 3 * i + j;
+                if kind == 3 {
+                    k = if k == swap_a { swap_b } else if k == swap_b { swap_a } else { k };
+                }
+                grid[r + i][c + j] = if kind == 2 { 5 } else { square[k / 3][k % 3] + shift };
+            }
+        }
+        if kind == 4 {
+            grid[r + 1][c + 1] = next_random(mut seed) % 16;
+        }
+    }
+    grid
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{grid} -> {num_magic_squares_inside(grid)}");
+}
+
+fn main() {
+    show([[4, 3, 8, 4], [9, 5, 1, 9], [2, 7, 6, 2]]);
+    show([[8]]);
+    show([[4, 9, 2], [3, 5, 7], [8, 1, 6]]);
+    show([[2, 9, 4], [7, 5, 3], [6, 1, 8]]);
+    show([[5, 5, 5], [5, 5, 5], [5, 5, 5]]);
+    show([[5, 10, 3], [4, 6, 8], [9, 2, 7]]);
+    show([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    show([[9, 4, 2], [3, 5, 7], [8, 1, 6]]);
+    show([[4, 9, 2, 9, 4], [3, 5, 7, 5, 3], [8, 1, 6, 1, 8]]);
+    show([[4, 9, 2], [3, 5, 7]]);
+    show([[5], [5], [5]]);
+    show([[0, 0, 0, 0], [0, 8, 1, 6], [0, 3, 5, 7], [0, 4, 9, 2]]);
+    // every one of the eight magic squares, side by side
+    let mut row_of_eight: Vec[Vec[i64]] = [Vec.new(), Vec.new(), Vec.new()];
+    for turn in 0..8 {
+        let square = oriented(turn);
+        for i in 0..3 {
+            for j in 0..3 {
+                row_of_eight[i].push(square[i][j]);
+            }
+        }
+    }
+    show(row_of_eight);
+    // LeetCode's largest grid, 10 by 10, with few and many squares stamped
+    let mut seed = 840;
+    for plants in [4, 12, 40] {
+        let grid = random_grid(mut seed, 10, 10, plants);
+        let mut check = 0;
+        for row in grid.iter() {
+            for v in row.iter() {
+                check = (check * 31 + *v) % 1000000007;
+            }
+        }
+        println(f"10 by 10, {plants} squares stamped: {num_magic_squares_inside(grid)} magic, grid checksum {check}");
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let rows = 1 + next_random(mut seed) % 10;
+        let cols = 1 + next_random(mut seed) % 10;
+        let plants = next_random(mut seed) % 6;
+        let count = num_magic_squares_inside(random_grid(mut seed, rows, cols, plants));
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"300 random grids: {total} magic, checksum {check}");
+}
