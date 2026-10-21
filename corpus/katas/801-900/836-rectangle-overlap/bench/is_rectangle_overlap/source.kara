@@ -1,0 +1,58 @@
+// Benchmark for #836: Rectangle Overlap -- the ★ arm (the two projections).
+//
+// Two axis-aligned rectangles overlap with positive area exactly when
+// their shadows on the x axis overlap in more than a point and so do their
+// shadows on the y axis. Two intervals overlap in more than a point when
+// the smaller of their right ends lies to the right of the larger of
+// their left ends. O(1).
+
+fn is_rectangle_overlap(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let left = rec1[0].max(rec2[0]);
+    let right = rec1[2].min(rec2[2]);
+    let bottom = rec1[1].max(rec2[1]);
+    let top = rec1[3].min(rec2[3]);
+    left < right and bottom < top
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a number below 2^32, from three draws
+fn big_random(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed) * 32768 + next_random(mut seed);
+    hi * 4 + next_random(mut seed) % 4
+}
+
+fn main() {
+    // 4096 rectangles drawn once in LeetCode's range, their corners
+    // anywhere and their sides up to 2 * 10^9 >> (k % 8) for rectangle k,
+    // so they run from the size of the range down to a 128th of it.
+    // Round s tests each rectangle i against rectangle (i + s + 1) % 4096.
+    let n = 4096;
+    let rounds = 100000;
+    let mut seed: i64 = 836;
+    let mut rects: Vec[Vec[i64]] = Vec.new();
+    for k in 0..n {
+        let reach = 2000000000 >> (k % 8);
+        let x1 = big_random(mut seed) % 2000000000 - 1000000000;
+        let y1 = big_random(mut seed) % 2000000000 - 1000000000;
+        let x2 = (x1 + 1 + big_random(mut seed) % reach).min(1000000000);
+        let y2 = (y1 + 1 + big_random(mut seed) % reach).min(1000000000);
+        rects.push([x1, y1, x2, y2]);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for s in 0..rounds {
+        let mut overlapping = 0;
+        for i in 0..n {
+            if is_rectangle_overlap(rects[i], rects[(i + s + 1) % n]) {
+                overlapping += 1;
+            }
+        }
+        total += overlapping;
+        checksum = (checksum * 131 + overlapping) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} pairs: {total} overlapping, checksum {checksum}");
+}

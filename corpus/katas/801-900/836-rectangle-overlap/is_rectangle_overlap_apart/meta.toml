@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/836-rectangle-overlap/is_rectangle_overlap_apart.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "d4ba0a00a"
+extracted_src = "30b6cbdc"
+model_rev = "583cfb0d"
+model_src = "30b6cbdc"

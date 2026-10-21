@@ -1,0 +1,218 @@
+// LeetCode #836: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random pairs of rectangles,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_rectangle_overlap_star(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let left = rec1[0].max(rec2[0]);
+    let right = rec1[2].min(rec2[2]);
+    let bottom = rec1[1].max(rec2[1]);
+    let top = rec1[3].min(rec2[3]);
+    left < right and bottom < top
+}
+
+// ---- apart arm ------------------------------------------------------
+
+fn is_rectangle_overlap_apart(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let left_of = rec1[2] <= rec2[0];
+    let right_of = rec2[2] <= rec1[0];
+    let below = rec1[3] <= rec2[1];
+    let above = rec2[3] <= rec1[1];
+    not (left_of or right_of or below or above)
+}
+
+// ---- area arm -------------------------------------------------------
+
+fn is_rectangle_overlap_area(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let width = (rec1[2].min(rec2[2]) - rec1[0].max(rec2[0])).max(0);
+    let height = (rec1[3].min(rec2[3]) - rec1[1].max(rec2[1])).max(0);
+    width * height > 0
+}
+
+// ---- interval arm ---------------------------------------------------
+
+struct Interval {
+    lo: i64,
+    hi: i64,
+}
+
+impl Interval {
+    fn overlaps(self, other: Interval) -> bool {
+        self.lo < other.hi and other.lo < self.hi
+    }
+}
+
+fn intervals(rec: Vec[i64]) -> (Interval, Interval) {
+    (Interval { lo: rec[0], hi: rec[2] }, Interval { lo: rec[1], hi: rec[3] })
+}
+
+fn is_rectangle_overlap_intervals(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let (x1, y1) = intervals(rec1);
+    let (x2, y2) = intervals(rec2);
+    x1.overlaps(x2) and y1.overlaps(y2)
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: the overlap's area, positive or not. The
+// four x and four y coordinates of the two rectangles cut the plane into
+// cells, each wholly inside or wholly outside each rectangle, and the
+// overlap's area is the sum of the areas of the cells inside both.
+fn inside(rec: Vec[i64], x: i64, y: i64) -> bool {
+    rec[0] <= x and x < rec[2] and rec[1] <= y and y < rec[3]
+}
+
+fn statement(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let mut xs: Vec[i64] = Vec.new();
+    let mut ys: Vec[i64] = Vec.new();
+    for rec in [rec1, rec2] {
+        xs.push(rec[0]);
+        xs.push(rec[2]);
+        ys.push(rec[1]);
+        ys.push(rec[3]);
+    }
+    xs.sort();
+    ys.sort();
+    let mut area = 0;
+    for i in 0..3 {
+        for j in 0..3 {
+            let (w, h) = (xs[i + 1] - xs[i], ys[j + 1] - ys[j]);
+            if w > 0 and h > 0 and inside(rec1, xs[i], ys[j]) and inside(rec2, xs[i], ys[j]) {
+                area += w * h;
+            }
+        }
+    }
+    area > 0
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a number below 2^32, from three draws
+fn big_random(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed) * 32768 + next_random(mut seed);
+    hi * 4 + next_random(mut seed) % 4
+}
+
+fn answer(arm: i64, rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    if arm == 0 {
+        is_rectangle_overlap_star(rec1, rec2)
+    } else if arm == 1 {
+        is_rectangle_overlap_apart(rec1, rec2)
+    } else if arm == 2 {
+        is_rectangle_overlap_area(rec1, rec2)
+    } else {
+        is_rectangle_overlap_intervals(rec1, rec2)
+    }
+}
+
+// a rectangle with its corner in [-reach, reach) and sides 1 to `side`
+fn small_rect(seed: mut ref i64, reach: i64, side: i64) -> Vec[i64] {
+    let x1 = next_random(mut seed) % (2 * reach) - reach;
+    let y1 = next_random(mut seed) % (2 * reach) - reach;
+    [x1, y1, x1 + 1 + next_random(mut seed) % side, y1 + 1 + next_random(mut seed) % side]
+}
+
+// an interval inside [-10^9, 10^9] of length at least 1
+fn big_span(seed: mut ref i64) -> (i64, i64) {
+    let lo = big_random(mut seed) % 2000000000 - 1000000000;
+    let hi = lo + 1 + big_random(mut seed) % (1000000000 - lo);
+    (lo, hi)
+}
+
+fn mirrored(rec: Vec[i64]) -> Vec[i64] {
+    [-rec[2], rec[1], -rec[0], rec[3]]
+}
+
+fn transposed(rec: Vec[i64]) -> Vec[i64] {
+    [rec[1], rec[0], rec[3], rec[2]]
+}
+
+fn turned(rec: Vec[i64]) -> Vec[i64] {
+    [-rec[2], -rec[3], -rec[0], -rec[1]]
+}
+
+fn main() {
+    let names = ["star", "apart", "area", "intervals"];
+    let properties = ["answer", "swapped", "mirrored", "transposed", "turned"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut overlapping = 0;
+    let mut seed = 836;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let (rec1, rec2) = if kind == 0 {
+            // small rectangles near the origin
+            (small_rect(mut seed, 3, 3), small_rect(mut seed, 3, 3))
+        } else if kind == 1 {
+            // a rectangle and a copy moved by at most its own size, so that
+            // the two often share just an edge or a corner
+            let rec = small_rect(mut seed, 3, 4);
+            let (w, h) = (rec[2] - rec[0], rec[3] - rec[1]);
+            let dx = next_random(mut seed) % (2 * w + 1) - w;
+            let dy = next_random(mut seed) % (2 * h + 1) - h;
+            let moved = [rec[0] + dx, rec[1] + dy, rec[2] + dx, rec[3] + dy];
+            (rec, moved)
+        } else if kind == 2 {
+            // rectangles anywhere in LeetCode's range, up to its corners
+            let (a, b) = (big_span(mut seed), big_span(mut seed));
+            let (c, d) = (big_span(mut seed), big_span(mut seed));
+            ([a.0, b.0, a.1, b.1], [c.0, d.0, c.1, d.1])
+        } else {
+            // one rectangle's spans each inside, around or past the other's,
+            // crosses and nestings among them
+            let rec = small_rect(mut seed, 3, 6);
+            let mut other: Vec[i64] = Vec.new();
+            for axis in 0..2 {
+                let (lo, hi) = (rec[axis], rec[axis + 2]);
+                let pick = next_random(mut seed) % 3;
+                let (a, b) = if pick == 0 and hi - lo >= 3 {
+                    (lo + 1, hi - 1)
+                } else if pick == 1 {
+                    (lo - 1 - next_random(mut seed) % 2, hi + next_random(mut seed) % 2)
+                } else {
+                    (hi + next_random(mut seed) % 2 - 1, hi + 2)
+                };
+                other.push(a);
+                other.push(b);
+            }
+            (rec, [other[0], other[2], other[1], other[3]])
+        };
+        let want = statement(rec1, rec2);
+        if want {
+            overlapping += 1;
+        }
+        for arm in 0..4 {
+            let got = answer(arm, rec1, rec2);
+            let oks = [
+                got == want,
+                answer(arm, rec2, rec1) == got,
+                answer(arm, mirrored(rec1), mirrored(rec2)) == got,
+                answer(arm, transposed(rec1), transposed(rec2)) == got,
+                answer(arm, turned(rec1), turned(rec2)) == got,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: rec1 = {rec1}, rec2 = {rec2} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {overlapping} overlapping, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, apart {by_arm[1]}, area {by_arm[2]}, intervals {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, swapped {by_property[1]}, mirrored {by_property[2]}, transposed {by_property[3]}, turned {by_property[4]}");
+}

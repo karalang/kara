@@ -1,0 +1,71 @@
+// LeetCode #836: Rectangle Overlap -- the ★ arm (the two projections).
+//
+// Two axis-aligned rectangles overlap with positive area exactly when
+// their shadows on the x axis overlap in more than a point and so do their
+// shadows on the y axis. Two intervals overlap in more than a point when
+// the smaller of their right ends lies to the right of the larger of
+// their left ends. O(1).
+
+fn is_rectangle_overlap(rec1: Vec[i64], rec2: Vec[i64]) -> bool {
+    let left = rec1[0].max(rec2[0]);
+    let right = rec1[2].min(rec2[2]);
+    let bottom = rec1[1].max(rec2[1]);
+    let top = rec1[3].min(rec2[3]);
+    left < right and bottom < top
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a number below 2^30, from two draws
+fn wide_random(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+// a rectangle with its lower left corner in [-reach, reach) and each side
+// 1 to `side` long
+fn random_rect(seed: mut ref i64, reach: i64, side: i64) -> Vec[i64] {
+    let x1 = wide_random(mut seed) % (2 * reach) - reach;
+    let y1 = wide_random(mut seed) % (2 * reach) - reach;
+    let w = 1 + wide_random(mut seed) % side;
+    let h = 1 + wide_random(mut seed) % side;
+    [x1, y1, x1 + w, y1 + h]
+}
+
+fn show(rec1: Vec[i64], rec2: Vec[i64]) {
+    println(f"rec1 = {rec1}, rec2 = {rec2} -> {is_rectangle_overlap(rec1, rec2)}");
+}
+
+fn main() {
+    show([0, 0, 2, 2], [1, 1, 3, 3]);
+    show([0, 0, 1, 1], [1, 0, 2, 1]);
+    show([0, 0, 1, 1], [2, 2, 3, 3]);
+    show([0, 0, 4, 4], [1, 1, 2, 2]);
+    show([1, 1, 2, 2], [0, 0, 4, 4]);
+    show([0, 1, 4, 2], [1, 0, 2, 4]);
+    show([0, 0, 1, 1], [1, 1, 2, 2]);
+    show([0, 0, 1, 1], [0, 1, 1, 2]);
+    show([0, 0, 5, 1], [2, -3, 3, 0]);
+    show([-3, -3, 3, 3], [-3, -3, 3, 3]);
+    show([-1000000000, -1000000000, 1000000000, 1000000000], [999999999, 999999999, 1000000000, 1000000000]);
+    show([-1000000000, -1000000000, 0, 1000000000], [0, -1000000000, 1000000000, 1000000000]);
+    // random pairs: near the origin with short sides, so that touching and
+    // overlapping are both common, and across LeetCode's whole range
+    let mut seed = 836;
+    for (label, reach, side) in [("small", 4, 6), ("large", 500000000, 500000000)] {
+        let mut overlapping = 0;
+        let mut check = 0;
+        for _ in 0..3000 {
+            let rec1 = random_rect(mut seed, reach, side);
+            let rec2 = random_rect(mut seed, reach, side);
+            let bit = if is_rectangle_overlap(rec1, rec2) { 1 } else { 0 };
+            overlapping += bit;
+            check = (check * 3 + bit) % 1000000007;
+        }
+        println(f"3000 {label} pairs: {overlapping} overlapping, checksum {check}");
+    }
+}
