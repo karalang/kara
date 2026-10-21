@@ -1529,6 +1529,16 @@ impl<'a> UseClassifier<'a> {
                 self.record_place_at_root(&expr.span, path);
                 let kind = self.classify_identifier(name, &expr.span, leaf_mode);
                 self.record(&expr.span, kind);
+                // A place rooted at the closure's own local (`match o.sub`
+                // on a `let o` inside the body) is a fresh move, not a
+                // capture, as for a bare identifier (B-2026-10-21-1).
+                if self.consume_origin_ctx == ConsumeOrigin::ClosureCapture
+                    && self.is_closure_local(name)
+                {
+                    self.classification
+                        .consume_origins
+                        .remove(&SpanKey::from_span(&expr.span));
+                }
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {

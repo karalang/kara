@@ -10617,3 +10617,40 @@ fn a_string_pattern_is_a_str_not_a_char() {
          }\n",
     );
 }
+
+/// B-2026-10-21-1: a closure that matches on a field of its OWN local moves
+/// out of that local, which is a fresh move and not a capture; matching on a
+/// captured binding's field and using it after the closure is still refused.
+#[test]
+fn a_closure_moves_out_of_its_own_local_freely() {
+    accepted(
+        "closure-local-field-match",
+        "struct Opts { sub: Option[String] }\n\
+         fn main() {\n\
+             let f = || {\n\
+                 let o = Opts { sub: Some(\"bob\".to_string()) };\n\
+                 match o.sub {\n\
+                     Some(s) => println(s),\n\
+                     None => println(\"none\"),\n\
+                 }\n\
+             };\n\
+             f();\n\
+         }\n",
+    );
+    rejected(
+        "captured-field-match-then-used",
+        "struct Opts { sub: Option[String] }\n\
+         fn main() {\n\
+             let o = Opts { sub: Some(\"bob\".to_string()) };\n\
+             let f = || {\n\
+                 match o.sub {\n\
+                     Some(s) => println(s),\n\
+                     None => println(\"none\"),\n\
+                 }\n\
+             };\n\
+             f();\n\
+             println(f\"{o.sub.is_some()}\");\n\
+         }\n",
+        "was moved into a closure",
+    );
+}
