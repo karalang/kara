@@ -1,0 +1,889 @@
+== rate limit strings
+'10/minute': [10 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/10/1/minute'
+'10 per minute': [10 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/10/1/minute'
+'10 per 1 minute': [10 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/10/1/minute'
+'10/2 minutes': [10 per 2 minute]
+  RateLimitItemPerMinute expiry=120 key='LIMITER/203.0.113.5/10/2/minute'
+'1/second': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'1 per seconds': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'100/hour': [100 per 1 hour]
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/100/1/hour'
+'1000/day': [1000 per 1 day]
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/1000/1/day'
+'5/month': [5 per 1 month]
+  RateLimitItemPerMonth expiry=2592000 key='LIMITER/203.0.113.5/5/1/month'
+'2/year': [2 per 1 year]
+  RateLimitItemPerYear expiry=31104000 key='LIMITER/203.0.113.5/2/1/year'
+'30 per 5 minute': [30 per 5 minute]
+  RateLimitItemPerMinute expiry=300 key='LIMITER/203.0.113.5/30/5/minute'
+'7 PER HOUR': [7 per 1 hour]
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/7/1/hour'
+'7 Per Hours': [7 per 1 hour]
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/7/1/hour'
+'10 / Minutes': [10 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/10/1/minute'
+'  3/second  ': [3 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/3/1/second'
+'3 /second': [3 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/3/1/second'
+'3/ second': [3 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/3/1/second'
+'3per second': [3 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/3/1/second'
+'3 persecond': [3 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/3/1/second'
+'1/second; 5/minute': [1 per 1 second, 5 per 1 minute]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/5/1/minute'
+'1/second,5/minute': [1 per 1 second, 5 per 1 minute]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/5/1/minute'
+'1/second|5/minute': [1 per 1 second, 5 per 1 minute]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/5/1/minute'
+'1/second ; 5 / minute ; 100/day': [1 per 1 second, 5 per 1 minute, 100 per 1 day]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/5/1/minute'
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/100/1/day'
+'5 per 2 hours; 1/second': [5 per 2 hour, 1 per 1 second]
+  RateLimitItemPerHour expiry=7200 key='LIMITER/203.0.113.5/5/2/hour'
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'100/day;10/hour;1/minute': [100 per 1 day, 10 per 1 hour, 1 per 1 minute]
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/100/1/day'
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/10/1/hour'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/1/1/minute'
+'1/second:,2/day': [1 per 1 second, 2 per 1 day]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/2/1/day'
+'1/second:;2/day': [1 per 1 second, 2 per 1 day]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/2/1/day'
+'1/second::2/day': ! ValueError: couldn't parse rate limit string '1/second::2/day'
+'1/second;;2/day': ! ValueError: couldn't parse rate limit string '1/second;;2/day'
+'1/second;': ! ValueError: couldn't parse rate limit string '1/second;'
+';1/second': ! ValueError: couldn't parse rate limit string ';1/second'
+'1 per 0 minute': [1 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/1/1/minute'
+'0/second': [0 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/0/1/second'
+'007/minute': [7 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/7/1/minute'
+'1/007 minute': [1 per 7 minute]
+  RateLimitItemPerMinute expiry=420 key='LIMITER/203.0.113.5/1/7/minute'
+'9223372036854775807/second': [9223372036854775807 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/9223372036854775807/1/second'
+'1/second\n': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'\n1/second': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'1/second\n\n': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'1/\tsecond': [1 per 1 second]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+'1\xa0per\xa0minute': [1 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/1/1/minute'
+'1/sec': ! ValueError: no granularity matched for sec
+'1/min': ! ValueError: no granularity matched for min
+'1/hr': ! ValueError: no granularity matched for hr
+'3/fortnight': ! ValueError: no granularity matched for fortnight
+'1/ſecond': ! ValueError: no granularity matched for ſecond
+'1/Kelvin': ! ValueError: no granularity matched for Kelvin
+'１０/minute': ! ValueError: couldn't parse rate limit string '１０/minute'
+'1/MINUTE': [1 per 1 minute]
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/1/1/minute'
+'1/Minutess': ! ValueError: no granularity matched for Minutess
+'1/2/3': ! ValueError: couldn't parse rate limit string '1/2/3'
+'': ! ValueError: couldn't parse rate limit string ''
+' ': ! ValueError: couldn't parse rate limit string ' '
+'per minute': ! ValueError: couldn't parse rate limit string 'per minute'
+'10': ! ValueError: couldn't parse rate limit string '10'
+'10/': ! ValueError: couldn't parse rate limit string '10/'
+'/minute': ! ValueError: couldn't parse rate limit string '/minute'
+'10 minute': ! ValueError: couldn't parse rate limit string '10 minute'
+'10/minute/5': ! ValueError: couldn't parse rate limit string '10/minute/5'
+'-1/second': ! ValueError: couldn't parse rate limit string '-1/second'
+'1.5/second': ! ValueError: couldn't parse rate limit string '1.5/second'
+'1/1.5 second': ! ValueError: couldn't parse rate limit string '1/1.5 second'
+'ten/minute': ! ValueError: couldn't parse rate limit string 'ten/minute'
+'1/secondly': ! ValueError: no granularity matched for secondly
+'1/days': [1 per 1 day]
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/1/1/day'
+'1/years': [1 per 1 year]
+  RateLimitItemPerYear expiry=31104000 key='LIMITER/203.0.113.5/1/1/year'
+'1/months': [1 per 1 month]
+  RateLimitItemPerMonth expiry=2592000 key='LIMITER/203.0.113.5/1/1/month'
+'1/hours': [1 per 1 hour]
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/1/1/hour'
+'1/seconds;1/minutes;1/hours;1/days;1/months;1/years': [1 per 1 second, 1 per 1 minute, 1 per 1 hour, 1 per 1 day, 1 per 1 month, 1 per 1 year]
+  RateLimitItemPerSecond expiry=1 key='LIMITER/203.0.113.5/1/1/second'
+  RateLimitItemPerMinute expiry=60 key='LIMITER/203.0.113.5/1/1/minute'
+  RateLimitItemPerHour expiry=3600 key='LIMITER/203.0.113.5/1/1/hour'
+  RateLimitItemPerDay expiry=86400 key='LIMITER/203.0.113.5/1/1/day'
+  RateLimitItemPerMonth expiry=2592000 key='LIMITER/203.0.113.5/1/1/month'
+  RateLimitItemPerYear expiry=31104000 key='LIMITER/203.0.113.5/1/1/year'
+b'1/second': ! ValueError: couldn't parse rate limit string 'b'1/second''
+b'x': ! ValueError: couldn't parse rate limit string 'b'x''
+== rate limit items
+RateLimitItemPerMinute(10, 1, namespace='LIMITER'): 10 per 1 minute expiry=60
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/10/1/minute'
+RateLimitItemPerMinute(10, 2, namespace='LIMITER'): 10 per 2 minute expiry=120
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/10/2/minute'
+RateLimitItemPerSecond(5, None, namespace='api'): 5 per 1 second expiry=1
+  key 'api/203.0.113.5/42/1.5/GET /api/v1/orders/5/1/second'
+RateLimitItemPerHour(100, 0, namespace='api'): 100 per 1 hour expiry=3600
+  key 'api/203.0.113.5/42/1.5/GET /api/v1/orders/100/1/hour'
+RateLimitItemPerDay(1000, 1, namespace='uploads'): 1000 per 1 day expiry=86400
+  key 'uploads/203.0.113.5/42/1.5/GET /api/v1/orders/1000/1/day'
+RateLimitItemPerMonth(5, 3, namespace='billing'): 5 per 3 month expiry=7776000
+  key 'billing/203.0.113.5/42/1.5/GET /api/v1/orders/5/3/month'
+RateLimitItemPerYear(2, 1, namespace='LIMITER'): 2 per 1 year expiry=31104000
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/2/1/year'
+RateLimitItemPerSecond('7', '2', namespace='LIMITER'): 7 per 2 second expiry=2
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/7/2/second'
+RateLimitItemPerMinute(2.9, 1.9, namespace='LIMITER'): 2 per 1 minute expiry=60
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/2/1/minute'
+RateLimitItemPerHour(1, -1, namespace='neg'): 1 per -1 hour expiry=-3600
+  key 'neg/203.0.113.5/42/1.5/GET /api/v1/orders/1/-1/hour'
+RateLimitItemPerDay(0, 1, namespace='zero'): 0 per 1 day expiry=86400
+  key 'zero/203.0.113.5/42/1.5/GET /api/v1/orders/0/1/day'
+RateLimitItemPerSecond(True, 1, namespace='LIMITER'): 1 per 1 second expiry=1
+  key 'LIMITER/203.0.113.5/42/1.5/GET /api/v1/orders/1/1/second'
+key_for() of 10 per 1 minute: 'LIMITER/10/1/minute'
+key_for('user', 7, -2, 3.25, 1e+20, 'a/b') of 10 per 1 minute: 'LIMITER/user/7/-2/3.25/1e+20/a/b/10/1/minute'
+key_for(b'caf\xc3\xa9') of 10 per 1 minute: 'LIMITER/café/10/1/minute'
+10 per 1 minute vs 10 per 1 minute: == True, < False, <= True, > False, >= True
+10 per 1 minute vs 10 per 2 minute: == False, < False, <= False, > True, >= True
+10 per 1 minute vs 10 per 1 hour: == False, < True, <= True, > False, >= False
+10 per 1 minute vs 5 per 1 minute: == False, < False, <= False, > True, >= True
+1 per 1 day vs 24 per 1 hour: == False, < False, <= False, > True, >= True
+60 per 1 minute vs 1 per 1 second: == False, < False, <= False, > True, >= True
+1 per 1 second vs 1 per 1 second: == True, < False, <= True, > False, >= True
+10 per 1 minute in 'api' vs 10 per 1 minute in 'web': == True, keys 'api/x/10/1/minute' 'web/x/10/1/minute'
+sorted [1 per 1 day, 10 per 1 minute, 5 per 1 second, 100 per 1 hour, 3 per 1 minute, 2 per 1 second, 1 per 1 year, 7 per 1 month, 4 per 2 minute, 9 per 1 hour]
+  -> [5 per 1 second, 2 per 1 second, 10 per 1 minute, 3 per 1 minute, 4 per 2 minute, 100 per 1 hour, 9 per 1 hour, 1 per 1 day, 7 per 1 month, 1 per 1 year]
+  min 5 per 1 second, max 1 per 1 year
+granularity 'second': RateLimitItemPerSecond
+granularity 'seconds': RateLimitItemPerSecond
+granularity 'SECOND': RateLimitItemPerSecond
+granularity 'Minutes': RateLimitItemPerMinute
+granularity 'minutess': ! ValueError: no granularity matched for minutess
+granularity 'sec': ! ValueError: no granularity matched for sec
+granularity '': ! ValueError: no granularity matched for 
+granularity 'hour': RateLimitItemPerHour
+granularity 'hours': RateLimitItemPerHour
+granularity 'day': RateLimitItemPerDay
+granularity 'month': RateLimitItemPerMonth
+granularity 'year': RateLimitItemPerYear
+granularity 'years': RateLimitItemPerYear
+granularity 'week': ! ValueError: no granularity matched for week
+== memory storage
+at 1700000000.0
+check -> True
+incr k1 60 +1 -> 1
+incr k1 60 +1 -> 2
+incr k1 60 +1 -> 3
+get k1 -> 3
+get_expiry k1 -> 1700000060.0
+get nope -> 0
+get_expiry nope -> 1700000000.0
+at 1700000030.5
+incr k1 60 +2 -> 5
+get_expiry k1 -> 1700000060.0
+decr k1 -1 -> 4
+get k1 -> 4
+decr k1 -10 -> 0
+get k1 -> 0
+incr k1 60 +0 -> 0
+get_expiry k1 -> 1700000090.5
+decr fresh -1 -> 0
+get fresh -> 0
+incr k2 10 +5 -> 5
+get_expiry k2 -> 1700000040.5
+at 1700000040.5
+get k2 -> 0
+at 1700000040.499
+get k2 -> 0
+at 1700000090.5
+get k1 -> 0
+incr k1 60 +1 -> 1
+get_expiry k1 -> 1700000150.5
+at 1700000100.0
+acquire_entry mw limit=3 expiry=10 amount=1 -> True
+at 1700000101.25
+acquire_entry mw limit=3 expiry=10 amount=1 -> True
+at 1700000102.5
+acquire_entry mw limit=3 expiry=10 amount=1 -> True
+at 1700000103.75
+acquire_entry mw limit=3 expiry=10 amount=1 -> False
+at 1700000105.0
+get_moving_window mw -> (1700000100.0, 3)
+acquire_entry mw limit=3 expiry=10 amount=4 -> False
+acquire_entry mw2 limit=5 expiry=10 amount=3 -> True
+acquire_entry mw2 limit=5 expiry=10 amount=3 -> False
+acquire_entry mw2 limit=5 expiry=10 amount=2 -> True
+get_moving_window mw2 -> (1700000105.0, 5)
+get_moving_window none -> (1700000105.0, 0)
+at 1700000112.5
+get_moving_window mw -> (1700000100.0, 0)
+acquire_entry mw limit=3 expiry=10 amount=1 -> True
+at 1700000142.5
+get_moving_window mw -> (1700000100.0, 0)
+state counters [k1=1@1700000150.5] events [mw:4, mw2:5] expirations 1
+sweep
+state counters [k1=1@1700000150.5] events [mw:0, mw2:0] expirations 1
+get_moving_window mw -> (1700000142.5, 0)
+at 1700000007.0
+get_sliding_window sw -> (0, 0.0, 0, 93.00000004470348)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> False
+get_sliding_window sw -> (0, 0.0, 5, 93.00000004470348)
+at 1700000057.75
+get_sliding_window sw -> (5, 42.249999940395355, 0, 102.24999994039536)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+at 1700000064.25
+get_sliding_window sw -> (5, 35.75000010430813, 1, 95.75000010430813)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+at 1700000070.75
+get_sliding_window sw -> (5, 29.250000044703484, 2, 89.25000004470348)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+at 1700000077.25
+get_sliding_window sw -> (5, 22.74999998509884, 3, 82.74999998509884)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=1 -> True
+at 1700000083.75
+get_sliding_window sw -> (5, 16.249999925494194, 4, 76.2499999254942)
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=9 -> False
+acquire_sliding_window_entry sw limit=5 expiry=60 amount=2 -> False
+state counters [k1=1@1700000150.5, sw/28333333=5@1700000127.0, sw/28333334=4@1700000177.75] events [mw:0, mw2:0] expirations 3
+clear_sliding_window sw
+get_sliding_window sw -> (0, 0.0, 0, 76.2499999254942)
+clear mw2
+state counters [k1=1@1700000150.5] events [mw:0] expirations 1
+reset -> 1
+reset -> 0
+state counters [] events [] expirations 0
+== strategy fixed-window
+1700000000.0 hit 4 per 1 minute alice cost=1 -> True
+1700000000.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=3)
+1700000001.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 test 4 per 1 minute alice cost=1 -> True
+1700000002.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=0)
+1700000003.0 hit 4 per 1 minute alice cost=1 -> False
+1700000003.0 test 4 per 1 minute alice cost=1 -> False
+1700000059.5 hit 4 per 1 minute alice cost=1 -> False
+1700000059.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=0)
+1700000060.25 test 4 per 1 minute alice cost=1 -> True
+1700000060.25 hit 4 per 1 minute alice cost=1 -> True
+1700000060.25 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000120.25, remaining=3)
+1700000075.0 hit 4 per 1 minute alice cost=1 -> True
+1700000075.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000120.25, remaining=2)
+1700000119.75 hit 4 per 1 minute alice cost=1 -> True
+1700000130.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000130.0, remaining=4)
+1700000200.0 test 4 per 1 minute alice cost=1 -> True
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000200.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000200.0 clear 4 per 1 minute alice
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000200.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000300.0 hit 4 per 1 minute bob/GET /orders cost=3 -> True
+1700000300.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=1)
+1700000301.0 test 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 hit 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=0)
+1700000302.0 hit 4 per 1 minute bob/GET /orders cost=1 -> False
+1700000302.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=0)
+1700000303.0 hit 4 per 1 minute carol cost=5 -> False
+1700000303.0 test 4 per 1 minute carol cost=5 -> False
+1700000304.0 hit 4 per 1 minute dave cost=0 -> True
+1700000304.0 test 4 per 1 minute dave cost=0 -> True
+1700000304.0 stats 4 per 1 minute dave -> WindowStats(reset_time=1700000364.0, remaining=4)
+1700000400.1 hit 2 per 1 second alice cost=1 -> True
+1700000400.2 hit 2 per 1 second alice cost=1 -> True
+1700000400.3 hit 2 per 1 second alice cost=1 -> False
+1700000400.9 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.1, remaining=0)
+1700000401.05 hit 2 per 1 second alice cost=1 -> False
+1700000401.15 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.15, remaining=2)
+1700000401.95 hit 2 per 1 second alice cost=1 -> True
+1700000402.5 stats 2 per 1 second alice -> WindowStats(reset_time=1700000402.95, remaining=1)
+1700000500.0 hit 3 per 2 second alice cost=1 -> True
+1700000500.5 hit 3 per 2 second alice cost=1 -> True
+1700000501.0 hit 3 per 2 second alice cost=1 -> True
+1700000501.5 hit 3 per 2 second alice cost=1 -> False
+1700000502.25 hit 3 per 2 second alice cost=1 -> True
+1700000502.25 stats 3 per 2 second alice -> WindowStats(reset_time=1700000504.25, remaining=2)
+1700000503.0 hit 3 per 2 second alice cost=1 -> True
+1700000504.75 stats 3 per 2 second alice -> WindowStats(reset_time=1700000504.75, remaining=3)
+== strategy moving-window
+1700000000.0 hit 4 per 1 minute alice cost=1 -> True
+1700000000.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=3)
+1700000001.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 test 4 per 1 minute alice cost=1 -> True
+1700000002.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=0)
+1700000003.0 hit 4 per 1 minute alice cost=1 -> False
+1700000003.0 test 4 per 1 minute alice cost=1 -> False
+1700000059.5 hit 4 per 1 minute alice cost=1 -> False
+1700000059.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=0)
+1700000060.25 test 4 per 1 minute alice cost=1 -> True
+1700000060.25 hit 4 per 1 minute alice cost=1 -> True
+1700000060.25 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000061.5, remaining=0)
+1700000075.0 hit 4 per 1 minute alice cost=1 -> True
+1700000075.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000120.25, remaining=2)
+1700000119.75 hit 4 per 1 minute alice cost=1 -> True
+1700000130.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000135.0, remaining=2)
+1700000200.0 test 4 per 1 minute alice cost=1 -> True
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000060.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000200.0 clear 4 per 1 minute alice
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000260.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000300.0 hit 4 per 1 minute bob/GET /orders cost=3 -> True
+1700000300.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=1)
+1700000301.0 test 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 hit 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=1)
+1700000302.0 hit 4 per 1 minute bob/GET /orders cost=1 -> True
+1700000302.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000360.0, remaining=0)
+1700000303.0 hit 4 per 1 minute carol cost=5 -> False
+1700000303.0 test 4 per 1 minute carol cost=5 -> False
+1700000304.0 hit 4 per 1 minute dave cost=0 -> True
+1700000304.0 test 4 per 1 minute dave cost=0 -> True
+1700000304.0 stats 4 per 1 minute dave -> WindowStats(reset_time=1700000364.0, remaining=4)
+1700000400.1 hit 2 per 1 second alice cost=1 -> True
+1700000400.2 hit 2 per 1 second alice cost=1 -> True
+1700000400.3 hit 2 per 1 second alice cost=1 -> False
+1700000400.9 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.1, remaining=0)
+1700000401.05 hit 2 per 1 second alice cost=1 -> False
+1700000401.15 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.2, remaining=1)
+1700000401.95 hit 2 per 1 second alice cost=1 -> True
+1700000402.5 stats 2 per 1 second alice -> WindowStats(reset_time=1700000402.95, remaining=1)
+1700000500.0 hit 3 per 2 second alice cost=1 -> True
+1700000500.5 hit 3 per 2 second alice cost=1 -> True
+1700000501.0 hit 3 per 2 second alice cost=1 -> True
+1700000501.5 hit 3 per 2 second alice cost=1 -> False
+1700000502.25 hit 3 per 2 second alice cost=1 -> True
+1700000502.25 stats 3 per 2 second alice -> WindowStats(reset_time=1700000502.5, remaining=0)
+1700000503.0 hit 3 per 2 second alice cost=1 -> True
+1700000504.75 stats 3 per 2 second alice -> WindowStats(reset_time=1700000505.0, remaining=2)
+== strategy sliding-window-counter
+1700000000.0 hit 4 per 1 minute alice cost=1 -> True
+1700000000.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000040.0, remaining=3)
+1700000001.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 hit 4 per 1 minute alice cost=1 -> True
+1700000002.0 test 4 per 1 minute alice cost=1 -> True
+1700000002.5 hit 4 per 1 minute alice cost=1 -> True
+1700000002.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000040.0, remaining=0)
+1700000003.0 hit 4 per 1 minute alice cost=1 -> False
+1700000003.0 test 4 per 1 minute alice cost=1 -> False
+1700000059.5 hit 4 per 1 minute alice cost=1 -> True
+1700000059.5 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000070.0, remaining=1)
+1700000060.25 test 4 per 1 minute alice cost=1 -> True
+1700000060.25 hit 4 per 1 minute alice cost=1 -> True
+1700000060.25 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000070.0, remaining=0)
+1700000075.0 hit 4 per 1 minute alice cost=1 -> True
+1700000075.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000085.0, remaining=0)
+1700000119.75 hit 4 per 1 minute alice cost=1 -> True
+1700000130.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000140.0, remaining=2)
+1700000200.0 test 4 per 1 minute alice cost=1 -> True
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000220.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000200.0 clear 4 per 1 minute alice
+1700000200.0 stats 4 per 1 minute alice -> WindowStats(reset_time=1700000200.0, remaining=4)
+1700000200.0 hit 4 per 1 minute alice cost=1 -> True
+1700000300.0 hit 4 per 1 minute bob/GET /orders cost=3 -> True
+1700000300.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000340.0, remaining=1)
+1700000301.0 test 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 hit 4 per 1 minute bob/GET /orders cost=2 -> False
+1700000301.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000340.0, remaining=1)
+1700000302.0 hit 4 per 1 minute bob/GET /orders cost=1 -> True
+1700000302.0 stats 4 per 1 minute bob/GET /orders -> WindowStats(reset_time=1700000340.0, remaining=0)
+1700000303.0 hit 4 per 1 minute carol cost=5 -> False
+1700000303.0 test 4 per 1 minute carol cost=5 -> False
+1700000304.0 hit 4 per 1 minute dave cost=0 -> True
+1700000304.0 test 4 per 1 minute dave cost=0 -> True
+1700000304.0 stats 4 per 1 minute dave -> WindowStats(reset_time=1700000304.0, remaining=4)
+1700000400.1 hit 2 per 1 second alice cost=1 -> True
+1700000400.2 hit 2 per 1 second alice cost=1 -> True
+1700000400.3 hit 2 per 1 second alice cost=1 -> False
+1700000400.9 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.0, remaining=0)
+1700000401.05 hit 2 per 1 second alice cost=1 -> True
+1700000401.15 stats 2 per 1 second alice -> WindowStats(reset_time=1700000401.5, remaining=0)
+1700000401.95 hit 2 per 1 second alice cost=1 -> True
+1700000402.5 stats 2 per 1 second alice -> WindowStats(reset_time=1700000402.5, remaining=1)
+1700000500.0 hit 3 per 2 second alice cost=1 -> True
+1700000500.5 hit 3 per 2 second alice cost=1 -> True
+1700000501.0 hit 3 per 2 second alice cost=1 -> True
+1700000501.5 hit 3 per 2 second alice cost=1 -> False
+1700000502.25 hit 3 per 2 second alice cost=1 -> True
+1700000502.25 stats 3 per 2 second alice -> WindowStats(reset_time=1700000502.6666667, remaining=0)
+1700000503.0 hit 3 per 2 second alice cost=1 -> True
+1700000504.75 stats 3 per 2 second alice -> WindowStats(reset_time=1700000505.0, remaining=2)
+== storage URIs
+'redis://localhost:6379': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('localhost', 6379)], path='', query={}) empty=False
+'redis://user:pw@localhost:6379/0?ssl=true&x=1&x=2': StorageURIOptions(scheme='redis', username='user', password='pw', locations=[('localhost', 6379)], path='/0', query={'ssl': ['true'], 'x': ['1', '2']}) empty=False
+'redis://:secret@cache:6380/2': StorageURIOptions(scheme='redis', username='', password='secret', locations=[('cache', 6380)], path='/2', query={}) empty=False
+'memcached://a:11211, b:11212,c:11213': StorageURIOptions(scheme='memcached', username=None, password=None, locations=[('a', 11211), ('b', 11212), ('c', 11213)], path='', query={}) empty=False
+'memcached:///var/run/memcached.sock': StorageURIOptions(scheme='memcached', username=None, password=None, locations=[], path='/var/run/memcached.sock', query={}) empty=False
+'redis://localhost': ! ConfigurationError: Missing host or port in location localhost
+'redis://h:99999': ! ConfigurationError: Unable to parse storage uri redis://h:99999
+'redis://h:abc': ! ConfigurationError: Unable to parse storage uri redis://h:abc
+'redis://h:': ! ConfigurationError: Missing host or port in location h:
+'redis+unix:///tmp/r.sock?db=1': StorageURIOptions(scheme='redis+unix', username=None, password=None, locations=[], path='/tmp/r.sock', query={'db': ['1']}) empty=False
+'redis://[::1]:6379': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('::1', 6379)], path='', query={}) empty=False
+'redis://[2001:db8::7]:6379,[2001:db8::8]:6380': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('2001:db8::7', 6379), ('2001:db8::8', 6380)], path='', query={}) empty=False
+'redis://[::1': ! ValueError: Invalid IPv6 URL
+'redis+cluster://a:7000,b:7001': StorageURIOptions(scheme='redis+cluster', username=None, password=None, locations=[('a', 7000), ('b', 7001)], path='', query={}) empty=False
+'redis+sentinel://s1:26379,s2:26379/mymaster': StorageURIOptions(scheme='redis+sentinel', username=None, password=None, locations=[('s1', 26379), ('s2', 26379)], path='/mymaster', query={}) empty=False
+'memory://': StorageURIOptions(scheme='memory', username=None, password=None, locations=[], path='', query={}) empty=True
+'memory:///': StorageURIOptions(scheme='memory', username=None, password=None, locations=[], path='/', query={}) empty=False
+'MEMORY://': StorageURIOptions(scheme='memory', username=None, password=None, locations=[], path='', query={}) empty=True
+'mongodb://u:p@db:27017/limits?authSource=admin': StorageURIOptions(scheme='mongodb', username='u', password='p', locations=[('db', 27017)], path='/limits', query={'authSource': ['admin']}) empty=False
+'redis://h:1?a=1&b&c=&d=%20x+y': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('h', 1)], path='', query={'a': ['1'], 'd': [' x y']}) empty=False
+'redis://u%40x:p%3A@h:1': StorageURIOptions(scheme='redis', username='u%40x', password='p%3A', locations=[('h', 1)], path='', query={}) empty=False
+'redis://h:0': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('h', 0)], path='', query={}) empty=False
+'redis://h:65535': StorageURIOptions(scheme='redis', username=None, password=None, locations=[('h', 65535)], path='', query={}) empty=False
+'redis://h:65536': ! ConfigurationError: Unable to parse storage uri redis://h:65536
+'redis://h: 1': ! ConfigurationError: Unable to parse storage uri redis://h: 1
+'redis://h:1,,': ! ConfigurationError: Missing host or port in location 
+'redis://,h:1': ! ConfigurationError: Missing host or port in location 
+'redis://@h:1': StorageURIOptions(scheme='redis', username='', password=None, locations=[('h', 1)], path='', query={}) empty=False
+'redis://u@': StorageURIOptions(scheme='redis', username='u', password=None, locations=[], path='', query={}) empty=False
+'x:y': StorageURIOptions(scheme='x', username=None, password=None, locations=[], path='y', query={}) empty=False
+storage_from_string('memory://'): limits.storage.memory.MemoryStorage
+storage_from_string('Memory://'): limits.storage.memory.MemoryStorage
+storage_from_string('memory://?x=1'): limits.storage.memory.MemoryStorage
+storage_from_string('async+memory://'): limits.aio.storage.memory.MemoryStorage
+storage_from_string('redis://localhost:6379'): ! ConfigurationError: 'redis' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('rediss://localhost:6380'): ! ConfigurationError: 'redis' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('redis+unix:///tmp/redis.sock'): ! ConfigurationError: 'redis' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('valkey://localhost:6379'): ! ConfigurationError: 'valkey' prerequisite not available. A minimum version of 6.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('Valkey://localhost:6379'): ! ConfigurationError: 'redis' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('valkeys://h:1'): ! ConfigurationError: 'valkey' prerequisite not available. A minimum version of 6.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('valkey+unix:///tmp/v.sock'): ! ConfigurationError: 'valkey' prerequisite not available. A minimum version of 6.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('redis+cluster://a:7000,b:7001'): ! ConfigurationError: 'redis' prerequisite not available. A minimum version of 4.2.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('redis+cluster://a'): ! ConfigurationError: Missing host or port in location a
+storage_from_string('valkey+cluster://a:7000'): ! ConfigurationError: 'valkey' prerequisite not available. A minimum version of 6.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('redis+sentinel://s1:26379,s2:26379/mymaster'): ! ConfigurationError: 'redis.sentinel' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('redis+sentinel://s1:26379'): ! ConfigurationError: 'service_name' not provided
+storage_from_string('redis+sentinel://s1:26379/'): ! ConfigurationError: 'redis.sentinel' prerequisite not available. A minimum version of 3.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('valkey+sentinel://s1:26379/primary'): ! ConfigurationError: 'valkey.sentinel' prerequisite not available. A minimum version of 6.0 is required. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('memcached://localhost:11211'): ! ConfigurationError: 'pymemcache' prerequisite not available. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('memcached://localhost'): ! ConfigurationError: Missing host or port in location localhost
+storage_from_string('memcached:///var/run/memcached.sock'): ! ConfigurationError: 'pymemcache' prerequisite not available. See https://limits.readthedocs.io/en/stable/storage.html#supported-versions for more details.
+storage_from_string('etcd://localhost:2379'): ! ConfigurationError: unknown storage scheme : etcd://localhost:2379
+storage_from_string(''): ! ConfigurationError: unknown storage scheme : 
+storage_from_string('localhost:6379'): ! ConfigurationError: unknown storage scheme : localhost:6379
+storage_from_string('redis'): ! ConfigurationError: unknown storage scheme : redis
+storage_from_string('https://cache.example.com'): ! ConfigurationError: unknown storage scheme : https://cache.example.com
+storage_from_string('redis+cluster://[::1'): ! ValueError: Invalid IPv6 URL
+storage_from_string('redis+sentinel://h:abc/x'): ! ConfigurationError: Unable to parse storage uri redis+sentinel://h:abc/x
+== api gateway
+route GET /api/v1/orders: fixed-window [5 per 1 minute, 20 per 1 hour] by ip
+route POST /api/v1/orders: moving-window [2 per 1 minute, 10 per 1 hour] by user
+route GET /api/v1/search: sliding-window-counter [10 per 1 minute] by key
+route GET /api/v1/export: sliding-window-counter [1000 per 1 hour] by key cost=rows
+route POST /api/v1/login: moving-window [3 per 1 minute, 10 per 1 hour] by ip
+route GET /healthz: fixed-window [200 per 1 day, 60 per 1 hour] by ip
+route GET /api/v1/reports: fixed-window [2 per 30 second] by user
+1700000004.0 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=59 reset=1700003604.0
+1700000004.125 198.51.100.7 GET /api/v1/export as k-ana cost=10 -> 200 limit=1000 per 1 hour remaining=990 reset=1700002800.0
+1700000011.625 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000040.0
+1700000015.375 198.51.100.7 POST /api/v1/login as 198.51.100.7 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000075.375
+1700000016.875 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000076.875
+1700000020.625 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000080.625
+1700000024.375 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000084.375
+1700000025.875 198.51.100.8 GET /api/v1/export as k-ben cost=200 -> 200 limit=1000 per 1 hour remaining=800 reset=1700002800.0
+1700000026.0 10.0.0.1 POST /api/v1/orders -> 200 exempt
+1700000033.5 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000040.0
+1700000033.625 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=58 reset=1700003604.0
+1700000033.875 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000084.375
+1700000035.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000076.875
+1700000037.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000076.875
+1700000038.375 203.0.113.9 GET /api/v1/export as k-chen cost=10 -> 200 limit=1000 per 1 hour remaining=990 reset=1700002800.0
+1700000040.375 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000100.375
+1700000047.875 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000100.0
+1700000048.125 198.51.100.8 GET /api/v1/reports as ben cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000078.125
+1700000048.625 10.0.0.1 GET /api/v1/export -> 200 exempt
+1700000056.125 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000056.625 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000100.0
+1700000058.125 203.0.113.9 POST /api/v1/orders as chen cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000118.125
+1700000059.125 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000059.25 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000119.25
+1700000061.25 203.0.113.9 DELETE /api/v1/orders -> 405
+1700000065.0 10.0.0.1 GET /api/v1/export -> 200 exempt
+1700000068.75 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000068.875 198.51.100.7 GET /api/v1/export as k-ana cost=200 -> 200 limit=1000 per 1 hour remaining=790 reset=1700002800.0
+1700000070.375 192.0.2.44 GET /api/v1/export as 192.0.2.44 cost=1500 -> 429 limit=1000 per 1 hour remaining=1000 reset=1700000070.375 retry-after=0
+1700000071.875 192.0.2.44 GET /api/v1/reports as 192.0.2.44 cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000101.875
+1700000073.375 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=57 reset=1700003604.0
+1700000076.375 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=0 reset=1700000080.625
+1700000079.375 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000100.0
+1700000082.375 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000142.375
+1700000088.375 10.0.0.1 POST /api/v1/orders -> 200 exempt
+1700000091.375 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000100.375
+1700000109.375 203.0.113.9 DELETE /api/v1/orders -> 405
+1700000115.375 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000118.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000178.375
+1700000163.375 198.51.100.8 GET /api/v1/unknown -> 404
+1700000163.5 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000220.0
+1700000165.0 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000178.375
+1700000165.25 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000167.25 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000220.0
+1700000171.0 198.51.100.8 GET /api/v1/reports as ben cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000201.0
+1700000172.0 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000173.0 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=7 reset=1700000220.0
+1700000174.0 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000177.75 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000220.0
+1700000178.25 203.0.113.9 GET /api/v1/reports as chen cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000208.25
+1700000179.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000220.0
+1700000181.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000220.0
+1700000183.75 10.0.0.1 GET /healthz -> 200 exempt
+1700000191.25 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000251.25
+1700000195.0 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=7 reset=1700000220.0
+1700000195.5 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000255.5
+1700000197.0 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=56 reset=1700003604.0
+1700000198.5 198.51.100.8 DELETE /api/v1/orders -> 405
+1700000200.5 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000202.5 203.0.113.9 DELETE /api/v1/orders -> 405
+1700000202.75 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=55 reset=1700003604.0
+1700000204.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=6 reset=1700000220.0
+1700000206.75 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000251.25
+1700000207.0 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=59 reset=1700003807.0
+1700000210.75 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000251.25
+1700000214.5 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=1 reset=1700000255.5
+1700000214.625 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000214.875 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=0 reset=1700000255.5
+1700000215.0 203.0.113.9 GET /api/v1/export as k-dee cost=10 -> 200 limit=1000 per 1 hour remaining=990 reset=1700002800.0
+1700000215.125 192.0.2.44 GET /healthz as 192.0.2.44 cost=1 -> 200 limit=60 per 1 hour remaining=59 reset=1700003815.125
+1700000218.125 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=54 reset=1700003604.0
+1700000230.125 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=1 reset=1700000251.25
+1700000231.625 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=0 reset=1700000251.25
+1700000233.125 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 429 limit=5 per 1 minute remaining=0 reset=1700000251.25 retry-after=19
+1700000257.125 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000317.125
+1700000275.125 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000280.0
+1700000281.125 10.0.0.1 GET /api/v1/reports -> 200 exempt
+1700000284.125 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000285.625 203.0.113.9 DELETE /api/v1/orders -> 405
+1700000375.625 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000376.625 198.51.100.8 DELETE /api/v1/orders -> 405
+1700000380.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000440.375
+1700000381.875 203.0.113.9 GET /api/v1/export as k-dee cost=400 -> 200 limit=1000 per 1 hour remaining=590 reset=1700002800.0
+1700000385.625 203.0.113.9 POST /api/v1/orders as dee cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000445.625
+1700000387.625 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000400.0
+1700000389.125 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000449.125
+1700000390.625 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000450.625
+1700000391.125 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000392.625 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000400.0
+1700000392.875 203.0.113.9 POST /api/v1/orders as chen cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000452.875
+1700000393.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000440.375
+1700000395.375 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000400.0
+1700000399.125 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=58 reset=1700003807.0
+1700000399.375 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000459.375
+1700000399.5 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000400.0
+1700000400.0 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000440.375
+1700000401.5 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000401.75 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000403.75 10.0.0.1 POST /api/v1/login -> 200 exempt
+1700000405.25 198.51.100.7 GET /api/v1/export as k-ana cost=1500 -> 429 limit=1000 per 1 hour remaining=790 reset=1700002800.0 retry-after=2395
+1700000409.0 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000416.5 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000430.0
+1700000417.0 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000460.0
+1700000417.125 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=7 reset=1700000430.0
+1700000418.625 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=1 reset=1700000440.375
+1700000418.75 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=0 reset=1700000440.375
+1700000422.5 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000430.0
+1700000424.0 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=6 reset=1700000430.0
+1700000426.0 10.0.0.1 POST /api/v1/login -> 200 exempt
+1700000428.0 203.0.113.9 DELETE /api/v1/orders -> 405
+1700000473.0 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000476.0 203.0.113.9 GET /api/v1/export as k-chen cost=50 -> 200 limit=1000 per 1 hour remaining=940 reset=1700002800.0
+1700000566.0 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000626.0
+1700000572.0 198.51.100.7 POST /api/v1/login as 198.51.100.7 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000632.0
+1700000575.0 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000580.0
+1700000578.0 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000638.0
+1700000584.0 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000640.0
+1700000629.0 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000640.0
+1700000632.0 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000640.0
+1700000650.0 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000710.0
+1700000652.0 203.0.113.9 GET /api/v1/unknown -> 404
+1700000654.0 203.0.113.9 GET /api/v1/export as k-chen cost=200 -> 200 limit=1000 per 1 hour remaining=740 reset=1700002800.0
+1700000654.125 198.51.100.7 POST /api/v1/login as 198.51.100.7 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000714.125
+1700000655.625 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000715.625
+1700000656.625 203.0.113.9 GET /api/v1/reports as dee cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000686.625
+1700000658.125 203.0.113.9 GET /api/v1/unknown -> 404
+1700000658.625 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000710.0
+1700000660.125 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000715.625
+1700000667.625 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700000727.625
+1700000671.375 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=57 reset=1700003807.0
+1700000675.125 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700000727.625
+1700000675.25 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000715.625
+1700000679.0 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000739.0
+1700000680.0 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000710.0
+1700000680.125 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700000727.625
+1700000681.125 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000681.625 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000700.0
+1700000681.875 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000700.0
+1700000683.375 203.0.113.9 POST /api/v1/orders as dee cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000743.375
+1700000685.375 192.0.2.44 POST /api/v1/login as 192.0.2.44 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700000745.375
+1700000685.5 203.0.113.9 POST /api/v1/orders as chen cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000745.5
+1700000685.75 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700000689.5 203.0.113.9 POST /api/v1/orders as chen cost=1 -> 200 limit=2 per 1 minute remaining=0 reset=1700000745.5
+1700000690.0 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000691.5 198.51.100.7 GET /healthz as 198.51.100.7 cost=1 -> 200 limit=60 per 1 hour remaining=59 reset=1700004291.5
+1700000692.0 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700000700.0
+1700000692.25 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=53 reset=1700003604.0
+1700000694.25 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=0 reset=1700000739.0
+1700000695.75 192.0.2.44 GET /api/v1/reports as 192.0.2.44 cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700000725.75
+1700000696.75 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700000720.75 10.0.0.1 GET /api/v1/reports -> 200 exempt
+1700000765.75 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000820.0
+1700000783.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700000820.0
+1700000795.75 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700000855.75
+1700000819.75 203.0.113.9 GET /api/v1/export as k-dee cost=50 -> 200 limit=1000 per 1 hour remaining=540 reset=1700002800.0
+1700000837.75 10.0.0.1 POST /api/v1/login -> 200 exempt
+1700000861.75 192.0.2.44 GET /api/v1/export as 192.0.2.44 cost=900 -> 200 limit=1000 per 1 hour remaining=100 reset=1700002800.0
+1700000906.75 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=52 reset=1700003604.0
+1700000908.25 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=56 reset=1700003807.0
+1700000998.25 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001000.0
+1700000998.5 198.51.100.8 GET /api/v1/export as k-ben cost=1500 -> 429 limit=1000 per 1 hour remaining=800 reset=1700002800.0 retry-after=1802
+1700000998.75 10.0.0.1 GET /healthz -> 200 exempt
+1700000998.875 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001058.875
+1700000999.875 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001059.875
+1700001007.375 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001060.0
+1700001014.875 192.0.2.44 GET /api/v1/export as 192.0.2.44 cost=900 -> 429 limit=1000 per 1 hour remaining=100 reset=1700002800.0 retry-after=1786
+1700001022.375 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001060.0
+1700001022.875 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001082.875
+1700001030.375 10.0.0.1 GET /api/v1/export -> 200 exempt
+1700001031.875 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001091.875
+1700001032.125 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=51 reset=1700003604.0
+1700001033.625 10.0.0.1 GET /api/v1/export -> 200 exempt
+1700001033.875 198.51.100.8 POST /api/v1/orders as ben cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001093.875
+1700001034.375 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001094.375
+1700001034.5 192.0.2.44 GET /healthz as 192.0.2.44 cost=1 -> 200 limit=60 per 1 hour remaining=58 reset=1700003815.125
+1700001042.0 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=50 reset=1700003604.0
+1700001042.5 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700001046.25 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700001091.875
+1700001048.25 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=49 reset=1700003604.0
+1700001048.5 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=55 reset=1700003807.0
+1700001056.0 198.51.100.8 POST /api/v1/orders as ben cost=1 -> 200 limit=2 per 1 minute remaining=0 reset=1700001093.875
+1700001056.25 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001060.0
+1700001063.75 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001123.75
+1700001064.0 192.0.2.44 DELETE /api/v1/orders -> 405
+1700001071.5 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700001079.0 198.51.100.7 GET /api/v1/export as k-ana cost=10 -> 200 limit=1000 per 1 hour remaining=780 reset=1700002800.0
+1700001081.0 198.51.100.7 GET /api/v1/reports as ana cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700001111.0
+1700001084.75 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700001094.375
+1700001084.875 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001144.875
+1700001085.375 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700001123.75
+1700001130.375 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001180.0
+1700001136.375 198.51.100.8 POST /api/v1/login as 198.51.100.8 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001196.375
+1700001137.875 203.0.113.9 GET /api/v1/reports as dee cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700001167.875
+1700001161.875 198.51.100.7 GET /healthz as 198.51.100.7 cost=1 -> 200 limit=60 per 1 hour remaining=58 reset=1700004291.5
+1700001173.875 203.0.113.9 POST /api/v1/orders as dee cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001233.875
+1700001197.875 198.51.100.8 DELETE /api/v1/orders -> 405
+1700001215.875 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001240.0
+1700001233.875 192.0.2.44 GET /healthz as 192.0.2.44 cost=1 -> 200 limit=60 per 1 hour remaining=57 reset=1700003815.125
+1700001257.875 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=20 per 1 hour remaining=2 reset=1700003616.875
+1700001259.375 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700001260.375 203.0.113.9 GET /api/v1/search as k-chen cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001300.0
+1700001264.125 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001300.0
+1700001265.625 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001325.625
+1700001265.75 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700001269.5 203.0.113.9 GET /api/v1/unknown -> 404
+1700001271.5 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700001271.625 198.51.100.8 GET /api/v1/export as k-ben cost=900 -> 429 limit=1000 per 1 hour remaining=800 reset=1700002800.0 retry-after=1529
+1700001271.875 198.51.100.8 GET /api/v1/export as k-ben cost=50 -> 200 limit=1000 per 1 hour remaining=750 reset=1700002800.0
+1700001272.125 203.0.113.9 GET /api/v1/export as k-dee cost=50 -> 200 limit=1000 per 1 hour remaining=490 reset=1700002800.0
+1700001272.625 203.0.113.9 POST /api/v1/orders as dee cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001332.625
+1700001274.625 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001334.625
+1700001275.125 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700001300.0
+1700001275.25 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=7 reset=1700001300.0
+1700001277.25 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700001278.25 10.0.0.1 POST /api/v1/orders -> 200 exempt
+1700001280.25 198.51.100.8 GET /healthz as 198.51.100.8 cost=1 -> 200 limit=60 per 1 hour remaining=54 reset=1700003807.0
+1700001280.75 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001340.75
+1700001282.25 192.0.2.44 POST /api/v1/login as 192.0.2.44 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001342.25
+1700001282.75 203.0.113.9 POST /api/v1/login as 203.0.113.9 cost=1 -> 200 limit=3 per 1 minute remaining=1 reset=1700001325.625
+1700001283.25 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001300.0
+1700001284.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001300.0
+1700001286.75 192.0.2.44 GET /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001346.75
+1700001288.25 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001300.0
+1700001288.5 198.51.100.8 GET /api/v1/orders as 198.51.100.8 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001348.5
+1700001288.75 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700001300.0
+1700001288.875 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700001334.625
+1700001296.375 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700001300.0
+1700001297.375 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=7 reset=1700001300.0
+1700001298.375 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=0 reset=1700001340.75
+1700001300.375 198.51.100.7 GET /api/v1/orders as 198.51.100.7 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700001334.625
+1700001324.375 192.0.2.44 POST /api/v1/login as 192.0.2.44 cost=1 -> 200 limit=3 per 1 minute remaining=1 reset=1700001342.25
+1700001369.375 10.0.0.1 GET /healthz -> 200 exempt
+1700001381.375 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001441.375
+1700001426.375 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=48 reset=1700003604.0
+1700001471.375 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001531.375
+1700001495.375 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001555.375
+1700001585.375 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001645.375
+1700001675.375 203.0.113.9 GET /healthz as 203.0.113.9 cost=1 -> 200 limit=60 per 1 hour remaining=47 reset=1700003604.0
+1700001681.375 203.0.113.9 DELETE /api/v1/orders -> 405
+1700001771.375 203.0.113.9 GET /api/v1/reports as chen cost=1 -> 200 limit=2 per 30 second remaining=1 reset=1700001801.375
+1700001771.5 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001780.0
+1700001771.75 203.0.113.9 GET /api/v1/orders as 203.0.113.9 cost=1 -> 200 limit=20 per 1 hour remaining=1 reset=1700003616.875
+1700001771.875 198.51.100.7 POST /api/v1/orders as ana cost=1 -> 200 limit=10 per 1 hour remaining=0 reset=1700003620.625
+1700001775.625 192.0.2.44 POST /api/v1/login as 192.0.2.44 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001835.625
+1700001777.625 10.0.0.1 GET /api/v1/reports -> 200 exempt
+1700001777.875 198.51.100.7 GET /api/v1/search as k-ana cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700001780.0
+1700001778.375 192.0.2.44 GET /api/v1/unknown -> 404
+1700001778.5 10.0.0.1 GET /api/v1/search -> 200 exempt
+1700001782.25 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001840.0
+1700001782.75 203.0.113.9 GET /api/v1/search as k-dee cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001840.0
+1700001784.75 203.0.113.9 POST /api/v1/orders as chen cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001844.75
+1700001785.25 192.0.2.44 GET /api/v1/search as 192.0.2.44 cost=1 -> 200 limit=10 per 1 minute remaining=9 reset=1700001840.0
+1700001785.75 198.51.100.7 POST /api/v1/login as 198.51.100.7 cost=1 -> 200 limit=3 per 1 minute remaining=2 reset=1700001845.75
+1700001787.75 198.51.100.8 GET /api/v1/search as k-ben cost=1 -> 200 limit=10 per 1 minute remaining=8 reset=1700001840.0
+1700001787.875 203.0.113.9 DELETE /api/v1/orders -> 405
+1700001788.875 10.0.0.1 GET /api/v1/orders -> 200 exempt
+1700001789.375 10.0.0.1 POST /api/v1/orders -> 200 exempt
+1700001793.125 10.0.0.1 GET /api/v1/reports -> 200 exempt
+1700001793.625 192.0.2.44 POST /api/v1/orders as 192.0.2.44 cost=1 -> 200 limit=2 per 1 minute remaining=1 reset=1700001853.625
+1700001801.125 10.0.0.1 GET /healthz -> 200 exempt
+1700001861.125 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 200 limit=5 per 1 minute remaining=4 reset=1700001921.125
+1700001861.625 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 200 limit=5 per 1 minute remaining=3 reset=1700001921.125
+1700001862.125 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 200 limit=5 per 1 minute remaining=2 reset=1700001921.125
+1700001862.625 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 200 limit=5 per 1 minute remaining=1 reset=1700001921.125
+1700001863.125 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 200 limit=5 per 1 minute remaining=0 reset=1700001921.125
+1700001863.625 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 429 limit=5 per 1 minute remaining=0 reset=1700001921.125 retry-after=58
+1700001864.125 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 429 limit=5 per 1 minute remaining=0 reset=1700001921.125 retry-after=57
+1700001864.625 198.51.100.66 GET /api/v1/orders as 198.51.100.66 cost=1 -> 429 limit=5 per 1 minute remaining=0 reset=1700001921.125 retry-after=57
+responses:
+  DELETE /api/v1/orders 405: 11
+  GET /api/v1/export 200: 17
+  GET /api/v1/export 429: 5
+  GET /api/v1/orders 200: 66
+  GET /api/v1/orders 429: 4
+  GET /api/v1/reports 200: 13
+  GET /api/v1/search 200: 68
+  GET /api/v1/unknown 404: 5
+  GET /healthz 200: 28
+  POST /api/v1/login 200: 20
+  POST /api/v1/orders 200: 31
+refused clients:
+  198.51.100.66: 3
+  192.0.2.44: 2
+  k-ben: 2
+  198.51.100.8: 1
+  k-ana: 1
+storage: 63 counters, 18 moving windows
+== login guard
+1700001000.5 198.51.100.7 ana: signed in, 9 left for 198.51.100.7
+1700001002.5 45.33.12.9 ana: wrong password, 2 left for ana (window from 1700001002.5)
+1700001004.5 45.33.12.9 ben: wrong password, 2 left for ben (window from 1700001004.5)
+1700001005.0 198.51.100.7 ana: wrong password, 1 left for ana (window from 1700001002.5)
+1700001014.0 45.33.12.9 admin: wrong password, 2 left for admin (window from 1700001014.0)
+1700001018.0 45.33.12.9 admin: wrong password, 1 left for admin (window from 1700001014.0)
+1700001022.0 198.51.100.7 ana: wrong password, 0 left for ana (window from 1700001002.5)
+1700001024.0 45.33.12.9 ana: blocked by 3 per 1 minute for ana, retry in 39s
+1700001033.0 45.33.12.9 ana: blocked by 3 per 1 minute for ana, retry in 30s
+1700001035.0 198.51.100.7 ana: blocked by 3 per 1 minute for ana, retry in 28s
+1700001039.0 45.33.12.9 ana: blocked by 3 per 1 minute for ana, retry in 24s
+1700001043.0 45.33.12.9 root: wrong password, 2 left for root (window from 1700001043.0)
+1700001045.0 198.51.100.7 ana: blocked by 3 per 1 minute for ana, retry in 18s
+1700001045.5 45.33.12.9 ben: wrong password, 1 left for ben (window from 1700001004.5)
+1700001054.5 45.33.12.9 root: wrong password, 1 left for root (window from 1700001043.0)
+1700001056.5 198.51.100.7 ana: blocked by 3 per 1 minute for ana, retry in 6s
+1700001057.0 45.33.12.9 ana: blocked by 3 per 1 minute for ana, retry in 6s
+1700001061.0 45.33.12.9 ana: blocked by 3 per 1 minute for ana, retry in 2s
+1700001070.0 198.51.100.7 ana: signed in, 6 left for 198.51.100.7
+1700001079.0 45.33.12.9 ben: wrong password, 1 left for ben (window from 1700001045.5)
+1700001081.0 45.33.12.9 root: wrong password, 0 left for root (window from 1700001043.0)
+1700001090.0 198.51.100.7 ana: wrong password, 2 left for ana (window from 1700001090.0)
+1700001099.0 45.33.12.9 root: blocked by 3 per 1 minute for root, retry in 4s
+1700001103.0 45.33.12.9 ana: wrong password, 1 left for ana (window from 1700001090.0)
+1700001112.0 198.51.100.7 ana: wrong password, 0 left for ana (window from 1700001090.0)
+1700001116.0 45.33.12.9 ben: blocked by 10 per 1 hour for 45.33.12.9, retry in 3487s
+1700001117.0 45.33.12.9 ben: blocked by 10 per 1 hour for 45.33.12.9, retry in 3486s
+1700001121.0 198.51.100.7 ana: blocked by 3 per 1 minute for ana, retry in 29s
+1700001122.0 45.33.12.9 ben: blocked by 10 per 1 hour for 45.33.12.9, retry in 3481s
+1700001124.0 45.33.12.9 ana: blocked by 10 per 1 hour for 45.33.12.9, retry in 3479s
+1700001195.5 198.51.100.7 ana: wrong password, 2 left for ana (window from 1700001195.5)
+1700001197.0 198.51.100.7 ana: wrong password, 1 left for ana (window from 1700001195.5)
+1700001198.5 198.51.100.7 ana: signed in, 1 left for 198.51.100.7
+1700001200.0 198.51.100.7 ana: wrong password, 2 left for ana (window from 1700001200.0)
+1700001201.5 198.51.100.7 ben: blocked by 10 per 1 hour for 198.51.100.7, retry in 3399s
+1700004901.5 45.33.12.9 root: wrong password, 2 left for root (window from 1700004901.5)
+1700004902.5 45.33.12.9 admin: wrong password, 2 left for admin (window from 1700004902.5)
+blocked 198.51.100.7: 5
+blocked 45.33.12.9: 10
+== export quotas
+1700005600.0 acme 50 rows -> accepted, remaining=950 reset=1700006400.0
+1700005660.0 globex 300 rows -> accepted, remaining=700 reset=1700006400.0
+1700005900.0 initech 300 rows -> accepted, remaining=700 reset=1700006400.0
+1700005990.0 acme 120 rows -> accepted, remaining=830 reset=1700006400.0
+1700006080.0 initech 120 rows -> accepted, remaining=580 reset=1700006400.0
+1700006680.0 globex 50 rows -> accepted, remaining=674 reset=1700006688.0
+1700006920.0 globex 700 rows -> refused, remaining=694 reset=1700006928.0
+1700007010.0 acme 450 rows -> accepted, remaining=409 reset=1700007014.117647
+1700007610.0 initech 700 rows -> accepted, remaining=22 reset=1700007617.142857
+1700007700.0 initech 300 rows -> refused, remaining=32 reset=1700007702.857143
+1700008300.0 initech 450 rows -> refused, remaining=102 reset=1700008302.857143
+1700008330.0 globex 450 rows -> accepted, remaining=361 reset=1700008332.0
+1700008360.0 globex 50 rows -> accepted, remaining=314 reset=1700008368.0
+1700008420.0 acme 300 rows -> accepted, remaining=176 reset=1700008432.9411764
+1700009020.0 acme 450 rows -> refused, remaining=204 reset=1700009025.882353
+1700009050.0 acme 50 rows -> accepted, remaining=156 reset=1700009068.235294
+1700009140.0 acme 450 rows -> refused, remaining=160 reset=1700009152.9411767
+1700009200.0 acme 120 rows -> accepted, remaining=43 reset=1700009216.4705884
+1700009230.0 acme 300 rows -> refused, remaining=44 reset=1700009237.6470587
+1700009290.0 acme 50 rows -> refused, remaining=47 reset=1700009301.1764705
+1700009350.0 acme 120 rows -> refused, remaining=50 reset=1700009364.7058823
+1700009950.0 acme 50 rows -> accepted, remaining=28 reset=1700009957.6470587
+1700010190.0 globex 50 rows -> accepted, remaining=430 reset=1700010196.3636363
+1700010220.0 globex 450 rows -> refused, remaining=434 reset=1700010222.5454545
+1700010280.0 acme 50 rows -> accepted, remaining=56 reset=1700010282.0618556
+1700010520.0 initech 300 rows -> accepted, remaining=102 reset=1700010524.5714285
+1700011120.0 initech 120 rows -> accepted, remaining=98 reset=1700011121.142857
+1700011720.0 initech 700 rows -> refused, remaining=215 reset=1700011722.857143
+1700011750.0 acme 50 rows -> accepted, remaining=402 reset=1700011751.7525773
+1700011840.0 acme 700 rows -> refused, remaining=426 reset=1700011840.8247423
+1700012080.0 globex 450 rows -> accepted, remaining=268 reset=1700012081.4545455
+1700012320.0 globex 700 rows -> refused, remaining=305 reset=1700012323.6363635
+1700012380.0 acme 700 rows -> refused, remaining=572 reset=1700012382.6804123
+1700012470.0 initech 450 rows -> refused, remaining=361 reset=1700012473.7142856
+1700012710.0 initech 700 rows -> refused, remaining=407 reset=1700012710.2857141
+1700012950.0 globex 120 rows -> accepted, remaining=281 reset=1700012952.0
+1700013010.0 globex 300 rows -> refused, remaining=290 reset=1700013010.909091
+1700013250.0 acme 50 rows -> accepted, remaining=756 reset=1700013251.1340208
+1700013280.0 globex 700 rows -> refused, remaining=332 reset=1700013285.8181818
+1700013880.0 acme 50 rows -> accepted, remaining=812 reset=1700013888.0
+acme: 1340 rows exported, 2770 refused
+globex: 1470 rows exported, 2850 refused
+initech: 1540 rows exported, 2600 refused
+== window boundary
+5 per 1 minute: fixed-window | moving-window | sliding-window-counter
+1700001255.0: ok  4 1700001315.0 | ok  4 1700001315.0 | ok  4 1700001300.0
+1700001256.0: ok  3 1700001315.0 | ok  3 1700001315.0 | ok  3 1700001300.0
+1700001257.0: ok  2 1700001315.0 | ok  2 1700001315.0 | ok  2 1700001300.0
+1700001258.0: ok  1 1700001315.0 | ok  1 1700001315.0 | ok  1 1700001300.0
+1700001259.0: ok  0 1700001315.0 | ok  0 1700001315.0 | ok  0 1700001300.0
+1700001259.5: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001260.0: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001260.5: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001261.0: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001262.0: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001290.0: 429 0 1700001315.0 | 429 0 1700001315.0 | 429 0 1700001300.0
+1700001310.0: 429 0 1700001315.0 | 429 0 1700001315.0 | ok  0 1700001312.0
+1700001315.5: ok  4 1700001375.5 | ok  0 1700001316.0 | ok  0 1700001324.0
+1700001319.0: ok  3 1700001375.5 | ok  3 1700001375.5 | 429 0 1700001324.0
+1700001321.0: ok  2 1700001375.5 | ok  2 1700001375.5 | 429 0 1700001324.0
+1700001350.0: ok  1 1700001375.5 | ok  1 1700001375.5 | ok  2 1700001360.0
+1700001375.0: ok  0 1700001375.5 | ok  0 1700001375.5 | ok  2 1700001380.0
+served: fixed-window 10, moving-window 10, sliding-window-counter 9
