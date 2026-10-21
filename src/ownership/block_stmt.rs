@@ -416,7 +416,17 @@ impl<'a> super::OwnershipChecker<'a> {
                             self.check_expr_reading(object, states, param_types, param_usage);
                             self.check_expr_consuming(key, states, param_types, param_usage);
                         }
-                        None => self.check_expr_reading(target, states, param_types, param_usage),
+                        None => {
+                            // A range target is written through, not kept
+                            // as a view (B-2026-10-21-36): `v[1..] = [5, 6];`.
+                            let snapshot = self.snapshot_active_borrow_lens();
+                            self.check_expr_reading(target, states, param_types, param_usage);
+                            if matches!(&target.kind, ExprKind::Index { index, .. }
+                                if matches!(index.kind, ExprKind::Range { .. }))
+                            {
+                                self.restore_active_borrows_to_snapshot(&snapshot);
+                            }
+                        }
                     }
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 }

@@ -1809,6 +1809,10 @@ pub struct OwnershipChecker<'a> {
     /// scans this list at every push to find slice-vs-slice and
     /// slice-vs-ref overlaps against the same root.
     pub(crate) active_borrows: HashMap<String, Vec<ActiveBorrow>>,
+    /// The field path a consume is moving out of (`p.b` in `take(p.a, p.b)`),
+    /// so a live borrow of a disjoint field does not block it
+    /// (B-2026-10-21-39).
+    pub(crate) moving_place: Option<PlaceExpr>,
     /// Disjoint capture slice 3 — active closure-capture borrows per
     /// captured root binding name. Pushed at the `ExprKind::Closure`
     /// arm in `expr_check.rs` for each `Ref` / `MutRef` entry of the
@@ -2086,6 +2090,7 @@ impl<'a> OwnershipChecker<'a> {
             slice_borrow_sources: FxHashMap::default(),
             slice_binding_sources: HashMap::new(),
             active_borrows: HashMap::new(),
+            moving_place: None,
             loop_da_stack: Vec::new(),
             closure_capture_borrows: HashMap::new(),
             current_scope_depth: 0,

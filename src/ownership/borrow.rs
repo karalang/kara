@@ -685,13 +685,18 @@ impl<'a> super::OwnershipChecker<'a> {
         let Some(borrows) = self.active_borrows.get(name) else {
             return false;
         };
-        if borrows.is_empty() {
+        // Moving one field leaves a borrow of another alone.
+        let moving = self.moving_place.as_ref().filter(|p| p.root == name);
+        let Some(prior) = borrows
+            .iter()
+            .find(|b| moving.is_none_or(|m| places_overlap(&b.source, m)))
+        else {
             return false;
-        }
+        };
         // Use the first live borrow as the secondary span — multiple
         // borrows would each fire, but for v1 we keep the diagnostic
         // count to one per move.
-        let prior = borrows[0].clone();
+        let prior = prior.clone();
         // Word the diagnostic by borrow form: a returned borrow (`let n =
         // f(u)` where `f -> ref T`) registers a non-slice `ImmRef`/`MutRef`
         // borrow on its source — moving the source while that borrow is

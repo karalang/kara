@@ -483,7 +483,14 @@ impl<'a> super::OwnershipChecker<'a> {
                     // would false-positive at the eventual Identifier
                     // leaf (empty projection trivially overlaps every
                     // captured path under the same root).
+                    let outer = self.moving_place.is_none();
+                    if outer {
+                        self.moving_place = self.place_expr_root(expr);
+                    }
                     self.check_expr_consuming_inner(object, states, param_types, param_usage);
+                    if outer {
+                        self.moving_place = None;
+                    }
                 }
             }
             // D5 migration: moving `self` (or a part of it, through the

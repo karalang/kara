@@ -10811,3 +10811,48 @@ fn tuple_branches_with_an_empty_vec_and_a_bare_none_join() {
          }\n",
     );
 }
+
+/// B-2026-10-21-36: a range assignment writes through its target and keeps
+/// no view of it, so a later `mut` borrow of the same Vec is accepted.
+#[test]
+fn a_range_assignment_keeps_no_borrow() {
+    accepted(
+        "range-assign-then-mut",
+        "fn bump(v: mut ref Vec[i64]) { v[0] = 9; }\n\
+         fn fill(s: mut Slice[i64], x: i64) { s[0] = x; }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = [1, 2, 3];\n\
+             v[1..] = [5, 6];\n\
+             bump(mut v);\n\
+             fill(mut v, 7);\n\
+             println(f\"{v}\");\n\
+         }\n",
+    );
+}
+
+/// B-2026-10-21-39: one call may borrow one field and move a different one,
+/// in either order; borrowing and moving the SAME field is still refused.
+#[test]
+fn a_call_borrows_one_field_and_moves_another() {
+    accepted(
+        "borrow-a-move-b",
+        "struct P { a: Vec[i64], b: Vec[i64] }\n\
+         fn take(x: ref Vec[i64], y: own Vec[i64]) -> i64 { x.len() + y.len() }\n\
+         fn give(y: own Vec[i64], x: ref Vec[i64]) -> i64 { x.len() + y.len() }\n\
+         fn main() {\n\
+             let p = P { a: vec![1, 2], b: vec![3] };\n\
+             let q = P { a: vec![1, 2], b: vec![3] };\n\
+             println(f\"{take(p.a, p.b)} {give(q.b, q.a)}\");\n\
+         }\n",
+    );
+    rejected(
+        "borrow-a-move-a",
+        "struct P { a: Vec[i64], b: Vec[i64] }\n\
+         fn take(x: ref Vec[i64], y: own Vec[i64]) -> i64 { x.len() + y.len() }\n\
+         fn main() {\n\
+             let p = P { a: vec![1, 2], b: vec![3] };\n\
+             println(f\"{take(p.a, p.a)}\");\n\
+         }\n",
+        "cannot move `p` while a borrow into it",
+    );
+}
