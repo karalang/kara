@@ -373,3 +373,56 @@ fn try_resize_is_clean_under_asan() {
         assert_eq!(out, WANT_TRY_RESIZE);
     }
 }
+
+/// B-2026-10-21-45: `close` drops the idle values at once, a loan's value
+/// drops when it comes back instead of going back, `acquire` answers
+/// `PoolClosed` from then on, and closing twice (or a hand-built pool) does
+/// nothing more.
+const POOL_CLOSE: &str = r#"struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"close {self.id}"); } }
+fn show(r: Result[PooledConnection[Conn], PoolError]) -> String {
+    match r {
+        Ok(c) => f"got {c.val.id}",
+        Err(PoolError.PoolClosed) => "closed".to_string(),
+        Err(PoolError.Timeout) => "timeout".to_string(),
+        Err(_) => "other".to_string(),
+    }
+}
+fn main() {
+    let pool: Pool[Conn] = Pool.new(|| Conn { id: 1 }, 2, 4);
+    match pool.acquire(10) {
+        Ok(held) => {
+            {
+                let idle = pool.acquire(10);
+            }
+            println("one idle, one lent");
+            pool.close();
+            println("closed");
+            println(show(pool.acquire(10)));
+            pool.close();
+            println(f"still holding {held.val.id}");
+        }
+        Err(_) => println("err"),
+    }
+    println("loan returned");
+    println(show(pool.acquire(10)));
+    let fake: Pool[Conn] = Pool { handle_id: 0 };
+    fake.close();
+    println(show(fake.acquire(10)));
+}
+"#;
+
+const WANT_POOL_CLOSE: &str = "one idle, one lent\nclose 1\nclosed\nclosed\nstill holding 1\n\
+                               close 1\nloan returned\nclosed\nclosed\n";
+
+#[test]
+fn pool_close_agrees_on_both_backends() {
+    agrees(POOL_CLOSE, WANT_POOL_CLOSE, 0);
+}
+
+#[test]
+fn pool_close_is_clean_under_asan() {
+    if let Some(out) = under_asan(POOL_CLOSE) {
+        assert_eq!(out, WANT_POOL_CLOSE);
+    }
+}

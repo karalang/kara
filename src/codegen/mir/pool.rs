@@ -78,6 +78,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.position_at_end(done);
             }
             ("acquire", [recv, _]) => self.pool_acquire(recv, dest)?,
+            // B-2026-10-21-45: a hand-built pool has nothing to close.
+            ("close", [recv]) => {
+                let h = self.pool_handle(recv)?;
+                let live = self.builder.build_is_not_null(h, "").map_err(e)?;
+                self.if_then(live, |cx| cx.rt("pool_close", &[h.into()]))?;
+            }
             ("release", [recv, conn]) => {
                 let into = self.pool_handle(recv)?;
                 let mut t = self.operand_type(conn)?;
@@ -131,7 +137,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// `pool.acquire(timeout)`: an idle value that passes the health check
     /// (a failing one is evicted), else a fresh one from the factory while
     /// the pool is below its bound, else `Timeout`; `PoolClosed` for a
-    /// hand-built pool.
+    /// hand-built or closed pool.
     fn pool_acquire(&mut self, recv: &Operand, dest: &Place) -> R<()> {
         let dty = self.place_type(dest)?;
         let h = self.pool_handle(recv)?;
@@ -169,9 +175,16 @@ impl<'ctx> Cx<'ctx, '_> {
         ]
         .map(|n| self.llcx.append_basic_block(f, n));
         let [closed, idle, pop, check, evict, mint, timeout, out, done] = blocks;
+        let open = self.llcx.append_basic_block(f, "pool.open");
         let null = self.builder.build_is_null(h, "").map_err(e)?;
         self.builder
-            .build_conditional_branch(null, closed, idle)
+            .build_conditional_branch(null, closed, open)
+            .map_err(e)?;
+        // A closed pool lends nothing (B-2026-10-21-45).
+        self.builder.position_at_end(open);
+        let shut = self.rt_flag("pool_closed", &[h.into()])?;
+        self.builder
+            .build_conditional_branch(shut, closed, idle)
             .map_err(e)?;
 
         let fail = |cx: &mut Self, why: &str| -> R<()> {

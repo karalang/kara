@@ -3695,12 +3695,27 @@ impl<'a> Interp<'a> {
                     out: Default::default(),
                     next_conn: 1,
                     refs: 1,
+                    closed: false,
                 });
                 Ok(Value::Agg(vec![Value::Int(self.pools.len() as i128)]))
             }
             "drop" => {
                 let id = self.handle_field(args.next().as_ref(), name)?;
                 self.pool_unref(id)?;
+                Ok(Value::Unit)
+            }
+            // The idle values drop now; loans drop their values when they
+            // come back, and `acquire` answers `PoolClosed` (B-2026-10-21-45).
+            "close" => {
+                let id = self.handle_field(args.next().as_ref(), name)?;
+                let Some(p) = self.pool(id) else {
+                    return Ok(Value::Unit);
+                };
+                p.closed = true;
+                let elem = p.elem;
+                for v in std::mem::take(&mut p.slots) {
+                    self.drop_value(v, elem)?;
+                }
                 Ok(Value::Unit)
             }
             "with_health_check" => {
@@ -3735,8 +3750,8 @@ impl<'a> Interp<'a> {
                     me.variant_named(ret, None, "Err", vec![e])
                 };
                 let elem = match self.pool(id) {
-                    Some(p) => p.elem,
-                    None => return fail(self, "PoolClosed"),
+                    Some(p) if !p.closed => p.elem,
+                    _ => return fail(self, "PoolClosed"),
                 };
                 // Idle connections first, each through the health check.
                 loop {
@@ -3837,7 +3852,7 @@ impl<'a> Interp<'a> {
 
     /// Puts a checked-out connection's value back in its pool (`keep`
     /// false: to another pool, which drops it); one that is not checked
-    /// out there (returned already) drops. The connection's reference on
+    /// out there (returned already), or whose pool is closed, drops. The connection's reference on
     /// its pool is gone either way.
     fn return_conn(
         &mut self,
@@ -3849,7 +3864,7 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         let elem = match self.pool(handle) {
             Some(p) => {
-                if p.out.remove(&conn) && keep {
+                if p.out.remove(&conn) && keep && !p.closed {
                     p.slots.push(val);
                     return self.pool_unref(handle).map(|()| Value::Unit);
                 }
@@ -12967,6 +12982,8 @@ struct PoolEntry {
     next_conn: i128,
     /// `Pool` values and checked-out connections holding the pool.
     refs: i128,
+    /// `close` was called: nothing is lent or kept any more.
+    closed: bool,
 }
 
 struct Callee<'a> {

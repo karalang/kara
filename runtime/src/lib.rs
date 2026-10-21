@@ -257,6 +257,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_pool_count,
         mir::karac_mir_pool_check_out,
         mir::karac_mir_pool_return,
+        mir::karac_mir_pool_close,
+        mir::karac_mir_pool_closed,
         mir::karac_mir_pool_drop,
         mir::karac_mir_chan_new,
         mir::karac_mir_chan_send,

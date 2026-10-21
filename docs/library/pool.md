@@ -53,5 +53,4 @@ When the `Pool` itself drops, its idle values drop. A loan that outlives its poo
 
 - The signatures above. Today the pool is `Pool[T]` with `create_fn: own Fn() -> T`, `PoolError` has no payload and `CreateFailed` is never produced (B-2026-10-21-41); `acquire` takes `timeout: i64` milliseconds (B-2026-10-21-42); and `with_health_check` takes `ref self` (B-2026-10-21-43).
 - Waiting. `acquire` fails with `Timeout` at once when every value is in use, whatever the `timeout`, `max_waiters` limits nothing, and `PoolError` has no `Busy` variant yet (B-2026-10-21-44).
-- `close` (B-2026-10-21-45). Until it exists, only a hand-built `Pool { handle_id: 0 }` answers `PoolClosed`.
 - `#[must_use]` on `PooledConnection` is recorded but not enforced. A bare `pool.acquire(..);` statement is still warned about, because `Result` is always must-use.

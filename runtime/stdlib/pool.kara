@@ -49,10 +49,9 @@
 enum PoolError {
     // The pool was at capacity and no slot freed before `timeout`.
     Timeout,
-    // `Pool.close()` was called (post-v1 entry); subsequent
-    // `acquire` calls fail with this variant. The interpreter
-    // currently surfaces this when the Pool's handle isn't in
-    // `pool_table` (e.g. a hand-rolled `Pool { handle_id: 0 }`).
+    // `pool.close()` was called; every later `acquire` fails with
+    // this variant. A hand-rolled `Pool { handle_id: 0 }`, which
+    // `Pool.new` never made, answers it too.
     PoolClosed,
     // The user-supplied `create_fn` returned an error path or
     // panicked; the pool refuses to retain the failing slot.
@@ -156,6 +155,18 @@ impl[T] Pool[T] {
     #[compiler_builtin]
     fn with_health_check(ref self, check: own Fn(T) -> bool) -> Pool[T] {
         Pool { handle_id: self.handle_id }
+    }
+
+    // Shut the pool down (docs/library/pool.md, B-2026-10-21-45): its idle
+    // values drop at once, each loan's value drops when it comes back
+    // rather than going back to the pool, and every later `acquire` fails
+    // with `PoolError.PoolClosed`. Closing twice does nothing more.
+    // Dispatched on the MIR backends (`pool_method` in src/mir/interp.rs,
+    // `karac_mir_pool_close` compiled); the legacy interpreter runs this
+    // placeholder body, which does nothing.
+    #[compiler_builtin]
+    fn close(ref self) -> Unit {
+        Unit
     }
 }
 

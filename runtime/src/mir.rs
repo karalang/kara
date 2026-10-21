@@ -3094,6 +3094,8 @@ pub struct MirPool {
     max: i64,
     out: std::collections::HashSet<i64>,
     next_conn: i64,
+    /// `close` was called: nothing is lent or kept any more.
+    closed: bool,
 }
 
 /// A new pool of `size`-byte values minted by the erased function at
@@ -3120,7 +3122,38 @@ pub unsafe extern "C" fn karac_mir_pool_new(
         max,
         out: Default::default(),
         next_conn: 1,
+        closed: false,
     }))
+}
+
+/// `pool.close()` (B-2026-10-21-45): the idle values drop now, and from here
+/// on [`karac_mir_pool_closed`] is 1 and [`karac_mir_pool_return`] keeps
+/// nothing.
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_close(h: *mut MirPool) {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    p.closed = true;
+    let slots = std::mem::take(&mut p.slots);
+    if let Some(d) = p.drop {
+        for mut b in slots {
+            // SAFETY: the bytes are a value the glue drops.
+            unsafe { d(b.as_mut_ptr()) };
+        }
+    }
+}
+
+/// 1 when `close` was called on pool `h`, else 0.
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_closed(h: *mut MirPool) -> u8 {
+    // SAFETY: the caller's contract.
+    u8::from(unsafe { &*h }.closed)
 }
 
 /// Another `Pool` value for `h`; `check` (when not null, moved in)
@@ -3229,7 +3262,7 @@ pub unsafe extern "C" fn karac_mir_pool_return(
     let took = {
         // SAFETY: the caller's contract.
         let p = unsafe { &mut *h };
-        if (into.is_null() || into == h) && p.out.remove(&conn) {
+        if p.out.remove(&conn) && (into.is_null() || into == h) && !p.closed {
             // SAFETY: as above.
             p.slots.push(unsafe { bytes(val, p.size) }.into());
             1
