@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 304 |
 | codegen-gap | 279 |
-| false-positive | 256 |
+| false-positive | 257 |
 | other | 185 |
 | diagnostics | 183 |
 | perf | 180 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 2980 |
 | interp | 1001 |
 | typecheck | 521 |
-| ownership | 124 |
+| ownership | 125 |
 | other | 122 |
 | runtime | 82 |
 | cli | 82 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 12 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -171,6 +171,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's parameter or local, `Copy` or not, by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
+| B-2026-10-21-1 | 2026-10-21 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = || { let o = Opts { sub: Some(s) }; match o.sub { Some(s) => println(s), None => .. } };` is error[ownership] "value 'o.sub' was moved into a closure (captured at line 5:15), used again here", with the capture span and the use span both the scrutinee `o.sub`. The same body outside a closure passes, and `__mir-run` prints `bob` | — |
 
 ### Relocated
 
