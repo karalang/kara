@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 610 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 314 |
+| missing-feature | 319 |
 | codegen-gap | 281 |
 | false-positive | 266 |
 | other | 191 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2999 |
-| interp | 1019 |
-| typecheck | 535 |
+| codegen | 3004 |
+| interp | 1024 |
+| typecheck | 539 |
 | ownership | 128 |
 | other | 123 |
-| runtime | 84 |
+| runtime | 85 |
 | cli | 82 |
 | parser | 76 |
 | autopar | 59 |
@@ -176,11 +176,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-31 | 2026-10-21 | typecheck | low | `CStr` does not have the methods docs/library/strings.md lists: `bytes(self) -> Slice[u8]` is spelled `as_bytes` in the typechecker's table (and in the corpus), and `to_str(self) -> Result[Str, Utf8Error]` does not exist under any name; `to_string` does. Later. | — |
 | B-2026-10-21-32 | 2026-10-21 | resolver+typecheck | low | The prelude exports the variants of `Ordering`, `MemoryOrdering`, `Entry` and `NormalizationForm` bare, so `"x".normalize(Nfc)` and an expression `Less` check, against design.md (around line 1310: only `Some`, `None`, `Ok` and `Err` are bare in expressions) and strings.md ("its variants are written qualified"). The review thread ruled 2026-10-21 that the spec holds: drop them from the prelude, refuse a bare one in an expression with a machine-applicable fix to the qualified form, keep accepting it in a pattern whose scrutinee type is known, and migrate the corpus and katas with `karac fix` in the same push. Later. | — |
 | B-2026-10-21-34 | 2026-10-21 | typecheck+interp+codegen | high | A trait default method whose own generic shares a name with the implementing impl's (`fn pair[K]` in a trait, `impl[K: Clone] Tr for W[K]`) is instantiated with the method's K in the impl's place on both v2 backends: `__mir-run` stops with `use of a0 after it was freed`, `build --mir` aborts with `free(): double free` | — |
-| B-2026-10-21-35 | 2026-10-21 | interp+runtime | low | `Vec.try_resize` with an unrepresentable length does not return the failure as a value: `v.try_resize(i64.MAX, 0)` runs until killed on `__mir-run` (timeout at 20 s) and panics on compiled MIR ("attempt to multiply with overflow", runtime/src/mir.rs:415); collections.md says a `try_*` method returns the failure as a value, which is `Err(AllocError.CapacityOverflow)` here | — |
 | B-2026-10-21-36 | 2026-10-21 | ownership | medium | `karac check` treats the target of a range assignment `v[a..b] = other` as a slice borrow that stays live, so a later `mut v` borrow of the same Vec is refused ("`v` cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"); both MIR backends run the program | — |
 | B-2026-10-21-38 | 2026-10-21 | codegen | medium | Compiled MIR aborts a pool's health check whenever the connection type needs dropping: `Pool.new(|| Conn { id: 1 }, 2, 4).with_health_check(|c| c.id > 5)` with `impl Drop for Conn` stops with "runtime error: a health check that takes the connection by value" at the second `acquire` on `__mir-llvm-run`, while `__mir-run` lends the idle value to the closure (whose bare parameter borrows it), evicts it and mints a fresh one | — |
 | B-2026-10-21-39 | 2026-10-21 | ownership | medium | `karac check` refuses a call that borrows one field of a struct and moves a DIFFERENT field in the same argument list: `take(p.a, p.b)` with `fn take(x: ref Vec[i64], y: own Vec[i64])` is 'cannot move `p` while a borrow into it is still live', while the MIR backend accepts it and prints 3 | — |
 | B-2026-10-21-40 | 2026-10-21 | typecheck+interp+codegen | medium | A `"lit".bytes()` view chosen in an `if` expression is refused with E0516 'drop of _N while it is borrowed' by `karac check` and the MIR borrow checker: `let digits = if upper { "ABC".bytes() } else { "abc".bytes() }; digits[1]`, while binding the `Str` first and calling `.bytes()` after the `if` is accepted | — |
+| B-2026-10-21-41 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool factory cannot fail: docs/library/pool.md specifies `Pool[T, E]` with `new(create_fn: own Fn() -> Result[T, E], max_connections, max_waiters)` and `PoolError[E]` whose `CreateFailed(E)` carries the factory's error, but runtime/stdlib/pool.kara ships `Pool[T]` with an infallible `Fn() -> T` and a payload-less `CreateFailed` that nothing produces | — |
+| B-2026-10-21-42 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool `acquire` takes `timeout: i64` milliseconds where docs/library/pool.md specifies `timeout: Duration` (`pool.acquire(Duration.ms(500))`) | — |
+| B-2026-10-21-43 | 2026-10-21 | typecheck+interp+codegen | low | Connection pool `with_health_check` takes `ref self` and returns a second `Pool` value where docs/library/pool.md specifies a builder taking `own self` | — |
+| B-2026-10-21-44 | 2026-10-21 | runtime+codegen+interp | medium | Connection pool `acquire` never waits and has no `Busy`: at capacity it returns `Timeout` at once whatever the timeout, and `max_waiters` limits nothing, where docs/library/pool.md specifies waiting up to the timeout for a value to come back and `PoolError.Busy` at once when `max_waiters` callers are already waiting | — |
+| B-2026-10-21-45 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool has no `close`: docs/library/pool.md specifies `close(ref self)`, after which idle values drop at once, each loan's value drops when it comes back, and every later `acquire` fails with `PoolClosed`; without it `PoolClosed` is produced only by a hand-built `Pool { handle_id: 0 }` | — |
 
 ### Relocated
 
@@ -4330,6 +4334,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-27 | interp+codegen | medium | `StableHash.siphash24(bytes, k0, k1)` (collections.md § Hashing, runtime/stdlib/stable_hash.kara) is missing on both MIR backends: "call of unknown f… | 16eb54f2a7 |
 | B-2026-10-21-28 | interp+runtime | medium | The fallible twins do not return a capacity overflow as a value: collections.md says a `try_*` method "returns the failure as a value", but `Vec.try_… | d944a30602 |
 | B-2026-10-21-33 | codegen | medium | MIR finish_build is roughly cubic in a body's `?` exits times its live owned locals: one 287-line constructor with ~90 `?` takes 36 s, so mini_inflec… | 5d8738dd2d |
+| B-2026-10-21-35 | interp+runtime | low | `Vec.try_resize` with an unrepresentable length does not return the failure as a value: `v.try_resize(i64.MAX, 0)` runs until killed on `__mir-run` (… | b94011d8b6 |
 | B-2026-10-21-37 | interp | medium | The MIR interpreter never drops a connection pool's idle values: when the last `Pool` value and loan are gone, compiled MIR drops the idle connection… | f29e674949 |
 
 </details>
