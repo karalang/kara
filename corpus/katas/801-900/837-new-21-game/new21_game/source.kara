@@ -1,0 +1,77 @@
+// LeetCode #837: New 21 Game -- the ★ arm (forward, with a sliding window).
+//
+// p[i] is the chance that Alice's points are ever exactly i. A total of
+// i is reached by a draw from any total in the last `max_pts` below it
+// at which she still draws, one below k, so p[i] is the sum of those
+// chances over `max_pts`. A running window holds that sum, gaining each
+// total below k as it is passed and losing the one `max_pts` back. She
+// stops at the first total of k or more, so the answer is the sum of p[i]
+// for i from k to n. When k is 0 she never draws, and when even her
+// largest possible stop, k - 1 + max_pts, is at most n she always wins.
+// O(n).
+
+fn new21_game(n: i64, k: i64, max_pts: i64) -> f64 {
+    if k == 0 or n >= k - 1 + max_pts {
+        return 1.0;
+    }
+    let w = max_pts as f64;
+    let mut p = Vec.filled(n + 1, 0.0);
+    p[0] = 1.0;
+    let mut window = 1.0;
+    let mut answer = 0.0;
+    for i in 1..n + 1 {
+        p[i] = window / w;
+        if i < k {
+            window += p[i];
+        } else {
+            answer += p[i];
+        }
+        let gone = i - max_pts;
+        if gone >= 0 and gone < k {
+            window -= p[gone];
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64, max_pts: i64) {
+    println(f"n = {n}, k = {k}, maxPts = {max_pts}: {new21_game(n, k, max_pts):.6}");
+}
+
+fn main() {
+    show(10, 1, 10);
+    show(6, 1, 10);
+    show(21, 17, 10);
+    show(0, 0, 1);
+    show(1, 1, 2);
+    show(5, 3, 1);
+    show(3, 3, 2);
+    show(4, 3, 3);
+    show(10000, 10000, 10000);
+    show(10000, 5000, 10000);
+    show(10000, 9999, 2);
+    show(10000, 10000, 1);
+    show(5000, 4999, 10000);
+    // random games: n up to 10^4, k up to n, maxPts up to 10^4
+    let mut seed = 837;
+    let mut sum = 0.0;
+    let mut above = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 10001;
+        let k = next_random(mut seed) % (n + 1);
+        let max_pts = 1 + next_random(mut seed) % 10000;
+        let x = new21_game(n, k, max_pts);
+        sum += x;
+        if x > 0.5 {
+            above += 1;
+        }
+    }
+    println(f"300 random games: sum {sum:.6}, {above} above one half");
+}

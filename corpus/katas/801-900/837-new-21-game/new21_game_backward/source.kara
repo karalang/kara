@@ -1,0 +1,67 @@
+// LeetCode #837: New 21 Game -- backward, the chance of winning from each total.
+//
+// f[x] is the chance that Alice wins from a total of x. At k or more she
+// has stopped, and wins when x is at most n; below k she draws, and f[x]
+// is the mean of f over the next `max_pts` totals. The totals are filled
+// from k - 1 down to 0 with that sum kept in a sliding window, and the
+// answer is f[0]. O(k + max_pts).
+
+fn new21_game(n: i64, k: i64, max_pts: i64) -> f64 {
+    let size = k + max_pts;
+    let mut f = Vec.filled(size, 0.0);
+    let mut window = 0.0;
+    for x in k..size {
+        if x <= n {
+            f[x] = 1.0;
+            window += 1.0;
+        }
+    }
+    let w = max_pts as f64;
+    for x in (0..k).rev() {
+        f[x] = window / w;
+        window += f[x] - f[x + max_pts];
+    }
+    f[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64, max_pts: i64) {
+    println(f"n = {n}, k = {k}, maxPts = {max_pts}: {new21_game(n, k, max_pts):.6}");
+}
+
+fn main() {
+    show(10, 1, 10);
+    show(6, 1, 10);
+    show(21, 17, 10);
+    show(0, 0, 1);
+    show(1, 1, 2);
+    show(5, 3, 1);
+    show(3, 3, 2);
+    show(4, 3, 3);
+    show(10000, 10000, 10000);
+    show(10000, 5000, 10000);
+    show(10000, 9999, 2);
+    show(10000, 10000, 1);
+    show(5000, 4999, 10000);
+    // random games: n up to 10^4, k up to n, maxPts up to 10^4
+    let mut seed = 837;
+    let mut sum = 0.0;
+    let mut above = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 10001;
+        let k = next_random(mut seed) % (n + 1);
+        let max_pts = 1 + next_random(mut seed) % 10000;
+        let x = new21_game(n, k, max_pts);
+        sum += x;
+        if x > 0.5 {
+            above += 1;
+        }
+    }
+    println(f"300 random games: sum {sum:.6}, {above} above one half");
+}

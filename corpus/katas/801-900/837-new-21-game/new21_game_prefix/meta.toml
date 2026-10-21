@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/837-new-21-game/new21_game_prefix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "5399776c0"
+extracted_src = "6fc988ee"
+model_rev = "583cfb0d"
+model_src = "6fc988ee"

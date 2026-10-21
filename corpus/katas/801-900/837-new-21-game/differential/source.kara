@@ -1,0 +1,245 @@
+// LeetCode #837: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random games,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn new21_game_star(n: i64, k: i64, max_pts: i64) -> f64 {
+    if k == 0 or n >= k - 1 + max_pts {
+        return 1.0;
+    }
+    let w = max_pts as f64;
+    let mut p = Vec.filled(n + 1, 0.0);
+    p[0] = 1.0;
+    let mut window = 1.0;
+    let mut answer = 0.0;
+    for i in 1..n + 1 {
+        p[i] = window / w;
+        if i < k {
+            window += p[i];
+        } else {
+            answer += p[i];
+        }
+        let gone = i - max_pts;
+        if gone >= 0 and gone < k {
+            window -= p[gone];
+        }
+    }
+    answer
+}
+
+// ---- backward arm ---------------------------------------------------
+
+fn new21_game_backward(n: i64, k: i64, max_pts: i64) -> f64 {
+    let size = k + max_pts;
+    let mut f = Vec.filled(size, 0.0);
+    let mut window = 0.0;
+    for x in k..size {
+        if x <= n {
+            f[x] = 1.0;
+            window += 1.0;
+        }
+    }
+    let w = max_pts as f64;
+    for x in (0..k).rev() {
+        f[x] = window / w;
+        window += f[x] - f[x + max_pts];
+    }
+    f[0]
+}
+
+// ---- prefix-sum arm -------------------------------------------------
+
+fn new21_game_prefix(n: i64, k: i64, max_pts: i64) -> f64 {
+    let w = max_pts as f64;
+    let mut p = Vec.filled(n + 1, 0.0);
+    let mut sums = Vec.filled(n + 2, 0.0);
+    p[0] = 1.0;
+    sums[1] = 1.0;
+    for i in 1..n + 1 {
+        let lo = (i - max_pts).max(0);
+        let hi = i.min(k);
+        p[i] = if lo < hi { (sums[hi] - sums[lo]) / w } else { 0.0 };
+        sums[i + 1] = sums[i] + p[i];
+    }
+    if k == 0 { 1.0 } else { sums[n + 1] - sums[k] }
+}
+
+// ---- push arm -------------------------------------------------------
+
+fn new21_game_push(n: i64, k: i64, max_pts: i64) -> f64 {
+    let w = max_pts as f64;
+    let mut delta = Vec.filled(n + 2, 0.0);
+    let mut incoming = 0.0;
+    let mut answer = 0.0;
+    for i in 0..n + 1 {
+        incoming += delta[i];
+        let p = if i == 0 { 1.0 } else { incoming };
+        if i < k {
+            let share = p / w;
+            delta[(i + 1).min(n + 1)] += share;
+            delta[(i + max_pts + 1).min(n + 1)] -= share;
+        } else {
+            answer += p;
+        }
+    }
+    answer
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally, for small games: every sequence of draws
+// played out, each draw one of `max_pts` equally likely numbers, and the
+// chances of the sequences that stop at a total of n or less added up.
+fn play(n: i64, k: i64, max_pts: i64, total: i64, chance: f64, won: mut ref f64) {
+    if total >= k {
+        if total <= n {
+            *won += chance;
+        }
+        return;
+    }
+    for d in 1..max_pts + 1 {
+        play(n, k, max_pts, total + d, chance / (max_pts as f64), mut won);
+    }
+}
+
+// For larger games, the chance of reaching each total i read directly:
+// the sum, over every draw d, of the chance of reaching i - d while still
+// drawing, over `max_pts`. O(n max_pts).
+fn by_draws(n: i64, k: i64, max_pts: i64) -> f64 {
+    let mut reach = Vec.filled(n + 1, 0.0);
+    reach[0] = 1.0;
+    let mut won = 0.0;
+    for i in 0..n + 1 {
+        if i > 0 {
+            for d in 1..max_pts + 1 {
+                if i - d >= 0 and i - d < k {
+                    reach[i] += reach[i - d] / (max_pts as f64);
+                }
+            }
+        }
+        if i >= k {
+            won += reach[i];
+        }
+    }
+    won
+}
+
+fn statement(n: i64, k: i64, max_pts: i64) -> f64 {
+    if k <= 10 and max_pts <= 10 {
+        let mut won = 0.0;
+        play(n, k, max_pts, 0, 1.0, mut won);
+        won
+    } else {
+        by_draws(n, k, max_pts)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, n: i64, k: i64, max_pts: i64) -> f64 {
+    if arm == 0 {
+        new21_game_star(n, k, max_pts)
+    } else if arm == 1 {
+        new21_game_backward(n, k, max_pts)
+    } else if arm == 2 {
+        new21_game_prefix(n, k, max_pts)
+    } else {
+        new21_game_push(n, k, max_pts)
+    }
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9
+}
+
+// after the first draw d, the game goes on as one from 0 with d fewer
+// points to stop at and d fewer allowed, or is over at d
+fn first_draw_holds(arm: i64, n: i64, k: i64, max_pts: i64, got: f64) -> bool {
+    if k == 0 {
+        return true;
+    }
+    let mut sum = 0.0;
+    for d in 1..max_pts + 1 {
+        sum += if d < k { answer(arm, n - d, k - d, max_pts) } else if d <= n { 1.0 } else { 0.0 };
+    }
+    close(got, sum / (max_pts as f64))
+}
+
+fn bounds_hold(n: i64, k: i64, max_pts: i64, got: f64) -> bool {
+    if k == 0 or n >= k - 1 + max_pts {
+        close(got, 1.0)
+    } else {
+        got >= 0.0 and got <= 1.0 + 1e-12
+    }
+}
+
+fn main() {
+    let names = ["star", "backward", "prefix", "push"];
+    let properties = ["answer", "more room", "first draw", "bounds", "gains shrink"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 837;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let (n, k, max_pts) = if kind == 0 {
+            // small games, played out draw by draw
+            let n = next_random(mut seed) % 13;
+            (n, next_random(mut seed) % (n.min(10) + 1), 1 + next_random(mut seed) % 6)
+        } else if kind == 1 {
+            // small games with n in the band where the answer is neither 0
+            // nor 1
+            let k = 1 + next_random(mut seed) % 10;
+            let max_pts = 1 + next_random(mut seed) % 10;
+            (k + next_random(mut seed) % max_pts, k, max_pts)
+        } else if kind == 2 {
+            // games up to 200 of any shape
+            let n = next_random(mut seed) % 201;
+            (n, next_random(mut seed) % (n + 1), 1 + next_random(mut seed) % 200)
+        } else {
+            // games up to 200 in the band
+            let k = 1 + next_random(mut seed) % 150;
+            let max_pts = 1 + next_random(mut seed) % 50;
+            (k + next_random(mut seed) % max_pts, k, max_pts)
+        };
+        let want = statement(n, k, max_pts);
+        for arm in 0..4 {
+            let got = answer(arm, n, k, max_pts);
+            let shrink_ok = if n > k and n < 10000 {
+                let (less, more) = (answer(arm, n - 1, k, max_pts), answer(arm, n + 1, k, max_pts));
+                more - got <= got - less + 1e-12
+            } else {
+                true
+            };
+            let oks = [
+                close(got, want),
+                n >= 10000 or answer(arm, n + 1, k, max_pts) >= got - 1e-12,
+                first_draw_holds(arm, n, k, max_pts, got),
+                bounds_hold(n, k, max_pts, got),
+                shrink_ok,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: n = {n}, k = {k}, maxPts = {max_pts} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, backward {by_arm[1]}, prefix {by_arm[2]}, push {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, more room {by_property[1]}, first draw {by_property[2]}, bounds {by_property[3]}, gains shrink {by_property[4]}");
+}

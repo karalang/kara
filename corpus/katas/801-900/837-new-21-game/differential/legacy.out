@@ -1,0 +1,8 @@
+FAIL star answer: n = 3, k = 2, maxPts = 1 -> 1, want 0
+FAIL backward answer: n = 3, k = 2, maxPts = 1 -> 1, want 0
+FAIL prefix answer: n = 3, k = 2, maxPts = 1 -> 1, want 0
+FAIL push answer: n = 3, k = 2, maxPts = 1 -> 1, want 0
+FAIL star answer: n = 3, k = 3, maxPts = 3 -> 0.5925925925925926, want 0
+1600 cases, 32000 checks over 4 arms: 3220 failures
+by arm: star 805, backward 805, prefix 805, push 805
+by property: answer 3220, more room 0, first draw 0, bounds 0, gains shrink 0
