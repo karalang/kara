@@ -7416,3 +7416,35 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-21-55: a generic fixed only by its return type learns it from
+/// the binding through `.unwrap()` / `.expect(..)`, for an `Option` and a
+/// `Result` return.
+#[test]
+fn mir_a_return_only_generic_learns_its_type_through_unwrap() {
+    let src = r#"
+fn make[T: Default]() -> Option[T] {
+    Some(T.default())
+}
+
+fn parse_or[T: Default](ok: bool) -> Result[T, String] {
+    if ok { Ok(T.default()) } else { Err("no".to_string()) }
+}
+
+fn main() {
+    let x: i64 = make().unwrap();
+    let s: String = make().expect("a value");
+    let b: bool = parse_or(true).unwrap();
+    let f: f64 = parse_or(true).expect("ok");
+    println(f"{x} [{s}] {b} {f}");
+}
+"#;
+    let want = "0 [] false 0.0\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

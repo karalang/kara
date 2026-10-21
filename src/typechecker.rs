@@ -2938,6 +2938,13 @@ pub struct TypeChecker<'a> {
     /// pinning has to happen WITHOUT short-circuiting the method call — that is
     /// what populates codegen's `method_unwrap_inner_types`.
     pub(super) pending_unwrap_receiver_expectation: Option<Type>,
+    /// B-2026-10-21-55 — the expected type of a `make().unwrap()` (or
+    /// `.expect(..)`), keyed by the receiver call's span: that call's
+    /// `Option[T]` / `Result[T, E]` return takes it as `T` before its
+    /// arguments are solved, as a call checked against its whole return
+    /// type does (`pending_expected_call_return`). Keyed so a call nested in
+    /// the receiver's arguments cannot take it.
+    pub(super) pending_expected_call_payload: Option<(SpanKey, Type)>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: FxHashMap<SpanKey, TypeExpr>,
@@ -3477,6 +3484,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_err_types: FxHashMap::default(),
             pending_expected_call_return: None,
             pending_unwrap_receiver_expectation: None,
+            pending_expected_call_payload: None,
             temp_recv_elem_types: FxHashMap::default(),
             tensor_index_recv_types: FxHashMap::default(),
             index_recv_vec_types: FxHashMap::default(),

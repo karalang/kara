@@ -3015,8 +3015,37 @@ impl<'a> super::TypeChecker<'a> {
         {
             self.pending_expected_call_return = Some(expected.clone());
         }
+        // The receiver call of an `.unwrap()` / `.expect(..)` learns its
+        // payload type the same way, on the MIR pipeline, where a generic
+        // fixed only by its return has no other source (B-2026-10-21-55).
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            let unwraps =
+                (method == "unwrap" && args.is_empty()) || (method == "expect" && args.len() == 1);
+            let seedable_receiver = matches!(
+                &object.kind,
+                ExprKind::Call { callee, .. }
+                    if matches!(&callee.kind, ExprKind::Path { .. } | ExprKind::Identifier(_))
+            );
+            if unwraps
+                && seedable_receiver
+                && self.library_methods_from_source
+                && *expected != Type::Error
+                && (expectation_is_concrete(expected)
+                    || (!contains_type_var(expected) && !self.mentions_foreign_param(expected)))
+            {
+                self.pending_expected_call_payload =
+                    Some((SpanKey::from_span(&object.span), expected.clone()));
+            }
+        }
         let actual = self.infer_expr(expr);
         self.pending_expected_call_return = None;
+        self.pending_expected_call_payload = None;
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
         // information to fix `T`), `expected` lets us bind `T` to a concrete
@@ -3701,6 +3730,26 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.const_substitutions,
                 );
                 seeded_from_expectation = true;
+            }
+        }
+        if self
+            .pending_expected_call_payload
+            .as_ref()
+            .is_some_and(|(key, _)| *key == SpanKey::from_span(record_subs_for_span))
+        {
+            let (_, payload) = self.pending_expected_call_payload.take().expect("checked");
+            if let Type::Named { name, args } = &sub_ret {
+                if (name == "Option" || name == "Result")
+                    && args.first().is_some_and(contains_type_var)
+                {
+                    unify_types(
+                        &args[0],
+                        &payload,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                    seeded_from_expectation = true;
+                }
             }
         }
 
