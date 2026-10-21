@@ -3914,12 +3914,12 @@ enum Obj {
     Pt(Port),
 }
 
-struct Jobs {
+struct Env {
     names: Vec[String],
     vals: Vec[Obj],
 }
 
-impl Jobs {
+impl Env {
     fn find(ref self, name: ref String) -> Option[i64] {
         let mut i = 0;
         while i < self.names.len() {
@@ -4171,7 +4171,7 @@ fn read_or_empty(p: ref String) -> Vec[u8] {
     }
 }
 
-fn track_items(env: ref Jobs, names: ref Vec[String]) -> Vec[Vec[Msg]] {
+fn track_items(env: ref Env, names: ref Vec[String]) -> Vec[Vec[Msg]] {
     let mut out: Vec[Vec[Msg]] = Vec.new();
     for n in names.iter() {
         out.push(env.track(n));
@@ -4179,7 +4179,7 @@ fn track_items(env: ref Jobs, names: ref Vec[String]) -> Vec[Vec[Msg]] {
     out
 }
 
-fn step_msgs(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
+fn step_msgs(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let op = jtext(st[0]);
     let o = op.as_str();
     if o == "msg" or o == "meta" {
@@ -4287,7 +4287,7 @@ fn step_msgs(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
     Ok(true)
 }
 
-fn step_parse(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
+fn step_parse(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let op = jtext(st[0]);
     let o = op.as_str();
     if o == "parse" or o == "parse_all" {
@@ -4473,7 +4473,7 @@ fn step_units(st: ref Vec[J]) -> Result[bool, Exc] {
     Ok(true)
 }
 
-fn step_tracks(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
+fn step_tracks(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let op = jtext(st[0]);
     let o = op.as_str();
     if o == "track" {
@@ -4592,7 +4592,7 @@ fn step_tracks(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
     Ok(true)
 }
 
-fn step_files(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
+fn step_files(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let op = jtext(st[0]);
     let o = op.as_str();
     if o == "file" {
@@ -4696,7 +4696,7 @@ fn step_files(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
     Ok(true)
 }
 
-fn step_ports(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
+fn step_ports(st: ref Vec[J], env: mut ref Env) -> Result[bool, Exc] {
     let op = jtext(st[0]);
     let o = op.as_str();
     let v = jtext(st[1]);
@@ -4755,7 +4755,7 @@ fn step_ports(st: ref Vec[J], env: mut ref Jobs) -> Result[bool, Exc] {
     Ok(true)
 }
 
-fn run_step(st: ref Vec[J], env: mut ref Jobs) -> Result[(), Exc] {
+fn run_step(st: ref Vec[J], env: mut ref Env) -> Result[(), Exc] {
     if step_msgs(st, mut env)? {
         return Ok(());
     }
@@ -4792,7 +4792,7 @@ fn run_jobs() -> Result[(), Exc] {
         }
         let j = loads_str(line.to_string())?;
         println(f"== {jtext(jfield(j, "name"))}");
-        let mut env = Jobs { names: Vec.new(), vals: Vec.new() };
+        let mut env = Env { names: Vec.new(), vals: Vec.new() };
         for st in jitems(jfield(j, "steps")).iter() {
             run_step(jitems(st), mut env)?;
         }

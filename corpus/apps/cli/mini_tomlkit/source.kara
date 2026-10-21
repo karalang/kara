@@ -5043,12 +5043,12 @@ struct TFile {
     linesep: String,
 }
 
-struct Scope {
+struct Env {
     vars: Vec[Binding],
     files: Vec[TFile],
 }
 
-fn env_get(env: ref Scope, name: ref String) -> Result[Val, Exc] {
+fn env_get(env: ref Env, name: ref String) -> Result[Val, Exc] {
     for b in env.vars {
         if b.name == *name {
             return Ok(b.val.clone());
@@ -5057,7 +5057,7 @@ fn env_get(env: ref Scope, name: ref String) -> Result[Val, Exc] {
     Err(exc("KeyError", str_repr(name)))
 }
 
-fn env_set(env: mut ref Scope, name: ref String, v: own Val) {
+fn env_set(env: mut ref Env, name: ref String, v: own Val) {
     let mut i = 0;
     while i < env.vars.len() {
         if env.vars[i].name == *name {
@@ -5136,7 +5136,7 @@ fn py_of(v: own Val) -> Result[PyV, Exc] {
     }
 }
 
-fn ev(w: mut ref World, env: ref Scope, x: ref J) -> Result[Val, Exc] {
+fn ev(w: mut ref World, env: ref Env, x: ref J) -> Result[Val, Exc] {
     if let Some((tag, v)) = j_tag(x) {
         if tag == "$v" {
             return env_get(env, j_str(v));
@@ -5229,7 +5229,7 @@ fn arg_str(args: ref Vec[J], i: i64) -> String {
     if i < args.len() { j_str(args[i]) } else { String.new() }
 }
 
-fn call(w: mut ref World, env: ref Scope, name: ref String, args0: own Vec[J]) -> Result[Val, Exc] {
+fn call(w: mut ref World, env: ref Env, name: ref String, args0: own Vec[J]) -> Result[Val, Exc] {
     let mut args = args0;
     let mut kw: Option[J] = None;
     if args.len() > 0 {
@@ -5785,7 +5785,7 @@ fn op_str(op: ref Vec[J], i: i64) -> String {
     j_str(op[i])
 }
 
-fn walk(w: mut ref World, env: ref Scope, base: ref String, keys: ref Vec[J]) -> Result[Val, Exc] {
+fn walk(w: mut ref World, env: ref Env, base: ref String, keys: ref Vec[J]) -> Result[Val, Exc] {
     let mut x = env_get(env, base)?;
     for k in keys {
         let kv = ev(mut w, env, k)?;
@@ -5804,7 +5804,7 @@ fn slice(op: ref Vec[J], start: i64, end: i64) -> Vec[J] {
     out
 }
 
-fn step(w: mut ref World, env: mut ref Scope, op: ref Vec[J]) -> Result[(), Exc] {
+fn step(w: mut ref World, env: mut ref Env, op: ref Vec[J]) -> Result[(), Exc] {
     let o = op_str(op, 0);
     let n = op.len();
     if o == "parse" {
@@ -6018,7 +6018,7 @@ fn run_jobs(w: mut ref World) -> Result[(), Exc] {
         }
         let job = loads_str(line.to_string())?;
         println(f"== {j_str(j_member(job, "name").unwrap_or(J.Null))}");
-        let mut env = Scope { vars: Vec.new(), files: Vec.new() };
+        let mut env = Env { vars: Vec.new(), files: Vec.new() };
         for op in j_items(j_member(job, "steps").unwrap_or(J.Null)) {
             let parts = j_items(op);
             let mut shown = String.new();
