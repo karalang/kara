@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 323 |
 | codegen-gap | 284 |
-| false-positive | 270 |
+| false-positive | 271 |
 | other | 191 |
 | diagnostics | 184 |
 | perf | 181 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3009 |
-| interp | 1028 |
+| codegen | 3010 |
+| interp | 1029 |
 | typecheck | 544 |
 | ownership | 128 |
 | other | 123 |
@@ -189,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-54 | 2026-10-21 | effect | medium | `karac check` demands `with panics` on a `pub fn` that can panic, contradicting design.md § Default-permitted effects ("`allocates(Heap)` and `panics` are default-permitted: inferred and shown, but never required in a declaration") and docs/library/README.md: `pub fn first(v: Vec[i64]) -> i64 { v[0] }` is refused with "public function 'first' performs effects [panics] but has no effect declaration", and so is a `pub fn` calling `Json.parse` | — |
 | B-2026-10-21-55 | 2026-10-21 | typecheck+codegen | medium | A generic fixed only by its return type does not lower on MIR when the call is unwrapped into an annotated binding: `fn make[T: Default]() -> Option[T]` with `let x: i64 = make().unwrap()` checks, but both MIR backends refuse it ("an expression whose type does not lower (Type(UnknownParam(\"T\")))"); the same blocks design.md's `let back: User = Json.deserialize(json).unwrap()` example | — |
 | B-2026-10-21-56 | 2026-10-21 | resolver+typecheck | low | `std.regex` and `std.json` do not exist as modules: `import std.regex.{Regex}` is "unknown module `std.regex`", and `Regex`, `Match`, `Captures`, `RegexError` and `Json` are reached without any import, where docs/library/README.md (and design.md:626, "everything else is under `std.*`") requires `import std.regex.{...}` and `import std.json.{Json}` | — |
+| B-2026-10-21-57 | 2026-10-21 | interp+codegen | medium | MIR path: the word `Parser` anywhere in a program (even `MidiParser` or a string literal) appends std.cli, whose `reads(Env)` then fails to resolve if the program declares its own `struct Env`; check and legacy run are fine | — |
 
 ### Relocated
 
