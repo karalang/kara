@@ -790,6 +790,126 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// B-2026-10-20-33: where `.into_iter()` would go for each of a call's type
+    /// parameters, should its `Iterator` bound fail on a collection. A
+    /// parameter that is an argument's own type goes at that argument's end
+    /// (`chain([0])`); one that only a closure's result names goes at the end
+    /// of the closure's value (`flat_map(|x| pairs(*x))`).
+    fn record_into_iter_sites(
+        &mut self,
+        args: &[CallArg],
+        params: &[Type],
+        param_names: &[String],
+        discharge_span: &Span,
+    ) {
+        fn value_end(e: &Expr) -> Option<Span> {
+            match &e.kind {
+                ExprKind::Closure { body, .. } => value_end(body),
+                ExprKind::Block(b) => value_end(b.final_expr.as_deref()?),
+                ExprKind::Identifier(_)
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. } => Some(Span {
+                    offset: e.span.offset + e.span.length,
+                    length: 0,
+                    ..e.span
+                }),
+                _ => None,
+            }
+        }
+        let key = SpanKey::from_span(discharge_span);
+        let mut direct: Vec<&str> = Vec::new();
+        for (arg, param) in args.iter().zip(params) {
+            if let Type::TypeParam(n) = param {
+                if let Some(at) = value_end(&arg.value) {
+                    self.into_iter_sites.insert((key, n.clone()), at);
+                }
+                direct.push(n);
+            }
+        }
+        let closures: Vec<&Expr> = args
+            .iter()
+            .map(|a| &a.value)
+            .filter(|e| matches!(e.kind, ExprKind::Closure { .. }))
+            .collect();
+        if let [closure] = closures.as_slice() {
+            if let Some(at) = value_end(closure) {
+                for n in param_names {
+                    if !direct.contains(&n.as_str()) {
+                        self.into_iter_sites.insert((key, n.clone()), at);
+                    }
+                }
+            }
+        }
+    }
+
+    /// B-2026-10-20-33: a collection where a call wants an `Iterator` is
+    /// iterated by `.into_iter()`, which the message says and, where the
+    /// argument that solved the parameter is known, the fix writes.
+    pub(super) fn hint_into_iter_for_bound(
+        &mut self,
+        type_name: &str,
+        trait_name: &str,
+        concrete: &Type,
+        span: Span,
+    ) -> bool {
+        if trait_name != "Iterator" || !self.has_into_iter(concrete) {
+            return false;
+        }
+        let message = format!(
+            "trait bound `{type_name}: Iterator` is not satisfied: `{}` is a collection, \
+             not an `Iterator`; iterate it with `.into_iter()` (docs/library/iterators.md)",
+            type_display(concrete)
+        );
+        match self
+            .into_iter_sites
+            .get(&(SpanKey::from_span(&span), type_name.to_string()))
+            .copied()
+        {
+            Some(at) => self.type_error_with_fix_it(
+                message,
+                span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: at,
+                    replacement: ".into_iter()".to_string(),
+                },
+            ),
+            None => self.type_error(message, span, TypeErrorKind::TypeMismatch),
+        }
+        self.into_iter_hinted = true;
+        true
+    }
+
+    /// A type the failed bound left unsolved, after the `.into_iter()` hint
+    /// was given: the adapter's items are unknown, so their uses are not
+    /// reported again (B-2026-10-20-33).
+    pub(super) fn after_into_iter_hint(&self, ty: &Type) -> bool {
+        self.into_iter_hinted
+            && matches!(
+                resolve_type_var_top(ty, &self.env.substitutions),
+                Type::TypeVar(_)
+            )
+    }
+
+    /// Whether `ty` has an `into_iter` method, its own or a trait's.
+    pub(super) fn has_into_iter(&self, ty: &Type) -> bool {
+        let name = match ty {
+            Type::Named { name, .. } => name.as_str(),
+            Type::Str => "String",
+            Type::Slice { .. } => "Slice",
+            _ => return false,
+        };
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.target_type == name && imp.methods.contains_key("into_iter"))
+    }
+
     /// B-2026-10-18-35: `let v: Vec[String] = s.split(",").collect();` from
     /// before `split` lent its pieces is fixed by copying each one first. The
     /// bound is discharged later; this records the edit for it.
@@ -4143,6 +4263,7 @@ impl<'a> super::TypeChecker<'a> {
             // (`normalize_bounds_into_where_clause`) so this single
             // discharge call covers both inline and where-clause surfaces.
             let all_param_names: Vec<String> = name_to_id.keys().cloned().collect();
+            self.record_into_iter_sites(args, params, &all_param_names, discharge_span);
             self.discharge_type_bounds(wc, &solutions, &all_param_names, discharge_span);
             // A bound on a parameter only the context solves (`collect`'s
             // `C: FromIterator[V]`) is checked once the context has solved
@@ -4402,6 +4523,9 @@ impl<'a> super::TypeChecker<'a> {
                         continue;
                     };
                     if !self.type_satisfies_bound(&concrete, trait_name) {
+                        if self.hint_into_iter_for_bound(type_name, trait_name, &concrete, d.span) {
+                            continue;
+                        }
                         let message = self.render_unsatisfied_bound_message(
                             type_name, trait_name, &concrete, bound,
                         );
@@ -4853,6 +4977,14 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 };
                 if !self.type_satisfies_bound(concrete_ty, trait_name) {
+                    if self.hint_into_iter_for_bound(
+                        type_name,
+                        trait_name,
+                        concrete_ty,
+                        *discharge_span,
+                    ) {
+                        continue;
+                    }
                     let message = self.render_unsatisfied_bound_message(
                         type_name,
                         trait_name,
@@ -7913,6 +8045,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                     Type::Error => Type::Error,
+                    t if self.after_into_iter_hint(t) => Type::Error,
                     _ => {
                         self.type_error(
                             format!("tuple index on non-tuple type '{}'", type_display(&obj_ty)),

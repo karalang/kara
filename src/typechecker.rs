@@ -2484,6 +2484,14 @@ pub struct TypeChecker<'a> {
     /// The edit that copies each `Str` piece before a `collect` into a
     /// `Vec[String]`, by the call's span (B-2026-10-18-35).
     pub(super) collect_strings_fixes: FxHashMap<SpanKey, FixIt>,
+    /// Where `.into_iter()` goes when a call's type parameter must be an
+    /// `Iterator` and is solved to a collection: the end of the argument, or
+    /// of the closure body, that solves it, by the call's span and the
+    /// parameter's name (B-2026-10-20-33).
+    pub(super) into_iter_sites: FxHashMap<(SpanKey, String), Span>,
+    /// Whether that hint was given, so the adapter's later methods do not
+    /// repeat the same bound (B-2026-10-20-33).
+    pub(super) into_iter_hinted: bool,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
@@ -3381,6 +3389,8 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_spans: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
+            into_iter_sites: FxHashMap::default(),
+            into_iter_hinted: false,
             core_once_calls: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),

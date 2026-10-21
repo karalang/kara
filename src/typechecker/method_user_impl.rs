@@ -1323,6 +1323,14 @@ impl<'a> super::TypeChecker<'a> {
                         return Type::Error;
                     }
                     let bound_trait = bound.path.last().cloned().unwrap_or_default();
+                    // The adapter call that took the collection already said
+                    // to write `.into_iter()` (B-2026-10-20-33).
+                    if bound_trait == "Iterator"
+                        && self.into_iter_hinted
+                        && self.has_into_iter(&concrete)
+                    {
+                        return Type::Error;
+                    }
                     let detail = self.render_unsatisfied_bound_message(
                         &param_name,
                         &bound_trait,

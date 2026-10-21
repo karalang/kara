@@ -3359,7 +3359,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.bind_pattern_types(pat, t);
                         }
                     }
-                } else if *ty != Type::Error {
+                } else if *ty != Type::Error && !self.after_into_iter_hint(ty) {
                     self.type_error(
                         format!("tuple pattern used but type is `{}`", type_display(ty)),
                         pattern.span,

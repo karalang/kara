@@ -10711,3 +10711,61 @@ fn a_handler_response_has_the_documented_shape() {
          }\n",
     );
 }
+
+/// B-2026-10-20-33: a collection where an adapter wants an `Iterator` (a
+/// `flat_map` closure's result, a `chain` or `zip` argument) is one error
+/// whose fix writes `.into_iter()`, not the bound, its repeat at the next
+/// method and the unsolved item's uses.
+#[test]
+fn a_collection_where_an_iterator_is_wanted_takes_into_iter() {
+    let flat_map = "fn pairs(n: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(n); v.push(n + 1); v }\n\
+         fn main() {\n\
+             let xs = vec![1, 2, 3];\n\
+             let all: Vec[i64] = xs.iter().flat_map(|x| pairs(*x)).collect();\n\
+             println(f\"{all}\");\n\
+         }\n";
+    rejected_then_fixed_by(
+        "flat-map-into-iter",
+        flat_map,
+        "`Vec[i64]` is a collection, not an `Iterator`; iterate it with `.into_iter()`",
+        "pairs(*x).into_iter()",
+    );
+    rejected_then_fixed_by(
+        "chain-into-iter",
+        "fn main() {\n\
+             let v = [3, 1, 2];\n\
+             let m = v.iter().cloned().chain([0]).min().unwrap();\n\
+             println(f\"{m}\");\n\
+         }\n",
+        "iterate it with `.into_iter()`",
+        ".chain([0].into_iter())",
+    );
+    let zip = "fn main() {\n\
+             let a = vec![1, 2];\n\
+             let b = vec![3, 4];\n\
+             let s: i64 = a.iter().cloned().zip(b).map(|p| p.0 * p.1).sum();\n\
+             let words = vec![\"a.b\", \"c\"];\n\
+             let n = words.iter().flat_map(|w| { let v: Vec[String] = vec![w.to_string()]; v }).map(|k| k.len()).count();\n\
+             println(f\"{s} {n}\");\n\
+         }\n";
+    let (dir, path) = fixture("zip-into-iter-one-error", zip);
+    let out = karac()
+        .arg("check")
+        .arg("--output=json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let json = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        json.matches("\"severity\":\"error\"").count(),
+        2,
+        "one error per adapter, none for the items: {json}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    rejected_then_fixed_by(
+        "zip-into-iter",
+        zip,
+        "iterate it with `.into_iter()`",
+        ".zip(b.into_iter())",
+    );
+}
