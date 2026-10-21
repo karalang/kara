@@ -1,0 +1,11 @@
+get 200 [hi] 2 bytes
+header yes
+no absent header
+listed yes
+post 200 [posted body]
+send 201 [PUT built body]
+echoed from builder
+missing: http://127.0.0.1:ORIGIN_PORT/missing: status code 404
+empty 200 []
+binary 4 bytes, 255 254 0 65
+refused: http://127.0.0.1:1/: connect failed: Connection refused (os error 111)

@@ -1,0 +1,40 @@
+# tests/mir_io.rs `http_client_natives_match_the_interpreter`: PORT is its
+# loopback server's, which the routes below stand in for (`http_server`).
+mask_origin_port = true
+
+[replace]
+PORT = "{origin_port}"
+
+[origin]
+
+[[origin.route]]
+path = "/binary"
+body_hex = "fffe0041"
+
+[[origin.route]]
+method = "GET"
+path = "/hello"
+headers = ["X-Kara: yes"]
+body = "hi"
+
+[[origin.route]]
+method = "GET"
+path = "/empty"
+headers = ["X-Kara: yes"]
+body = ""
+
+[[origin.route]]
+method = "GET"
+status = "404 Not Found"
+headers = ["X-Kara: yes"]
+body = "nope"
+
+[[origin.route]]
+method = "POST"
+headers = ["X-Kara: yes"]
+body = "{body}"
+
+[[origin.route]]
+status = "201 Created"
+headers = ["X-Kara: yes", "X-Echo: {h[x-echo]}"]
+body = "{method} {body}"

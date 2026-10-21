@@ -128,6 +128,10 @@ def template_stdout(stdout: bytes, template, tmpd: Path, origin) -> bytes:
     own, then what the origin recorded, then the files `show_files` names."""
     if origin is not None and origin.record:
         stdout += b"=== origin ===\n" + origin.transcript()
+    if origin is not None and (template or {}).get("mask_origin_port"):
+        # A program that prints its origin's URL (an error naming it): the
+        # port is the run's own, so expected.out holds `ORIGIN_PORT`.
+        stdout = stdout.replace(f"127.0.0.1:{origin.port}".encode(), b"127.0.0.1:ORIGIN_PORT")
     # Files whose contents its test checks after the run.
     for name in (template or {}).get("show_files", []):
         f = tmpd / name
@@ -148,7 +152,9 @@ def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
     word and its value, and has no holes.
     `[files]` are written into that directory first, and the contents of the
     files `show_files` names end the entry's stdout, each after a
-    `=== file <name> ===` line, for a test that checks a file after the run."""
+    `=== file <name> ===` line, for a test that checks a file after the run.
+    With `mask_origin_port = true` the origin's port in the entry's stdout
+    is written `ORIGIN_PORT`."""
     fills = {"tmp": str(tmpd), "origin_port": str(origin.port) if origin else ""}
     holes = {k: str(v).format(**fills) for k, v in template.get("holes", {}).items()}
     for name, text in template.get("files", {}).items():
@@ -175,12 +181,21 @@ class Origin:
     `reply`. With `record = true` the entry's stdout ends with
     `=== origin ===` and each request it got: the request line, the headers
     named in `record_headers` (in that order, names in lower case) and the
-    body, with CRLF written as LF."""
+    body, with CRLF written as LF.
+
+    An origin that answers by route lists `[[origin.route]]` tables instead,
+    the first that matches answering: `method` and `path` (either left out
+    matches any), `status` (`"200 OK"`), `headers` (lines after the
+    `Content-Length` one) and `body`, or `body_hex` for bytes that are not
+    text. `body` and `headers` may name `{method}`, `{path}`, `{body}` and a
+    request header as `{h[x-echo]}`. `reply` then answers what no route
+    matches."""
 
     def __init__(self, spec: dict):
         import socket
         import threading
-        self.reply = spec["reply"].encode("latin-1")
+        self.reply = spec.get("reply", "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").encode("latin-1")
+        self.routes = spec.get("route", [])
         self.record = bool(spec.get("record"))
         self.headers = [h.lower() for h in spec.get("record_headers", [])]
         self.seen = []
@@ -219,9 +234,27 @@ class Origin:
                             break
                         body += got
                     self.seen.append((lines[0], fields, body))
-                    conn.sendall(self.reply)
+                    conn.sendall(self.answer(lines[0], fields, body))
                 except OSError:
                     pass
+
+    def answer(self, line: bytes, fields: dict, body: bytes) -> bytes:
+        words = line.decode("latin-1").split()
+        method, path = (words + ["", ""])[:2]
+        for r in self.routes:
+            if r.get("method", method) != method or r.get("path", path) != path:
+                continue
+            vals = {"method": method, "path": path, "body": body.decode("latin-1"),
+                    "h": {k: v.decode("latin-1") for k, v in fields.items()}}
+            if "body_hex" in r:
+                text = bytes.fromhex(r["body_hex"])
+            else:
+                text = r.get("body", "").format(**vals).encode("latin-1")
+            head = f"HTTP/1.1 {r.get('status', '200 OK')}\r\nContent-Length: {len(text)}\r\n"
+            for h in r.get("headers", []):
+                head += h.format(**vals) + "\r\n"
+            return (head + "\r\n").encode("latin-1") + text
+        return self.reply
 
     def stop(self):
         import socket
