@@ -56,8 +56,7 @@ fn flip_and_invert_image_reverse(image: own Vec[Vec[i64]]) -> Vec[Vec[i64]] {
 // ---- iterator arm ---------------------------------------------------
 
 fn flip_and_invert_image_iter(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
-    let out: Vec[Vec[i64]] = image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect();
-    out
+    image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect()
 }
 
 // ---- the statement ----------------------------------------------------------

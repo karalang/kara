@@ -1,0 +1,160 @@
+// LeetCode #834: Sum of Distances in Tree -- peeling leaves.
+//
+// The leaves are peeled off one at a time, each passing its subtree's
+// size and distance sum to the one neighbour it still has, which becomes
+// a leaf in turn once its other neighbours are gone; the last node left
+// is the root, and its sum is its answer. The peeled nodes, taken in the
+// opposite order, then receive their answers from the neighbour they were
+// peeled into. No adjacency lists are built: each node keeps the XOR of
+// its neighbours, and a leaf's one neighbour is that XOR. O(n).
+
+fn sum_of_distances_in_tree(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut degree = Vec.filled(n, 0);
+    let mut link = Vec.filled(n, 0);
+    for (a, b) in edges {
+        degree[a] += 1;
+        degree[b] += 1;
+        link[a] ^= b;
+        link[b] ^= a;
+    }
+    let mut size = Vec.filled(n, 1);
+    let mut down = Vec.filled(n, 0);
+    let mut into = Vec.filled(n, -1);
+    let mut peeled: Vec[i64] = Vec.new();
+    let mut leaves: Vec[i64] = Vec.new();
+    for u in 0..n {
+        if degree[u] == 1 {
+            leaves.push(u);
+        }
+    }
+    while let Some(u) = leaves.pop() {
+        if peeled.len() == n - 1 {
+            break;
+        }
+        let p = link[u];
+        into[u] = p;
+        peeled.push(u);
+        size[p] += size[u];
+        down[p] += down[u] + size[u];
+        link[p] ^= u;
+        degree[p] -= 1;
+        if degree[p] == 1 {
+            leaves.push(p);
+        }
+    }
+    let mut root = 0;
+    for u in 0..n {
+        if into[u] < 0 {
+            root = u;
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    answer[root] = down[root];
+    for u in peeled.iter().rev() {
+        let p = into[u];
+        answer[u] = answer[p] - size[u] + (n - size[u]);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random tree: node v > 0 hangs from a node drawn among the `reach`
+// before it, the labels shuffled and each edge given either way round
+fn random_tree(seed: mut ref i64, n: i64, reach: i64) -> Vec[(i64, i64)] {
+    let mut label: Vec[i64] = (0..n).collect();
+    let mut i = n;
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        label.swap(i, j);
+    }
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for v in 1..n {
+        let lo = if v > reach { v - reach } else { 0 };
+        let u = lo + next_random(mut seed) % (v - lo);
+        if next_random(mut seed) % 2 == 0 {
+            edges.push((label[u], label[v]));
+        } else {
+            edges.push((label[v], label[u]));
+        }
+    }
+    let mut k = edges.len();
+    while k > 1 {
+        let j = next_random(mut seed) % k;
+        k -= 1;
+        edges.swap(k, j);
+    }
+    edges
+}
+
+fn show(n: i64, edges: Vec[(i64, i64)]) {
+    println(f"n = {n}, edges = {edges} -> {sum_of_distances_in_tree(n, edges)}");
+}
+
+fn fold(check: i64, answer: Vec[i64]) -> i64 {
+    let mut c = check;
+    for x in answer {
+        c = (c * 1000003 + x) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    show(6, [(0, 1), (0, 2), (2, 3), (2, 4), (2, 5)]);
+    show(1, []);
+    show(2, [(1, 0)]);
+    show(5, [(0, 1), (1, 2), (2, 3), (3, 4)]);
+    show(5, [(3, 0), (3, 1), (3, 2), (3, 4)]);
+    show(7, [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)]);
+    // LeetCode's largest, 30000 nodes: a path, a star and a random tree,
+    // each shown by its least and greatest answer and a checksum.
+    let mut seed = 834;
+    let n = 30000;
+    for reach in [1, n, 3] {
+        let tree = if reach == 1 {
+            let mut path: Vec[(i64, i64)] = Vec.new();
+            for v in 1..n {
+                path.push((v - 1, v));
+            }
+            path
+        } else if reach == n {
+            let mut star: Vec[(i64, i64)] = Vec.new();
+            for v in 1..n {
+                star.push((0, v));
+            }
+            star
+        } else {
+            random_tree(mut seed, n, reach)
+        };
+        let answer = sum_of_distances_in_tree(n, tree);
+        let mut lo = answer[0];
+        let mut hi = answer[0];
+        for x in answer {
+            if x < lo {
+                lo = x;
+            }
+            if x > hi {
+                hi = x;
+            }
+        }
+        println(f"30000 nodes, reach {reach}: least {lo}, greatest {hi}, checksum {fold(0, answer)}");
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let reach = 1 + next_random(mut seed) % n;
+        let answer = sum_of_distances_in_tree(n, random_tree(mut seed, n, reach));
+        for x in answer {
+            total += x;
+        }
+        check = fold(check, answer);
+    }
+    println(f"300 random trees: answers total {total}, checksum {check}");
+}

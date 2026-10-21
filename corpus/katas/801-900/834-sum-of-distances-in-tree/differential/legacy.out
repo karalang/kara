@@ -1,0 +1,3 @@
+1600 cases, 32000 checks over 4 arms: 0 failures
+by arm: star 0, recursive 0, bfs 0, peel 0
+by property: answer 0, relabelled 0, turned 0, edges 0, bounds 0

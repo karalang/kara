@@ -1,0 +1,93 @@
+// Benchmark for #834: Sum of Distances in Tree -- the ★ arm (rerooting, with a stack).
+//
+// One walk from node 0 on an explicit stack records parents and a
+// visiting order; the order taken backwards gives subtree sizes and
+// distance sums, and taken forwards moves the root along each edge.
+fn sum_of_distances_in_tree(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut parent = Vec.filled(n, -1);
+    let mut order: Vec[i64] = Vec.new();
+    let mut seen = Vec.filled(n, false);
+    let mut stack = [0];
+    seen[0] = true;
+    while let Some(u) = stack.pop() {
+        order.push(u);
+        for v in adj[u] {
+            if not seen[v] {
+                seen[v] = true;
+                parent[v] = u;
+                stack.push(v);
+            }
+        }
+    }
+    let mut size = Vec.filled(n, 1);
+    let mut down = Vec.filled(n, 0);
+    for j in 0..n {
+        let u = order[n - 1 - j];
+        let p = parent[u];
+        if p >= 0 {
+            size[p] += size[u];
+            down[p] += down[u] + size[u];
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    answer[0] = down[0];
+    for u in order {
+        let p = parent[u];
+        if p >= 0 {
+            answer[u] = answer[p] - size[u] + (n - size[u]);
+        }
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 trees drawn once, each of LeetCode's largest size, 30000 nodes:
+    // node v > 0 hangs from a node among the `reach` before it, `reach`
+    // running from 2 to 2^16 over the trees, so they go from near-paths to
+    // bushy ones, with the labels shuffled. Each round solves the next tree
+    // and reads one answer.
+    let count = 16;
+    let rounds = 320;
+    let n = 30000;
+    let mut seed: i64 = 834;
+    let mut trees: Vec[Vec[(i64, i64)]] = Vec.new();
+    for g in 0..count {
+        let reach = 2 << g;
+        let mut label: Vec[i64] = (0..n).collect();
+        let mut i = n;
+        while i > 1 {
+            let j = next_random(mut seed) % i;
+            i -= 1;
+            label.swap(i, j);
+        }
+        let mut edges: Vec[(i64, i64)] = Vec.new();
+        for v in 1..n {
+            let lo = if v > reach { v - reach } else { 0 };
+            let u = lo + next_random(mut seed) % (v - lo);
+            edges.push((label[u], label[v]));
+        }
+        trees.push(edges);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let answer = sum_of_distances_in_tree(n, trees[round % count]);
+        let x = answer[round * 7919 % n];
+        total += x;
+        checksum = (checksum * 131 + x) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} trees: answers total {total}, checksum {checksum}");
+}

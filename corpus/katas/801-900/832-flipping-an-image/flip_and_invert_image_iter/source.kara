@@ -3,14 +3,9 @@
 // The image is a `map` over its rows, each row a `rev` of its cells
 // `map`ped to their inverse and `collect`ed, the rows `collect`ed in
 // turn. O(n^2).
-//
-// The result is bound to an annotated `let` because the tail-expression
-// form, the chain returned directly, is not lowered by v2's MIR builder
-// yet (B-2026-10-21-50); return the chain itself when the row closes.
 
 fn flip_and_invert_image(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
-    let out: Vec[Vec[i64]] = image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect();
-    out
+    image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect()
 }
 
 // ---- test harness ---------------------------------------------------------

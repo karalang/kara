@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/834-sum-of-distances-in-tree/sum_of_distances_in_tree.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "13fdc3282"
+extracted_src = "c374f574"
+model_rev = "583cfb0d"
+model_src = "c374f574"

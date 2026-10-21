@@ -1,0 +1,374 @@
+// LeetCode #834: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random trees,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn sum_of_distances_in_tree_star(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut parent = Vec.filled(n, -1);
+    let mut order: Vec[i64] = Vec.new();
+    let mut seen = Vec.filled(n, false);
+    let mut stack = [0];
+    seen[0] = true;
+    while let Some(u) = stack.pop() {
+        order.push(u);
+        for v in adj[u] {
+            if not seen[v] {
+                seen[v] = true;
+                parent[v] = u;
+                stack.push(v);
+            }
+        }
+    }
+    let mut size = Vec.filled(n, 1);
+    let mut down = Vec.filled(n, 0);
+    for j in 0..n {
+        let u = order[n - 1 - j];
+        let p = parent[u];
+        if p >= 0 {
+            size[p] += size[u];
+            down[p] += down[u] + size[u];
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    answer[0] = down[0];
+    for u in order {
+        let p = parent[u];
+        if p >= 0 {
+            answer[u] = answer[p] - size[u] + (n - size[u]);
+        }
+    }
+    answer
+}
+
+// ---- recursive arm --------------------------------------------------
+
+fn count(adj: Vec[Vec[i64]], u: i64, p: i64, size: mut ref Vec[i64], down: mut ref Vec[i64]) {
+    for v in adj[u] {
+        if v != p {
+            count(adj, v, u, mut size, mut down);
+            size[u] += size[v];
+            down[u] += down[v] + size[v];
+        }
+    }
+}
+
+fn spread(adj: Vec[Vec[i64]], u: i64, p: i64, n: i64, size: Vec[i64], answer: mut ref Vec[i64]) {
+    for v in adj[u] {
+        if v != p {
+            answer[v] = answer[u] - size[v] + (n - size[v]);
+            spread(adj, v, u, n, size, mut answer);
+        }
+    }
+}
+
+fn sum_of_distances_in_tree_recursive(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut size = Vec.filled(n, 1);
+    let mut down = Vec.filled(n, 0);
+    count(adj, 0, -1, mut size, mut down);
+    let mut answer = Vec.filled(n, 0);
+    answer[0] = down[0];
+    spread(adj, 0, -1, n, size, mut answer);
+    answer
+}
+
+// ---- breadth-first arm ----------------------------------------------
+
+fn sum_of_distances_in_tree_bfs(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut parent = Vec.filled(n, -1);
+    let mut depth = Vec.filled(n, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    let mut order: Vec[i64] = Vec.new();
+    depth[0] = 0;
+    queue.push_back(0);
+    while let Some(u) = queue.pop_front() {
+        order.push(u);
+        for v in adj[u] {
+            if depth[v] < 0 {
+                depth[v] = depth[u] + 1;
+                parent[v] = u;
+                queue.push_back(v);
+            }
+        }
+    }
+    let mut size = Vec.filled(n, 1);
+    for u in order.iter().rev() {
+        if parent[u] >= 0 {
+            size[parent[u]] += size[u];
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    answer[0] = depth.iter().sum();
+    for u in order {
+        if parent[u] >= 0 {
+            answer[u] = answer[parent[u]] + n - 2 * size[u];
+        }
+    }
+    answer
+}
+
+// ---- leaf-peeling arm -----------------------------------------------
+
+fn sum_of_distances_in_tree_peel(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut degree = Vec.filled(n, 0);
+    let mut link = Vec.filled(n, 0);
+    for (a, b) in edges {
+        degree[a] += 1;
+        degree[b] += 1;
+        link[a] ^= b;
+        link[b] ^= a;
+    }
+    let mut size = Vec.filled(n, 1);
+    let mut down = Vec.filled(n, 0);
+    let mut into = Vec.filled(n, -1);
+    let mut peeled: Vec[i64] = Vec.new();
+    let mut leaves: Vec[i64] = Vec.new();
+    for u in 0..n {
+        if degree[u] == 1 {
+            leaves.push(u);
+        }
+    }
+    while let Some(u) = leaves.pop() {
+        if peeled.len() == n - 1 {
+            break;
+        }
+        let p = link[u];
+        into[u] = p;
+        peeled.push(u);
+        size[p] += size[u];
+        down[p] += down[u] + size[u];
+        link[p] ^= u;
+        degree[p] -= 1;
+        if degree[p] == 1 {
+            leaves.push(p);
+        }
+    }
+    let mut root = 0;
+    for u in 0..n {
+        if into[u] < 0 {
+            root = u;
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    answer[root] = down[root];
+    for u in peeled.iter().rev() {
+        let p = into[u];
+        answer[u] = answer[p] - size[u] + (n - size[u]);
+    }
+    answer
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: for each node, the distance to every other
+// node, found by a breadth-first search from it, summed.
+fn statement(n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for s in 0..n {
+        let mut dist = Vec.filled(n, -1);
+        dist[s] = 0;
+        let mut frontier = [s];
+        let mut total = 0;
+        while frontier.len() > 0 {
+            let mut next: Vec[i64] = Vec.new();
+            for u in frontier {
+                total += dist[u];
+                for v in adj[u] {
+                    if dist[v] < 0 {
+                        dist[v] = dist[u] + 1;
+                        next.push(v);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        answer.push(total);
+    }
+    answer
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, n: i64, edges: Vec[(i64, i64)]) -> Vec[i64] {
+    if arm == 0 {
+        sum_of_distances_in_tree_star(n, edges)
+    } else if arm == 1 {
+        sum_of_distances_in_tree_recursive(n, edges)
+    } else if arm == 2 {
+        sum_of_distances_in_tree_bfs(n, edges)
+    } else {
+        sum_of_distances_in_tree_peel(n, edges)
+    }
+}
+
+// a random permutation of 0..n
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut p: Vec[i64] = (0..n).collect();
+    let mut i = n;
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        p.swap(i, j);
+    }
+    p
+}
+
+// a random tree: node v > 0 hangs from a node drawn among the `reach`
+// before it, the labels shuffled and each edge given either way round
+fn random_tree(seed: mut ref i64, n: i64, reach: i64) -> Vec[(i64, i64)] {
+    let label = shuffled(mut seed, n);
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for v in 1..n {
+        let lo = if v > reach { v - reach } else { 0 };
+        let u = lo + next_random(mut seed) % (v - lo);
+        if next_random(mut seed) % 2 == 0 {
+            edges.push((label[u], label[v]));
+        } else {
+            edges.push((label[v], label[u]));
+        }
+    }
+    edges
+}
+
+// the same tree with every node renamed by `p`
+fn relabelled(edges: Vec[(i64, i64)], p: Vec[i64]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a, b) in edges {
+        out.push((p[a], p[b]));
+    }
+    out
+}
+
+// the same edges, each turned round, in the opposite order
+fn turned(edges: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for j in 0..edges.len() {
+        let (a, b) = edges[edges.len() - 1 - j];
+        out.push((b, a));
+    }
+    out
+}
+
+// across each edge (a, b), n less the difference of the two answers is
+// twice the number of nodes on a's side, a number between 1 and n - 1
+fn edges_hold(n: i64, edges: Vec[(i64, i64)], got: Vec[i64]) -> bool {
+    for (a, b) in edges {
+        let gap = n - (got[a] - got[b]);
+        if gap % 2 != 0 or gap / 2 < 1 or gap / 2 > n - 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// every answer lies between n - 1, each other node one step away, and
+// n (n - 1) / 2, the nodes in a line from it
+fn bounds_hold(n: i64, got: Vec[i64]) -> bool {
+    if got.len() != n {
+        return false;
+    }
+    for x in got {
+        if x < n - 1 or x > n * (n - 1) / 2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = ["star", "recursive", "bfs", "peel"];
+    let properties = ["answer", "relabelled", "turned", "edges", "bounds"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut seed = 834;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = if kind == 0 { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 80 };
+        let reach = if kind == 0 or kind == 1 {
+            // small trees, and trees up to 80 nodes of any shape
+            1 + next_random(mut seed) % n
+        } else if kind == 2 {
+            // paths and near-paths
+            1 + next_random(mut seed) % 2
+        } else {
+            // bushy trees, stars among them
+            n
+        };
+        let edges = random_tree(mut seed, n, reach);
+        let p = shuffled(mut seed, n);
+        let want = statement(n, edges);
+        for arm in 0..4 {
+            let got = answer(arm, n, edges);
+            let moved = answer(arm, n, relabelled(edges, p));
+            let mut relabel_ok = moved.len() == n;
+            if relabel_ok {
+                for u in 0..n {
+                    if moved[p[u]] != got[u] {
+                        relabel_ok = false;
+                    }
+                }
+            }
+            let oks = [
+                got == want,
+                relabel_ok,
+                answer(arm, n, turned(edges)) == got,
+                edges_hold(n, edges, got),
+                bounds_hold(n, got),
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: n = {n}, edges = {edges} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, recursive {by_arm[1]}, bfs {by_arm[2]}, peel {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, relabelled {by_property[1]}, turned {by_property[2]}, edges {by_property[3]}, bounds {by_property[4]}");
+}

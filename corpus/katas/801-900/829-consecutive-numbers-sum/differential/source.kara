@@ -62,7 +62,7 @@ fn consecutive_numbers_sum_pairs(n: i64) -> i64 {
 // ---- iterator arm ---------------------------------------------------
 
 fn consecutive_numbers_sum_iter(n: i64) -> i64 {
-    (1..=n).take_while(|k| k * (k + 1) / 2 <= n).filter(|k| (n - k * (k - 1) / 2) % k == 0).count()
+    (1..).take_while(|k| k * (k + 1) / 2 <= n).filter(|k| (n - k * (k - 1) / 2) % k == 0).count()
 }
 
 // ---- the statement ----------------------------------------------------------

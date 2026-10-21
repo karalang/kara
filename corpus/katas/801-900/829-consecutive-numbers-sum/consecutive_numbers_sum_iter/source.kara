@@ -3,12 +3,9 @@
 // The run lengths a range that `take_while` the smallest run of that
 // length fits in n, `filter`ed to those whose remainder after the
 // triangle k * (k - 1) / 2 is a multiple of k, and `count`ed. O(sqrt n).
-//
-// The range would be the open `(1..)`, which v2 refuses for now
-// (B-2026-10-21-46); `1..=n` bounds it where `take_while` stops anyway.
 
 fn consecutive_numbers_sum(n: i64) -> i64 {
-    (1..=n).take_while(|k| k * (k + 1) / 2 <= n).filter(|k| (n - k * (k - 1) / 2) % k == 0).count()
+    (1..).take_while(|k| k * (k + 1) / 2 <= n).filter(|k| (n - k * (k - 1) / 2) % k == 0).count()
 }
 
 // ---- test harness ---------------------------------------------------------

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/834-sum-of-distances-in-tree/bench/sum_of_distances_in_tree.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "13fdc3282"
+extracted_src = "b5cb5f02"
+model_rev = "583cfb0d"
+model_src = "b5cb5f02"
