@@ -1,0 +1,5878 @@
+// mini_dnspython: dnspython 2.7.0's zone files, names and messages
+// (zone parsing and text, name text and wire forms, the message wire
+// format with compression, and an authoritative responder), checked
+// against dnspython itself (oracle.py). The generated section at the end
+// comes from gen_kara.py.
+
+// ------------------------------------------------------------- basics
+
+// Text is kept as bytes (each an i64 from 0 to 255): DNS labels and
+// character strings are bytes, and dnspython's text forms escape every
+// byte that is not printable ASCII, so what is printed is ASCII.
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+// A Python exception: its class and its message.
+#[derive(Clone)]
+struct PyError {
+    kind: String,
+    msg: String,
+}
+
+fn failm(kind: Str, msg: own String) -> PyError {
+    PyError { kind: kind.to_string(), msg: msg }
+}
+
+fn fail(kind: Str, msg: Str) -> PyError {
+    PyError { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+// An exception raised with no arguments: its message is the docstring.
+fn raise(kind: Str) -> PyError {
+    failm(kind, doc(kind))
+}
+
+fn doc(kind: Str) -> String {
+    let t = if kind == "FormError" {
+        "DNS message is malformed."
+    } else if kind == "SyntaxError" {
+        "Text input is malformed."
+    } else if kind == "UnexpectedEnd" {
+        "Text input ended unexpectedly."
+    } else if kind == "TooBig" {
+        "The DNS message is too big."
+    } else if kind == "EmptyLabel" {
+        "A DNS label is empty."
+    } else if kind == "BadEscape" {
+        "An escaped code in a text format of DNS name is invalid."
+    } else if kind == "BadPointer" {
+        "A DNS compression pointer points forward instead of backward."
+    } else if kind == "BadLabelType" {
+        "The label type in DNS name wire format is unknown."
+    } else if kind == "NeedAbsoluteNameOrOrigin" {
+        "An attempt was made to convert a non-absolute name to\nwire when there was also a non-absolute (or missing) origin."
+    } else if kind == "NameTooLong" {
+        "A DNS name is > 255 octets long."
+    } else if kind == "LabelTooLong" {
+        "A DNS label is > 63 octets long."
+    } else if kind == "AbsoluteConcatenation" {
+        "An attempt was made to append anything other than the\nempty name to an absolute DNS name."
+    } else if kind == "NoParent" {
+        "An attempt was made to get the parent of the root name\nor the empty name."
+    } else if kind == "BadTTL" {
+        "DNS TTL value is not well-formed."
+    } else if kind == "NoSOA" {
+        "The DNS zone has no SOA RR at its origin."
+    } else if kind == "NoNS" {
+        "The DNS zone has no NS RRset at its origin."
+    } else if kind == "UngetBufferFull" {
+        "An attempt was made to unget a token when the unget buffer was full."
+    } else if kind == "UnknownRdatatype" {
+        "DNS resource record type is unknown."
+    } else if kind == "UnknownRdataclass" {
+        "A DNS class is unknown."
+    } else if kind == "ShortHeader" {
+        "The DNS packet passed to from_wire() is too short."
+    } else if kind == "TrailingJunk" {
+        "The DNS packet passed to from_wire() has extra junk at the end of it."
+    } else if kind == "BadEDNS" {
+        "An OPT record occurred somewhere other than\nthe additional data section."
+    } else if kind == "BadTSIG" {
+        "A TSIG record occurred somewhere other than the end of\nthe additional data section."
+    } else {
+        ""
+    };
+    t.to_string()
+}
+
+// dns.exception.SyntaxError and the classes under it.
+fn is_syntax(kind: ref String) -> bool {
+    kind == "SyntaxError" or kind == "UnexpectedEnd" or kind == "BadTTL" or kind == "EmptyLabel"
+        or kind == "BadEscape" or kind == "LabelTooLong"
+}
+
+// dns.exception.FormError and the classes under it.
+fn is_form(kind: ref String) -> bool {
+    kind == "FormError" or kind == "BadPointer" or kind == "BadLabelType" or kind == "NameTooLong"
+        or kind == "ShortHeader" or kind == "TrailingJunk" or kind == "BadEDNS" or kind == "BadTSIG"
+}
+
+fn b(s: Str) -> Vec[i64] {
+    let raw = s.bytes();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        out.push(raw[i] as i64);
+        i += 1;
+    }
+    out
+}
+
+fn bs(s: ref String) -> Vec[i64] {
+    let raw = s.bytes();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        out.push(raw[i] as i64);
+        i += 1;
+    }
+    out
+}
+
+fn text(v: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in v {
+        out.push(c as u8);
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_b(out: mut ref Vec[i64], v: ref Vec[i64]) {
+    for c in v {
+        out.push(c);
+    }
+}
+
+fn push_s(out: mut ref Vec[i64], s: Str) {
+    let v = b(s);
+    push_b(mut out, v);
+}
+
+fn same(a: ref Vec[i64], c: ref Vec[i64]) -> bool {
+    if a.len() != c.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != c[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_lit(a: ref Vec[i64], s: Str) -> bool {
+    let v = b(s);
+    same(a, v)
+}
+
+fn sub(v: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn lower(c: i64) -> i64 {
+    if c >= 65 and c <= 90 {
+        c + 32
+    } else {
+        c
+    }
+}
+
+fn upper(c: i64) -> i64 {
+    if c >= 97 and c <= 122 {
+        c - 32
+    } else {
+        c
+    }
+}
+
+fn lower_all(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v {
+        out.push(lower(c));
+    }
+    out
+}
+
+fn upper_all(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v {
+        out.push(upper(c));
+    }
+    out
+}
+
+// bytes comparison: -1, 0 or 1
+fn cmp_bytes(a: ref Vec[i64], c: ref Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < a.len() and i < c.len() {
+        if a[i] < c[i] {
+            return -1;
+        }
+        if a[i] > c[i] {
+            return 1;
+        }
+        i += 1;
+    }
+    if a.len() < c.len() {
+        -1
+    } else if a.len() > c.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+// str.isdigit / bytes.isdigit on ASCII text
+fn all_digits(v: ref Vec[i64]) -> bool {
+    if v.len() == 0 {
+        return false;
+    }
+    for c in v {
+        if not is_digit(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_alnum(c: i64) -> bool {
+    is_digit(c) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn digits_value(v: ref Vec[i64]) -> i64 {
+    let mut n = 0;
+    for c in v {
+        n = n * 10 + (c - 48);
+    }
+    n
+}
+
+// int(text) for a decimal string that may be signed; None when Python
+// raises ValueError.
+fn py_int(v: ref Vec[i64]) -> Option[i64] {
+    let mut i = 0;
+    let mut neg = false;
+    if v.len() > 0 and (v[0] == 43 or v[0] == 45) {
+        neg = v[0] == 45;
+        i = 1;
+    }
+    let digits = sub(v, i, v.len());
+    if not all_digits(digits) {
+        return None;
+    }
+    let n = digits_value(digits);
+    if neg {
+        Some(0 - n)
+    } else {
+        Some(n)
+    }
+}
+
+fn hex_digit(n: i64) -> i64 {
+    if n < 10 {
+        48 + n
+    } else {
+        87 + n
+    }
+}
+
+fn hexlify(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v {
+        out.push(hex_digit(c >> 4));
+        out.push(hex_digit(c & 15));
+    }
+    out
+}
+
+fn hex_of(v: ref Vec[i64]) -> String {
+    let h = hexlify(v);
+    text(h)
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+// binascii.unhexlify
+fn unhexlify(v: ref Vec[i64]) -> Result[Vec[i64], PyError] {
+    if v.len() % 2 != 0 {
+        return Err(fail("Error", "Odd-length string"));
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        let hi = hex_value(v[i]);
+        let lo = hex_value(v[i + 1]);
+        if hi < 0 or lo < 0 {
+            return Err(fail("Error", "Non-hexadecimal digit found"));
+        }
+        out.push(hi * 16 + lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+// bytes.fromhex for the hex the jobs carry
+fn from_hex(s: ref String) -> Vec[i64] {
+    let v = bs(s);
+    match unhexlify(v) {
+        Ok(out) => out,
+        Err(_) => Vec.new(),
+    }
+}
+
+fn pad3(n: i64) -> String {
+    if n < 10 {
+        f"00{n}"
+    } else if n < 100 {
+        f"0{n}"
+    } else {
+        f"{n}"
+    }
+}
+
+fn py_bool(x: bool) -> String {
+    if x {
+        "True".to_string()
+    } else {
+        "False".to_string()
+    }
+}
+
+fn u16_bytes(out: mut ref Vec[i64], n: i64) {
+    out.push((n >> 8) & 255);
+    out.push(n & 255);
+}
+
+fn u32_bytes(out: mut ref Vec[i64], n: i64) {
+    out.push((n >> 24) & 255);
+    out.push((n >> 16) & 255);
+    out.push((n >> 8) & 255);
+    out.push(n & 255);
+}
+
+// the number of characters in UTF-8 bytes
+fn char_len(v: ref Vec[i64]) -> i64 {
+    let mut n = 0;
+    for c in v {
+        if c < 128 or c >= 192 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn push_utf8(out: mut ref Vec[i64], cp: i64) {
+    if cp < 128 {
+        out.push(cp);
+    } else {
+        out.push(192 | (cp >> 6));
+        out.push(128 | (cp & 63));
+    }
+}
+
+// str.replace(old, new): every occurrence, left to right
+fn replace_all(hay: ref Vec[i64], old: ref Vec[i64], new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if old.len() == 0 {
+        return hay.clone();
+    }
+    let mut i = 0;
+    while i < hay.len() {
+        let mut hit = i + old.len() <= hay.len();
+        let mut k = 0;
+        while hit and k < old.len() {
+            if hay[i + k] != old[k] {
+                hit = false;
+            }
+            k += 1;
+        }
+        if hit {
+            push_b(mut out, new);
+            i += old.len();
+        } else {
+            out.push(hay[i]);
+            i += 1;
+        }
+    }
+    out
+}
+// ------------------------------------------------------------- names
+
+// dns.name.Name: a tuple of labels, each a byte string; an absolute name
+// ends with the empty (root) label.
+#[derive(Clone)]
+struct Name {
+    labels: Vec[Vec[i64]],
+}
+
+// The result of Name.fullcompare: the relation (NameRelation's value:
+// NONE 0, SUPERDOMAIN 1, SUBDOMAIN 2, EQUAL 3, COMMONANCESTOR 4), the
+// order and the number of labels in common.
+struct Cmp {
+    rel: i64,
+    order: i64,
+    n: i64,
+}
+
+const REL_NONE: i64 = 0;
+const REL_SUPERDOMAIN: i64 = 1;
+const REL_SUBDOMAIN: i64 = 2;
+const REL_EQUAL: i64 = 3;
+const REL_COMMONANCESTOR: i64 = 4;
+
+fn rel_name(rel: i64) -> String {
+    let t = if rel == REL_SUPERDOMAIN {
+        "SUPERDOMAIN"
+    } else if rel == REL_SUBDOMAIN {
+        "SUBDOMAIN"
+    } else if rel == REL_EQUAL {
+        "EQUAL"
+    } else if rel == REL_COMMONANCESTOR {
+        "COMMONANCESTOR"
+    } else {
+        "NONE"
+    };
+    t.to_string()
+}
+
+fn root() -> Name {
+    let mut labels: Vec[Vec[i64]] = Vec.new();
+    labels.push(Vec.new());
+    Name { labels: labels }
+}
+
+fn empty_name() -> Name {
+    Name { labels: Vec.new() }
+}
+
+// dns.name._validate_labels
+fn validate(labels: ref Vec[Vec[i64]]) -> Result[(), PyError] {
+    let mut total = 0;
+    let mut first_empty = -1;
+    let mut j = 0;
+    for label in labels {
+        total += label.len() + 1;
+        if label.len() > 63 {
+            return Err(raise("LabelTooLong"));
+        }
+        if first_empty < 0 and label.len() == 0 {
+            first_empty = j;
+        }
+        j += 1;
+    }
+    if total > 255 {
+        return Err(raise("NameTooLong"));
+    }
+    if first_empty >= 0 and first_empty != labels.len() - 1 {
+        return Err(raise("EmptyLabel"));
+    }
+    Ok(())
+}
+
+fn mk_name(labels: own Vec[Vec[i64]]) -> Result[Name, PyError] {
+    validate(labels)?;
+    Ok(Name { labels: labels })
+}
+
+fn sub_labels(labels: ref Vec[Vec[i64]], start: i64, end: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(labels[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn is_absolute(n: ref Name) -> bool {
+    n.labels.len() > 0 and n.labels[n.labels.len() - 1].len() == 0
+}
+
+fn is_wild(n: ref Name) -> bool {
+    n.labels.len() > 0 and is_lit(n.labels[0], "*")
+}
+
+fn fullcompare(a: ref Name, o: ref Name) -> Cmp {
+    let sabs = is_absolute(a);
+    let oabs = is_absolute(o);
+    if sabs != oabs {
+        if sabs {
+            return Cmp { rel: REL_NONE, order: 1, n: 0 };
+        }
+        return Cmp { rel: REL_NONE, order: -1, n: 0 };
+    }
+    let mut l1 = a.labels.len();
+    let mut l2 = o.labels.len();
+    let ldiff = l1 - l2;
+    let mut l = if ldiff < 0 {
+        l1
+    } else {
+        l2
+    };
+    let mut nlabels = 0;
+    while l > 0 {
+        l -= 1;
+        l1 -= 1;
+        l2 -= 1;
+        let c = cmp_bytes(lower_all(a.labels[l1]), lower_all(o.labels[l2]));
+        if c != 0 {
+            let rel = if nlabels > 0 {
+                REL_COMMONANCESTOR
+            } else {
+                REL_NONE
+            };
+            return Cmp { rel: rel, order: c, n: nlabels };
+        }
+        nlabels += 1;
+    }
+    let rel = if ldiff < 0 {
+        REL_SUPERDOMAIN
+    } else if ldiff > 0 {
+        REL_SUBDOMAIN
+    } else {
+        REL_EQUAL
+    };
+    Cmp { rel: rel, order: ldiff, n: nlabels }
+}
+
+fn is_subdomain(a: ref Name, o: ref Name) -> bool {
+    let c = fullcompare(a, o);
+    c.rel == REL_SUBDOMAIN or c.rel == REL_EQUAL
+}
+
+fn is_superdomain(a: ref Name, o: ref Name) -> bool {
+    let c = fullcompare(a, o);
+    c.rel == REL_SUPERDOMAIN or c.rel == REL_EQUAL
+}
+
+fn name_eq(a: ref Name, o: ref Name) -> bool {
+    fullcompare(a, o).order == 0
+}
+
+fn name_lt(a: ref Name, o: ref Name) -> bool {
+    fullcompare(a, o).order < 0
+}
+
+fn canonicalize(n: ref Name) -> Name {
+    let mut labels: Vec[Vec[i64]] = Vec.new();
+    for label in n.labels {
+        labels.push(lower_all(label));
+    }
+    Name { labels: labels }
+}
+
+// dns.name._escapify for a label of bytes
+fn escapify_label(out: mut ref Vec[i64], label: ref Vec[i64]) {
+    for c in label {
+        if c == 34 or c == 40 or c == 41 or c == 46 or c == 59 or c == 92 or c == 64 or c == 36 {
+            out.push(92);
+            out.push(c);
+        } else if c > 32 and c < 127 {
+            out.push(c);
+        } else {
+            out.push(92);
+            push_s(mut out, pad3(c));
+        }
+    }
+}
+
+fn name_text(n: ref Name, omit: bool) -> String {
+    if n.labels.len() == 0 {
+        return "@".to_string();
+    }
+    if n.labels.len() == 1 and n.labels[0].len() == 0 {
+        return ".".to_string();
+    }
+    let mut count = n.labels.len();
+    if omit and is_absolute(n) {
+        count -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < count {
+        if i > 0 {
+            out.push(46);
+        }
+        escapify_label(mut out, n.labels[i]);
+        i += 1;
+    }
+    text(out)
+}
+
+fn str_name(n: ref Name) -> String {
+    name_text(n, false)
+}
+
+fn need_absolute() -> PyError {
+    raise("NeedAbsoluteNameOrOrigin")
+}
+
+// The labels to write: the name's, then the origin's for a relative name.
+fn wire_labels(n: ref Name, origin: ref Option[Name]) -> Result[Vec[Vec[i64]], PyError] {
+    let mut labels = n.labels.clone();
+    if not is_absolute(n) {
+        match origin {
+            Some(o) => {
+                if not is_absolute(o) {
+                    return Err(need_absolute());
+                }
+                for label in o.labels {
+                    labels.push(label.clone());
+                }
+            }
+            None => {
+                return Err(need_absolute());
+            }
+        }
+    }
+    Ok(labels)
+}
+
+// Name.to_wire() with no file: the uncompressed wire form.
+fn name_wire(n: ref Name, origin: ref Option[Name], canon: bool) -> Result[Vec[i64], PyError] {
+    let labels = wire_labels(n, origin)?;
+    let mut out: Vec[i64] = Vec.new();
+    for label in labels {
+        out.push(label.len());
+        if canon {
+            push_b(mut out, lower_all(label));
+        } else {
+            push_b(mut out, label);
+        }
+    }
+    Ok(out)
+}
+
+// The renderer's compression table: a dict from Name to offset, which
+// compares names without regard to case.
+struct Compress {
+    names: Vec[Name],
+    pos: Vec[i64],
+}
+
+fn new_compress() -> Compress {
+    Compress { names: Vec.new(), pos: Vec.new() }
+}
+
+fn compress_get(comp: ref Compress, n: ref Name) -> i64 {
+    let mut i = 0;
+    while i < comp.names.len() {
+        if name_eq(comp.names[i], n) {
+            return comp.pos[i];
+        }
+        i += 1;
+    }
+    -1
+}
+
+// Name.to_wire(file, compress, origin, canonicalize); `use_comp` false is
+// compress=None.
+fn name_to_wire(n: ref Name, out: mut ref Vec[i64], comp: mut ref Compress, use_comp: bool, origin: ref Option[Name], canon: bool) -> Result[(), PyError] {
+    let labels = wire_labels(n, origin)?;
+    let mut i = 0;
+    while i < labels.len() {
+        let suffix = Name { labels: sub_labels(labels, i, labels.len()) };
+        let pos = if use_comp {
+            compress_get(comp, suffix)
+        } else {
+            -1
+        };
+        if pos >= 0 {
+            u16_bytes(mut out, 49152 + pos);
+            return Ok(());
+        }
+        if use_comp and suffix.labels.len() > 1 {
+            let here = out.len();
+            if here <= 16383 {
+                comp.names.push(suffix);
+                comp.pos.push(here);
+            }
+        }
+        out.push(labels[i].len());
+        if canon {
+            push_b(mut out, lower_all(labels[i]));
+        } else {
+            push_b(mut out, labels[i]);
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+// dns.name.from_text on ASCII text
+fn name_from_text(t: ref Vec[i64], origin: ref Option[Name]) -> Result[Name, PyError] {
+    let mut labels: Vec[Vec[i64]] = Vec.new();
+    if t.len() > 0 and not is_lit(t, "@") {
+        if is_lit(t, ".") {
+            return Ok(root());
+        }
+        let mut label: Vec[i64] = Vec.new();
+        let mut escaping = false;
+        let mut edigits = 0;
+        let mut total = 0;
+        for c in t {
+            if escaping {
+                if edigits == 0 {
+                    if is_digit(c) {
+                        total = c - 48;
+                        edigits += 1;
+                    } else {
+                        label.push(c);
+                        escaping = false;
+                    }
+                } else {
+                    if not is_digit(c) {
+                        return Err(raise("BadEscape"));
+                    }
+                    total = total * 10 + (c - 48);
+                    edigits += 1;
+                    if edigits == 3 {
+                        escaping = false;
+                        if total > 255 {
+                            return Err(fail("error", "'B' format requires 0 <= number <= 255"));
+                        }
+                        label.push(total);
+                    }
+                }
+            } else if c == 46 {
+                if label.len() == 0 {
+                    return Err(raise("EmptyLabel"));
+                }
+                labels.push(label);
+                label = Vec.new();
+            } else if c == 92 {
+                escaping = true;
+                edigits = 0;
+                total = 0;
+            } else {
+                label.push(c);
+            }
+        }
+        if escaping {
+            return Err(raise("BadEscape"));
+        }
+        labels.push(label);
+    }
+    let relative = labels.len() == 0 or labels[labels.len() - 1].len() != 0;
+    if relative {
+        if let Some(o) = origin {
+            for label in o.labels {
+                labels.push(label.clone());
+            }
+        }
+    }
+    mk_name(labels)
+}
+
+fn name_of(s: Str) -> Result[Name, PyError] {
+    let t = b(s);
+    name_from_text(t, Some(root()))
+}
+
+// dns.name.from_text(text, None)
+fn rel_name_of(s: ref String) -> Result[Name, PyError] {
+    let t = bs(s);
+    name_from_text(t, None)
+}
+
+fn split_name(n: ref Name, depth: i64) -> Result[Vec[Name], PyError] {
+    let l = n.labels.len();
+    let mut out: Vec[Name] = Vec.new();
+    if depth == 0 {
+        out.push(n.clone());
+        out.push(empty_name());
+    } else if depth == l {
+        out.push(empty_name());
+        out.push(n.clone());
+    } else if depth < 0 or depth > l {
+        return Err(fail("ValueError", "depth must be >= 0 and <= the length of the name"));
+    } else {
+        out.push(Name { labels: sub_labels(n.labels, 0, l - depth) });
+        out.push(Name { labels: sub_labels(n.labels, l - depth, l) });
+    }
+    Ok(out)
+}
+
+fn concatenate(n: ref Name, o: ref Name) -> Result[Name, PyError] {
+    if is_absolute(n) and o.labels.len() > 0 {
+        return Err(raise("AbsoluteConcatenation"));
+    }
+    let mut labels = n.labels.clone();
+    for label in o.labels {
+        labels.push(label.clone());
+    }
+    mk_name(labels)
+}
+
+fn relativize(n: ref Name, origin: ref Name) -> Name {
+    if is_subdomain(n, origin) {
+        // self[:-len(origin)]: an empty origin leaves nothing
+        let keep = if origin.labels.len() == 0 {
+            0
+        } else {
+            n.labels.len() - origin.labels.len()
+        };
+        return Name { labels: sub_labels(n.labels, 0, keep) };
+    }
+    n.clone()
+}
+
+fn derelativize(n: ref Name, origin: ref Name) -> Result[Name, PyError] {
+    if not is_absolute(n) {
+        return concatenate(n, origin);
+    }
+    Ok(n.clone())
+}
+
+// Name.choose_relativity; an empty origin counts as no origin, as a Name
+// with no labels is false in Python.
+fn choose_relativity(n: ref Name, origin: ref Option[Name], rel: bool) -> Result[Name, PyError] {
+    if let Some(o) = origin {
+        if o.labels.len() > 0 {
+            if rel {
+                return Ok(relativize(n, o));
+            }
+            return derelativize(n, o);
+        }
+    }
+    Ok(n.clone())
+}
+
+fn parent(n: ref Name) -> Result[Name, PyError] {
+    if name_eq(n, root()) or name_eq(n, empty_name()) {
+        return Err(raise("NoParent"));
+    }
+    mk_name(sub_labels(n.labels, 1, n.labels.len()))
+}
+
+// ------------------------------------------------------------- wire parser
+
+// dns.wire.Parser
+struct Parser {
+    wire: Vec[i64],
+    current: i64,
+    end: i64,
+    furthest: i64,
+}
+
+fn new_parser(wire: ref Vec[i64]) -> Parser {
+    Parser { wire: wire.clone(), current: 0, end: wire.len(), furthest: 0 }
+}
+
+fn remaining(p: ref Parser) -> i64 {
+    p.end - p.current
+}
+
+fn get_bytes(p: mut ref Parser, size: i64) -> Result[Vec[i64], PyError] {
+    if size > remaining(p) {
+        return Err(raise("FormError"));
+    }
+    let out = sub(p.wire, p.current, p.current + size);
+    p.current += size;
+    if p.current > p.furthest {
+        p.furthest = p.current;
+    }
+    Ok(out)
+}
+
+fn get_uint(p: mut ref Parser, size: i64) -> Result[i64, PyError] {
+    let v = get_bytes(mut p, size)?;
+    let mut n = 0;
+    for c in v {
+        n = n * 256 + c;
+    }
+    Ok(n)
+}
+
+fn get_counted(p: mut ref Parser) -> Result[Vec[i64], PyError] {
+    let n = get_uint(mut p, 1)?;
+    get_bytes(mut p, n)
+}
+
+fn get_remaining(p: mut ref Parser) -> Result[Vec[i64], PyError] {
+    let n = remaining(p);
+    get_bytes(mut p, n)
+}
+
+fn seek(p: mut ref Parser, at: i64) -> Result[(), PyError] {
+    if at < 0 or at > p.end {
+        return Err(raise("FormError"));
+    }
+    p.current = at;
+    Ok(())
+}
+
+// dns.name.from_wire_parser
+fn name_from_wire(p: mut ref Parser) -> Result[Name, PyError] {
+    let mut labels: Vec[Vec[i64]] = Vec.new();
+    let mut biggest = p.current;
+    let mut count = get_uint(mut p, 1)?;
+    while count != 0 {
+        if count < 64 {
+            labels.push(get_bytes(mut p, count)?);
+        } else if count >= 192 {
+            let at = (count & 63) * 256 + get_uint(mut p, 1)?;
+            if at >= biggest {
+                return Err(raise("BadPointer"));
+            }
+            biggest = at;
+            seek(mut p, at)?;
+        } else {
+            return Err(raise("BadLabelType"));
+        }
+        count = get_uint(mut p, 1)?;
+    }
+    labels.push(Vec.new());
+    p.current = p.furthest;
+    mk_name(labels)
+}
+
+// Parser.get_name(origin)
+fn get_name(p: mut ref Parser, origin: ref Option[Name]) -> Result[Name, PyError] {
+    let n = name_from_wire(mut p)?;
+    if let Some(o) = origin {
+        if o.labels.len() > 0 {
+            return Ok(relativize(n, o));
+        }
+    }
+    Ok(n)
+}
+// ------------------------------------------------------------- tokenizer
+
+const T_EOF: i64 = 0;
+const T_EOL: i64 = 1;
+const T_WHITESPACE: i64 = 2;
+const T_IDENTIFIER: i64 = 3;
+const T_QUOTED: i64 = 4;
+const T_COMMENT: i64 = 5;
+const T_DELIMITER: i64 = 6;
+
+// No character: the unget buffer is empty. End of input reads as -1.
+const NO_CHAR: i64 = -2;
+
+#[derive(Clone)]
+struct Token {
+    ttype: i64,
+    value: Vec[i64],
+    has_escape: bool,
+    has_comment: bool,
+    comment: Vec[i64],
+}
+
+fn token(ttype: i64, value: own Vec[i64]) -> Token {
+    Token { ttype: ttype, value: value, has_escape: false, has_comment: false, comment: Vec.new() }
+}
+
+fn is_eol_or_eof(t: ref Token) -> bool {
+    t.ttype == T_EOL or t.ttype == T_EOF
+}
+
+// dns.tokenizer.Tokenizer over a string
+struct Tokenizer {
+    text: Vec[i64],
+    pos: i64,
+    ungotten_char: i64,
+    ungotten: Vec[Token],
+    multiline: i64,
+    quoting: bool,
+    eof: bool,
+    line: i64,
+}
+
+fn new_tokenizer(t: ref Vec[i64]) -> Tokenizer {
+    Tokenizer {
+        text: t.clone(),
+        pos: 0,
+        ungotten_char: NO_CHAR,
+        ungotten: Vec.new(),
+        multiline: 0,
+        quoting: false,
+        eof: false,
+        line: 1,
+    }
+}
+
+fn get_char(tok: mut ref Tokenizer) -> i64 {
+    if tok.ungotten_char != NO_CHAR {
+        let c = tok.ungotten_char;
+        tok.ungotten_char = NO_CHAR;
+        return c;
+    }
+    if tok.eof {
+        return -1;
+    }
+    if tok.pos >= tok.text.len() {
+        tok.eof = true;
+        return -1;
+    }
+    let c = tok.text[tok.pos];
+    tok.pos += 1;
+    if c == 10 {
+        tok.line += 1;
+    }
+    c
+}
+
+fn unget_char(tok: mut ref Tokenizer, c: i64) {
+    tok.ungotten_char = c;
+}
+
+fn is_delimiter(tok: ref Tokenizer, c: i64) -> bool {
+    if tok.quoting {
+        return c == 34;
+    }
+    c == 32 or c == 9 or c == 10 or c == 59 or c == 40 or c == 41 or c == 34
+}
+
+fn skip_whitespace(tok: mut ref Tokenizer) -> i64 {
+    let mut skipped = 0;
+    loop {
+        let c = get_char(mut tok);
+        if c != 32 and c != 9 {
+            if c != 10 or tok.multiline == 0 {
+                unget_char(mut tok, c);
+                return skipped;
+            }
+        }
+        skipped += 1;
+    }
+}
+
+fn get_tok(tok: mut ref Tokenizer, want_leading: bool, want_comment: bool) -> Result[Token, PyError] {
+    if tok.ungotten.len() > 0 {
+        let u = tok.ungotten.pop().unwrap();
+        if u.ttype == T_WHITESPACE {
+            if want_leading {
+                return Ok(u);
+            }
+        } else if u.ttype == T_COMMENT {
+            if want_comment {
+                return Ok(u);
+            }
+        } else {
+            return Ok(u);
+        }
+    }
+    let skipped = skip_whitespace(mut tok);
+    if want_leading and skipped > 0 {
+        return Ok(token(T_WHITESPACE, b(" ")));
+    }
+    let mut value: Vec[i64] = Vec.new();
+    let mut ttype = T_IDENTIFIER;
+    let mut has_escape = false;
+    loop {
+        let mut c = get_char(mut tok);
+        if c == -1 or is_delimiter(tok, c) {
+            if c == -1 and tok.quoting {
+                return Err(raise("UnexpectedEnd"));
+            }
+            if value.len() == 0 and ttype != T_QUOTED {
+                if c == 40 {
+                    tok.multiline += 1;
+                    skip_whitespace(mut tok);
+                    continue;
+                } else if c == 41 {
+                    if tok.multiline <= 0 {
+                        return Err(raise("SyntaxError"));
+                    }
+                    tok.multiline -= 1;
+                    skip_whitespace(mut tok);
+                    continue;
+                } else if c == 34 {
+                    if not tok.quoting {
+                        tok.quoting = true;
+                        ttype = T_QUOTED;
+                        continue;
+                    }
+                    tok.quoting = false;
+                    skip_whitespace(mut tok);
+                    continue;
+                } else if c == 10 {
+                    return Ok(token(T_EOL, b("\n")));
+                } else if c == 59 {
+                    loop {
+                        c = get_char(mut tok);
+                        if c == 10 or c == -1 {
+                            break;
+                        }
+                        value.push(c);
+                    }
+                    if want_comment {
+                        unget_char(mut tok, c);
+                        return Ok(token(T_COMMENT, value));
+                    } else if c == -1 {
+                        if tok.multiline > 0 {
+                            return Err(fail("SyntaxError", "unbalanced parentheses"));
+                        }
+                        let mut t = token(T_EOF, Vec.new());
+                        t.has_comment = true;
+                        t.comment = value;
+                        return Ok(t);
+                    } else if tok.multiline > 0 {
+                        skip_whitespace(mut tok);
+                        value = Vec.new();
+                        continue;
+                    } else {
+                        let mut t = token(T_EOL, b("\n"));
+                        t.has_comment = true;
+                        t.comment = value;
+                        return Ok(t);
+                    }
+                } else {
+                    // token = c, which is "" at EOF
+                    if c != -1 {
+                        value.push(c);
+                    }
+                    ttype = T_DELIMITER;
+                }
+            } else {
+                unget_char(mut tok, c);
+            }
+            break;
+        } else if tok.quoting and c == 10 {
+            return Err(fail("SyntaxError", "newline in quoted string"));
+        } else if c == 92 {
+            value.push(c);
+            has_escape = true;
+            c = get_char(mut tok);
+            if c == -1 or (c == 10 and not tok.quoting) {
+                return Err(raise("UnexpectedEnd"));
+            }
+        }
+        value.push(c);
+    }
+    if value.len() == 0 and ttype != T_QUOTED {
+        if tok.multiline > 0 {
+            return Err(fail("SyntaxError", "unbalanced parentheses"));
+        }
+        ttype = T_EOF;
+    }
+    let mut t = token(ttype, value);
+    t.has_escape = has_escape;
+    Ok(t)
+}
+
+fn get(tok: mut ref Tokenizer) -> Result[Token, PyError] {
+    get_tok(mut tok, false, false)
+}
+
+fn unget(tok: mut ref Tokenizer, t: own Token) {
+    tok.ungotten.push(t);
+}
+
+// Token.unescape: \DDD becomes the character with that code point (two
+// bytes of UTF-8 from 128 up), \X becomes X.
+fn unescape(t: ref Token) -> Result[Token, PyError] {
+    if not t.has_escape {
+        return Ok(t.clone());
+    }
+    let v = ref t.value;
+    let l = v.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < l {
+        let mut c = v[i];
+        i += 1;
+        if c == 92 {
+            c = v[i];
+            i += 1;
+            if is_digit(c) {
+                if i >= l {
+                    return Err(raise("UnexpectedEnd"));
+                }
+                let c2 = v[i];
+                i += 1;
+                if i >= l {
+                    return Err(raise("UnexpectedEnd"));
+                }
+                let c3 = v[i];
+                i += 1;
+                if not (is_digit(c2) and is_digit(c3)) {
+                    return Err(raise("SyntaxError"));
+                }
+                let cp = (c - 48) * 100 + (c2 - 48) * 10 + (c3 - 48);
+                if cp > 255 {
+                    return Err(raise("SyntaxError"));
+                }
+                push_utf8(mut out, cp);
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    Ok(token(t.ttype, out))
+}
+
+// Token.unescape_to_bytes: \DDD becomes that byte.
+fn unescape_to_bytes(t: ref Token) -> Result[Token, PyError] {
+    let v = ref t.value;
+    let l = v.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < l {
+        let mut c = v[i];
+        i += 1;
+        if c == 92 {
+            c = v[i];
+            i += 1;
+            if is_digit(c) {
+                if i >= l {
+                    return Err(raise("UnexpectedEnd"));
+                }
+                let c2 = v[i];
+                i += 1;
+                if i >= l {
+                    return Err(raise("UnexpectedEnd"));
+                }
+                let c3 = v[i];
+                i += 1;
+                if not (is_digit(c2) and is_digit(c3)) {
+                    return Err(raise("SyntaxError"));
+                }
+                let cp = (c - 48) * 100 + (c2 - 48) * 10 + (c3 - 48);
+                if cp > 255 {
+                    return Err(raise("SyntaxError"));
+                }
+                out.push(cp);
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    Ok(token(t.ttype, out))
+}
+
+fn get_int(tok: mut ref Tokenizer) -> Result[i64, PyError] {
+    let raw = get(mut tok)?;
+    let t = unescape(raw)?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(fail("SyntaxError", "expecting an identifier"));
+    }
+    if not all_digits(t.value) {
+        return Err(fail("SyntaxError", "expecting an integer"));
+    }
+    Ok(digits_value(t.value))
+}
+
+fn get_uint8(tok: mut ref Tokenizer) -> Result[i64, PyError] {
+    let v = get_int(mut tok)?;
+    if v > 255 {
+        return Err(failm("SyntaxError", f"{v} is not an unsigned 8-bit integer"));
+    }
+    Ok(v)
+}
+
+fn get_uint16(tok: mut ref Tokenizer) -> Result[i64, PyError] {
+    let v = get_int(mut tok)?;
+    if v > 65535 {
+        return Err(failm("SyntaxError", f"{v} is not an unsigned 16-bit integer"));
+    }
+    Ok(v)
+}
+
+fn get_uint32(tok: mut ref Tokenizer) -> Result[i64, PyError] {
+    let v = get_int(mut tok)?;
+    if v > 4294967295 {
+        return Err(failm("SyntaxError", f"{v} is not an unsigned 32-bit integer"));
+    }
+    Ok(v)
+}
+
+// get_string(max_length): the length limit counts characters.
+fn get_string(tok: mut ref Tokenizer, max_length: i64) -> Result[Vec[i64], PyError] {
+    let raw = get(mut tok)?;
+    let t = unescape(raw)?;
+    if not (t.ttype == T_IDENTIFIER or t.ttype == T_QUOTED) {
+        return Err(fail("SyntaxError", "expecting a string"));
+    }
+    if max_length > 0 and char_len(t.value) > max_length {
+        return Err(fail("SyntaxError", "string too long"));
+    }
+    Ok(t.value)
+}
+
+fn get_identifier(tok: mut ref Tokenizer) -> Result[Vec[i64], PyError] {
+    let raw = get(mut tok)?;
+    let t = unescape(raw)?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(fail("SyntaxError", "expecting an identifier"));
+    }
+    Ok(t.value)
+}
+
+fn get_remaining_tokens(tok: mut ref Tokenizer) -> Result[Vec[Token], PyError] {
+    let mut out: Vec[Token] = Vec.new();
+    loop {
+        let t = get(mut tok)?;
+        if is_eol_or_eof(t) {
+            unget(mut tok, t);
+            break;
+        }
+        out.push(t);
+    }
+    Ok(out)
+}
+
+fn concatenate_remaining_identifiers(tok: mut ref Tokenizer, allow_empty: bool) -> Result[Vec[i64], PyError] {
+    let mut s: Vec[i64] = Vec.new();
+    loop {
+        let raw = get(mut tok)?;
+        let t = unescape(raw)?;
+        if is_eol_or_eof(t) {
+            unget(mut tok, t);
+            break;
+        }
+        if t.ttype != T_IDENTIFIER {
+            return Err(raise("SyntaxError"));
+        }
+        push_b(mut s, t.value);
+    }
+    if not allow_empty and s.len() == 0 {
+        return Err(fail("SyntaxError", "expecting another identifier"));
+    }
+    Ok(s)
+}
+
+// Tokenizer.as_name: from_text with the origin, then choose_relativity
+// against relativize_to (or the origin).
+fn as_name(t: ref Token, origin: ref Option[Name], rel: bool, rel_to: ref Option[Name]) -> Result[Name, PyError] {
+    if t.ttype != T_IDENTIFIER {
+        return Err(fail("SyntaxError", "expecting an identifier"));
+    }
+    let n = name_from_text(t.value, origin)?;
+    let mut target = origin.clone();
+    if let Some(r) = rel_to {
+        if r.labels.len() > 0 {
+            target = Some(r.clone());
+        }
+    }
+    choose_relativity(n, target, rel)
+}
+
+fn get_name_tok(tok: mut ref Tokenizer, origin: ref Option[Name], rel: bool, rel_to: ref Option[Name]) -> Result[Name, PyError] {
+    let t = get(mut tok)?;
+    as_name(t, origin, rel, rel_to)
+}
+
+fn token_text(t: ref Token) -> String {
+    text(t.value)
+}
+
+fn get_eol_as_token(tok: mut ref Tokenizer) -> Result[Token, PyError] {
+    let t = get(mut tok)?;
+    if not is_eol_or_eof(t) {
+        return Err(failm("SyntaxError", f"expected EOL or EOF, got {t.ttype} \"{token_text(t)}\""));
+    }
+    Ok(t)
+}
+
+fn get_ttl(tok: mut ref Tokenizer) -> Result[i64, PyError] {
+    let raw = get(mut tok)?;
+    let t = unescape(raw)?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(fail("SyntaxError", "expecting an identifier"));
+    }
+    ttl_from_text(t.value)
+}
+
+// dns.ttl.from_text
+fn ttl_from_text(t: ref Vec[i64]) -> Result[i64, PyError] {
+    let mut total = 0;
+    if all_digits(t) {
+        total = digits_value(t);
+    } else if t.len() == 0 {
+        return Err(raise("BadTTL"));
+    } else {
+        let mut current = 0;
+        let mut need_digit = true;
+        for c in t {
+            if is_digit(c) {
+                current = current * 10 + (c - 48);
+                need_digit = false;
+            } else {
+                if need_digit {
+                    return Err(raise("BadTTL"));
+                }
+                let lc = lower(c);
+                if lc == 119 {
+                    total += current * 604800;
+                } else if lc == 100 {
+                    total += current * 86400;
+                } else if lc == 104 {
+                    total += current * 3600;
+                } else if lc == 109 {
+                    total += current * 60;
+                } else if lc == 115 {
+                    total += current;
+                } else {
+                    let mut unit: Vec[i64] = Vec.new();
+                    unit.push(lc);
+                    return Err(failm("BadTTL", f"unknown unit '{text(unit)}'"));
+                }
+                current = 0;
+                need_digit = true;
+            }
+        }
+        if current != 0 {
+            return Err(fail("BadTTL", "trailing integer"));
+        }
+    }
+    if total < 0 or total > 4294967295 {
+        return Err(fail("BadTTL", "TTL should be between 0 and 2**32 - 1 (inclusive)"));
+    }
+    Ok(total)
+}
+// ------------------------------------------------------------- enums
+
+// RdataType.from_text: a member name (with - for _), or TYPE<n>.
+fn rdtype_from_text(t: ref Vec[i64]) -> Result[i64, PyError] {
+    let u = upper_all(t);
+    let v = type_by_name(text(u));
+    if v >= 0 {
+        return Ok(v);
+    }
+    let dash = b("-");
+    let under = b("_");
+    let w = type_by_name(text(replace_all(u, dash, under)));
+    if w >= 0 and u.contains(45) {
+        return Ok(w);
+    }
+    enum_number(u, "TYPE", 65535, "type", "UnknownRdatatype")
+}
+
+fn rdtype_text(v: i64) -> String {
+    let n = type_name(v);
+    if n.len() > 0 {
+        let raw = bs(n);
+        return text(replace_all(raw, b("_"), b("-")));
+    }
+    f"TYPE{v}"
+}
+
+// The <prefix><digits> form, checked against the enum's maximum.
+fn enum_number(u: ref Vec[i64], prefix: Str, max: i64, short: Str, unknown: Str) -> Result[i64, PyError] {
+    let p = b(prefix);
+    if u.len() > p.len() and same(sub(u, 0, p.len()), p) {
+        let rest = sub(u, p.len(), u.len());
+        if all_digits(rest) {
+            let value = digits_value(rest);
+            if value > max {
+                return Err(failm("ValueError", f"{short} must be an int between >= 0 and <= {max}"));
+            }
+            return Ok(value);
+        }
+    }
+    Err(raise(unknown))
+}
+
+fn rdclass_from_text(t: ref Vec[i64]) -> Result[i64, PyError] {
+    let u = upper_all(t);
+    let s = text(u);
+    if s == "RESERVED0" {
+        return Ok(0);
+    }
+    if s == "IN" or s == "INTERNET" {
+        return Ok(1);
+    }
+    if s == "CH" or s == "CHAOS" {
+        return Ok(3);
+    }
+    if s == "HS" or s == "HESIOD" {
+        return Ok(4);
+    }
+    if s == "NONE" {
+        return Ok(254);
+    }
+    if s == "ANY" {
+        return Ok(255);
+    }
+    enum_number(u, "CLASS", 65535, "class", "UnknownRdataclass")
+}
+
+fn rdclass_text(v: i64) -> String {
+    if v == 0 {
+        return "RESERVED0".to_string();
+    }
+    if v == 1 {
+        return "IN".to_string();
+    }
+    if v == 3 {
+        return "CH".to_string();
+    }
+    if v == 4 {
+        return "HS".to_string();
+    }
+    if v == 254 {
+        return "NONE".to_string();
+    }
+    if v == 255 {
+        return "ANY".to_string();
+    }
+    f"CLASS{v}"
+}
+
+fn opcode_text(v: i64) -> String {
+    let t = if v == 0 {
+        "QUERY"
+    } else if v == 1 {
+        "IQUERY"
+    } else if v == 2 {
+        "STATUS"
+    } else if v == 4 {
+        "NOTIFY"
+    } else if v == 5 {
+        "UPDATE"
+    } else {
+        ""
+    };
+    if t.len() == 0 {
+        return f"{v}";
+    }
+    t.to_string()
+}
+
+fn rcode_text(v: i64) -> String {
+    let names = [
+        "NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED", "YXDOMAIN", "YXRRSET",
+        "NXRRSET", "NOTAUTH", "NOTZONE", "DSOTYPENI",
+    ];
+    if v >= 0 and v < 12 {
+        return names[v].to_string();
+    }
+    let t = if v == 16 {
+        "BADVERS"
+    } else if v == 17 {
+        "BADKEY"
+    } else if v == 18 {
+        "BADTIME"
+    } else if v == 19 {
+        "BADMODE"
+    } else if v == 20 {
+        "BADNAME"
+    } else if v == 21 {
+        "BADALG"
+    } else if v == 22 {
+        "BADTRUNC"
+    } else if v == 23 {
+        "BADCOOKIE"
+    } else {
+        ""
+    };
+    if t.len() == 0 {
+        return f"{v}";
+    }
+    t.to_string()
+}
+
+const QR: i64 = 32768;
+const AA: i64 = 1024;
+const TC: i64 = 512;
+const RD: i64 = 256;
+const RA: i64 = 128;
+
+fn flags_text(flags: i64) -> String {
+    let names = ["QR", "AA", "TC", "RD", "RA", "AD", "CD"];
+    let values = [32768, 1024, 512, 256, 128, 32, 16];
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 7 {
+        if flags & values[i] != 0 {
+            parts.push(names[i].to_string());
+        }
+        i += 1;
+    }
+    parts.join(" ")
+}
+
+// ------------------------------------------------------------- addresses
+
+// dns.ipv4.inet_aton
+fn ipv4_aton(t: ref Vec[i64]) -> Result[Vec[i64], PyError] {
+    let parts = split_on(t, 46);
+    if parts.len() != 4 {
+        return Err(raise("SyntaxError"));
+    }
+    for part in parts {
+        if not all_digits(part) {
+            return Err(raise("SyntaxError"));
+        }
+        if part.len() > 1 and part[0] == 48 {
+            return Err(raise("SyntaxError"));
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for part in parts {
+        let v = digits_value(part);
+        if v > 255 {
+            return Err(raise("SyntaxError"));
+        }
+        out.push(v);
+    }
+    Ok(out)
+}
+
+fn ipv4_ntoa(a: ref Vec[i64]) -> Result[String, PyError] {
+    if a.len() != 4 {
+        return Err(raise("SyntaxError"));
+    }
+    Ok(f"{a[0]}.{a[1]}.{a[2]}.{a[3]}")
+}
+
+fn split_on(t: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in t {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn ends_with(t: ref Vec[i64], s: Str) -> bool {
+    let p = b(s);
+    t.len() >= p.len() and same(sub(t, t.len() - p.len(), t.len()), p)
+}
+
+fn starts_with(t: ref Vec[i64], s: Str) -> bool {
+    let p = b(s);
+    t.len() >= p.len() and same(sub(t, 0, p.len()), p)
+}
+
+// \d+\.\d+\.\d+\.\d+ over the whole of t
+fn dotted_quad(t: ref Vec[i64]) -> bool {
+    let parts = split_on(t, 46);
+    if parts.len() != 4 {
+        return false;
+    }
+    for part in parts {
+        if not all_digits(part) {
+            return false;
+        }
+    }
+    true
+}
+
+// dns.ipv6.inet_aton
+fn ipv6_aton(t: ref Vec[i64]) -> Result[Vec[i64], PyError] {
+    let mut btext = t.clone();
+    if btext.len() == 0 {
+        return Err(raise("SyntaxError"));
+    } else if ends_with(btext, ":") and not ends_with(btext, "::") {
+        return Err(raise("SyntaxError"));
+    } else if starts_with(btext, ":") and not starts_with(btext, "::") {
+        return Err(raise("SyntaxError"));
+    } else if is_lit(btext, "::") {
+        btext = b("0::");
+    }
+    // (.*):(\d+\.\d+\.\d+\.\d+)$
+    let mut last = -1;
+    let mut i = 0;
+    while i < btext.len() {
+        if btext[i] == 58 {
+            last = i;
+        }
+        i += 1;
+    }
+    if last >= 0 {
+        let tail = sub(btext, last + 1, btext.len());
+        if dotted_quad(tail) {
+            let v4 = ipv4_aton(tail)?;
+            let mut nt = sub(btext, 0, last);
+            nt.push(58);
+            push_b(mut nt, hexlify(sub(v4, 0, 2)));
+            nt.push(58);
+            push_b(mut nt, hexlify(sub(v4, 2, 4)));
+            btext = nt;
+        }
+    }
+    if starts_with(btext, "::") {
+        btext = sub(btext, 1, btext.len());
+    } else if ends_with(btext, "::") {
+        btext = sub(btext, 0, btext.len() - 1);
+    }
+    let chunks = split_on(btext, 58);
+    let l = chunks.len();
+    if l > 8 {
+        return Err(raise("SyntaxError"));
+    }
+    let mut seen_empty = false;
+    let mut canonical: Vec[i64] = Vec.new();
+    for c in chunks {
+        if c.len() == 0 {
+            if seen_empty {
+                return Err(raise("SyntaxError"));
+            }
+            seen_empty = true;
+            let mut k = 0;
+            while k < 8 - l + 1 {
+                push_s(mut canonical, "0000");
+                k += 1;
+            }
+        } else {
+            if c.len() > 4 {
+                return Err(raise("SyntaxError"));
+            }
+            let mut k = c.len();
+            while k < 4 {
+                canonical.push(48);
+                k += 1;
+            }
+            push_b(mut canonical, c);
+        }
+    }
+    if l < 8 and not seen_empty {
+        return Err(raise("SyntaxError"));
+    }
+    match unhexlify(canonical) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(raise("SyntaxError")),
+    }
+}
+
+// dns.ipv6.inet_ntoa
+fn ipv6_ntoa(a: ref Vec[i64]) -> Result[String, PyError] {
+    if a.len() != 16 {
+        return Err(fail("ValueError", "IPv6 addresses are 16 bytes long"));
+    }
+    let hex = hexlify(a);
+    let mut chunks: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < 32 {
+        let mut chunk = sub(hex, i, i + 4);
+        while chunk.len() > 1 and chunk[0] == 48 {
+            chunk = sub(chunk, 1, chunk.len());
+        }
+        chunks.push(chunk);
+        i += 4;
+    }
+    let mut best_start = 0;
+    let mut best_len = 0;
+    let mut start = -1;
+    let mut last_was_zero = false;
+    let mut j = 0;
+    while j < 8 {
+        if not is_lit(chunks[j], "0") {
+            if last_was_zero {
+                let current_len = j - start;
+                if current_len > best_len {
+                    best_start = start;
+                    best_len = current_len;
+                }
+                last_was_zero = false;
+            }
+        } else if not last_was_zero {
+            start = j;
+            last_was_zero = true;
+        }
+        j += 1;
+    }
+    if last_was_zero {
+        let current_len = 8 - start;
+        if current_len > best_len {
+            best_start = start;
+            best_len = current_len;
+        }
+    }
+    if best_len > 1 {
+        if best_start == 0 and (best_len == 6 or (best_len == 5 and is_lit(chunks[5], "ffff"))) {
+            let prefix = if best_len == 6 {
+                "::"
+            } else {
+                "::ffff:"
+            };
+            let v4 = ipv4_ntoa(sub(a, 12, 16))?;
+            return Ok(f"{prefix}{v4}");
+        }
+        let mut out: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < best_start {
+            if k > 0 {
+                out.push(58);
+            }
+            push_b(mut out, chunks[k]);
+            k += 1;
+        }
+        push_s(mut out, "::");
+        k = best_start + best_len;
+        while k < 8 {
+            if k > best_start + best_len {
+                out.push(58);
+            }
+            push_b(mut out, chunks[k]);
+            k += 1;
+        }
+        return Ok(text(out));
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 8 {
+        if k > 0 {
+            out.push(58);
+        }
+        push_b(mut out, chunks[k]);
+        k += 1;
+    }
+    Ok(text(out))
+}
+
+fn is_mapped(a: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < 10 {
+        if a[i] != 0 {
+            return false;
+        }
+        i += 1;
+    }
+    a[10] == 255 and a[11] == 255
+}
+
+// dns.reversename.from_address
+fn reverse_from_address(t: ref Vec[i64]) -> Result[Name, PyError] {
+    let mut parts: Vec[Vec[i64]] = Vec.new();
+    let mut origin = name_of("in-addr.arpa.")?;
+    match ipv6_aton(t) {
+        Ok(v6) => {
+            if is_mapped(v6) {
+                let mut k = 12;
+                while k < 16 {
+                    parts.push(bs(f"{v6[k]}"));
+                    k += 1;
+                }
+            } else {
+                for c in hexlify(v6) {
+                    let mut one: Vec[i64] = Vec.new();
+                    one.push(c);
+                    parts.push(one);
+                }
+                origin = name_of("ip6.arpa.")?;
+            }
+        }
+        Err(_) => {
+            let v4 = ipv4_aton(t)?;
+            for c in v4 {
+                parts.push(bs(f"{c}"));
+            }
+        }
+    }
+    let mut joined: Vec[i64] = Vec.new();
+    let mut k = parts.len() - 1;
+    while k >= 0 {
+        push_b(mut joined, parts[k]);
+        if k > 0 {
+            joined.push(46);
+        }
+        k -= 1;
+    }
+    name_from_text(joined, Some(origin))
+}
+
+// dns.reversename.to_address
+fn reverse_to_address(n: ref Name) -> Result[String, PyError] {
+    let v4_origin = name_of("in-addr.arpa.")?;
+    let v6_origin = name_of("ip6.arpa.")?;
+    if is_subdomain(n, v4_origin) {
+        let r = relativize(n, v4_origin);
+        let mut t: Vec[i64] = Vec.new();
+        let mut k = r.labels.len() - 1;
+        while k >= 0 {
+            push_b(mut t, r.labels[k]);
+            if k > 0 {
+                t.push(46);
+            }
+            k -= 1;
+        }
+        let a = ipv4_aton(t)?;
+        return ipv4_ntoa(a);
+    }
+    if is_subdomain(n, v6_origin) {
+        let r = relativize(n, v6_origin);
+        let mut labels: Vec[Vec[i64]] = Vec.new();
+        let mut k = r.labels.len() - 1;
+        while k >= 0 {
+            labels.push(r.labels[k].clone());
+            k -= 1;
+        }
+        let mut t: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < labels.len() {
+            if i > 0 {
+                t.push(58);
+            }
+            let mut j = i;
+            while j < i + 4 and j < labels.len() {
+                push_b(mut t, labels[j]);
+                j += 1;
+            }
+            i += 4;
+        }
+        let a = ipv6_aton(t)?;
+        return ipv6_ntoa(a);
+    }
+    Err(fail("SyntaxError", "unknown reverse-map address family"))
+}
+// ------------------------------------------------------------- rdata
+
+// The rdata classes this port implements, by layout; any other type is
+// dns.rdata.GenericRdata.
+const K_GENERIC: i64 = 0;
+const K_A: i64 = 1;
+const K_AAAA: i64 = 2;
+const K_NS: i64 = 3; // NS, CNAME, PTR: one name, compressed
+const K_DNAME: i64 = 4; // one name, never compressed or downcased
+const K_MX: i64 = 5;
+const K_TXT: i64 = 6; // TXT, SPF
+const K_SOA: i64 = 7;
+const K_SRV: i64 = 8;
+const K_CAA: i64 = 9;
+const K_HINFO: i64 = 10;
+const K_SSHFP: i64 = 11;
+const K_TLSA: i64 = 12; // TLSA, SMIMEA
+
+fn rd_kind(rdclass: i64, rdtype: i64) -> i64 {
+    if rdtype == 1 or rdtype == 28 or rdtype == 33 {
+        if rdclass != 1 {
+            return K_GENERIC;
+        }
+        if rdtype == 1 {
+            return K_A;
+        }
+        if rdtype == 28 {
+            return K_AAAA;
+        }
+        return K_SRV;
+    }
+    if rdtype == 2 or rdtype == 5 or rdtype == 12 {
+        return K_NS;
+    }
+    if rdtype == 39 {
+        return K_DNAME;
+    }
+    if rdtype == 15 {
+        return K_MX;
+    }
+    if rdtype == 16 or rdtype == 99 {
+        return K_TXT;
+    }
+    if rdtype == 6 {
+        return K_SOA;
+    }
+    if rdtype == 257 {
+        return K_CAA;
+    }
+    if rdtype == 13 {
+        return K_HINFO;
+    }
+    if rdtype == 44 {
+        return K_SSHFP;
+    }
+    if rdtype == 52 or rdtype == 53 {
+        return K_TLSA;
+    }
+    K_GENERIC
+}
+
+// One rdata. nums holds the integer fields in order (preference; serial
+// to minimum; priority, weight, port; flags; algorithm and fingerprint
+// type; usage, selector, matching type), names the domain names, strs
+// the character strings (TXT strings; CPU and OS; CAA tag and value) and
+// data the bytes (an address, fingerprint, certificate or generic data).
+#[derive(Clone)]
+struct Rdata {
+    rdclass: i64,
+    rdtype: i64,
+    kind: i64,
+    nums: Vec[i64],
+    names: Vec[Name],
+    strs: Vec[Vec[i64]],
+    data: Vec[i64],
+    has_comment: bool,
+    comment: Vec[i64],
+}
+
+fn new_rdata(rdclass: i64, rdtype: i64) -> Rdata {
+    Rdata {
+        rdclass: rdclass,
+        rdtype: rdtype,
+        kind: rd_kind(rdclass, rdtype),
+        nums: Vec.new(),
+        names: Vec.new(),
+        strs: Vec.new(),
+        data: Vec.new(),
+        has_comment: false,
+        comment: Vec.new(),
+    }
+}
+
+// dns.rdata._escapify for a quoted string
+fn escapify_q(v: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    for c in v {
+        if c == 34 or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c >= 32 and c < 127 {
+            out.push(c);
+        } else {
+            out.push(92);
+            push_s(mut out, pad3(c));
+        }
+    }
+    text(out)
+}
+
+// dns.rdata._hexify: hex broken into chunks joined by a space
+fn hexify(v: ref Vec[i64], chunk: i64) -> String {
+    let h = hexlify(v);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < h.len() {
+        if i > 0 and i % chunk == 0 {
+            out.push(32);
+        }
+        out.push(h[i]);
+        i += 1;
+    }
+    text(out)
+}
+
+fn rel_text(n: ref Name, origin: ref Option[Name], rel: bool) -> Result[String, PyError] {
+    let c = choose_relativity(n, origin, rel)?;
+    Ok(str_name(c))
+}
+
+fn rdata_text(rd: ref Rdata, origin: ref Option[Name], rel: bool) -> Result[String, PyError] {
+    let k = rd.kind;
+    if k == K_A {
+        return ipv4_ntoa(rd.data);
+    }
+    if k == K_AAAA {
+        return ipv6_ntoa(rd.data);
+    }
+    if k == K_NS or k == K_DNAME {
+        return rel_text(rd.names[0], origin, rel);
+    }
+    if k == K_MX {
+        let x = rel_text(rd.names[0], origin, rel)?;
+        return Ok(f"{rd.nums[0]} {x}");
+    }
+    if k == K_TXT {
+        let mut parts: Vec[String] = Vec.new();
+        for s in rd.strs {
+            parts.push(f"\"{escapify_q(s)}\"");
+        }
+        return Ok(parts.join(" "));
+    }
+    if k == K_SOA {
+        let m = rel_text(rd.names[0], origin, rel)?;
+        let r = rel_text(rd.names[1], origin, rel)?;
+        let n = ref rd.nums;
+        return Ok(f"{m} {r} {n[0]} {n[1]} {n[2]} {n[3]} {n[4]}");
+    }
+    if k == K_SRV {
+        let t = rel_text(rd.names[0], origin, rel)?;
+        let n = ref rd.nums;
+        return Ok(f"{n[0]} {n[1]} {n[2]} {t}");
+    }
+    if k == K_CAA {
+        let tag = escapify_q(rd.strs[0]);
+        let value = escapify_q(rd.strs[1]);
+        return Ok(f"{rd.nums[0]} {tag} \"{value}\"");
+    }
+    if k == K_HINFO {
+        return Ok(f"\"{escapify_q(rd.strs[0])}\" \"{escapify_q(rd.strs[1])}\"");
+    }
+    if k == K_SSHFP {
+        return Ok(f"{rd.nums[0]} {rd.nums[1]} {hexify(rd.data, 128)}");
+    }
+    if k == K_TLSA {
+        return Ok(f"{rd.nums[0]} {rd.nums[1]} {rd.nums[2]} {hexify(rd.data, 128)}");
+    }
+    Ok(f"\\# {rd.data.len()} {hexify(rd.data, 32)}")
+}
+
+fn push_counted(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    out.push(s.len());
+    push_b(mut out, s);
+}
+
+fn rdata_to_wire(rd: ref Rdata, out: mut ref Vec[i64], comp: mut ref Compress, use_comp: bool, origin: ref Option[Name], canon: bool) -> Result[(), PyError] {
+    let k = rd.kind;
+    if k == K_NS {
+        return name_to_wire(rd.names[0], mut out, mut comp, use_comp, origin, canon);
+    }
+    if k == K_DNAME {
+        return name_to_wire(rd.names[0], mut out, mut comp, false, origin, false);
+    }
+    if k == K_MX {
+        u16_bytes(mut out, rd.nums[0]);
+        return name_to_wire(rd.names[0], mut out, mut comp, use_comp, origin, canon);
+    }
+    if k == K_TXT {
+        for s in rd.strs {
+            push_counted(mut out, s);
+        }
+        return Ok(());
+    }
+    if k == K_SOA {
+        name_to_wire(rd.names[0], mut out, mut comp, use_comp, origin, canon)?;
+        name_to_wire(rd.names[1], mut out, mut comp, use_comp, origin, canon)?;
+        for n in rd.nums {
+            u32_bytes(mut out, n);
+        }
+        return Ok(());
+    }
+    if k == K_SRV {
+        for n in rd.nums {
+            u16_bytes(mut out, n);
+        }
+        return name_to_wire(rd.names[0], mut out, mut comp, use_comp, origin, canon);
+    }
+    if k == K_CAA {
+        out.push(rd.nums[0]);
+        push_counted(mut out, rd.strs[0]);
+        push_b(mut out, rd.strs[1]);
+        return Ok(());
+    }
+    if k == K_HINFO {
+        push_counted(mut out, rd.strs[0]);
+        push_counted(mut out, rd.strs[1]);
+        return Ok(());
+    }
+    // A, AAAA, SSHFP, TLSA and generic: the integer fields as bytes, then
+    // the data
+    for n in rd.nums {
+        out.push(n);
+    }
+    push_b(mut out, rd.data);
+    Ok(())
+}
+
+// Rdata.to_wire() with no file, compression or origin
+fn rdata_wire(rd: ref Rdata) -> Result[Vec[i64], PyError] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut comp = new_compress();
+    rdata_to_wire(rd, mut out, mut comp, false, None, false)?;
+    Ok(out)
+}
+
+fn has_relative_name(rd: ref Rdata) -> bool {
+    for n in rd.names {
+        if not is_absolute(n) {
+            return true;
+        }
+    }
+    false
+}
+
+// Rdata.__eq__: the same class and type, the same relativity, and the
+// same digestable (canonical) wire form.
+fn rdata_eq(a: ref Rdata, c: ref Rdata) -> bool {
+    if a.rdclass != c.rdclass or a.rdtype != c.rdtype {
+        return false;
+    }
+    let ra = has_relative_name(a);
+    if ra != has_relative_name(c) {
+        return false;
+    }
+    let origin = if ra {
+        Some(root())
+    } else {
+        None
+    };
+    let mut wa: Vec[i64] = Vec.new();
+    let mut wc: Vec[i64] = Vec.new();
+    let mut comp = new_compress();
+    if rdata_to_wire(a, mut wa, mut comp, false, origin, true).is_err() {
+        return false;
+    }
+    if rdata_to_wire(c, mut wc, mut comp, false, origin, true).is_err() {
+        return false;
+    }
+    same(wa, wc)
+}
+
+fn is_alnum_all(v: ref Vec[i64]) -> bool {
+    if v.len() == 0 {
+        return false;
+    }
+    for c in v {
+        if not is_alnum(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// GenericRdata.from_text: \# <length> <hex>
+fn generic_from_text(tok: mut ref Tokenizer) -> Result[Vec[i64], PyError] {
+    let t = get(mut tok)?;
+    if t.ttype != T_IDENTIFIER or not is_lit(t.value, "\\#") {
+        return Err(fail("SyntaxError", "generic rdata does not start with \\#"));
+    }
+    let length = get_int(mut tok)?;
+    let hex = concatenate_remaining_identifiers(mut tok, true)?;
+    let data = unhexlify(hex)?;
+    if data.len() != length {
+        return Err(fail("SyntaxError", "generic rdata hex data has wrong length"));
+    }
+    Ok(data)
+}
+
+fn known_from_text(rdclass: i64, rdtype: i64, tok: mut ref Tokenizer, origin: ref Option[Name], rel: bool, rel_to: ref Option[Name]) -> Result[Rdata, PyError] {
+    let mut rd = new_rdata(rdclass, rdtype);
+    let k = rd.kind;
+    if k == K_A {
+        let t = get_identifier(mut tok)?;
+        rd.data = ipv4_aton(t)?;
+    } else if k == K_AAAA {
+        let t = get_identifier(mut tok)?;
+        rd.data = ipv6_aton(t)?;
+    } else if k == K_NS or k == K_DNAME {
+        rd.names.push(get_name_tok(mut tok, origin, rel, rel_to)?);
+    } else if k == K_MX {
+        rd.nums.push(get_uint16(mut tok)?);
+        rd.names.push(get_name_tok(mut tok, origin, rel, rel_to)?);
+    } else if k == K_TXT {
+        for raw in get_remaining_tokens(mut tok)? {
+            let t = unescape_to_bytes(raw)?;
+            if not (t.ttype == T_QUOTED or t.ttype == T_IDENTIFIER) {
+                return Err(fail("SyntaxError", "expected a string"));
+            }
+            if t.value.len() > 255 {
+                return Err(fail("SyntaxError", "string too long"));
+            }
+            rd.strs.push(t.value);
+        }
+        if rd.strs.len() == 0 {
+            return Err(raise("UnexpectedEnd"));
+        }
+    } else if k == K_SOA {
+        rd.names.push(get_name_tok(mut tok, origin, rel, rel_to)?);
+        rd.names.push(get_name_tok(mut tok, origin, rel, rel_to)?);
+        rd.nums.push(get_uint32(mut tok)?);
+        let mut i = 0;
+        while i < 4 {
+            rd.nums.push(get_ttl(mut tok)?);
+            i += 1;
+        }
+    } else if k == K_SRV {
+        let mut i = 0;
+        while i < 3 {
+            rd.nums.push(get_uint16(mut tok)?);
+            i += 1;
+        }
+        rd.names.push(get_name_tok(mut tok, origin, rel, rel_to)?);
+    } else if k == K_CAA {
+        rd.nums.push(get_uint8(mut tok)?);
+        let tag = get_string(mut tok, 0)?;
+        let value = get_string(mut tok, 0)?;
+        if tag.len() > 255 {
+            return Err(fail("ValueError", "too long"));
+        }
+        if not is_alnum_all(tag) {
+            return Err(fail("ValueError", "tag is not alphanumeric"));
+        }
+        rd.strs.push(tag);
+        rd.strs.push(value);
+    } else if k == K_HINFO {
+        let cpu = get_string(mut tok, 255)?;
+        let os = get_string(mut tok, 255)?;
+        if cpu.len() > 255 or os.len() > 255 {
+            return Err(fail("ValueError", "too long"));
+        }
+        rd.strs.push(cpu);
+        rd.strs.push(os);
+    } else if k == K_SSHFP {
+        rd.nums.push(get_uint8(mut tok)?);
+        rd.nums.push(get_uint8(mut tok)?);
+        let hex = concatenate_remaining_identifiers(mut tok, false)?;
+        rd.data = unhexlify(hex)?;
+    } else if k == K_TLSA {
+        let mut i = 0;
+        while i < 3 {
+            rd.nums.push(get_uint8(mut tok)?);
+            i += 1;
+        }
+        let hex = concatenate_remaining_identifiers(mut tok, false)?;
+        rd.data = unhexlify(hex)?;
+    } else {
+        rd.data = generic_from_text(mut tok)?;
+    }
+    Ok(rd)
+}
+
+fn rdata_from_text_inner(rdclass: i64, rdtype: i64, tok: mut ref Tokenizer, origin: ref Option[Name], rel: bool, rel_to: ref Option[Name]) -> Result[Rdata, PyError] {
+    let mut found: Option[Rdata] = None;
+    if rd_kind(rdclass, rdtype) != K_GENERIC {
+        let t = get(mut tok)?;
+        let generic = t.ttype == T_IDENTIFIER and is_lit(t.value, "\\#");
+        unget(mut tok, t);
+        if generic {
+            let data = generic_from_text(mut tok)?;
+            let rd = rdata_from_wire_bytes(rdclass, rdtype, data, origin)?;
+            let rwire = rdata_wire(rd)?;
+            if not same(rwire, data) {
+                return Err(fail("SyntaxError", "compressed data in generic syntax form of known rdatatype"));
+            }
+            found = Some(rd);
+        }
+    }
+    let mut rd = match found {
+        Some(r) => r,
+        None => known_from_text(rdclass, rdtype, mut tok, origin, rel, rel_to)?,
+    };
+    let eol = get_eol_as_token(mut tok)?;
+    if eol.has_comment {
+        rd.has_comment = true;
+        rd.comment = eol.comment;
+    }
+    Ok(rd)
+}
+
+// dns.rdata.from_text: any error that is not a SyntaxError becomes one,
+// with the same message.
+fn rdata_from_text(rdclass: i64, rdtype: i64, tok: mut ref Tokenizer, origin: ref Option[Name], rel: bool, rel_to: ref Option[Name]) -> Result[Rdata, PyError] {
+    match rdata_from_text_inner(rdclass, rdtype, mut tok, origin, rel, rel_to) {
+        Ok(rd) => Ok(rd),
+        Err(e) => {
+            if is_syntax(e.kind) {
+                return Err(e);
+            }
+            Err(failm("SyntaxError", e.msg))
+        }
+    }
+}
+
+fn known_from_wire(rdclass: i64, rdtype: i64, p: mut ref Parser, origin: ref Option[Name]) -> Result[Rdata, PyError] {
+    let mut rd = new_rdata(rdclass, rdtype);
+    let k = rd.kind;
+    if k == K_A {
+        rd.data = get_remaining(mut p)?;
+        if rd.data.len() != 4 {
+            return Err(raise("SyntaxError"));
+        }
+    } else if k == K_AAAA {
+        rd.data = get_remaining(mut p)?;
+        if rd.data.len() != 16 {
+            return Err(fail("ValueError", "IPv6 addresses are 16 bytes long"));
+        }
+    } else if k == K_NS or k == K_DNAME {
+        rd.names.push(get_name(mut p, origin)?);
+    } else if k == K_MX {
+        rd.nums.push(get_uint(mut p, 2)?);
+        rd.names.push(get_name(mut p, origin)?);
+    } else if k == K_TXT {
+        while remaining(p) > 0 {
+            rd.strs.push(get_counted(mut p)?);
+        }
+        if rd.strs.len() == 0 {
+            return Err(fail("ValueError", "the list of strings must not be empty"));
+        }
+    } else if k == K_SOA {
+        rd.names.push(get_name(mut p, origin)?);
+        rd.names.push(get_name(mut p, origin)?);
+        let five = get_bytes(mut p, 20)?;
+        let mut i = 0;
+        while i < 20 {
+            rd.nums.push(five[i] * 16777216 + five[i + 1] * 65536 + five[i + 2] * 256 + five[i + 3]);
+            i += 4;
+        }
+    } else if k == K_SRV {
+        let three = get_bytes(mut p, 6)?;
+        let mut i = 0;
+        while i < 6 {
+            rd.nums.push(three[i] * 256 + three[i + 1]);
+            i += 2;
+        }
+        rd.names.push(get_name(mut p, origin)?);
+    } else if k == K_CAA {
+        rd.nums.push(get_uint(mut p, 1)?);
+        let tag = get_counted(mut p)?;
+        let value = get_remaining(mut p)?;
+        if not is_alnum_all(tag) {
+            return Err(fail("ValueError", "tag is not alphanumeric"));
+        }
+        rd.strs.push(tag);
+        rd.strs.push(value);
+    } else if k == K_HINFO {
+        rd.strs.push(get_counted(mut p)?);
+        rd.strs.push(get_counted(mut p)?);
+    } else if k == K_SSHFP or k == K_TLSA {
+        let count = if k == K_SSHFP {
+            2
+        } else {
+            3
+        };
+        for c in get_bytes(mut p, count)? {
+            rd.nums.push(c);
+        }
+        rd.data = get_remaining(mut p)?;
+    } else {
+        rd.data = get_remaining(mut p)?;
+    }
+    Ok(rd)
+}
+
+// dns.rdata.from_wire_parser: any error that is not a FormError becomes
+// one, with the same message.
+fn rdata_from_wire(rdclass: i64, rdtype: i64, p: mut ref Parser, origin: ref Option[Name]) -> Result[Rdata, PyError] {
+    match known_from_wire(rdclass, rdtype, mut p, origin) {
+        Ok(rd) => Ok(rd),
+        Err(e) => {
+            if is_form(e.kind) {
+                return Err(e);
+            }
+            Err(failm("FormError", e.msg))
+        }
+    }
+}
+
+// dns.rdata.from_wire(rdclass, rdtype, wire, 0, len(wire), origin)
+fn rdata_from_wire_bytes(rdclass: i64, rdtype: i64, wire: ref Vec[i64], origin: ref Option[Name]) -> Result[Rdata, PyError] {
+    let mut p = new_parser(wire);
+    let rd = rdata_from_wire(rdclass, rdtype, mut p, origin)?;
+    if p.current != p.end {
+        return Err(raise("FormError"));
+    }
+    Ok(rd)
+}
+// ------------------------------------------------------------- rdatasets
+
+#[derive(Clone)]
+struct Rdataset {
+    rdclass: i64,
+    rdtype: i64,
+    ttl: i64,
+    rds: Vec[Rdata],
+}
+
+fn new_rdataset(rdclass: i64, rdtype: i64) -> Rdataset {
+    Rdataset { rdclass: rdclass, rdtype: rdtype, ttl: 0, rds: Vec.new() }
+}
+
+// SOA, NXT, DNAME, NSEC and CNAME hold one rdata.
+fn is_singleton(rdtype: i64) -> bool {
+    rdtype == 6 or rdtype == 30 or rdtype == 39 or rdtype == 47 or rdtype == 5
+}
+
+fn update_ttl(s: mut ref Rdataset, ttl: i64) {
+    if s.rds.len() == 0 {
+        s.ttl = ttl;
+    } else if ttl < s.ttl {
+        s.ttl = ttl;
+    }
+}
+
+fn rds_contains(s: ref Rdataset, rd: ref Rdata) -> bool {
+    for x in s.rds {
+        if rdata_eq(x, rd) {
+            return true;
+        }
+    }
+    false
+}
+
+// Rdataset.add without a TTL: a singleton type drops what it held, and an
+// rdata already there is not added again.
+fn rds_add(s: mut ref Rdataset, rd: ref Rdata) {
+    if is_singleton(rd.rdtype) and s.rds.len() > 0 {
+        s.rds = Vec.new();
+    }
+    if not rds_contains(s, rd) {
+        s.rds.push(rd.clone());
+    }
+}
+
+// Rdataset.update / union_update: the smaller TTL, then each rdata added.
+fn rds_update(s: mut ref Rdataset, other: ref Rdataset) {
+    update_ttl(mut s, other.ttl);
+    for rd in other.rds {
+        rds_add(mut s, rd);
+    }
+}
+
+fn rds_text(rds: ref Rdataset, name: ref Name, origin: ref Option[Name], rel: bool, comments: bool) -> Result[String, PyError] {
+    let n = choose_relativity(name, origin, rel)?;
+    let ntext = str_name(n);
+    let class_text = rdclass_text(rds.rdclass);
+    let type_text = rdtype_text(rds.rdtype);
+    if rds.rds.len() == 0 {
+        return Ok(f"{ntext} {class_text} {type_text}");
+    }
+    let mut lines: Vec[String] = Vec.new();
+    for rd in rds.rds {
+        let mut extra = String.new();
+        if comments and rd.has_comment and rd.comment.len() > 0 {
+            extra = f" ;{text(rd.comment)}";
+        }
+        let body = rdata_text(rd, origin, rel)?;
+        lines.push(f"{ntext} {rds.ttl} {class_text} {type_text} {body}{extra}");
+    }
+    Ok(lines.join("\n"))
+}
+
+// ------------------------------------------------------------- zones
+
+// NodeKind: REGULAR 0, NEUTRAL 1 (NSEC, NSEC3, KEY), CNAME 2
+fn node_kind(rdtype: i64) -> i64 {
+    if rdtype == 5 {
+        2
+    } else if rdtype == 47 or rdtype == 50 or rdtype == 25 {
+        1
+    } else {
+        0
+    }
+}
+
+fn classify(node: ref Vec[Rdataset]) -> i64 {
+    for rds in node {
+        let k = node_kind(rds.rdtype);
+        if k != 1 {
+            return k;
+        }
+    }
+    1
+}
+
+fn node_get(node: ref Vec[Rdataset], rdclass: i64, rdtype: i64) -> i64 {
+    let mut i = 0;
+    while i < node.len() {
+        if node[i].rdclass == rdclass and node[i].rdtype == rdtype {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// Node.replace_rdataset: the old rdataset of the type goes, CNAME and
+// regular data push each other out, and the new one goes at the end.
+fn node_replace(node: mut ref Vec[Rdataset], rds: own Rdataset) {
+    let mut kept: Vec[Rdataset] = Vec.new();
+    let kind = node_kind(rds.rdtype);
+    for old in node {
+        if old.rdclass == rds.rdclass and old.rdtype == rds.rdtype {
+            continue;
+        }
+        let ok = node_kind(old.rdtype);
+        if kind == 2 and ok == 0 {
+            continue;
+        }
+        if kind == 0 and ok == 2 {
+            continue;
+        }
+        kept.push(old.clone());
+    }
+    kept.push(rds);
+    *node = kept;
+}
+
+struct Zone {
+    origin: Name,
+    relativize: bool,
+    names: Vec[Name],
+    nodes: Vec[Vec[Rdataset]],
+}
+
+// The zone's own key for a name (zone._validate_name), or None when the
+// name is outside the zone.
+fn zone_key(z: ref Zone, name: ref Name) -> Option[Name] {
+    if is_absolute(name) {
+        if not is_subdomain(name, z.origin) {
+            return None;
+        }
+        if z.relativize {
+            return Some(relativize(name, z.origin));
+        }
+        return Some(name.clone());
+    }
+    let full = match derelativize(name, z.origin) {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    if z.relativize {
+        return Some(name.clone());
+    }
+    Some(full)
+}
+
+fn zone_find(z: ref Zone, name: ref Name) -> i64 {
+    match zone_key(z, name) {
+        Some(key) => {
+            let mut i = 0;
+            while i < z.names.len() {
+                if name_eq(z.names[i], key) {
+                    return i;
+                }
+                i += 1;
+            }
+            -1
+        }
+        None => -1,
+    }
+}
+
+fn zone_get_rdataset(z: ref Zone, name: ref Name, rdtype: i64) -> Option[Rdataset] {
+    let i = zone_find(z, name);
+    if i < 0 {
+        return None;
+    }
+    let j = node_get(z.nodes[i], 1, rdtype);
+    if j < 0 {
+        return None;
+    }
+    Some(z.nodes[i][j].clone())
+}
+
+// The name the zone keeps the apex under.
+fn apex(z: ref Zone) -> Name {
+    if z.relativize {
+        return empty_name();
+    }
+    z.origin.clone()
+}
+
+// Transaction.add(name, ttl, rdata) as the zone reader calls it.
+fn txn_add(z: mut ref Zone, name: ref Name, ttl: i64, rd: ref Rdata) -> Result[(), PyError] {
+    let mut rds = new_rdataset(rd.rdclass, rd.rdtype);
+    update_ttl(mut rds, ttl);
+    rds_add(mut rds, rd);
+    if rd.rdtype == 6 and not name_eq(name, apex(z)) {
+        return Err(fail("ValueError", "add() has non-origin SOA"));
+    }
+    let at = zone_find(z, name);
+    if at >= 0 {
+        let j = node_get(z.nodes[at], rd.rdclass, rd.rdtype);
+        if j >= 0 {
+            let mut merged = z.nodes[at][j].clone();
+            rds_update(mut merged, rds);
+            rds = merged;
+        }
+        // _check_cname_and_other_data
+        let node_k = classify(z.nodes[at]);
+        let rds_k = node_kind(rds.rdtype);
+        if node_k == 2 and rds_k == 0 {
+            return Err(fail("CNAMEAndOtherData", "rdataset type is not compatible with a CNAME node"));
+        }
+        if node_k == 0 and rds_k == 2 {
+            return Err(fail("CNAMEAndOtherData", "CNAME rdataset is not compatible with a regular data node"));
+        }
+        node_replace(mut z.nodes[at], rds);
+        return Ok(());
+    }
+    let key = match zone_key(z, name) {
+        Some(k) => k,
+        None => return Err(failm("KeyError", "'name parameter must be a subdomain of the zone origin'".to_string())),
+    };
+    let mut node: Vec[Rdataset] = Vec.new();
+    node.push(rds);
+    z.names.push(key);
+    z.nodes.push(node);
+    Ok(())
+}
+
+fn check_origin(z: ref Zone) -> Result[(), PyError] {
+    let a = apex(z);
+    if zone_get_rdataset(z, a, 6).is_none() {
+        return Err(raise("NoSOA"));
+    }
+    if zone_get_rdataset(z, a, 2).is_none() {
+        return Err(raise("NoNS"));
+    }
+    Ok(())
+}
+
+// The zone's names in DNSSEC order (Name.__lt__)
+fn sorted_names(z: ref Zone) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < z.names.len() {
+        let mut at = order.len();
+        while at > 0 and name_lt(z.names[i], z.names[order[at - 1]]) {
+            at -= 1;
+        }
+        order.insert(at, i);
+        i += 1;
+    }
+    order
+}
+
+// Zone.to_text
+fn zone_text(z: ref Zone, rel: bool, comments: bool, want_origin: bool) -> Result[String, PyError] {
+    let mut out = String.new();
+    if want_origin {
+        out.push_str(f"$ORIGIN {str_name(z.origin)}\n");
+    }
+    let origin = Some(z.origin.clone());
+    for i in sorted_names(z) {
+        let mut lines: Vec[String] = Vec.new();
+        for rds in z.nodes[i] {
+            if rds.rds.len() > 0 {
+                lines.push(rds_text(rds, z.names[i], origin, rel, comments)?);
+            }
+        }
+        out.push_str(lines.join("\n"));
+        out.push_str("\n");
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------- zone reader
+
+// dns.zonefile.Reader
+struct Reader {
+    tok: Tokenizer,
+    zone: Zone,
+    current_origin: Name,
+    last_name: Name,
+    last_ttl: i64,
+    last_ttl_known: bool,
+    default_ttl: i64,
+    default_ttl_known: bool,
+}
+
+fn eat_line(r: mut ref Reader) -> Result[(), PyError] {
+    loop {
+        let t = get(mut r.tok)?;
+        if is_eol_or_eof(t) {
+            return Ok(());
+        }
+    }
+}
+
+// Reader._get_identifier
+fn next_identifier(r: mut ref Reader) -> Result[Token, PyError] {
+    let t = get(mut r.tok)?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(raise("SyntaxError"));
+    }
+    Ok(t)
+}
+
+fn rr_line(r: mut ref Reader) -> Result[(), PyError] {
+    let origin = Some(r.current_origin.clone());
+    let first = get_tok(mut r.tok, true, false)?;
+    if first.ttype != T_WHITESPACE {
+        r.last_name = as_name(first, origin, false, None)?;
+    } else {
+        let t = get(mut r.tok)?;
+        if is_eol_or_eof(t) {
+            return Ok(());
+        }
+        unget(mut r.tok, t);
+    }
+    let mut name = r.last_name.clone();
+    if not is_subdomain(name, r.zone.origin) {
+        eat_line(mut r)?;
+        return Ok(());
+    }
+    if r.zone.relativize {
+        name = relativize(name, r.zone.origin);
+    }
+    let mut ttl = -1;
+    let t = next_identifier(mut r)?;
+    let parsed = ttl_from_text(t.value);
+    match parsed {
+        Ok(v) => {
+            ttl = v;
+            r.last_ttl = v;
+            r.last_ttl_known = true;
+        }
+        Err(_) => unget(mut r.tok, t),
+    }
+    let t = next_identifier(mut r)?;
+    let parsed = rdclass_from_text(t.value);
+    let rdclass = match parsed {
+        Ok(c) => c,
+        Err(_) => {
+            // the zone's class: every zone here is IN
+            unget(mut r.tok, t);
+            1
+        }
+    };
+    if rdclass != 1 {
+        return Err(fail("SyntaxError", "RR class is not zone's class"));
+    }
+    if ttl < 0 {
+        let t = next_identifier(mut r)?;
+        let parsed = ttl_from_text(t.value);
+        match parsed {
+            Ok(v) => {
+                ttl = v;
+                r.last_ttl = v;
+                r.last_ttl_known = true;
+            }
+            Err(_) => {
+                if r.default_ttl_known {
+                    ttl = r.default_ttl;
+                } else if r.last_ttl_known {
+                    ttl = r.last_ttl;
+                }
+                unget(mut r.tok, t);
+            }
+        }
+    }
+    let t = next_identifier(mut r)?;
+    let rdtype = match rdtype_from_text(t.value) {
+        Ok(v) => v,
+        Err(_) => return Err(failm("SyntaxError", f"unknown rdatatype '{token_text(t)}'")),
+    };
+    let zone_origin = Some(r.zone.origin.clone());
+    let rd = rdata_from_text(rdclass, rdtype, mut r.tok, origin, r.zone.relativize, zone_origin)?;
+    if not r.default_ttl_known and rdtype == 6 {
+        r.default_ttl = rd.nums[4];
+        r.default_ttl_known = true;
+        if ttl < 0 {
+            ttl = rd.nums[4];
+        }
+    }
+    if ttl < 0 {
+        return Err(fail("SyntaxError", "Missing default TTL value"));
+    }
+    txn_add(mut r.zone, name, ttl, rd)
+}
+
+// A $GENERATE modifier: the text after $ to replace, the sign, offset,
+// width and base.
+struct Modify {
+    text: Vec[i64],
+    sign: i64,
+    offset: i64,
+    width: i64,
+    base: i64,
+}
+
+// Reads {sign digits [, digits [, char]]} at t[at] (just after a $):
+// the end index and the fields, or -1 when the form does not fit `want`
+// fields (1, 2 or 3).
+fn parse_brace(t: ref Vec[i64], at: i64, want: i64) -> Option[Modify] {
+    let n = t.len();
+    if at >= n or t[at] != 123 {
+        return None;
+    }
+    let mut i = at + 1;
+    let mut sign = 43;
+    if i < n and (t[i] == 43 or t[i] == 45) {
+        sign = t[i];
+        i += 1;
+    }
+    let start = i;
+    while i < n and is_digit(t[i]) {
+        i += 1;
+    }
+    if i == start {
+        return None;
+    }
+    let offset = digits_value(sub(t, start, i));
+    let mut width = 0;
+    let mut base = 100;
+    if want >= 2 {
+        if i >= n or t[i] != 44 {
+            return None;
+        }
+        i += 1;
+        let ws = i;
+        while i < n and is_digit(t[i]) {
+            i += 1;
+        }
+        if i == ws {
+            return None;
+        }
+        width = digits_value(sub(t, ws, i));
+        if want == 3 {
+            if i >= n or t[i] != 44 {
+                return None;
+            }
+            i += 1;
+            if i >= n or t[i] == 10 {
+                return None;
+            }
+            base = t[i];
+            i += 1;
+        }
+    }
+    if i >= n or t[i] != 125 {
+        return None;
+    }
+    Some(Modify { text: sub(t, at, i + 1), sign: sign, offset: offset, width: width, base: base })
+}
+
+// Reader._parse_modify: the rightmost ${...} of the first form that
+// matches (three fields, then one, then two).
+fn parse_modify(side: ref Vec[i64]) -> Result[Modify, PyError] {
+    let forms = [3, 1, 2];
+    for want in forms {
+        let mut at = side.len() - 1;
+        while at >= 0 {
+            if side[at] == 36 {
+                if let Some(m) = parse_brace(side, at + 1, want) {
+                    if m.base != 100 and m.base != 111 and m.base != 120 and m.base != 88 and m.base != 110 and m.base != 78 {
+                        let mut one: Vec[i64] = Vec.new();
+                        one.push(m.base);
+                        return Err(failm("SyntaxError", f"invalid type {text(one)}"));
+                    }
+                    return Ok(m);
+                }
+            }
+            at -= 1;
+        }
+    }
+    Ok(Modify { text: Vec.new(), sign: 43, offset: 0, width: 0, base: 100 })
+}
+
+fn digits_in_base(v: i64, base: i64, upper_hex: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut n = if v < 0 {
+        0 - v
+    } else {
+        v
+    };
+    if n == 0 {
+        out.push(48);
+    }
+    while n > 0 {
+        let d = n % base;
+        let c = if d < 10 {
+            48 + d
+        } else if upper_hex {
+            55 + d
+        } else {
+            87 + d
+        };
+        out.insert(0, c);
+        n = n / base;
+    }
+    if v < 0 {
+        out.insert(0, 45);
+    }
+    out
+}
+
+// str.zfill
+fn zfill(v: ref Vec[i64], width: i64) -> Vec[i64] {
+    if v.len() >= width {
+        return v.clone();
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut rest = v.clone();
+    if v.len() > 0 and (v[0] == 45 or v[0] == 43) {
+        out.push(v[0]);
+        rest = sub(v, 1, v.len());
+    }
+    let mut k = v.len();
+    while k < width {
+        out.push(48);
+        k += 1;
+    }
+    push_b(mut out, rest);
+    out
+}
+
+// _format_index
+fn format_index(index: i64, base: i64, width: i64) -> Vec[i64] {
+    if base == 100 {
+        return zfill(digits_in_base(index, 10, false), width);
+    }
+    if base == 111 {
+        return zfill(digits_in_base(index, 8, false), width);
+    }
+    if base == 120 {
+        return zfill(digits_in_base(index, 16, false), width);
+    }
+    if base == 88 {
+        return zfill(digits_in_base(index, 16, true), width);
+    }
+    let hexa = format_index(index, 120, width);
+    let mut nibbles: Vec[i64] = Vec.new();
+    let mut k = hexa.len() - 1;
+    while k >= 0 {
+        nibbles.push(hexa[k]);
+        if k > 0 {
+            nibbles.push(46);
+        }
+        k -= 1;
+    }
+    if nibbles.len() > width {
+        nibbles = sub(nibbles, 0, width);
+    }
+    if base == 78 {
+        nibbles = upper_all(nibbles);
+    }
+    nibbles
+}
+
+// dns.grange.from_text: start, stop, step
+fn grange(t: ref Vec[i64]) -> Option[Vec[i64]] {
+    let mut start = -1;
+    let mut stop = -1;
+    let mut step = 1;
+    let mut cur: Vec[i64] = Vec.new();
+    let mut state = 0;
+    if t.len() > 0 and t[0] == 45 {
+        return None;
+    }
+    for c in t {
+        if c == 45 and state == 0 {
+            if cur.len() == 0 {
+                return None;
+            }
+            start = digits_value(cur);
+            cur = Vec.new();
+            state = 1;
+        } else if c == 47 {
+            if cur.len() == 0 {
+                return None;
+            }
+            stop = digits_value(cur);
+            cur = Vec.new();
+            state = 2;
+        } else if is_digit(c) {
+            cur.push(c);
+        } else {
+            return None;
+        }
+    }
+    if state == 0 {
+        return None;
+    }
+    if cur.len() == 0 {
+        return None;
+    }
+    if state == 1 {
+        stop = digits_value(cur);
+    } else {
+        step = digits_value(cur);
+    }
+    if step < 1 or start < 0 or start > stop {
+        return None;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    out.push(start);
+    out.push(stop);
+    out.push(step);
+    Some(out)
+}
+
+// Any error becomes a bare SyntaxError, as the try blocks of
+// _generate_line turn it into one.
+fn bare(r: own Result[Token, PyError]) -> Result[Token, PyError] {
+    match r {
+        Ok(t) => Ok(t),
+        Err(_) => Err(raise("SyntaxError")),
+    }
+}
+
+fn generate_line(r: mut ref Reader) -> Result[(), PyError] {
+    let t = get(mut r.tok)?;
+    let range = match grange(t.value) {
+        Some(g) => g,
+        None => return Err(raise("SyntaxError")),
+    };
+    let t = bare(get(mut r.tok))?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(raise("SyntaxError"));
+    }
+    let lhs = t.value.clone();
+    let mut t = bare(get(mut r.tok))?;
+    if t.ttype != T_IDENTIFIER {
+        return Err(raise("SyntaxError"));
+    }
+    let mut ttl = 0;
+    match ttl_from_text(t.value) {
+        Ok(v) => {
+            ttl = v;
+            r.last_ttl = v;
+            r.last_ttl_known = true;
+            t = get(mut r.tok)?;
+            if t.ttype != T_IDENTIFIER {
+                return Err(raise("SyntaxError"));
+            }
+        }
+        Err(_) => {
+            if not (r.last_ttl_known or r.default_ttl_known) {
+                return Err(fail("SyntaxError", "Missing default TTL value"));
+            }
+            if r.default_ttl_known {
+                ttl = r.default_ttl;
+            } else {
+                ttl = r.last_ttl;
+            }
+        }
+    }
+    let mut rdclass = 1;
+    let parsed = rdclass_from_text(t.value);
+    if let Ok(c) = parsed {
+        rdclass = c;
+        t = match get(mut r.tok) {
+            Ok(x) => x,
+            Err(e) => {
+                if is_syntax(e.kind) {
+                    return Err(raise("SyntaxError"));
+                }
+                return Err(e);
+            }
+        };
+        if t.ttype != T_IDENTIFIER {
+            return Err(raise("SyntaxError"));
+        }
+    }
+    if rdclass != 1 {
+        return Err(fail("SyntaxError", "RR class is not zone's class"));
+    }
+    let rdtype = match rdtype_from_text(t.value) {
+        Ok(v) => v,
+        Err(_) => return Err(failm("SyntaxError", f"unknown rdatatype '{token_text(t)}'")),
+    };
+    let type_tok = t;
+    t = match get(mut r.tok) {
+        Ok(x) => x,
+        Err(_) => return Err(failm("SyntaxError", f"unknown rdatatype '{token_text(type_tok)}'")),
+    };
+    if t.ttype != T_IDENTIFIER {
+        return Err(failm("SyntaxError", f"unknown rdatatype '{token_text(t)}'"));
+    }
+    let rhs = t.value.clone();
+    let lm = parse_modify(lhs)?;
+    let rm = parse_modify(rhs)?;
+    let mut ltext = b("$");
+    push_b(mut ltext, lm.text);
+    let mut rtext = b("$");
+    push_b(mut rtext, rm.text);
+    let mut i = range[0];
+    while i <= range[1] {
+        let lindex = if lm.sign == 45 {
+            i - lm.offset
+        } else {
+            i + lm.offset
+        };
+        let rindex = if rm.sign == 45 {
+            i - rm.offset
+        } else {
+            i + rm.offset
+        };
+        let lz = format_index(lindex, lm.base, lm.width);
+        let rz = format_index(rindex, rm.base, rm.width);
+        let name_text = replace_all(lhs, ltext, lz);
+        let rdata_text = replace_all(rhs, rtext, rz);
+        let origin = Some(r.current_origin.clone());
+        r.last_name = name_from_text(name_text, origin)?;
+        let mut name = r.last_name.clone();
+        if not is_subdomain(name, r.zone.origin) {
+            eat_line(mut r)?;
+            return Ok(());
+        }
+        if r.zone.relativize {
+            name = relativize(name, r.zone.origin);
+        }
+        let mut rtok = new_tokenizer(rdata_text);
+        let zone_origin = Some(r.zone.origin.clone());
+        let rd = rdata_from_text(rdclass, rdtype, mut rtok, origin, r.zone.relativize, zone_origin)?;
+        txn_add(mut r.zone, name, ttl, rd)?;
+        i += range[2];
+    }
+    Ok(())
+}
+
+fn read_inner(r: mut ref Reader) -> Result[(), PyError] {
+    loop {
+        let t = get_tok(mut r.tok, true, true)?;
+        if t.ttype == T_EOF {
+            return Ok(());
+        }
+        if t.ttype == T_EOL {
+            continue;
+        }
+        if t.ttype == T_COMMENT {
+            get_eol_as_token(mut r.tok)?;
+            continue;
+        }
+        if t.value.len() == 0 {
+            return Err(fail("IndexError", "string index out of range"));
+        }
+        if t.value[0] == 36 {
+            let c = text(upper_all(t.value));
+            if c != "$GENERATE" and c != "$ORIGIN" and c != "$TTL" {
+                return Err(failm("SyntaxError", f"zone file directive '{c}' is not allowed"));
+            }
+            if c == "$TTL" {
+                let v = get(mut r.tok)?;
+                if v.ttype != T_IDENTIFIER {
+                    return Err(fail("SyntaxError", "bad $TTL"));
+                }
+                r.default_ttl = ttl_from_text(v.value)?;
+                r.default_ttl_known = true;
+                get_eol_as_token(mut r.tok)?;
+            } else if c == "$ORIGIN" {
+                r.current_origin = get_name_tok(mut r.tok, None, false, None)?;
+                get_eol_as_token(mut r.tok)?;
+            } else {
+                generate_line(mut r)?;
+            }
+            continue;
+        }
+        unget(mut r.tok, t);
+        rr_line(mut r)?;
+    }
+}
+
+// Reader.read: a SyntaxError gains the file name and line.
+fn read_zone(r: mut ref Reader) -> Result[(), PyError] {
+    match read_inner(mut r) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if is_syntax(e.kind) {
+                return Err(failm("SyntaxError", f"<string>:{r.tok.line}: {e.msg}"));
+            }
+            Err(e)
+        }
+    }
+}
+
+// dns.zone.from_text(text, origin, relativize=..., check_origin=...)
+fn zone_from_text(body: ref String, origin_text: ref String, rel: bool, check: bool) -> Result[Zone, PyError] {
+    let origin = name_from_text(bs(origin_text), Some(root()))?;
+    let zone = Zone { origin: origin.clone(), relativize: rel, names: Vec.new(), nodes: Vec.new() };
+    let mut r = Reader {
+        tok: new_tokenizer(bs(body)),
+        zone: zone,
+        current_origin: origin.clone(),
+        last_name: origin,
+        last_ttl: 0,
+        last_ttl_known: false,
+        default_ttl: 0,
+        default_ttl_known: false,
+    };
+    read_zone(mut r)?;
+    if check {
+        check_origin(r.zone)?;
+    }
+    Ok(r.zone)
+}
+
+fn zone_count(z: ref Zone) -> i64 {
+    let mut n = 0;
+    for node in z.nodes {
+        for rds in node {
+            n += rds.rds.len();
+        }
+    }
+    n
+}
+// ------------------------------------------------------------- messages
+
+#[derive(Clone)]
+struct RRset {
+    name: Name,
+    set: Rdataset,
+}
+
+// dns.message.Message: sections QUESTION 0, ANSWER 1, AUTHORITY 2,
+// ADDITIONAL 3.
+struct Message {
+    id: i64,
+    flags: i64,
+    sections: Vec[Vec[RRset]],
+}
+
+fn new_message(id: i64) -> Message {
+    let mut sections: Vec[Vec[RRset]] = Vec.new();
+    let mut i = 0;
+    while i < 4 {
+        sections.push(Vec.new());
+        i += 1;
+    }
+    Message { id: id, flags: 0, sections: sections }
+}
+
+fn opcode_of(m: ref Message) -> i64 {
+    (m.flags & 30720) >> 11
+}
+
+fn rcode_of(m: ref Message) -> i64 {
+    m.flags & 15
+}
+
+fn set_rcode(m: mut ref Message, rcode: i64) {
+    m.flags = (m.flags & 65520) | rcode;
+}
+
+// Message.find_rrset(section, name, rdclass, rdtype, create=True): the
+// index keeps the rrset made last for a key, and names match without
+// regard to case.
+fn find_rrset(m: mut ref Message, section: i64, name: ref Name, rdclass: i64, rdtype: i64, force_unique: bool) -> i64 {
+    if not force_unique {
+        let mut i = m.sections[section].len() - 1;
+        while i >= 0 {
+            let rs = ref m.sections[section][i];
+            if rs.set.rdclass == rdclass and rs.set.rdtype == rdtype and name_eq(rs.name, name) {
+                return i;
+            }
+            i -= 1;
+        }
+    }
+    m.sections[section].push(RRset { name: name.clone(), set: new_rdataset(rdclass, rdtype) });
+    m.sections[section].len() - 1
+}
+
+// dns.message.from_wire
+fn message_from_wire(wire: ref Vec[i64]) -> Result[Message, PyError] {
+    let mut p = new_parser(wire);
+    if remaining(p) < 12 {
+        return Err(raise("ShortHeader"));
+    }
+    let id = get_uint(mut p, 2)?;
+    let flags = get_uint(mut p, 2)?;
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 4 {
+        counts.push(get_uint(mut p, 2)?);
+        i += 1;
+    }
+    let mut m = new_message(id);
+    m.flags = flags;
+    let mut q = 0;
+    while q < counts[0] {
+        let qname = get_name(mut p, None)?;
+        let rdtype = get_uint(mut p, 2)?;
+        let rdclass = get_uint(mut p, 2)?;
+        find_rrset(mut m, 0, qname, rdclass, rdtype, true);
+        q += 1;
+    }
+    let mut section = 1;
+    while section < 4 {
+        let count = counts[section];
+        let mut k = 0;
+        while k < count {
+            let name = get_name(mut p, None)?;
+            let rdtype = get_uint(mut p, 2)?;
+            let rdclass = get_uint(mut p, 2)?;
+            let mut ttl = get_uint(mut p, 4)?;
+            let rdlen = get_uint(mut p, 2)?;
+            if rdtype == 41 {
+                if section != 3 or not name_eq(name, root()) {
+                    return Err(raise("BadEDNS"));
+                }
+                return Err(fail("NotImplementedError", "EDNS is not part of this port"));
+            }
+            if rdtype == 250 {
+                if section != 3 or rdclass != 255 or k != count - 1 {
+                    return Err(raise("BadTSIG"));
+                }
+                return Err(fail("UnknownTSIGKey", "got signed message without keyring"));
+            }
+            // Parser.restrict_to(rdlen)
+            if rdlen > remaining(p) {
+                return Err(raise("FormError"));
+            }
+            let saved_end = p.end;
+            p.end = p.current + rdlen;
+            let rd = rdata_from_wire(rdclass, rdtype, mut p, None)?;
+            if p.current != p.end {
+                return Err(raise("FormError"));
+            }
+            p.end = saved_end;
+            let at = find_rrset(mut m, section, name, rdclass, rdtype, false);
+            if ttl > 2147483647 {
+                ttl = 0;
+            }
+            update_ttl(mut m.sections[section][at].set, ttl);
+            rds_add(mut m.sections[section][at].set, rd);
+            k += 1;
+        }
+        section += 1;
+    }
+    if remaining(p) != 0 {
+        return Err(raise("TrailingJunk"));
+    }
+    Ok(m)
+}
+
+fn rrset_text(rs: ref RRset) -> Result[String, PyError] {
+    rds_text(rs.set, rs.name, None, true, false)
+}
+
+// Message.to_text
+fn message_text(m: ref Message) -> Result[String, PyError] {
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"id {m.id}");
+    lines.push(f"opcode {opcode_text(opcode_of(m))}");
+    lines.push(f"rcode {rcode_text(rcode_of(m))}");
+    lines.push(f"flags {flags_text(m.flags)}");
+    let names = ["QUESTION", "ANSWER", "AUTHORITY", "ADDITIONAL"];
+    let mut s = 0;
+    while s < 4 {
+        lines.push(f";{names[s]}");
+        for rs in m.sections[s] {
+            lines.push(rrset_text(rs)?);
+        }
+        s += 1;
+    }
+    Ok(lines.join("\n"))
+}
+
+// dns.renderer.Renderer
+struct Renderer {
+    out: Vec[i64],
+    comp: Compress,
+    section: i64,
+    counts: Vec[i64],
+    max_size: i64,
+    flags: i64,
+}
+
+fn rollback(r: mut ref Renderer, at: i64) {
+    r.out = sub(r.out, 0, at);
+    let mut names: Vec[Name] = Vec.new();
+    let mut pos: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < r.comp.names.len() {
+        if r.comp.pos[i] < at {
+            names.push(r.comp.names[i].clone());
+            pos.push(r.comp.pos[i]);
+        }
+        i += 1;
+    }
+    r.comp = Compress { names: names, pos: pos };
+}
+
+// Rdataset.to_wire(name, file, compress, want_shuffle=False): the number
+// of records written.
+fn rrset_to_wire(rs: ref RRset, r: mut ref Renderer) -> Result[i64, PyError] {
+    let rds = ref rs.set;
+    if rds.rds.len() == 0 {
+        name_to_wire(rs.name, mut r.out, mut r.comp, true, None, false)?;
+        u16_bytes(mut r.out, rds.rdtype);
+        u16_bytes(mut r.out, rds.rdclass);
+        u32_bytes(mut r.out, 0);
+        u16_bytes(mut r.out, 0);
+        return Ok(1);
+    }
+    for rd in rds.rds {
+        name_to_wire(rs.name, mut r.out, mut r.comp, true, None, false)?;
+        u16_bytes(mut r.out, rds.rdtype);
+        u16_bytes(mut r.out, rds.rdclass);
+        u32_bytes(mut r.out, rds.ttl);
+        // prefixed_length(file, 2)
+        u16_bytes(mut r.out, 0);
+        let start = r.out.len();
+        rdata_to_wire(rd, mut r.out, mut r.comp, true, None, false)?;
+        let length = r.out.len() - start;
+        if length > 65535 {
+            return Err(raise("FormError"));
+        }
+        r.out[start - 2] = length >> 8;
+        r.out[start - 1] = length & 255;
+    }
+    Ok(rds.rds.len())
+}
+
+fn add_question(r: mut ref Renderer, rs: ref RRset) -> Result[(), PyError] {
+    r.section = 0;
+    let start = r.out.len();
+    name_to_wire(rs.name, mut r.out, mut r.comp, true, None, false)?;
+    u16_bytes(mut r.out, rs.set.rdtype);
+    u16_bytes(mut r.out, rs.set.rdclass);
+    if r.out.len() > r.max_size {
+        rollback(mut r, start);
+        return Err(raise("TooBig"));
+    }
+    r.counts[0] += 1;
+    Ok(())
+}
+
+fn add_rrset(r: mut ref Renderer, section: i64, rs: ref RRset) -> Result[(), PyError] {
+    if r.section > section {
+        return Err(raise("FormError"));
+    }
+    r.section = section;
+    let start = r.out.len();
+    let n = rrset_to_wire(rs, mut r)?;
+    if r.out.len() > r.max_size {
+        rollback(mut r, start);
+        return Err(raise("TooBig"));
+    }
+    r.counts[section] += n;
+    Ok(())
+}
+
+fn render_all(m: ref Message, r: mut ref Renderer) -> Result[(), PyError] {
+    for rs in m.sections[0] {
+        add_question(mut r, rs)?;
+    }
+    let mut s = 1;
+    while s < 4 {
+        for rs in m.sections[s] {
+            add_rrset(mut r, s, rs)?;
+        }
+        s += 1;
+    }
+    Ok(())
+}
+
+// Message.to_wire(max_size, prefer_truncation, want_shuffle=False)
+fn message_to_wire(m: ref Message, max_size: i64, prefer_truncation: bool) -> Result[Vec[i64], PyError] {
+    let mut size = if max_size == 0 {
+        65535
+    } else {
+        max_size
+    };
+    if size < 512 {
+        size = 512;
+    } else if size > 65535 {
+        size = 65535;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 12 {
+        out.push(0);
+        i += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        counts.push(0);
+        k += 1;
+    }
+    let mut r = Renderer { out: out, comp: new_compress(), section: 0, counts: counts, max_size: size, flags: m.flags };
+    match render_all(m, mut r) {
+        Ok(()) => {}
+        Err(e) => {
+            if e.kind == "TooBig" and prefer_truncation {
+                if r.section < 3 {
+                    r.flags = r.flags | TC;
+                }
+            } else {
+                return Err(e);
+            }
+        }
+    }
+    // write_header
+    let mut header: Vec[i64] = Vec.new();
+    u16_bytes(mut header, m.id);
+    u16_bytes(mut header, r.flags);
+    for c in r.counts {
+        u16_bytes(mut header, c);
+    }
+    let mut j = 0;
+    while j < 12 {
+        r.out[j] = header[j];
+        j += 1;
+    }
+    Ok(r.out)
+}
+
+// dns.message.make_query(qname, rdtype, id=id)
+fn make_query(qname: ref String, rdtype: ref String, id: i64) -> Result[Message, PyError] {
+    let name = name_from_text(bs(qname), Some(root()))?;
+    let t = rdtype_from_text(bs(rdtype))?;
+    let mut m = new_message(id);
+    m.flags = RD;
+    find_rrset(mut m, 0, name, 1, t, true);
+    Ok(m)
+}
+
+// dns.message.make_response(query)
+fn make_response(q: ref Message) -> Result[Message, PyError] {
+    if q.flags & QR != 0 {
+        return Err(fail("FormError", "specified query message is not a query"));
+    }
+    let opcode = opcode_of(q);
+    let mut r = new_message(q.id);
+    r.flags = QR | (q.flags & RD);
+    r.flags = (r.flags & 34815) | (opcode << 11);
+    for rs in q.sections[0] {
+        r.sections[0].push(rs.clone());
+    }
+    Ok(r)
+}
+// ------------------------------------------------------------- the server
+
+// add(): the response's rrset for the name and type, updated with rds.
+fn add_to(r: mut ref Message, section: i64, name: ref Name, rds: ref Rdataset) {
+    let at = find_rrset(mut r, section, name, rds.rdclass, rds.rdtype, false);
+    rds_update(mut r.sections[section][at].set, rds);
+}
+
+fn zone_node(z: ref Zone, name: ref Name) -> i64 {
+    zone_find(z, name)
+}
+
+fn node_rdataset(z: ref Zone, at: i64, rdtype: i64) -> Option[Rdataset] {
+    let j = node_get(z.nodes[at], 1, rdtype);
+    if j < 0 {
+        return None;
+    }
+    Some(z.nodes[at][j].clone())
+}
+
+// glue(): the A and AAAA records of in-zone targets go in ADDITIONAL.
+fn glue(z: ref Zone, r: mut ref Message, rds: ref Rdataset) {
+    for rd in rds.rds {
+        let target = ref rd.names[0];
+        if is_subdomain(target, z.origin) {
+            let at = zone_node(z, target);
+            if at >= 0 {
+                for t in [1, 28] {
+                    if let Some(s) = node_rdataset(z, at, t) {
+                        add_to(mut r, 3, target, s);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn add_soa(z: ref Zone, r: mut ref Message) {
+    if let Some(s) = zone_get_rdataset(z, z.origin, 6) {
+        add_to(mut r, 2, z.origin, s);
+    }
+}
+
+// respond(): an authoritative answer from the zone, as oracle.py builds it.
+fn respond(z: ref Zone, q: ref Message) -> Result[Message, PyError] {
+    let mut r = make_response(q)?;
+    r.flags = r.flags | AA;
+    if q.sections[0].len() != 1 {
+        set_rcode(mut r, 1);
+        return Ok(r);
+    }
+    let qrr = ref q.sections[0][0];
+    let qname = qrr.name.clone();
+    let qtype = qrr.set.rdtype;
+    if qrr.set.rdclass != 1 or not is_subdomain(qname, z.origin) {
+        r.flags = r.flags & (65535 - AA);
+        set_rcode(mut r, 5);
+        return Ok(r);
+    }
+    // a delegation between the apex and the name answers with a referral
+    let mut path: Vec[Name] = Vec.new();
+    let mut n = qname.clone();
+    while not name_eq(n, z.origin) {
+        path.push(n.clone());
+        n = parent(n)?;
+    }
+    let mut k = path.len() - 1;
+    while k >= 0 {
+        let at = zone_node(z, path[k]);
+        if at >= 0 {
+            if let Some(ns) = node_rdataset(z, at, 2) {
+                r.flags = r.flags & (65535 - AA);
+                add_to(mut r, 2, path[k], ns);
+                glue(z, mut r, ns);
+                return Ok(r);
+            }
+        }
+        k -= 1;
+    }
+    let mut name = qname;
+    let mut chain = 0;
+    loop {
+        let at = zone_node(z, name);
+        if at < 0 {
+            if chain == 0 {
+                set_rcode(mut r, 3);
+            }
+            add_soa(z, mut r);
+            return Ok(r);
+        }
+        if qtype == 255 {
+            for rds in z.nodes[at] {
+                add_to(mut r, 1, name, rds);
+            }
+            return Ok(r);
+        }
+        if let Some(rds) = node_rdataset(z, at, qtype) {
+            add_to(mut r, 1, name, rds);
+            if qtype == 2 or qtype == 15 or qtype == 33 {
+                glue(z, mut r, rds);
+            }
+            return Ok(r);
+        }
+        if let Some(cname) = node_rdataset(z, at, 5) {
+            if chain < 8 {
+                add_to(mut r, 1, name, cname);
+                let target = cname.rds[0].names[0].clone();
+                if not is_subdomain(target, z.origin) {
+                    return Ok(r);
+                }
+                name = target;
+                chain += 1;
+                continue;
+            }
+        }
+        add_soa(z, mut r);
+        return Ok(r);
+    }
+}
+
+fn indent(out: mut ref String, body: ref String) {
+    for line in body.split("\n") {
+        out.push_str(f"  {line}\n");
+    }
+}
+
+fn answer(z: ref Zone, wire: ref Vec[i64], udp: bool, out: mut ref String) -> Result[(), PyError] {
+    let q = message_from_wire(wire)?;
+    let r = respond(z, q)?;
+    let mut reply: Vec[i64] = Vec.new();
+    if udp {
+        match message_to_wire(r, 512, false) {
+            Ok(w) => reply = w,
+            Err(e) => {
+                if e.kind != "TooBig" {
+                    return Err(e);
+                }
+                out.push_str(f"  ! {e.kind}: {e.msg}\n");
+                reply = message_to_wire(r, 512, true)?;
+            }
+        }
+    } else {
+        reply = message_to_wire(r, 0, false)?;
+    }
+    out.push_str(f"  wire {reply.len()} {hex_of(reply)}\n");
+    let back = message_from_wire(reply)?;
+    indent(mut out, message_text(back)?);
+    Ok(())
+}
+
+// ------------------------------------------------------------- jobs
+
+fn read_data(path: ref String) -> Result[String, PyError] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(failm("OSError", f"{e}")),
+    }
+}
+
+fn opt_name(t: ref String) -> Result[Option[Name], PyError] {
+    if t == "-" {
+        return Ok(None);
+    }
+    let n = rel_name_of(t)?;
+    Ok(Some(n))
+}
+
+fn try_line(out: mut ref String, label: Str, r: own Result[String, PyError]) {
+    match r {
+        Ok(v) => out.push_str(f"  {label} {v}\n"),
+        Err(e) => out.push_str(f"  {label} ! {e.kind}: {e.msg}\n"),
+    }
+}
+
+fn zone_job(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let mode = ref job[3];
+    let body = read_data(job[1])?;
+    let z = zone_from_text(body, job[2], mode != "abs", mode != "nocheck")?;
+    let t = if mode == "abs" {
+        zone_text(z, false, false, false)?
+    } else if mode == "comments" {
+        zone_text(z, true, true, false)?
+    } else if mode == "origin" {
+        zone_text(z, true, false, true)?
+    } else {
+        zone_text(z, true, false, false)?
+    };
+    out.push_str(t);
+    out.push_str(f"  ({z.names.len()} names, {zone_count(z)} records)\n");
+    Ok(())
+}
+
+fn name_job(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let origin = opt_name(job[2])?;
+    let n = name_from_text(bs(job[1]), origin)?;
+    out.push_str(f"  text {name_text(n, false)} omit {name_text(n, true)} absolute {py_bool(is_absolute(n))} wild {py_bool(is_wild(n))} labels {n.labels.len()}\n");
+    out.push_str(f"  canonical {str_name(canonicalize(n))}\n");
+    try_line(mut out, "wire", match name_wire(n, None, false) {
+        Ok(w) => Ok(hex_of(w)),
+        Err(e) => Err(e),
+    });
+    let example = name_of("example.")?;
+    try_line(mut out, "digest", match name_wire(n, Some(example), true) {
+        Ok(w) => Ok(hex_of(w)),
+        Err(e) => Err(e),
+    });
+    Ok(())
+}
+
+fn cmp_job(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let x = rel_name_of(job[1])?;
+    let y = rel_name_of(job[2])?;
+    let c = fullcompare(x, y);
+    out.push_str(f"  {rel_name(c.rel)} {c.order} {c.n}\n");
+    out.push_str(f"  subdomain {py_bool(is_subdomain(x, y))} superdomain {py_bool(is_superdomain(x, y))} equal {py_bool(name_eq(x, y))} less {py_bool(name_lt(x, y))}\n");
+    out.push_str(f"  relativize {str_name(relativize(x, y))}\n");
+    try_line(mut out, "derelativize", match derelativize(x, y) {
+        Ok(n) => Ok(str_name(n)),
+        Err(e) => Err(e),
+    });
+    Ok(())
+}
+
+fn split_job(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let n = rel_name_of(job[1])?;
+    let depth = match py_int(bs(job[2])) {
+        Some(d) => d,
+        None => return Err(failm("ValueError", f"invalid literal for int() with base 10: '{job[2]}'")),
+    };
+    let parts = split_name(n, depth)?;
+    out.push_str(f"  {str_name(parts[0])} | {str_name(parts[1])}\n");
+    Ok(())
+}
+
+fn diff_line(n: ref Name, rds: ref Rdataset, rd: ref Rdata) -> Result[String, PyError] {
+    let body = rdata_text(rd, None, true)?;
+    Ok(f"{str_name(n)} {rds.ttl} {rdclass_text(rds.rdclass)} {rdtype_text(rds.rdtype)} {body}")
+}
+
+fn diff_job(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let a = zone_from_text(read_data(job[1])?, job[3], true, true)?;
+    let c = zone_from_text(read_data(job[2])?, job[3], true, true)?;
+    let mut names: Vec[Name] = a.names.clone();
+    for n in c.names {
+        let mut seen = false;
+        for m in names {
+            if name_eq(m, n) {
+                seen = true;
+            }
+        }
+        if not seen {
+            names.push(n.clone());
+        }
+    }
+    let all = Zone { origin: a.origin.clone(), relativize: true, names: names, nodes: Vec.new() };
+    let mut removed = 0;
+    let mut added = 0;
+    let mut changed = 0;
+    for i in sorted_names(all) {
+        let n = ref all.names[i];
+        let na = zone_find(a, n);
+        let nb = zone_find(c, n);
+        if na >= 0 {
+            for rds in a.nodes[na] {
+                let other = if nb >= 0 {
+                    node_rdataset(c, nb, rds.rdtype)
+                } else {
+                    None
+                };
+                for rd in rds.rds {
+                    let missing = match other {
+                        Some(ref o) => not rds_contains(o, rd),
+                        None => true,
+                    };
+                    if missing {
+                        out.push_str(f"  - {diff_line(n, rds, rd)?}\n");
+                        removed += 1;
+                    }
+                }
+                if let Some(o) = other {
+                    if o.ttl != rds.ttl {
+                        out.push_str(f"  ~ {str_name(n)} {rdtype_text(rds.rdtype)} ttl {rds.ttl} -> {o.ttl}\n");
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        if nb >= 0 {
+            for rds in c.nodes[nb] {
+                let other = if na >= 0 {
+                    node_rdataset(a, na, rds.rdtype)
+                } else {
+                    None
+                };
+                for rd in rds.rds {
+                    let missing = match other {
+                        Some(ref o) => not rds_contains(o, rd),
+                        None => true,
+                    };
+                    if missing {
+                        out.push_str(f"  + {diff_line(n, rds, rd)?}\n");
+                        added += 1;
+                    }
+                }
+            }
+        }
+    }
+    out.push_str(f"  {removed} removed, {added} added, {changed} ttl changes\n");
+    Ok(())
+}
+
+fn run(job: ref Vec[String], out: mut ref String) -> Result[(), PyError] {
+    let kind = ref job[0];
+    if kind == "zone" {
+        return zone_job(job, mut out);
+    }
+    if kind == "name" {
+        return name_job(job, mut out);
+    }
+    if kind == "cmp" {
+        return cmp_job(job, mut out);
+    }
+    if kind == "split" {
+        return split_job(job, mut out);
+    }
+    if kind == "concat" {
+        let x = rel_name_of(job[1])?;
+        let y = rel_name_of(job[2])?;
+        let n = concatenate(x, y)?;
+        out.push_str(f"  {str_name(n)}\n");
+        return Ok(());
+    }
+    if kind == "parent" {
+        let x = rel_name_of(job[1])?;
+        let n = parent(x)?;
+        out.push_str(f"  {str_name(n)}\n");
+        return Ok(());
+    }
+    if kind == "ttl" {
+        let v = ttl_from_text(bs(job[1]))?;
+        out.push_str(f"  {v}\n");
+        return Ok(());
+    }
+    if kind == "ip6" {
+        let w = ipv6_aton(bs(job[1]))?;
+        out.push_str(f"  {hex_of(w)} {ipv6_ntoa(w)?}\n");
+        return Ok(());
+    }
+    if kind == "rev" {
+        let n = reverse_from_address(bs(job[1]))?;
+        out.push_str(f"  {str_name(n)}\n");
+        return Ok(());
+    }
+    if kind == "unrev" {
+        let n = name_from_text(bs(job[1]), Some(root()))?;
+        out.push_str(f"  {reverse_to_address(n)?}\n");
+        return Ok(());
+    }
+    if kind == "query" {
+        let id = digits_value(bs(job[3]));
+        let q = make_query(job[1], job[2], id)?;
+        let w = message_to_wire(q, 0, false)?;
+        out.push_str(f"  wire {hex_of(w)}\n");
+        indent(mut out, message_text(q)?);
+        return Ok(());
+    }
+    if kind == "serve" {
+        let z = zone_from_text(read_data(job[1])?, job[2], false, true)?;
+        let id = digits_value(bs(job[5]));
+        let q = make_query(job[3], job[4], id)?;
+        let w = message_to_wire(q, 0, false)?;
+        return answer(z, w, job.len() > 6, mut out);
+    }
+    if kind == "servewire" {
+        let z = zone_from_text(read_data(job[1])?, job[2], false, true)?;
+        return answer(z, from_hex(job[3]), false, mut out);
+    }
+    if kind == "wire" {
+        let m = message_from_wire(from_hex(job[2]))?;
+        indent(mut out, message_text(m)?);
+        let w = message_to_wire(m, 0, false)?;
+        out.push_str(f"  rewire {hex_of(w)}\n");
+        return Ok(());
+    }
+    if kind == "diff" {
+        return diff_job(job, mut out);
+    }
+    Ok(())
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    let files = data_files();
+    for file in files.iter() {
+        if let Err(e) = make_parent(file.path) {
+            eprintln(e);
+            return;
+        }
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            eprintln(f"cannot write {file.path}: {e}");
+            return;
+        }
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for line in jobs.split("\n") {
+        if line.len() == 0 {
+            continue;
+        }
+        let job: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        println(f"-- {job.join(" ")}");
+        let mut out = String.new();
+        let result = run(job, mut out);
+        print(out);
+        if let Err(e) = result {
+            println(f"! {e.kind}: {e.msg}");
+        }
+    }
+}
+// ------------------------------------------------------------ generated
+
+// RdataType[name]: every member name, aliases included; -1 for none.
+fn type_by_name(s: ref String) -> i64 {
+    let v0 = type_by_name_0(s);
+    if v0 >= 0 {
+        return v0;
+    }
+    let v1 = type_by_name_1(s);
+    if v1 >= 0 {
+        return v1;
+    }
+    -1
+}
+
+fn type_by_name_0(s: ref String) -> i64 {
+    if s == "TYPE0" {
+        return 0;
+    }
+    if s == "NONE" {
+        return 0;
+    }
+    if s == "A" {
+        return 1;
+    }
+    if s == "NS" {
+        return 2;
+    }
+    if s == "MD" {
+        return 3;
+    }
+    if s == "MF" {
+        return 4;
+    }
+    if s == "CNAME" {
+        return 5;
+    }
+    if s == "SOA" {
+        return 6;
+    }
+    if s == "MB" {
+        return 7;
+    }
+    if s == "MG" {
+        return 8;
+    }
+    if s == "MR" {
+        return 9;
+    }
+    if s == "NULL" {
+        return 10;
+    }
+    if s == "WKS" {
+        return 11;
+    }
+    if s == "PTR" {
+        return 12;
+    }
+    if s == "HINFO" {
+        return 13;
+    }
+    if s == "MINFO" {
+        return 14;
+    }
+    if s == "MX" {
+        return 15;
+    }
+    if s == "TXT" {
+        return 16;
+    }
+    if s == "RP" {
+        return 17;
+    }
+    if s == "AFSDB" {
+        return 18;
+    }
+    if s == "X25" {
+        return 19;
+    }
+    if s == "ISDN" {
+        return 20;
+    }
+    if s == "RT" {
+        return 21;
+    }
+    if s == "NSAP" {
+        return 22;
+    }
+    if s == "NSAP_PTR" {
+        return 23;
+    }
+    if s == "SIG" {
+        return 24;
+    }
+    if s == "KEY" {
+        return 25;
+    }
+    if s == "PX" {
+        return 26;
+    }
+    if s == "GPOS" {
+        return 27;
+    }
+    if s == "AAAA" {
+        return 28;
+    }
+    if s == "LOC" {
+        return 29;
+    }
+    if s == "NXT" {
+        return 30;
+    }
+    if s == "SRV" {
+        return 33;
+    }
+    if s == "NAPTR" {
+        return 35;
+    }
+    if s == "KX" {
+        return 36;
+    }
+    if s == "CERT" {
+        return 37;
+    }
+    if s == "A6" {
+        return 38;
+    }
+    if s == "DNAME" {
+        return 39;
+    }
+    if s == "OPT" {
+        return 41;
+    }
+    if s == "APL" {
+        return 42;
+    }
+    if s == "DS" {
+        return 43;
+    }
+    if s == "SSHFP" {
+        return 44;
+    }
+    if s == "IPSECKEY" {
+        return 45;
+    }
+    if s == "RRSIG" {
+        return 46;
+    }
+    if s == "NSEC" {
+        return 47;
+    }
+    if s == "DNSKEY" {
+        return 48;
+    }
+    if s == "DHCID" {
+        return 49;
+    }
+    if s == "NSEC3" {
+        return 50;
+    }
+    if s == "NSEC3PARAM" {
+        return 51;
+    }
+    if s == "TLSA" {
+        return 52;
+    }
+    -1
+}
+
+fn type_by_name_1(s: ref String) -> i64 {
+    if s == "SMIMEA" {
+        return 53;
+    }
+    if s == "HIP" {
+        return 55;
+    }
+    if s == "NINFO" {
+        return 56;
+    }
+    if s == "CDS" {
+        return 59;
+    }
+    if s == "CDNSKEY" {
+        return 60;
+    }
+    if s == "OPENPGPKEY" {
+        return 61;
+    }
+    if s == "CSYNC" {
+        return 62;
+    }
+    if s == "ZONEMD" {
+        return 63;
+    }
+    if s == "SVCB" {
+        return 64;
+    }
+    if s == "HTTPS" {
+        return 65;
+    }
+    if s == "SPF" {
+        return 99;
+    }
+    if s == "UNSPEC" {
+        return 103;
+    }
+    if s == "NID" {
+        return 104;
+    }
+    if s == "L32" {
+        return 105;
+    }
+    if s == "L64" {
+        return 106;
+    }
+    if s == "LP" {
+        return 107;
+    }
+    if s == "EUI48" {
+        return 108;
+    }
+    if s == "EUI64" {
+        return 109;
+    }
+    if s == "TKEY" {
+        return 249;
+    }
+    if s == "TSIG" {
+        return 250;
+    }
+    if s == "IXFR" {
+        return 251;
+    }
+    if s == "AXFR" {
+        return 252;
+    }
+    if s == "MAILB" {
+        return 253;
+    }
+    if s == "MAILA" {
+        return 254;
+    }
+    if s == "ANY" {
+        return 255;
+    }
+    if s == "URI" {
+        return 256;
+    }
+    if s == "CAA" {
+        return 257;
+    }
+    if s == "AVC" {
+        return 258;
+    }
+    if s == "AMTRELAY" {
+        return 260;
+    }
+    if s == "RESINFO" {
+        return 261;
+    }
+    if s == "WALLET" {
+        return 262;
+    }
+    if s == "TA" {
+        return 32768;
+    }
+    if s == "DLV" {
+        return 32769;
+    }
+    -1
+}
+
+// RdataType(value).name: the first member with the value; empty for none.
+fn type_name(v: i64) -> String {
+    if v == 0 {
+        return "TYPE0".to_string();
+    }
+    if v == 1 {
+        return "A".to_string();
+    }
+    if v == 2 {
+        return "NS".to_string();
+    }
+    if v == 3 {
+        return "MD".to_string();
+    }
+    if v == 4 {
+        return "MF".to_string();
+    }
+    if v == 5 {
+        return "CNAME".to_string();
+    }
+    if v == 6 {
+        return "SOA".to_string();
+    }
+    if v == 7 {
+        return "MB".to_string();
+    }
+    if v == 8 {
+        return "MG".to_string();
+    }
+    if v == 9 {
+        return "MR".to_string();
+    }
+    if v == 10 {
+        return "NULL".to_string();
+    }
+    if v == 11 {
+        return "WKS".to_string();
+    }
+    if v == 12 {
+        return "PTR".to_string();
+    }
+    if v == 13 {
+        return "HINFO".to_string();
+    }
+    if v == 14 {
+        return "MINFO".to_string();
+    }
+    if v == 15 {
+        return "MX".to_string();
+    }
+    if v == 16 {
+        return "TXT".to_string();
+    }
+    if v == 17 {
+        return "RP".to_string();
+    }
+    if v == 18 {
+        return "AFSDB".to_string();
+    }
+    if v == 19 {
+        return "X25".to_string();
+    }
+    if v == 20 {
+        return "ISDN".to_string();
+    }
+    if v == 21 {
+        return "RT".to_string();
+    }
+    if v == 22 {
+        return "NSAP".to_string();
+    }
+    if v == 23 {
+        return "NSAP_PTR".to_string();
+    }
+    if v == 24 {
+        return "SIG".to_string();
+    }
+    if v == 25 {
+        return "KEY".to_string();
+    }
+    if v == 26 {
+        return "PX".to_string();
+    }
+    if v == 27 {
+        return "GPOS".to_string();
+    }
+    if v == 28 {
+        return "AAAA".to_string();
+    }
+    if v == 29 {
+        return "LOC".to_string();
+    }
+    if v == 30 {
+        return "NXT".to_string();
+    }
+    if v == 33 {
+        return "SRV".to_string();
+    }
+    if v == 35 {
+        return "NAPTR".to_string();
+    }
+    if v == 36 {
+        return "KX".to_string();
+    }
+    if v == 37 {
+        return "CERT".to_string();
+    }
+    if v == 38 {
+        return "A6".to_string();
+    }
+    if v == 39 {
+        return "DNAME".to_string();
+    }
+    if v == 41 {
+        return "OPT".to_string();
+    }
+    if v == 42 {
+        return "APL".to_string();
+    }
+    if v == 43 {
+        return "DS".to_string();
+    }
+    if v == 44 {
+        return "SSHFP".to_string();
+    }
+    if v == 45 {
+        return "IPSECKEY".to_string();
+    }
+    if v == 46 {
+        return "RRSIG".to_string();
+    }
+    if v == 47 {
+        return "NSEC".to_string();
+    }
+    if v == 48 {
+        return "DNSKEY".to_string();
+    }
+    if v == 49 {
+        return "DHCID".to_string();
+    }
+    if v == 50 {
+        return "NSEC3".to_string();
+    }
+    if v == 51 {
+        return "NSEC3PARAM".to_string();
+    }
+    if v == 52 {
+        return "TLSA".to_string();
+    }
+    if v == 53 {
+        return "SMIMEA".to_string();
+    }
+    if v == 55 {
+        return "HIP".to_string();
+    }
+    if v == 56 {
+        return "NINFO".to_string();
+    }
+    if v == 59 {
+        return "CDS".to_string();
+    }
+    if v == 60 {
+        return "CDNSKEY".to_string();
+    }
+    if v == 61 {
+        return "OPENPGPKEY".to_string();
+    }
+    if v == 62 {
+        return "CSYNC".to_string();
+    }
+    if v == 63 {
+        return "ZONEMD".to_string();
+    }
+    if v == 64 {
+        return "SVCB".to_string();
+    }
+    if v == 65 {
+        return "HTTPS".to_string();
+    }
+    if v == 99 {
+        return "SPF".to_string();
+    }
+    if v == 103 {
+        return "UNSPEC".to_string();
+    }
+    if v == 104 {
+        return "NID".to_string();
+    }
+    if v == 105 {
+        return "L32".to_string();
+    }
+    if v == 106 {
+        return "L64".to_string();
+    }
+    if v == 107 {
+        return "LP".to_string();
+    }
+    if v == 108 {
+        return "EUI48".to_string();
+    }
+    if v == 109 {
+        return "EUI64".to_string();
+    }
+    if v == 249 {
+        return "TKEY".to_string();
+    }
+    if v == 250 {
+        return "TSIG".to_string();
+    }
+    if v == 251 {
+        return "IXFR".to_string();
+    }
+    if v == 252 {
+        return "AXFR".to_string();
+    }
+    if v == 253 {
+        return "MAILB".to_string();
+    }
+    if v == 254 {
+        return "MAILA".to_string();
+    }
+    if v == 255 {
+        return "ANY".to_string();
+    }
+    if v == 256 {
+        return "URI".to_string();
+    }
+    if v == 257 {
+        return "CAA".to_string();
+    }
+    if v == 258 {
+        return "AVC".to_string();
+    }
+    if v == 260 {
+        return "AMTRELAY".to_string();
+    }
+    if v == 261 {
+        return "RESINFO".to_string();
+    }
+    if v == 262 {
+        return "WALLET".to_string();
+    }
+    if v == 32768 {
+        return "TA".to_string();
+    }
+    if v == 32769 {
+        return "DLV".to_string();
+    }
+    String.new()
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    {
+        let mut t = String.new();
+        file_broken_a_then_cname_zone_0(mut t);
+        v.push(DataFile { path: "broken/a_then_cname.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_escape_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_escape.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_ipv4_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_ipv4.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_ipv6_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_ipv6.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_ttl_record_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_ttl_record.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_ttl_trailing_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_ttl_trailing.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_bad_ttl_unit_zone_0(mut t);
+        v.push(DataFile { path: "broken/bad_ttl_unit.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_caa_flags_zone_0(mut t);
+        v.push(DataFile { path: "broken/caa_flags.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_caa_tag_zone_0(mut t);
+        v.push(DataFile { path: "broken/caa_tag.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_class_by_number_zone_0(mut t);
+        v.push(DataFile { path: "broken/class_by_number.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_class_mismatch_zone_0(mut t);
+        v.push(DataFile { path: "broken/class_mismatch.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_cname_then_a_zone_0(mut t);
+        v.push(DataFile { path: "broken/cname_then_a.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_empty_label_zone_0(mut t);
+        v.push(DataFile { path: "broken/empty_label.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_eof_in_quote_zone_0(mut t);
+        v.push(DataFile { path: "broken/eof_in_quote.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_escape_at_eol_zone_0(mut t);
+        v.push(DataFile { path: "broken/escape_at_eol.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_escape_too_big_owner_zone_0(mut t);
+        v.push(DataFile { path: "broken/escape_too_big_owner.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_escape_too_big_rdata_zone_0(mut t);
+        v.push(DataFile { path: "broken/escape_too_big_rdata.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_escape_too_big_txt_zone_0(mut t);
+        v.push(DataFile { path: "broken/escape_too_big_txt.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_extra_token_zone_0(mut t);
+        v.push(DataFile { path: "broken/extra_token.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_bad_rdata_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_bad_rdata.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_base_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_base.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_class_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_class.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_negative_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_negative.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_no_rhs_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_no_rhs.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_no_ttl_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_no_ttl.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_nostop_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_nostop.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_parse_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_parse.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_range_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_range.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_gen_type_zone_0(mut t);
+        v.push(DataFile { path: "broken/gen_type.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_generic_known_bad_zone_0(mut t);
+        v.push(DataFile { path: "broken/generic_known_bad.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_generic_length_zone_0(mut t);
+        v.push(DataFile { path: "broken/generic_length.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_generic_no_hash_zone_0(mut t);
+        v.push(DataFile { path: "broken/generic_no_hash.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_generic_odd_zone_0(mut t);
+        v.push(DataFile { path: "broken/generic_odd.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_hinfo_short_zone_0(mut t);
+        v.push(DataFile { path: "broken/hinfo_short.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_hinfo_too_long_zone_0(mut t);
+        v.push(DataFile { path: "broken/hinfo_too_long.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_include_zone_0(mut t);
+        v.push(DataFile { path: "broken/include.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv4_leading_zero_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv4_leading_zero.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv4_short_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv4_short.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv6_colon_end_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv6_colon_end.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv6_long_chunk_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv6_long_chunk.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv6_two_gaps_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv6_two_gaps.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ipv6_v4_bad_zone_0(mut t);
+        v.push(DataFile { path: "broken/ipv6_v4_bad.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_label_too_long_owner_zone_0(mut t);
+        v.push(DataFile { path: "broken/label_too_long_owner.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_label_too_long_rdata_zone_0(mut t);
+        v.push(DataFile { path: "broken/label_too_long_rdata.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_missing_ttl_zone_0(mut t);
+        v.push(DataFile { path: "broken/missing_ttl.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_mx_not_int_zone_0(mut t);
+        v.push(DataFile { path: "broken/mx_not_int.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_mx_too_big_zone_0(mut t);
+        v.push(DataFile { path: "broken/mx_too_big.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_name_only_zone_0(mut t);
+        v.push(DataFile { path: "broken/name_only.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_name_too_long_owner_zone_0(mut t);
+        v.push(DataFile { path: "broken/name_too_long_owner.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_name_too_long_rdata_zone_0(mut t);
+        v.push(DataFile { path: "broken/name_too_long_rdata.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_newline_in_quote_zone_0(mut t);
+        v.push(DataFile { path: "broken/newline_in_quote.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_no_ns_zone_0(mut t);
+        v.push(DataFile { path: "broken/no_ns.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_no_soa_zone_0(mut t);
+        v.push(DataFile { path: "broken/no_soa.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_non_origin_soa_zone_0(mut t);
+        v.push(DataFile { path: "broken/non_origin_soa.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_owner_then_eof_zone_0(mut t);
+        v.push(DataFile { path: "broken/owner_then_eof.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_soa_serial_zone_0(mut t);
+        v.push(DataFile { path: "broken/soa_serial.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_soa_short_zone_0(mut t);
+        v.push(DataFile { path: "broken/soa_short.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_srv_port_zone_0(mut t);
+        v.push(DataFile { path: "broken/srv_port.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_sshfp_empty_zone_0(mut t);
+        v.push(DataFile { path: "broken/sshfp_empty.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_sshfp_hex_zone_0(mut t);
+        v.push(DataFile { path: "broken/sshfp_hex.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_tlsa_odd_zone_0(mut t);
+        v.push(DataFile { path: "broken/tlsa_odd.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_ttl_too_big_zone_0(mut t);
+        v.push(DataFile { path: "broken/ttl_too_big.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_txt_none_zone_0(mut t);
+        v.push(DataFile { path: "broken/txt_none.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_txt_too_long_zone_0(mut t);
+        v.push(DataFile { path: "broken/txt_too_long.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_type_too_big_zone_0(mut t);
+        v.push(DataFile { path: "broken/type_too_big.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_unbalanced_close_zone_0(mut t);
+        v.push(DataFile { path: "broken/unbalanced_close.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_unbalanced_open_zone_0(mut t);
+        v.push(DataFile { path: "broken/unbalanced_open.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_unknown_directive_zone_0(mut t);
+        v.push(DataFile { path: "broken/unknown_directive.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_broken_unknown_type_zone_0(mut t);
+        v.push(DataFile { path: "broken/unknown_type.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_caa_quirks_zone_0(mut t);
+        v.push(DataFile { path: "cases/caa_quirks.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_comments_kept_zone_0(mut t);
+        v.push(DataFile { path: "cases/comments_kept.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_empty_quoted_zone_0(mut t);
+        v.push(DataFile { path: "cases/empty_quoted.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_escapes_zone_0(mut t);
+        v.push(DataFile { path: "cases/escapes.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_generic_zone_0(mut t);
+        v.push(DataFile { path: "cases/generic.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_inherit_zone_0(mut t);
+        v.push(DataFile { path: "cases/inherit.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_merge_zone_0(mut t);
+        v.push(DataFile { path: "cases/merge.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_relative_origin_zone_0(mut t);
+        v.push(DataFile { path: "cases/relative_origin.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_soa_ttl_zone_0(mut t);
+        v.push(DataFile { path: "cases/soa_ttl.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_cases_ttls_zone_0(mut t);
+        v.push(DataFile { path: "cases/ttls.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_jobs_tsv_0(mut t);
+        file_jobs_tsv_1(mut t);
+        v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_zones_2_0_192_in_addr_arpa_zone_0(mut t);
+        v.push(DataFile { path: "zones/2.0.192.in-addr.arpa.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_zones_db8_ip6_zone_0(mut t);
+        v.push(DataFile { path: "zones/db8.ip6.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_zones_example_com_next_zone_0(mut t);
+        v.push(DataFile { path: "zones/example.com.next.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_zones_example_com_zone_0(mut t);
+        v.push(DataFile { path: "zones/example.com.zone".to_string(), body: t });
+    }
+    {
+        let mut t = String.new();
+        file_zones_example_net_zone_0(mut t);
+        v.push(DataFile { path: "zones/example.net.zone".to_string(), body: t });
+    }
+    v
+}
+
+fn file_broken_a_then_cname_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("www A 192.0.2.1\n");
+    t.push_str("www CNAME ns\n");
+}
+
+fn file_broken_bad_escape_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("a\\1b A 192.0.2.1\n");
+}
+
+fn file_broken_bad_ipv4_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("host A 192.0.2.300\n");
+}
+
+fn file_broken_bad_ipv6_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host AAAA 2001:db8:::1\n");
+}
+
+fn file_broken_bad_ttl_record_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host 5w5 A 192.0.2.1\n");
+}
+
+fn file_broken_bad_ttl_trailing_zone_0(t: mut ref String) {
+    t.push_str("$TTL 1h30\n");
+}
+
+fn file_broken_bad_ttl_unit_zone_0(t: mut ref String) {
+    t.push_str("$TTL 1x\n");
+}
+
+fn file_broken_caa_flags_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CAA 300 issue \"x\"\n");
+}
+
+fn file_broken_caa_tag_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CAA 0 is-sue \"x\"\n");
+}
+
+fn file_broken_class_by_number_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CLASS2 A 192.0.2.1\n");
+}
+
+fn file_broken_class_mismatch_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CH A 192.0.2.1\n");
+}
+
+fn file_broken_cname_then_a_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("www CNAME ns\n");
+    t.push_str("www A 192.0.2.1\n");
+}
+
+fn file_broken_empty_label_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("a..b A 192.0.2.1\n");
+}
+
+fn file_broken_eof_in_quote_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT \"open");
+}
+
+fn file_broken_escape_at_eol_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT abc\\\n");
+}
+
+fn file_broken_escape_too_big_owner_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("\\300x A 192.0.2.1\n");
+}
+
+fn file_broken_escape_too_big_rdata_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CNAME \\300x\n");
+}
+
+fn file_broken_escape_too_big_txt_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT \"\\300\"\n");
+}
+
+fn file_broken_extra_token_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host A 192.0.2.1 extra\n");
+}
+
+fn file_broken_gen_bad_rdata_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 250-256 h$ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_base_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 1-2 ${0,2,z} A 192.0.2.$\n");
+}
+
+fn file_broken_gen_class_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 1-2 h$ CH A 192.0.2.$\n");
+}
+
+fn file_broken_gen_negative_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE -1-4 $ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_no_rhs_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 1-2 h$ A\n");
+}
+
+fn file_broken_gen_no_ttl_zone_0(t: mut ref String) {
+    t.push_str("$GENERATE 1-2 h$ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_nostop_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 7 $ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_parse_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 1-x $ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_range_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 10-5 $ A 192.0.2.$\n");
+}
+
+fn file_broken_gen_type_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$GENERATE 1-2 h$ BOGUS x\n");
+}
+
+fn file_broken_generic_known_bad_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host A \\# 5 0102030405\n");
+}
+
+fn file_broken_generic_length_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TYPE65280 \\# 4 0a0b0c\n");
+}
+
+fn file_broken_generic_no_hash_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TYPE65280 0a0b\n");
+}
+
+fn file_broken_generic_odd_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TYPE65280 \\# 2 abc\n");
+}
+
+fn file_broken_hinfo_short_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host HINFO cpu\n");
+}
+
+fn file_broken_hinfo_too_long_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host HINFO \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\" os\n");
+}
+
+fn file_broken_include_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$INCLUDE other.zone\n");
+}
+
+fn file_broken_ipv4_leading_zero_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host A 192.0.02.1\n");
+}
+
+fn file_broken_ipv4_short_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host A 192.0.2\n");
+}
+
+fn file_broken_ipv6_colon_end_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host AAAA 2001:db8:1:\n");
+}
+
+fn file_broken_ipv6_long_chunk_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host AAAA 2001:db8::12345\n");
+}
+
+fn file_broken_ipv6_two_gaps_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host AAAA 2001::db8::1\n");
+}
+
+fn file_broken_ipv6_v4_bad_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host AAAA ::ffff:192.0.2.300\n");
+}
+
+fn file_broken_label_too_long_owner_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy A 192.0.2.1\n");
+}
+
+fn file_broken_label_too_long_rdata_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CNAME xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+}
+
+fn file_broken_missing_ttl_zone_0(t: mut ref String) {
+    t.push_str("host A 192.0.2.1\n");
+}
+
+fn file_broken_mx_not_int_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host MX ten mail\n");
+}
+
+fn file_broken_mx_too_big_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host MX 70000 mail\n");
+}
+
+fn file_broken_name_only_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("www\n");
+    t.push_str("@ NS ns\n");
+}
+
+fn file_broken_name_too_long_owner_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A 192.0.2.1\n");
+}
+
+fn file_broken_name_too_long_rdata_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host CNAME bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+}
+
+fn file_broken_newline_in_quote_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT \"open\n");
+    t.push_str("close\"\n");
+}
+
+fn file_broken_no_ns_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("ns A 192.0.2.1\n");
+}
+
+fn file_broken_no_soa_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+}
+
+fn file_broken_non_origin_soa_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1 1 1 1 1\n");
+    t.push_str("sub SOA ns hm 1 1 1 1 1\n");
+}
+
+fn file_broken_owner_then_eof_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("www");
+}
+
+fn file_broken_soa_serial_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1h 1 1 1 1\n");
+}
+
+fn file_broken_soa_short_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm 1 1 1\n");
+}
+
+fn file_broken_srv_port_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host SRV 1 2 65536 target\n");
+}
+
+fn file_broken_sshfp_empty_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host SSHFP 4 2\n");
+}
+
+fn file_broken_sshfp_hex_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host SSHFP 4 2 zz\n");
+}
+
+fn file_broken_tlsa_odd_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TLSA 3 1 1 abc\n");
+}
+
+fn file_broken_ttl_too_big_zone_0(t: mut ref String) {
+    t.push_str("host 4294967296 A 192.0.2.1\n");
+}
+
+fn file_broken_txt_none_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT\n");
+}
+
+fn file_broken_txt_too_long_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TXT \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"\n");
+}
+
+fn file_broken_type_too_big_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host TYPE70000 x\n");
+}
+
+fn file_broken_unbalanced_close_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host A 192.0.2.1 )\n");
+}
+
+fn file_broken_unbalanced_open_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hm ( 1 1 1 1 1\n");
+}
+
+fn file_broken_unknown_directive_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("$FOO bar\n");
+}
+
+fn file_broken_unknown_type_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("host FOO bar\n");
+}
+
+fn file_cases_caa_quirks_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("@ CAA 0 issuewild \";\"\n");
+    t.push_str("@ CAA 0 issue \"ca.example.net; account=1234\"\n");
+    t.push_str("@ CAA 0 Issue \"mixed case tag\"\n");
+}
+
+fn file_cases_comments_kept_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1 ; the apex\n");
+    t.push_str("@ NS ns ;primary\n");
+    t.push_str("ns A 192.0.2.1 ;   spaced out\n");
+    t.push_str("ns A 192.0.2.2\n");
+}
+
+fn file_cases_empty_quoted_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("\"\" A 192.0.2.1\n");
+}
+
+fn file_cases_escapes_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("odd\\.label A 192.0.2.2\n");
+    t.push_str("sp\\032ace TXT \"x\"\n");
+    t.push_str("semi\\;colon TXT \"y\"\n");
+    t.push_str("\\@sign TXT \"z\"\n");
+    t.push_str("quote TXT \"say \\\"hi\\\"\" \"back\\\\slash\" \"\\255\\000\\127\"\n");
+    t.push_str("utf TXT \"caf\\195\\169\" \"ünï\"\n");
+    t.push_str("hinfo HINFO \"c\\112u\" os\n");
+    t.push_str("caa CAA 128 tbs \"\\077x\"\n");
+}
+
+fn file_cases_generic_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("g1 TYPE65280 \\# 0\n");
+    t.push_str("g2 TYPE65281 \\# 6 01 0203 040506\n");
+    t.push_str("g3 TYPE1 192.0.2.7\n");
+    t.push_str("g4 A \\# 4 c0 00 02 08\n");
+    t.push_str("g5 TYPE99 \"spf by number\"\n");
+    t.push_str("g6 MX \\# 8 000a 046d61696c 00\n");
+    t.push_str("g7 class1 A 192.0.2.9\n");
+    t.push_str("g8 IN TYPE13 \"cpu\" \"os\"\n");
+}
+
+fn file_cases_inherit_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("  NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("   A 192.0.2.2\n");
+    t.push_str("\n");
+    t.push_str("   AAAA 2001:db8::1\n");
+    t.push_str("; a comment line\n");
+    t.push_str("host A 192.0.2.3 ; a trailing comment\n");
+    t.push_str("\tMX 10 host\n");
+}
+
+fn file_cases_merge_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("@ MX 10 mx1\n");
+    t.push_str("@ NS NS\n");
+    t.push_str("@ 60 NS ns2\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("NS A 192.0.2.9\n");
+    t.push_str("alias CNAME one\n");
+    t.push_str("alias CNAME two\n");
+    t.push_str("@ 100 SOA ns hostmaster 2 2 2 2 2\n");
+    t.push_str("txt TXT \"Hello\"\n");
+    t.push_str("txt TXT \"hello\"\n");
+    t.push_str("txt TXT \"Hello\"\n");
+}
+
+fn file_cases_relative_origin_zone_0(t: mut ref String) {
+    t.push_str("$TTL 300\n");
+    t.push_str("@ SOA ns hostmaster 1 1 1 1 1\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("$ORIGIN sub\n");
+    t.push_str("lost A 192.0.2.2\n");
+    t.push_str("$ORIGIN sub.example.com.\n");
+    t.push_str("found A 192.0.2.3\n");
+}
+
+fn file_cases_soa_ttl_zone_0(t: mut ref String) {
+    t.push_str("@ SOA ns hostmaster 1 2 3 4 1800\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+}
+
+fn file_cases_ttls_zone_0(t: mut ref String) {
+    t.push_str("@ 1d SOA ns hostmaster 1 2h 30m 1w 10m\n");
+    t.push_str("@ NS ns\n");
+    t.push_str("ns A 192.0.2.1\n");
+    t.push_str("a 1w2d3h4m5s A 192.0.2.2\n");
+    t.push_str("b A 192.0.2.3\n");
+    t.push_str("c 0 A 192.0.2.4\n");
+    t.push_str("d 4294967295 A 192.0.2.5\n");
+    t.push_str("$TTL 1H\n");
+    t.push_str("e A 192.0.2.6\n");
+}
+
+fn file_jobs_tsv_0(t: mut ref String) {
+    t.push_str("zone\tzones/2.0.192.in-addr.arpa.zone\t2.0.192.in-addr.arpa\trel\n");
+    t.push_str("zone\tzones/db8.ip6.zone\t0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa\trel\n");
+    t.push_str("zone\tzones/example.com.next.zone\texample.com\trel\n");
+    t.push_str("zone\tzones/example.com.zone\texample.com\trel\n");
+    t.push_str("zone\tzones/example.net.zone\texample.net\trel\n");
+    t.push_str("zone\tzones/example.com.zone\texample.com\tabs\n");
+    t.push_str("zone\tzones/example.com.zone\texample.com.\torigin\n");
+    t.push_str("zone\tzones/example.net.zone\texample.net\tabs\n");
+    t.push_str("zone\tzones/example.com.zone\texample.com\tcomments\n");
+    t.push_str("zone\tcases/caa_quirks.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/comments_kept.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/empty_quoted.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/escapes.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/generic.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/inherit.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/merge.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/relative_origin.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/soa_ttl.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/ttls.zone\texample.com\trel\n");
+    t.push_str("zone\tcases/comments_kept.zone\texample.com\tcomments\n");
+    t.push_str("zone\tcases/escapes.zone\texample.com\tabs\n");
+    t.push_str("zone\tcases/merge.zone\tExample.COM\tabs\n");
+    t.push_str("zone\tbroken/a_then_cname.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_escape.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_ipv4.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_ipv6.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_ttl_record.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_ttl_trailing.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/bad_ttl_unit.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/caa_flags.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/caa_tag.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/class_by_number.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/class_mismatch.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/cname_then_a.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/empty_label.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/eof_in_quote.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/escape_at_eol.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/escape_too_big_owner.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/escape_too_big_rdata.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/escape_too_big_txt.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/extra_token.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_bad_rdata.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_base.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_class.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_negative.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_no_rhs.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_no_ttl.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_nostop.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_parse.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_range.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/gen_type.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/generic_known_bad.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/generic_length.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/generic_no_hash.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/generic_odd.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/hinfo_short.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/hinfo_too_long.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/include.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv4_leading_zero.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv4_short.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv6_colon_end.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv6_long_chunk.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv6_two_gaps.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ipv6_v4_bad.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/label_too_long_owner.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/label_too_long_rdata.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/missing_ttl.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/mx_not_int.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/mx_too_big.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/name_only.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/name_too_long_owner.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/name_too_long_rdata.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/newline_in_quote.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/no_ns.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/no_soa.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/non_origin_soa.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/owner_then_eof.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/soa_serial.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/soa_short.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/srv_port.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/sshfp_empty.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/sshfp_hex.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/tlsa_odd.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/ttl_too_big.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/txt_none.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/txt_too_long.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/type_too_big.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/unbalanced_close.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/unbalanced_open.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/unknown_directive.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/unknown_type.zone\texample.com\trel\n");
+    t.push_str("zone\tbroken/no_soa.zone\texample.com\tnocheck\n");
+    t.push_str("zone\tbroken/no_ns.zone\texample.com\tnocheck\n");
+    t.push_str("zone\tzones/example.com.zone\tcom\trel\n");
+    t.push_str("zone\tzones/example.com.zone\texample.org\tnocheck\n");
+    t.push_str("name\twww.example.com\t.\n");
+    t.push_str("name\twww.example.com.\t-\n");
+    t.push_str("name\twww.example.com\t-\n");
+    t.push_str("name\t@\texample.com\n");
+    t.push_str("name\t@\t-\n");
+    t.push_str("name\t.\t-\n");
+    t.push_str("name\t\texample.com\n");
+    t.push_str("name\tWWW.Example.COM.\t-\n");
+    t.push_str("name\ta\\.b.example.com.\t-\n");
+    t.push_str("name\ta\\032b\\099.c\texample.org\n");
+    t.push_str("name\t\\@.\\$.\\;.\\(\\).\\\"q\\\".\t-\n");
+    t.push_str("name\t*.example.com.\t-\n");
+    t.push_str("name\tex\\ample.com.\t-\n");
+    t.push_str("name\ttab\\009here.\t-\n");
+    t.push_str("name\thigh\\200\\255.\t-\n");
+    t.push_str("name\ta..b\t-\n");
+    t.push_str("name\t.a\t-\n");
+    t.push_str("name\ta\\1\t-\n");
+    t.push_str("name\ta\\12x.\t-\n");
+    t.push_str("name\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.\t-\n");
+    t.push_str("name\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.\t-\n");
+    t.push_str("name\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.\t-\n");
+    t.push_str("name\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.\t-\n");
+    t.push_str("name\t\\300.\t-\n");
+    t.push_str("name\trelative.name\trel.origin\n");
+    t.push_str("name\ta.b.c.d.e.f.g\t-\n");
+    t.push_str("cmp\twww.example.com.\texample.com.\n");
+    t.push_str("cmp\texample.com.\twww.example.com.\n");
+    t.push_str("cmp\twww.example.com.\tWWW.EXAMPLE.COM.\n");
+    t.push_str("cmp\ta.example.com.\tb.example.com.\n");
+    t.push_str("cmp\tmail.example.com.\twww.example.net.\n");
+    t.push_str("cmp\twww\twww.example.com.\n");
+    t.push_str("cmp\twww.example.com.\twww\n");
+    t.push_str("cmp\ta.b\tb\n");
+    t.push_str("cmp\tx.a.b\ty.a.b\n");
+    t.push_str("cmp\t.\tcom.\n");
+    t.push_str("cmp\t@\t@\n");
+    t.push_str("cmp\t@\ta\n");
+    t.push_str("cmp\tZ.example.com.\ta.example.com.\n");
+    t.push_str("cmp\t\\200.com.\tz.com.\n");
+    t.push_str("cmp\ta.example.com.\ta-b.example.com.\n");
+    t.push_str("cmp\tab.example.com.\ta.example.com.\n");
+    t.push_str("cmp\texample.com.\t.\n");
+    t.push_str("cmp\tcom.\tnet.\n");
+    t.push_str("split\twww.example.com.\t0\n");
+    t.push_str("split\twww.example.com.\t1\n");
+    t.push_str("split\twww.example.com.\t2\n");
+    t.push_str("split\twww.example.com.\t4\n");
+    t.push_str("split\twww.example.com.\t5\n");
+    t.push_str("split\ta.b\t2\n");
+    t.push_str("split\ta.b\t-1\n");
+    t.push_str("concat\twww\texample.com.\n");
+    t.push_str("concat\twww.\texample.com.\n");
+    t.push_str("concat\twww.\t@\n");
+    t.push_str("concat\t@\t@\n");
+    t.push_str("concat\ta.b\tc.d\n");
+    t.push_str("concat\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\tyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.\n");
+    t.push_str("parent\twww.example.com.\n");
+    t.push_str("parent\tcom.\n");
+    t.push_str("parent\t.\n");
+    t.push_str("parent\t@\n");
+    t.push_str("parent\ta\n");
+    t.push_str("ttl\t3600\n");
+    t.push_str("ttl\t1h\n");
+    t.push_str("ttl\t1H30M\n");
+    t.push_str("ttl\t2w1d\n");
+    t.push_str("ttl\t1w2d3h4m5s\n");
+    t.push_str("ttl\t0\n");
+    t.push_str("ttl\t\n");
+    t.push_str("ttl\th\n");
+    t.push_str("ttl\t1h30\n");
+    t.push_str("ttl\t1y\n");
+    t.push_str("ttl\t4294967295\n");
+    t.push_str("ttl\t4294967296\n");
+    t.push_str("ttl\t60s60s\n");
+    t.push_str("ttl\t007\n");
+    t.push_str("ip6\t2001:db8::1\n");
+    t.push_str("ip6\t2001:DB8:0:0:0:0:0:1\n");
+    t.push_str("ip6\t::\n");
+    t.push_str("ip6\t::1\n");
+    t.push_str("ip6\t1::\n");
+    t.push_str("ip6\t::ffff:192.0.2.1\n");
+    t.push_str("ip6\t::192.0.2.1\n");
+    t.push_str("ip6\t::ffff:0:192.0.2.1\n");
+    t.push_str("ip6\t1:0:0:2:0:0:0:3\n");
+}
+
+fn file_jobs_tsv_1(t: mut ref String) {
+    t.push_str("ip6\t0:0:1:0:0:1:0:0\n");
+    t.push_str("ip6\t1:2:3:4:5:6:7:8\n");
+    t.push_str("ip6\tfe80::1:0:0:0\n");
+    t.push_str("ip6\t2001:db8::0:1\n");
+    t.push_str("ip6\t0::0\n");
+    t.push_str("ip6\t1:2:3:4:5:6:7::\n");
+    t.push_str("ip6\t::1:2:3:4:5:6:7\n");
+    t.push_str("ip6\t0:0:0:0:0:ffff:c000:201\n");
+    t.push_str("ip6\t0:0:0:0:0:0:c000:201\n");
+    t.push_str("ip6\t1:2:3:4:5:6:7:8:9\n");
+    t.push_str("ip6\t1:2:3\n");
+    t.push_str("ip6\t12345::\n");
+    t.push_str("ip6\tg::1\n");
+    t.push_str("ip6\t:1::2\n");
+    t.push_str("ip6\t1::2:\n");
+    t.push_str("ip6\t::ffff:1.2.3\n");
+    t.push_str("rev\t192.0.2.1\n");
+    t.push_str("rev\t2001:db8::53\n");
+    t.push_str("rev\t::ffff:198.51.100.7\n");
+    t.push_str("rev\t::1\n");
+    t.push_str("rev\t10.0.0.256\n");
+    t.push_str("rev\tnonsense\n");
+    t.push_str("rev\t1.2.3\n");
+    t.push_str("unrev\t1.2.0.192.in-addr.arpa.\n");
+    t.push_str("unrev\t3.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.\n");
+    t.push_str("unrev\t4.3.in-addr.arpa.\n");
+    t.push_str("unrev\twww.example.com.\n");
+    t.push_str("unrev\t300.2.0.192.in-addr.arpa.\n");
+    t.push_str("query\twww.example.com\tA\t4660\n");
+    t.push_str("query\texample.com.\tMX\t1\n");
+    t.push_str("query\tExample.COM\tTYPE65280\t65535\n");
+    t.push_str("query\t_sip._tcp.example.com\tSRV\t0\n");
+    t.push_str("query\texample.com\tANY\t42\n");
+    t.push_str("query\tb\\.c.example.com\tAAAA\t77\n");
+    t.push_str("query\texample.com\tNOPE\t1\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tSOA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tNS\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tMX\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tWWW.Example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tshop.example.com\tAAAA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tshop.example.com\tCNAME\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tapi.example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tmail.example.com\tMX\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tnothere.example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tns1.example.com\tTXT\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\t_sip._tcp.example.com\tSRV\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\thost.dev.example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tdev.example.com\tNS\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tANY\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tintranet.corp.example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\twww.example.org\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tlegacy.example.com\tTXT\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\t_443._tcp.www.example.com\tTLSA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\toffice.example.com\tTYPE65280\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tmixed.case.example.com\tMX\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tCAA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tbig.example.com\tTXT\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\twww2.example.com\tA\t100\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\tbig.example.com\tTXT\t101\tudp\n");
+    t.push_str("serve\tzones/example.com.zone\texample.com\texample.com\tANY\t102\tudp\n");
+    t.push_str("serve\tzones/2.0.192.in-addr.arpa.zone\t2.0.192.in-addr.arpa\t103.2.0.192.in-addr.arpa\tPTR\t103\n");
+    t.push_str("serve\tzones/example.net.zone\texample.net\tcdn.example.net\tA\t104\n");
+    t.push_str("servewire\tzones/example.com.zone\texample.com\t000e0100000200000000000003777777076578616d706c6503636f6d0000010001076578616d706c6503636f6d00000f0001\n");
+    t.push_str("servewire\tzones/example.com.zone\texample.com\t000f010000010000000000000776657273696f6e0462696e640000100003\n");
+    t.push_str("servewire\tzones/example.com.zone\texample.com\t12348180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c02d000100010000003c0004c000020a\n");
+    t.push_str("servewire\tzones/example.com.zone\texample.com\t00120100000100000000000003777777076578616d706c6503636f6d000001000100\n");
+    t.push_str("servewire\tzones/example.com.zone\texample.com\t0011000000000000000000\n");
+    t.push_str("wire\tanswer\t12348180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c02d000100010000003c0004c000020a\n");
+    t.push_str("wire\tmerge_ttl\t00078400000100030000000003777777076578616d706c6503636f6d0000010001c00c000100010000012c0004c000020103575757074558414d504c4503434f4d00000100010000003c0004c0000202c00c00010001800000000004c0000203\n");
+    t.push_str("wire\ttwo_cnames\t00088180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c000f0161076578616d706c65036e657400c00c000500010000012c000f0162076578616d706c65036e657400\n");
+    t.push_str("wire\tnxdomain\t000981830001000000010000046e6f7065076578616d706c6503636f6d0000010001c011000600010000012c003d036e7331076578616d706c6503636f6d000a686f73746d6173746572076578616d706c6503636f6d0078c3dd5500001c2000000384001275000000012c\n");
+    t.push_str("wire\talltypes\t000a850000000012000000000174076578616d706c65036f7267000001000100000e100004c63364070174076578616d706c65036f726700001c000100000e10001020010db8000000000000ff00004200010174076578616d706c65036f726700001c000100000e10001000000000000000000000ffffc00002010174076578616d706c65036f726700001c000100000e100010000000000000000000000000000000010174076578616d706c65036f726700001c000100000e100010fe8000000000000000000000000000000174076578616d706c65036f7267000002000100000e100010026e73076578616d706c65036f7267000174076578616d706c65036f726700000c000100000e10001204686f7374076578616d706c65036f7267000174076578616d706c65036f726700000f000100000e1000120005026d78076578616d706c65036f7267000174076578616d706c65036f7267000010000100000e10000e056669727374000662696e00ff220174076578616d706c65036f7267000063000100000e10000c0b763d73706631202d616c6c0174076578616d706c65036f7267000021000100000e1000170001000201bb03737663076578616d706c65036f7267000174076578616d706c65036f7267000101000100000e1000150005697373756563612e6578616d706c652e6e65740174076578616d706c65036f726700000d000100000e10000b0341524d06506c616e20390174076578616d706c65036f726700002c000100000e1000160101000102030405060708090a0b0c0d0e0f101112130174076578616d706c65036f7267000034000100000e100049030101000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041424344450174076578616d706c65036f7267000027000100000e10000f056f74686572076578616d706c65000174076578616d706c65036f726700ff00000100000e100004deadbeef0174076578616d706c65036f726700ff00000100000e100000\n");
+    t.push_str("wire\tnotify\t000b24000001000000000000076578616d706c6503636f6d0000060001\n");
+    t.push_str("wire\topcode3\t000c18000000000000000000\n");
+    t.push_str("wire\trcode12\t000d87bc0000000000000000\n");
+    t.push_str("wire\ttwo_questions\t000e0100000200000000000003777777076578616d706c6503636f6d0000010001076578616d706c6503636f6d00000f0001\n");
+    t.push_str("wire\tchaos\t000f010000010000000000000776657273696f6e0462696e640000100003\n");
+    t.push_str("wire\tescaped_name\t00108000000100000000000003612e620673702061636504007fc3a90773656d693b40240000010001\n");
+    t.push_str("wire\tshort\t0011000000000000000000\n");
+    t.push_str("wire\tempty\t\n");
+    t.push_str("wire\ttrailing\t00120100000100000000000003777777076578616d706c6503636f6d000001000100\n");
+    t.push_str("wire\tforward_pointer\t001301000001000000000000c02800010001\n");
+    t.push_str("wire\tself_pointer\t001401000001000000000000c00c00010001\n");
+    t.push_str("wire\tpointer_loop\t00150100000100010000000003777777076578616d706c6503636f6d00000100010178c02100010001000000000000\n");
+    t.push_str("wire\tlabel_type\t001601000001000000000000416162630000010001\n");
+    t.push_str("wire\ttruncated_name\t001701000001000000000000037777\n");
+    t.push_str("wire\ttruncated_question\t00180100000100000000000003777777076578616d706c6503636f6d0000\n");
+    t.push_str("wire\trdlen_too_big\t00198180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c000ac0000201\n");
+    t.push_str("wire\ta_short\t001a8180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c0003c00002\n");
+    t.push_str("wire\taaaa_short\t001b8180000100010000000003777777076578616d706c6503636f6d0000010001c00c001c00010000003c000400000000\n");
+    t.push_str("wire\tmx_leftover\t001c8180000100010000000003777777076578616d706c6503636f6d0000010001c00c000f00010000003c00060001c00c0000\n");
+    t.push_str("wire\ttxt_overrun\t001d8180000100010000000003777777076578616d706c6503636f6d0000010001c00c001000010000003c000409616263\n");
+    t.push_str("wire\ttxt_empty\t00268180000100010000000003777777076578616d706c6503636f6d0000010001c00c001000010000003c0000\n");
+    t.push_str("wire\tcaa_bad_tag\t00278180000100010000000003777777076578616d706c6503636f6d0000010001c00c010100010000003c00050002612d62\n");
+    t.push_str("wire\topt_in_answer\t001e8180000100010000000003777777076578616d706c6503636f6d00000100010000291000000000000000\n");
+    t.push_str("wire\ttsig_in_answer\t001f8180000100010000000003777777076578616d706c6503636f6d0000010001c00c00fa00ff000000000000\n");
+    t.push_str("wire\tname_too_long\t00208180000100010000000003777777076578616d706c6503636f6d00000100013c6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613c6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262623c6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363633c6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464643c656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565c00c000100010000003c0004c0000201\n");
+    t.push_str("wire\tsoa_short\t00218180000100010000000003777777076578616d706c6503636f6d0000010001c00c000600010000003c000e0000000000010000000200000003\n");
+    t.push_str("wire\tcaa_short\t00228180000100010000000003777777076578616d706c6503636f6d0000010001c00c010100010000003c00050005697373\n");
+    t.push_str("wire\tsrv_short\t00238180000100010000000003777777076578616d706c6503636f6d0000010001c00c002100010000003c0003000100\n");
+    t.push_str("wire\trr_header_short\t00248180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100\n");
+    t.push_str("wire\tcount_too_big\t00258180000100020000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c0004c0000201\n");
+    t.push_str("diff\tzones/example.com.zone\tzones/example.com.next.zone\texample.com\n");
+    t.push_str("diff\tzones/example.com.next.zone\tzones/example.com.zone\texample.com\n");
+    t.push_str("diff\tcases/merge.zone\tcases/inherit.zone\texample.com\n");
+}
+
+fn file_zones_2_0_192_in_addr_arpa_zone_0(t: mut ref String) {
+    t.push_str("$TTL 1d\n");
+    t.push_str("@ SOA ns1.example.com. hostmaster.example.com. 1 1h 15m 1w 1h\n");
+    t.push_str("@ NS ns1.example.com.\n");
+    t.push_str("10 PTR example.com.\n");
+    t.push_str("25 PTR mail.example.com.\n");
+    t.push_str("26 PTR mail.example.com.\n");
+    t.push_str("53 PTR ns1.example.com.\n");
+    t.push_str("$GENERATE 100-104 $ PTR dhcp-$.example.com.\n");
+    t.push_str("$GENERATE 200-206/3 ${0,3,d} 600 PTR h${-199,2,x}.lab.example.com.\n");
+    t.push_str("$GENERATE 7-9 ${0,0,o} IN PTR oct-${8}.example.com.\n");
+}
+
+fn file_zones_db8_ip6_zone_0(t: mut ref String) {
+    t.push_str("$TTL 1h\n");
+    t.push_str("@ SOA ns1.example.com. hostmaster.example.com. 1 1h 15m 1w 1h\n");
+    t.push_str("@ NS ns1.example.com.\n");
+    t.push_str("0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0 PTR example.com.\n");
+    t.push_str("3.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0 PTR ns1.example.com.\n");
+    t.push_str("$GENERATE 10-12 ${0,7,n}.0.0.0.0.0.0.0.0.0.0.0.0 PTR v6-$.example.com.\n");
+    t.push_str("$GENERATE 250-251 ${0,7,N}.0.0.0.0.0.0.0.0.0.0.0.1 PTR V6-${0,4,X}.example.com.\n");
+}
+
+fn file_zones_example_com_next_zone_0(t: mut ref String) {
+    t.push_str("$TTL 1h\n");
+    t.push_str("@   IN  SOA ns1.example.com. hostmaster.example.com. 2026102201 2h 15m 2w 5m\n");
+    t.push_str("    IN  NS   ns1\n");
+    t.push_str("    IN  NS   ns2.example.net.\n");
+    t.push_str("    IN  MX   10 mail\n");
+    t.push_str("    IN  MX   30 mail3\n");
+    t.push_str("    IN  TXT  \"v=spf1 mx include:_spf.example.net -all\"\n");
+    t.push_str("    IN  A    192.0.2.10\n");
+    t.push_str("    IN  AAAA 2001:db8::10\n");
+    t.push_str("ns1     IN A    192.0.2.53\n");
+    t.push_str("        IN AAAA 2001:db8::53\n");
+    t.push_str("mail    IN A    192.0.2.25\n");
+    t.push_str("mail3   IN A    192.0.2.27\n");
+    t.push_str("www     IN CNAME @\n");
+    t.push_str("shop    IN CNAME www\n");
+    t.push_str("api     300 A   192.0.2.30\n");
+    t.push_str("api     300 A   192.0.2.31\n");
+    t.push_str("status  A       192.0.2.80\n");
+    t.push_str("_dmarc  TXT     \"v=DMARC1; p=reject; rua=mailto:dmarc@example.com\"\n");
+}
+
+fn file_zones_example_com_zone_0(t: mut ref String) {
+    t.push_str("; example.com: the zone of Example Shop\n");
+    t.push_str("$TTL 1h\n");
+    t.push_str("@   IN  SOA ns1.example.com. hostmaster.example.com. (\n");
+    t.push_str("        2026102101 ; serial\n");
+    t.push_str("        2h         ; refresh\n");
+    t.push_str("        15m        ; retry\n");
+    t.push_str("        2w         ; expire\n");
+    t.push_str("        5m )       ; negative caching\n");
+    t.push_str("    IN  NS   ns1\n");
+    t.push_str("    IN  NS   ns2.example.net.\n");
+    t.push_str("    IN  MX   10 mail\n");
+    t.push_str("    IN  MX   20 mail2.example.net.\n");
+    t.push_str("    IN  TXT  \"v=spf1 mx include:_spf.example.net -all\"\n");
+    t.push_str("    IN  CAA  0 issue \"letsencrypt.org\"\n");
+    t.push_str("    IN  CAA  0 iodef \"mailto:security@example.com\"\n");
+    t.push_str("    IN  A    192.0.2.10\n");
+    t.push_str("    IN  AAAA 2001:db8:0:0::10\n");
+    t.push_str("\n");
+    t.push_str("ns1     IN A    192.0.2.53\n");
+    t.push_str("        IN AAAA 2001:DB8::53\n");
+    t.push_str("mail    300 IN A 192.0.2.25\n");
+    t.push_str("mail    IN A    192.0.2.26\n");
+    t.push_str("www     IN CNAME @\n");
+    t.push_str("shop    IN CNAME www\n");
+    t.push_str("api     600 A   192.0.2.30\n");
+    t.push_str("api     A       192.0.2.31\n");
+    t.push_str("api     A       192.0.2.30   ; the same address again\n");
+    t.push_str("_dmarc  TXT     \"v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com\"\n");
+    t.push_str("_sip._tcp SRV   10 60 5060 sip1\n");
+    t.push_str("          SRV   20 0 5060 sip2.example.net.\n");
+    t.push_str("sip1    A       192.0.2.40\n");
+    t.push_str("_443._tcp.www TLSA 3 1 1 ( 0123456789abcdef0123456789abcdef\n");
+    t.push_str("                           0123456789ABCDEF0123456789ABCDEF )\n");
+    t.push_str("ns1     SSHFP   4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a\n");
+    t.push_str("db      HINFO   \"x86_64\" \"Linux 6.1\"\n");
+    t.push_str("legacy  TXT     \"a \\\"quoted\\\" word\" two\\032words \"semi;colon\" \"tab\\009x\" \"\"\n");
+    t.push_str("dev     NS      ns.dev\n");
+    t.push_str("ns.dev  A       192.0.2.60\n");
+    t.push_str("office  TYPE65280 \\# 4 0a0b0c0d\n");
+    t.push_str("printer A       \\# 4 C0000263\n");
+    t.push_str("WWW2    A       192.0.2.11\n");
+    t.push_str("www2    A       192.0.2.12\n");
+    t.push_str("Mixed.Case MX   5 MAIL\n");
+    t.push_str("big     TXT     \"record one of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record two of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record three of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record four of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record five of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record six of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record seven of the big set, padded out to make the answer long\"\n");
+    t.push_str("big     TXT     \"record eight of the big set, padded out to make the answer long\"\n");
+    t.push_str("$ORIGIN corp.example.com.\n");
+    t.push_str("vpn     A       198.51.100.1\n");
+    t.push_str("intranet CNAME  vpn\n");
+    t.push_str("@       TXT     \"corp\"\n");
+    t.push_str("$ORIGIN example.com.\n");
+    t.push_str("*.cdn   CNAME   cdn.example.net.\n");
+}
+
+fn file_zones_example_net_zone_0(t: mut ref String) {
+    t.push_str("$ORIGIN example.net.\n");
+    t.push_str("$TTL 86400\n");
+    t.push_str("example.net. 3600 IN SOA ns2.example.net. admin.example.net. 7 3600 900 1209600 300\n");
+    t.push_str("example.net. IN 3600 NS ns2\n");
+    t.push_str("             NS ns3.example.org.\n");
+    t.push_str("ns2 A 203.0.113.2\n");
+    t.push_str("mail2 IN A 203.0.113.25\n");
+    t.push_str("sip2 1d IN A 203.0.113.40\n");
+    t.push_str("_spf TXT \"v=spf1 ip4:192.0.2.0/24 ip4:203.0.113.0/24 -all\"\n");
+    t.push_str("cdn 60 CNAME edge.cdn.example.org.\n");
+    t.push_str("$TTL 5m\n");
+    t.push_str("ttl-test A 203.0.113.99\n");
+    t.push_str("\tA 203.0.113.98\n");
+    t.push_str("other.example.org. A 203.0.113.1   ; outside the zone, so it is skipped\n");
+}

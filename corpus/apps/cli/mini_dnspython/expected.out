@@ -1,0 +1,1716 @@
+-- zone zones/2.0.192.in-addr.arpa.zone 2.0.192.in-addr.arpa rel
+@ 86400 IN SOA ns1.example.com. hostmaster.example.com. 1 3600 900 604800 3600
+@ 86400 IN NS ns1.example.com.
+10 86400 IN PTR example.com.
+10 86400 IN PTR oct-16.example.com.
+100 86400 IN PTR dhcp-100.example.com.
+101 86400 IN PTR dhcp-101.example.com.
+102 86400 IN PTR dhcp-102.example.com.
+103 86400 IN PTR dhcp-103.example.com.
+104 86400 IN PTR dhcp-104.example.com.
+11 86400 IN PTR oct-17.example.com.
+200 600 IN PTR h01.lab.example.com.
+203 600 IN PTR h04.lab.example.com.
+206 600 IN PTR h07.lab.example.com.
+25 86400 IN PTR mail.example.com.
+26 86400 IN PTR mail.example.com.
+53 86400 IN PTR ns1.example.com.
+7 86400 IN PTR oct-15.example.com.
+  (15 names, 17 records)
+-- zone zones/db8.ip6.zone 0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa rel
+@ 3600 IN SOA ns1.example.com. hostmaster.example.com. 1 3600 900 604800 3600
+@ 3600 IN NS ns1.example.com.
+a.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 3600 IN PTR v6-10.example.com.
+b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 3600 IN PTR v6-11.example.com.
+c.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 3600 IN PTR v6-12.example.com.
+0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0 3600 IN PTR example.com.
+3.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0 3600 IN PTR ns1.example.com.
+A.F.0.0.0.0.0.0.0.0.0.0.0.0.0.1 3600 IN PTR V6-00FA.example.com.
+B.F.0.0.0.0.0.0.0.0.0.0.0.0.0.1 3600 IN PTR V6-00FB.example.com.
+  (8 names, 9 records)
+-- zone zones/example.com.next.zone example.com rel
+@ 3600 IN SOA ns1 hostmaster 2026102201 7200 900 1209600 300
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 30 mail3
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+api 300 IN A 192.0.2.30
+api 300 IN A 192.0.2.31
+mail 3600 IN A 192.0.2.25
+mail3 3600 IN A 192.0.2.27
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+shop 3600 IN CNAME www
+status 3600 IN A 192.0.2.80
+www 3600 IN CNAME @
+  (9 names, 18 records)
+-- zone zones/example.com.zone example.com rel
+@ 3600 IN SOA ns1 hostmaster 2026102101 7200 900 1209600 300
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 20 mail2.example.net.
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN CAA 0 issue "letsencrypt.org"
+@ 3600 IN CAA 0 iodef "mailto:security@example.com"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp 3600 IN SRV 10 60 5060 sip1
+_sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+api 600 IN A 192.0.2.30
+api 600 IN A 192.0.2.31
+big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case 3600 IN MX 5 MAIL
+*.cdn 3600 IN CNAME cdn.example.net.
+corp 3600 IN TXT "corp"
+intranet.corp 3600 IN CNAME vpn.corp
+vpn.corp 3600 IN A 198.51.100.1
+db 3600 IN HINFO "x86_64" "Linux 6.1"
+dev 3600 IN NS ns.dev
+ns.dev 3600 IN A 192.0.2.60
+legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail 300 IN A 192.0.2.25
+mail 300 IN A 192.0.2.26
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer 3600 IN A 192.0.2.99
+shop 3600 IN CNAME www
+sip1 3600 IN A 192.0.2.40
+www 3600 IN CNAME @
+_443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2 3600 IN A 192.0.2.11
+WWW2 3600 IN A 192.0.2.12
+  (23 names, 45 records)
+-- zone zones/example.net.zone example.net rel
+@ 3600 IN SOA ns2 admin 7 3600 900 1209600 300
+@ 3600 IN NS ns2
+@ 3600 IN NS ns3.example.org.
+_spf 86400 IN TXT "v=spf1 ip4:192.0.2.0/24 ip4:203.0.113.0/24 -all"
+cdn 60 IN CNAME edge.cdn.example.org.
+mail2 86400 IN A 203.0.113.25
+ns2 86400 IN A 203.0.113.2
+sip2 86400 IN A 203.0.113.40
+ttl-test 300 IN A 203.0.113.99
+ttl-test 300 IN A 203.0.113.98
+  (7 names, 10 records)
+-- zone zones/example.com.zone example.com abs
+example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+example.com. 3600 IN NS ns1.example.com.
+example.com. 3600 IN NS ns2.example.net.
+example.com. 3600 IN MX 10 mail.example.com.
+example.com. 3600 IN MX 20 mail2.example.net.
+example.com. 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+example.com. 3600 IN CAA 0 issue "letsencrypt.org"
+example.com. 3600 IN CAA 0 iodef "mailto:security@example.com"
+example.com. 3600 IN A 192.0.2.10
+example.com. 3600 IN AAAA 2001:db8::10
+_dmarc.example.com. 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp.example.com. 3600 IN SRV 10 60 5060 sip1.example.com.
+_sip._tcp.example.com. 3600 IN SRV 20 0 5060 sip2.example.net.
+api.example.com. 600 IN A 192.0.2.30
+api.example.com. 600 IN A 192.0.2.31
+big.example.com. 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big.example.com. 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case.example.com. 3600 IN MX 5 MAIL.example.com.
+*.cdn.example.com. 3600 IN CNAME cdn.example.net.
+corp.example.com. 3600 IN TXT "corp"
+intranet.corp.example.com. 3600 IN CNAME vpn.corp.example.com.
+vpn.corp.example.com. 3600 IN A 198.51.100.1
+db.example.com. 3600 IN HINFO "x86_64" "Linux 6.1"
+dev.example.com. 3600 IN NS ns.dev.example.com.
+ns.dev.example.com. 3600 IN A 192.0.2.60
+legacy.example.com. 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail.example.com. 300 IN A 192.0.2.25
+mail.example.com. 300 IN A 192.0.2.26
+ns1.example.com. 3600 IN A 192.0.2.53
+ns1.example.com. 3600 IN AAAA 2001:db8::53
+ns1.example.com. 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office.example.com. 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer.example.com. 3600 IN A 192.0.2.99
+shop.example.com. 3600 IN CNAME www.example.com.
+sip1.example.com. 3600 IN A 192.0.2.40
+www.example.com. 3600 IN CNAME example.com.
+_443._tcp.www.example.com. 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2.example.com. 3600 IN A 192.0.2.11
+WWW2.example.com. 3600 IN A 192.0.2.12
+  (23 names, 45 records)
+-- zone zones/example.com.zone example.com. origin
+$ORIGIN example.com.
+@ 3600 IN SOA ns1 hostmaster 2026102101 7200 900 1209600 300
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 20 mail2.example.net.
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN CAA 0 issue "letsencrypt.org"
+@ 3600 IN CAA 0 iodef "mailto:security@example.com"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp 3600 IN SRV 10 60 5060 sip1
+_sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+api 600 IN A 192.0.2.30
+api 600 IN A 192.0.2.31
+big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case 3600 IN MX 5 MAIL
+*.cdn 3600 IN CNAME cdn.example.net.
+corp 3600 IN TXT "corp"
+intranet.corp 3600 IN CNAME vpn.corp
+vpn.corp 3600 IN A 198.51.100.1
+db 3600 IN HINFO "x86_64" "Linux 6.1"
+dev 3600 IN NS ns.dev
+ns.dev 3600 IN A 192.0.2.60
+legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail 300 IN A 192.0.2.25
+mail 300 IN A 192.0.2.26
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer 3600 IN A 192.0.2.99
+shop 3600 IN CNAME www
+sip1 3600 IN A 192.0.2.40
+www 3600 IN CNAME @
+_443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2 3600 IN A 192.0.2.11
+WWW2 3600 IN A 192.0.2.12
+  (23 names, 45 records)
+-- zone zones/example.net.zone example.net abs
+example.net. 3600 IN SOA ns2.example.net. admin.example.net. 7 3600 900 1209600 300
+example.net. 3600 IN NS ns2.example.net.
+example.net. 3600 IN NS ns3.example.org.
+_spf.example.net. 86400 IN TXT "v=spf1 ip4:192.0.2.0/24 ip4:203.0.113.0/24 -all"
+cdn.example.net. 60 IN CNAME edge.cdn.example.org.
+mail2.example.net. 86400 IN A 203.0.113.25
+ns2.example.net. 86400 IN A 203.0.113.2
+sip2.example.net. 86400 IN A 203.0.113.40
+ttl-test.example.net. 300 IN A 203.0.113.99
+ttl-test.example.net. 300 IN A 203.0.113.98
+  (7 names, 10 records)
+-- zone zones/example.com.zone example.com comments
+@ 3600 IN SOA ns1 hostmaster 2026102101 7200 900 1209600 300 ; negative caching
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 20 mail2.example.net.
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN CAA 0 issue "letsencrypt.org"
+@ 3600 IN CAA 0 iodef "mailto:security@example.com"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp 3600 IN SRV 10 60 5060 sip1
+_sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+api 600 IN A 192.0.2.30
+api 600 IN A 192.0.2.31
+big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case 3600 IN MX 5 MAIL
+*.cdn 3600 IN CNAME cdn.example.net.
+corp 3600 IN TXT "corp"
+intranet.corp 3600 IN CNAME vpn.corp
+vpn.corp 3600 IN A 198.51.100.1
+db 3600 IN HINFO "x86_64" "Linux 6.1"
+dev 3600 IN NS ns.dev
+ns.dev 3600 IN A 192.0.2.60
+legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail 300 IN A 192.0.2.25
+mail 300 IN A 192.0.2.26
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer 3600 IN A 192.0.2.99
+shop 3600 IN CNAME www
+sip1 3600 IN A 192.0.2.40
+www 3600 IN CNAME @
+_443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2 3600 IN A 192.0.2.11
+WWW2 3600 IN A 192.0.2.12
+  (23 names, 45 records)
+-- zone cases/caa_quirks.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+@ 300 IN CAA 0 issuewild ";"
+@ 300 IN CAA 0 issue "ca.example.net; account=1234"
+@ 300 IN CAA 0 Issue "mixed case tag"
+ns 300 IN A 192.0.2.1
+  (2 names, 6 records)
+-- zone cases/comments_kept.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+ns 300 IN A 192.0.2.1
+ns 300 IN A 192.0.2.2
+  (2 names, 4 records)
+-- zone cases/empty_quoted.zone example.com rel
+! IndexError: string index out of range
+-- zone cases/escapes.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+\@sign 300 IN TXT "z"
+caa 300 IN CAA 128 tbs "Mx"
+hinfo 300 IN HINFO "cpu" "os"
+ns 300 IN A 192.0.2.1
+odd\.label 300 IN A 192.0.2.2
+quote 300 IN TXT "say \"hi\"" "back\\slash" "\255\000\127"
+semi\;colon 300 IN TXT "y"
+sp\032ace 300 IN TXT "x"
+utf 300 IN TXT "caf\195\169" "\195\188n\195\175"
+  (10 names, 11 records)
+-- zone cases/generic.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+g1 300 IN TYPE65280 \# 0 
+g2 300 IN TYPE65281 \# 6 010203040506
+g3 300 IN A 192.0.2.7
+g4 300 IN A 192.0.2.8
+g5 300 IN SPF "spf by number"
+g6 300 IN MX 10 mail.
+g7 300 IN A 192.0.2.9
+g8 300 IN HINFO "cpu" "os"
+ns 300 IN A 192.0.2.1
+  (10 names, 11 records)
+-- zone cases/inherit.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+host 300 IN A 192.0.2.3
+host 300 IN MX 10 host
+ns 300 IN A 192.0.2.1
+ns 300 IN A 192.0.2.2
+ns 300 IN AAAA 2001:db8::1
+  (3 names, 7 records)
+-- zone cases/merge.zone example.com rel
+@ 300 IN MX 10 mx1
+@ 60 IN NS ns
+@ 60 IN NS ns2
+@ 100 IN SOA ns hostmaster 2 2 2 2 2
+alias 300 IN CNAME two
+ns 300 IN A 192.0.2.1
+ns 300 IN A 192.0.2.9
+txt 300 IN TXT "Hello"
+txt 300 IN TXT "hello"
+  (4 names, 9 records)
+-- zone cases/relative_origin.zone example.com rel
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+@ 300 IN NS ns
+ns 300 IN A 192.0.2.1
+found.sub 300 IN A 192.0.2.3
+  (3 names, 4 records)
+-- zone cases/soa_ttl.zone example.com rel
+@ 1800 IN SOA ns hostmaster 1 2 3 4 1800
+@ 1800 IN NS ns
+ns 1800 IN A 192.0.2.1
+  (2 names, 3 records)
+-- zone cases/ttls.zone example.com rel
+@ 86400 IN SOA ns hostmaster 1 7200 1800 604800 600
+@ 600 IN NS ns
+a 788645 IN A 192.0.2.2
+b 600 IN A 192.0.2.3
+c 0 IN A 192.0.2.4
+d 4294967295 IN A 192.0.2.5
+e 3600 IN A 192.0.2.6
+ns 600 IN A 192.0.2.1
+  (7 names, 8 records)
+-- zone cases/comments_kept.zone example.com comments
+@ 300 IN SOA ns hostmaster 1 1 1 1 1 ; the apex
+@ 300 IN NS ns ;primary
+ns 300 IN A 192.0.2.1 ;   spaced out
+ns 300 IN A 192.0.2.2
+  (2 names, 4 records)
+-- zone cases/escapes.zone example.com abs
+example.com. 300 IN SOA ns.example.com. hostmaster.example.com. 1 1 1 1 1
+example.com. 300 IN NS ns.example.com.
+\@sign.example.com. 300 IN TXT "z"
+caa.example.com. 300 IN CAA 128 tbs "Mx"
+hinfo.example.com. 300 IN HINFO "cpu" "os"
+ns.example.com. 300 IN A 192.0.2.1
+odd\.label.example.com. 300 IN A 192.0.2.2
+quote.example.com. 300 IN TXT "say \"hi\"" "back\\slash" "\255\000\127"
+semi\;colon.example.com. 300 IN TXT "y"
+sp\032ace.example.com. 300 IN TXT "x"
+utf.example.com. 300 IN TXT "caf\195\169" "\195\188n\195\175"
+  (10 names, 11 records)
+-- zone cases/merge.zone Example.COM abs
+Example.COM. 300 IN MX 10 mx1.Example.COM.
+Example.COM. 60 IN NS ns.Example.COM.
+Example.COM. 60 IN NS ns2.Example.COM.
+Example.COM. 100 IN SOA ns.Example.COM. hostmaster.Example.COM. 2 2 2 2 2
+alias.Example.COM. 300 IN CNAME two.Example.COM.
+ns.Example.COM. 300 IN A 192.0.2.1
+ns.Example.COM. 300 IN A 192.0.2.9
+txt.Example.COM. 300 IN TXT "Hello"
+txt.Example.COM. 300 IN TXT "hello"
+  (4 names, 9 records)
+-- zone broken/a_then_cname.zone example.com rel
+! CNAMEAndOtherData: CNAME rdataset is not compatible with a regular data node
+-- zone broken/bad_escape.zone example.com rel
+! SyntaxError: <string>:2: An escaped code in a text format of DNS name is invalid.
+-- zone broken/bad_ipv4.zone example.com rel
+! SyntaxError: <string>:5: Text input is malformed.
+-- zone broken/bad_ipv6.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/bad_ttl_record.zone example.com rel
+! SyntaxError: <string>:2: unknown rdatatype '5w5'
+-- zone broken/bad_ttl_trailing.zone example.com rel
+! SyntaxError: <string>:2: trailing integer
+-- zone broken/bad_ttl_unit.zone example.com rel
+! SyntaxError: <string>:2: unknown unit 'x'
+-- zone broken/caa_flags.zone example.com rel
+! SyntaxError: <string>:2: 300 is not an unsigned 8-bit integer
+-- zone broken/caa_tag.zone example.com rel
+! SyntaxError: <string>:2: tag is not alphanumeric
+-- zone broken/class_by_number.zone example.com rel
+! SyntaxError: <string>:2: RR class is not zone's class
+-- zone broken/class_mismatch.zone example.com rel
+! SyntaxError: <string>:2: RR class is not zone's class
+-- zone broken/cname_then_a.zone example.com rel
+! CNAMEAndOtherData: rdataset type is not compatible with a CNAME node
+-- zone broken/empty_label.zone example.com rel
+! SyntaxError: <string>:2: A DNS label is empty.
+-- zone broken/eof_in_quote.zone example.com rel
+! SyntaxError: <string>:2: Text input ended unexpectedly.
+-- zone broken/escape_at_eol.zone example.com rel
+! SyntaxError: <string>:3: Text input ended unexpectedly.
+-- zone broken/escape_too_big_owner.zone example.com rel
+! error: 'B' format requires 0 <= number <= 255
+-- zone broken/escape_too_big_rdata.zone example.com rel
+! SyntaxError: <string>:3: 'B' format requires 0 <= number <= 255
+-- zone broken/escape_too_big_txt.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/extra_token.zone example.com rel
+! SyntaxError: <string>:3: expected EOL or EOF, got 3 "extra"
+-- zone broken/gen_bad_rdata.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/gen_base.zone example.com rel
+! SyntaxError: <string>:3: invalid type z
+-- zone broken/gen_class.zone example.com rel
+! SyntaxError: <string>:2: RR class is not zone's class
+-- zone broken/gen_negative.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/gen_no_rhs.zone example.com rel
+! SyntaxError: <string>:3: unknown rdatatype '
+'
+-- zone broken/gen_no_ttl.zone example.com rel
+! SyntaxError: <string>:1: Missing default TTL value
+-- zone broken/gen_nostop.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/gen_parse.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/gen_range.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/gen_type.zone example.com rel
+! SyntaxError: <string>:2: unknown rdatatype 'BOGUS'
+-- zone broken/generic_known_bad.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/generic_length.zone example.com rel
+! SyntaxError: <string>:3: generic rdata hex data has wrong length
+-- zone broken/generic_no_hash.zone example.com rel
+! SyntaxError: <string>:3: generic rdata does not start with \#
+-- zone broken/generic_odd.zone example.com rel
+! SyntaxError: <string>:3: Odd-length string
+-- zone broken/hinfo_short.zone example.com rel
+! SyntaxError: <string>:3: expecting a string
+-- zone broken/hinfo_too_long.zone example.com rel
+! SyntaxError: <string>:2: string too long
+-- zone broken/include.zone example.com rel
+! SyntaxError: <string>:2: zone file directive '$INCLUDE' is not allowed
+-- zone broken/ipv4_leading_zero.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/ipv4_short.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/ipv6_colon_end.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/ipv6_long_chunk.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/ipv6_two_gaps.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/ipv6_v4_bad.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/label_too_long_owner.zone example.com rel
+! SyntaxError: <string>:2: A DNS label is > 63 octets long.
+-- zone broken/label_too_long_rdata.zone example.com rel
+! SyntaxError: <string>:3: A DNS label is > 63 octets long.
+-- zone broken/missing_ttl.zone example.com rel
+! SyntaxError: <string>:2: Missing default TTL value
+-- zone broken/mx_not_int.zone example.com rel
+! SyntaxError: <string>:2: expecting an integer
+-- zone broken/mx_too_big.zone example.com rel
+! SyntaxError: <string>:2: 70000 is not an unsigned 16-bit integer
+-- zone broken/name_only.zone example.com rel
+! SyntaxError: <string>:3: Text input is malformed.
+-- zone broken/name_too_long_owner.zone example.com rel
+! NameTooLong: A DNS name is > 255 octets long.
+-- zone broken/name_too_long_rdata.zone example.com rel
+! SyntaxError: <string>:3: A DNS name is > 255 octets long.
+-- zone broken/newline_in_quote.zone example.com rel
+! SyntaxError: <string>:3: newline in quoted string
+-- zone broken/no_ns.zone example.com rel
+! NoNS: The DNS zone has no NS RRset at its origin.
+-- zone broken/no_soa.zone example.com rel
+! NoSOA: The DNS zone has no SOA RR at its origin.
+-- zone broken/non_origin_soa.zone example.com rel
+! ValueError: add() has non-origin SOA
+-- zone broken/owner_then_eof.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/soa_serial.zone example.com rel
+! SyntaxError: <string>:2: expecting an integer
+-- zone broken/soa_short.zone example.com rel
+! SyntaxError: <string>:3: expecting an identifier
+-- zone broken/srv_port.zone example.com rel
+! SyntaxError: <string>:2: 65536 is not an unsigned 16-bit integer
+-- zone broken/sshfp_empty.zone example.com rel
+! SyntaxError: <string>:3: expecting another identifier
+-- zone broken/sshfp_hex.zone example.com rel
+! SyntaxError: <string>:3: Non-hexadecimal digit found
+-- zone broken/tlsa_odd.zone example.com rel
+! SyntaxError: <string>:3: Odd-length string
+-- zone broken/ttl_too_big.zone example.com rel
+! SyntaxError: <string>:1: unknown rdatatype '4294967296'
+-- zone broken/txt_none.zone example.com rel
+! SyntaxError: <string>:3: Text input ended unexpectedly.
+-- zone broken/txt_too_long.zone example.com rel
+! SyntaxError: <string>:3: string too long
+-- zone broken/type_too_big.zone example.com rel
+! SyntaxError: <string>:2: unknown rdatatype 'TYPE70000'
+-- zone broken/unbalanced_close.zone example.com rel
+! SyntaxError: <string>:2: Text input is malformed.
+-- zone broken/unbalanced_open.zone example.com rel
+! SyntaxError: <string>:3: unbalanced parentheses
+-- zone broken/unknown_directive.zone example.com rel
+! SyntaxError: <string>:2: zone file directive '$FOO' is not allowed
+-- zone broken/unknown_type.zone example.com rel
+! SyntaxError: <string>:2: unknown rdatatype 'FOO'
+-- zone broken/no_soa.zone example.com nocheck
+@ 300 IN NS ns
+ns 300 IN A 192.0.2.1
+  (2 names, 2 records)
+-- zone broken/no_ns.zone example.com nocheck
+@ 300 IN SOA ns hostmaster 1 1 1 1 1
+ns 300 IN A 192.0.2.1
+  (2 names, 2 records)
+-- zone zones/example.com.zone com rel
+@ 3600 IN SOA ns1.example hostmaster.example 2026102101 7200 900 1209600 300
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 20 mail2.example.net.
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN CAA 0 issue "letsencrypt.org"
+@ 3600 IN CAA 0 iodef "mailto:security@example.com"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp 3600 IN SRV 10 60 5060 sip1
+_sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+api 600 IN A 192.0.2.30
+api 600 IN A 192.0.2.31
+big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case 3600 IN MX 5 MAIL
+db 3600 IN HINFO "x86_64" "Linux 6.1"
+dev 3600 IN NS ns.dev
+ns.dev 3600 IN A 192.0.2.60
+*.cdn.example 3600 IN CNAME cdn.example.net.
+corp.example 3600 IN TXT "corp"
+intranet.corp.example 3600 IN CNAME vpn.corp.example
+vpn.corp.example 3600 IN A 198.51.100.1
+legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail 300 IN A 192.0.2.25
+mail 300 IN A 192.0.2.26
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer 3600 IN A 192.0.2.99
+shop 3600 IN CNAME www
+sip1 3600 IN A 192.0.2.40
+www 3600 IN CNAME @
+_443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2 3600 IN A 192.0.2.11
+WWW2 3600 IN A 192.0.2.12
+  (23 names, 45 records)
+-- zone zones/example.com.zone example.org nocheck
+@ 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+@ 3600 IN NS ns1
+@ 3600 IN NS ns2.example.net.
+@ 3600 IN MX 10 mail
+@ 3600 IN MX 20 mail2.example.net.
+@ 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+@ 3600 IN CAA 0 issue "letsencrypt.org"
+@ 3600 IN CAA 0 iodef "mailto:security@example.com"
+@ 3600 IN A 192.0.2.10
+@ 3600 IN AAAA 2001:db8::10
+_dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+_sip._tcp 3600 IN SRV 10 60 5060 sip1
+_sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+api 600 IN A 192.0.2.30
+api 600 IN A 192.0.2.31
+big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+Mixed.Case 3600 IN MX 5 MAIL
+db 3600 IN HINFO "x86_64" "Linux 6.1"
+dev 3600 IN NS ns.dev
+ns.dev 3600 IN A 192.0.2.60
+legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+mail 300 IN A 192.0.2.25
+mail 300 IN A 192.0.2.26
+ns1 3600 IN A 192.0.2.53
+ns1 3600 IN AAAA 2001:db8::53
+ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+office 3600 IN TYPE65280 \# 4 0a0b0c0d
+printer 3600 IN A 192.0.2.99
+shop 3600 IN CNAME www
+sip1 3600 IN A 192.0.2.40
+www 3600 IN CNAME @
+_443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+WWW2 3600 IN A 192.0.2.11
+WWW2 3600 IN A 192.0.2.12
+  (19 names, 41 records)
+-- name www.example.com .
+  text www.example.com. omit www.example.com absolute True wild False labels 4
+  canonical www.example.com.
+  wire 03777777076578616d706c6503636f6d00
+  digest 03777777076578616d706c6503636f6d00
+-- name www.example.com. -
+  text www.example.com. omit www.example.com absolute True wild False labels 4
+  canonical www.example.com.
+  wire 03777777076578616d706c6503636f6d00
+  digest 03777777076578616d706c6503636f6d00
+-- name www.example.com -
+  text www.example.com omit www.example.com absolute False wild False labels 3
+  canonical www.example.com
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 03777777076578616d706c6503636f6d076578616d706c6500
+-- name @ example.com
+  text example.com omit example.com absolute False wild False labels 2
+  canonical example.com
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 076578616d706c6503636f6d076578616d706c6500
+-- name @ -
+  text @ omit @ absolute False wild False labels 0
+  canonical @
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 076578616d706c6500
+-- name . -
+  text . omit . absolute True wild False labels 1
+  canonical .
+  wire 00
+  digest 00
+-- name  example.com
+  text example.com omit example.com absolute False wild False labels 2
+  canonical example.com
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 076578616d706c6503636f6d076578616d706c6500
+-- name WWW.Example.COM. -
+  text WWW.Example.COM. omit WWW.Example.COM absolute True wild False labels 4
+  canonical www.example.com.
+  wire 03575757074578616d706c6503434f4d00
+  digest 03777777076578616d706c6503636f6d00
+-- name a\.b.example.com. -
+  text a\.b.example.com. omit a\.b.example.com absolute True wild False labels 4
+  canonical a\.b.example.com.
+  wire 03612e62076578616d706c6503636f6d00
+  digest 03612e62076578616d706c6503636f6d00
+-- name a\032b\099.c example.org
+  text a\032bc.c.example.org omit a\032bc.c.example.org absolute False wild False labels 4
+  canonical a\032bc.c.example.org
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 04612062630163076578616d706c65036f7267076578616d706c6500
+-- name \@.\$.\;.\(\).\"q\". -
+  text \@.\$.\;.\(\).\"q\". omit \@.\$.\;.\(\).\"q\" absolute True wild False labels 6
+  canonical \@.\$.\;.\(\).\"q\".
+  wire 01400124013b0228290322712200
+  digest 01400124013b0228290322712200
+-- name *.example.com. -
+  text *.example.com. omit *.example.com absolute True wild True labels 4
+  canonical *.example.com.
+  wire 012a076578616d706c6503636f6d00
+  digest 012a076578616d706c6503636f6d00
+-- name ex\ample.com. -
+  text example.com. omit example.com absolute True wild False labels 3
+  canonical example.com.
+  wire 076578616d706c6503636f6d00
+  digest 076578616d706c6503636f6d00
+-- name tab\009here. -
+  text tab\009here. omit tab\009here absolute True wild False labels 2
+  canonical tab\009here.
+  wire 08746162096865726500
+  digest 08746162096865726500
+-- name high\200\255. -
+  text high\200\255. omit high\200\255 absolute True wild False labels 2
+  canonical high\200\255.
+  wire 0668696768c8ff00
+  digest 0668696768c8ff00
+-- name a..b -
+! EmptyLabel: A DNS label is empty.
+-- name .a -
+! EmptyLabel: A DNS label is empty.
+-- name a\1 -
+! BadEscape: An escaped code in a text format of DNS name is invalid.
+-- name a\12x. -
+! BadEscape: An escaped code in a text format of DNS name is invalid.
+-- name xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx. -
+  text xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx. omit xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx absolute True wild False labels 2
+  canonical xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.
+  wire 3f78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787800
+  digest 3f78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787800
+-- name xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx. -
+! LabelTooLong: A DNS label is > 63 octets long.
+-- name aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. -
+  text aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. omit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb absolute True wild False labels 5
+  canonical aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.
+  wire 3f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613d6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200
+  digest 3f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613d6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200
+-- name aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. -
+! NameTooLong: A DNS name is > 255 octets long.
+-- name \300. -
+! error: 'B' format requires 0 <= number <= 255
+-- name relative.name rel.origin
+  text relative.name.rel.origin omit relative.name.rel.origin absolute False wild False labels 4
+  canonical relative.name.rel.origin
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 0872656c6174697665046e616d650372656c066f726967696e076578616d706c6500
+-- name a.b.c.d.e.f.g -
+  text a.b.c.d.e.f.g omit a.b.c.d.e.f.g absolute False wild False labels 7
+  canonical a.b.c.d.e.f.g
+  wire ! NeedAbsoluteNameOrOrigin: An attempt was made to convert a non-absolute name to
+wire when there was also a non-absolute (or missing) origin.
+  digest 0161016201630164016501660167076578616d706c6500
+-- cmp www.example.com. example.com.
+  SUBDOMAIN 1 3
+  subdomain True superdomain False equal False less False
+  relativize www
+  derelativize www.example.com.
+-- cmp example.com. www.example.com.
+  SUPERDOMAIN -1 3
+  subdomain False superdomain True equal False less True
+  relativize example.com.
+  derelativize example.com.
+-- cmp www.example.com. WWW.EXAMPLE.COM.
+  EQUAL 0 4
+  subdomain True superdomain True equal True less False
+  relativize @
+  derelativize www.example.com.
+-- cmp a.example.com. b.example.com.
+  COMMONANCESTOR -1 3
+  subdomain False superdomain False equal False less True
+  relativize a.example.com.
+  derelativize a.example.com.
+-- cmp mail.example.com. www.example.net.
+  COMMONANCESTOR -1 1
+  subdomain False superdomain False equal False less True
+  relativize mail.example.com.
+  derelativize mail.example.com.
+-- cmp www www.example.com.
+  NONE -1 0
+  subdomain False superdomain False equal False less True
+  relativize www
+  derelativize www.www.example.com.
+-- cmp www.example.com. www
+  NONE 1 0
+  subdomain False superdomain False equal False less False
+  relativize www.example.com.
+  derelativize www.example.com.
+-- cmp a.b b
+  SUBDOMAIN 1 1
+  subdomain True superdomain False equal False less False
+  relativize a
+  derelativize a.b.b
+-- cmp x.a.b y.a.b
+  COMMONANCESTOR -1 2
+  subdomain False superdomain False equal False less True
+  relativize x.a.b
+  derelativize x.a.b.y.a.b
+-- cmp . com.
+  SUPERDOMAIN -1 1
+  subdomain False superdomain True equal False less True
+  relativize .
+  derelativize .
+-- cmp @ @
+  EQUAL 0 0
+  subdomain True superdomain True equal True less False
+  relativize @
+  derelativize @
+-- cmp @ a
+  SUPERDOMAIN -1 0
+  subdomain False superdomain True equal False less True
+  relativize @
+  derelativize a
+-- cmp Z.example.com. a.example.com.
+  COMMONANCESTOR 1 3
+  subdomain False superdomain False equal False less False
+  relativize Z.example.com.
+  derelativize Z.example.com.
+-- cmp \200.com. z.com.
+  COMMONANCESTOR 1 2
+  subdomain False superdomain False equal False less False
+  relativize \200.com.
+  derelativize \200.com.
+-- cmp a.example.com. a-b.example.com.
+  COMMONANCESTOR -1 3
+  subdomain False superdomain False equal False less True
+  relativize a.example.com.
+  derelativize a.example.com.
+-- cmp ab.example.com. a.example.com.
+  COMMONANCESTOR 1 3
+  subdomain False superdomain False equal False less False
+  relativize ab.example.com.
+  derelativize ab.example.com.
+-- cmp example.com. .
+  SUBDOMAIN 2 1
+  subdomain True superdomain False equal False less False
+  relativize example.com
+  derelativize example.com.
+-- cmp com. net.
+  COMMONANCESTOR -1 1
+  subdomain False superdomain False equal False less True
+  relativize com.
+  derelativize com.
+-- split www.example.com. 0
+  www.example.com. | @
+-- split www.example.com. 1
+  www.example.com | .
+-- split www.example.com. 2
+  www.example | com.
+-- split www.example.com. 4
+  @ | www.example.com.
+-- split www.example.com. 5
+! ValueError: depth must be >= 0 and <= the length of the name
+-- split a.b 2
+  @ | a.b
+-- split a.b -1
+! ValueError: depth must be >= 0 and <= the length of the name
+-- concat www example.com.
+  www.example.com.
+-- concat www. example.com.
+! AbsoluteConcatenation: An attempt was made to append anything other than the
+empty name to an absolute DNS name.
+-- concat www. @
+  www.
+-- concat @ @
+  @
+-- concat a.b c.d
+  a.b.c.d
+-- concat xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.
+! NameTooLong: A DNS name is > 255 octets long.
+-- parent www.example.com.
+  example.com.
+-- parent com.
+  .
+-- parent .
+! NoParent: An attempt was made to get the parent of the root name
+or the empty name.
+-- parent @
+! NoParent: An attempt was made to get the parent of the root name
+or the empty name.
+-- parent a
+  @
+-- ttl 3600
+  3600
+-- ttl 1h
+  3600
+-- ttl 1H30M
+  5400
+-- ttl 2w1d
+  1296000
+-- ttl 1w2d3h4m5s
+  788645
+-- ttl 0
+  0
+-- ttl 
+! BadTTL: DNS TTL value is not well-formed.
+-- ttl h
+! BadTTL: DNS TTL value is not well-formed.
+-- ttl 1h30
+! BadTTL: trailing integer
+-- ttl 1y
+! BadTTL: unknown unit 'y'
+-- ttl 4294967295
+  4294967295
+-- ttl 4294967296
+! BadTTL: TTL should be between 0 and 2**32 - 1 (inclusive)
+-- ttl 60s60s
+  120
+-- ttl 007
+  7
+-- ip6 2001:db8::1
+  20010db8000000000000000000000001 2001:db8::1
+-- ip6 2001:DB8:0:0:0:0:0:1
+  20010db8000000000000000000000001 2001:db8::1
+-- ip6 ::
+  00000000000000000000000000000000 ::
+-- ip6 ::1
+  00000000000000000000000000000001 ::1
+-- ip6 1::
+  00010000000000000000000000000000 1::
+-- ip6 ::ffff:192.0.2.1
+  00000000000000000000ffffc0000201 ::ffff:192.0.2.1
+-- ip6 ::192.0.2.1
+  000000000000000000000000c0000201 ::192.0.2.1
+-- ip6 ::ffff:0:192.0.2.1
+  0000000000000000ffff0000c0000201 ::ffff:0:c000:201
+-- ip6 1:0:0:2:0:0:0:3
+  00010000000000020000000000000003 1:0:0:2::3
+-- ip6 0:0:1:0:0:1:0:0
+  00000000000100000000000100000000 ::1:0:0:1:0:0
+-- ip6 1:2:3:4:5:6:7:8
+  00010002000300040005000600070008 1:2:3:4:5:6:7:8
+-- ip6 fe80::1:0:0:0
+  fe800000000000000001000000000000 fe80::1:0:0:0
+-- ip6 2001:db8::0:1
+  20010db8000000000000000000000001 2001:db8::1
+-- ip6 0::0
+  00000000000000000000000000000000 ::
+-- ip6 1:2:3:4:5:6:7::
+  00010002000300040005000600070000 1:2:3:4:5:6:7:0
+-- ip6 ::1:2:3:4:5:6:7
+  00000001000200030004000500060007 0:1:2:3:4:5:6:7
+-- ip6 0:0:0:0:0:ffff:c000:201
+  00000000000000000000ffffc0000201 ::ffff:192.0.2.1
+-- ip6 0:0:0:0:0:0:c000:201
+  000000000000000000000000c0000201 ::192.0.2.1
+-- ip6 1:2:3:4:5:6:7:8:9
+! SyntaxError: Text input is malformed.
+-- ip6 1:2:3
+! SyntaxError: Text input is malformed.
+-- ip6 12345::
+! SyntaxError: Text input is malformed.
+-- ip6 g::1
+! SyntaxError: Text input is malformed.
+-- ip6 :1::2
+! SyntaxError: Text input is malformed.
+-- ip6 1::2:
+! SyntaxError: Text input is malformed.
+-- ip6 ::ffff:1.2.3
+! SyntaxError: Text input is malformed.
+-- rev 192.0.2.1
+  1.2.0.192.in-addr.arpa.
+-- rev 2001:db8::53
+  3.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+-- rev ::ffff:198.51.100.7
+  7.100.51.198.in-addr.arpa.
+-- rev ::1
+  1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa.
+-- rev 10.0.0.256
+! SyntaxError: Text input is malformed.
+-- rev nonsense
+! SyntaxError: Text input is malformed.
+-- rev 1.2.3
+! SyntaxError: Text input is malformed.
+-- unrev 1.2.0.192.in-addr.arpa.
+  192.0.2.1
+-- unrev 3.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+  2001:db8::53
+-- unrev 4.3.in-addr.arpa.
+! SyntaxError: Text input is malformed.
+-- unrev www.example.com.
+! SyntaxError: unknown reverse-map address family
+-- unrev 300.2.0.192.in-addr.arpa.
+! SyntaxError: Text input is malformed.
+-- query www.example.com A 4660
+  wire 12340100000100000000000003777777076578616d706c6503636f6d0000010001
+  id 4660
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  www.example.com. IN A
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query example.com. MX 1
+  wire 000101000001000000000000076578616d706c6503636f6d00000f0001
+  id 1
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  example.com. IN MX
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query Example.COM TYPE65280 65535
+  wire ffff01000001000000000000074578616d706c6503434f4d00ff000001
+  id 65535
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  Example.COM. IN TYPE65280
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query _sip._tcp.example.com SRV 0
+  wire 000001000001000000000000045f736970045f746370076578616d706c6503636f6d0000210001
+  id 0
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  _sip._tcp.example.com. IN SRV
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query example.com ANY 42
+  wire 002a01000001000000000000076578616d706c6503636f6d0000ff0001
+  id 42
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  example.com. IN ANY
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query b\.c.example.com AAAA 77
+  wire 004d0100000100000000000003622e63076578616d706c6503636f6d00001c0001
+  id 77
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  b\.c.example.com. IN AAAA
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- query example.com NOPE 1
+! UnknownRdatatype: DNS resource record type is unknown.
+-- serve zones/example.com.zone example.com example.com SOA 100
+  wire 80 006485000001000100000000076578616d706c6503636f6d0000060001c00c0006000100000e100027036e7331c00c0a686f73746d6173746572c00c78c3dd5500001c2000000384001275000000012c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN SOA
+  ;ANSWER
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com example.com NS 100
+  wire 120 006485000001000200000002076578616d706c6503636f6d0000020001c00c0002000100000e100006036e7331c00cc00c0002000100000e100011036e7332076578616d706c65036e657400c0290001000100000e100004c0000235c029001c000100000e10001020010db8000000000000000000000053
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN NS
+  ;ANSWER
+  example.com. 3600 IN NS ns1.example.com.
+  example.com. 3600 IN NS ns2.example.net.
+  ;AUTHORITY
+  ;ADDITIONAL
+  ns1.example.com. 3600 IN A 192.0.2.53
+  ns1.example.com. 3600 IN AAAA 2001:db8::53
+-- serve zones/example.com.zone example.com example.com MX 100
+  wire 115 006485000001000200000002076578616d706c6503636f6d00000f0001c00c000f000100000e100009000a046d61696cc00cc00c000f000100000e1000150014056d61696c32076578616d706c65036e657400c02b000100010000012c0004c0000219c02b000100010000012c0004c000021a
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN MX
+  ;ANSWER
+  example.com. 3600 IN MX 10 mail.example.com.
+  example.com. 3600 IN MX 20 mail2.example.net.
+  ;AUTHORITY
+  ;ADDITIONAL
+  mail.example.com. 300 IN A 192.0.2.25
+  mail.example.com. 300 IN A 192.0.2.26
+-- serve zones/example.com.zone example.com WWW.Example.com A 100
+  wire 63 00648500000100020000000003575757074578616d706c6503636f6d0000010001c00c0005000100000e100002c010c0100001000100000e100004c000020a
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  WWW.Example.com. IN A
+  ;ANSWER
+  WWW.Example.com. 3600 IN CNAME Example.com.
+  Example.com. 3600 IN A 192.0.2.10
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com shop.example.com AAAA 100
+  wire 94 0064850000010003000000000473686f70076578616d706c6503636f6d00001c0001c00c0005000100000e10000603777777c011c02e0005000100000e100002c011c011001c000100000e10001020010db8000000000000000000000010
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  shop.example.com. IN AAAA
+  ;ANSWER
+  shop.example.com. 3600 IN CNAME www.example.com.
+  www.example.com. 3600 IN CNAME example.com.
+  example.com. 3600 IN AAAA 2001:db8::10
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com shop.example.com CNAME 100
+  wire 52 0064850000010001000000000473686f70076578616d706c6503636f6d0000050001c00c0005000100000e10000603777777c011
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  shop.example.com. IN CNAME
+  ;ANSWER
+  shop.example.com. 3600 IN CNAME www.example.com.
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com api.example.com A 100
+  wire 65 00648500000100020000000003617069076578616d706c6503636f6d0000010001c00c00010001000002580004c000021ec00c00010001000002580004c000021f
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  api.example.com. IN A
+  ;ANSWER
+  api.example.com. 600 IN A 192.0.2.30
+  api.example.com. 600 IN A 192.0.2.31
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com mail.example.com MX 100
+  wire 85 006485000001000000010000046d61696c076578616d706c6503636f6d00000f0001c0110006000100000e100027036e7331c0110a686f73746d6173746572c01178c3dd5500001c2000000384001275000000012c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  mail.example.com. IN MX
+  ;ANSWER
+  ;AUTHORITY
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com nothere.example.com A 100
+  wire 88 006485030001000000010000076e6f7468657265076578616d706c6503636f6d0000010001c0140006000100000e100027036e7331c0140a686f73746d6173746572c01478c3dd5500001c2000000384001275000000012c
+  id 100
+  opcode QUERY
+  rcode NXDOMAIN
+  flags QR AA RD
+  ;QUESTION
+  nothere.example.com. IN A
+  ;ANSWER
+  ;AUTHORITY
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com ns1.example.com TXT 100
+  wire 80 006485000001000000010000036e7331076578616d706c6503636f6d0000100001c0100006000100000e100023c00c0a686f73746d6173746572c01078c3dd5500001c2000000384001275000000012c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  ns1.example.com. IN TXT
+  ;ANSWER
+  ;AUTHORITY
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com _sip._tcp.example.com SRV 100
+  wire 116 006485000001000200000001045f736970045f746370076578616d706c6503636f6d0000210001c00c0021000100000e10000d000a003c13c40473697031c016c00c0021000100000e1000180014000013c40473697032076578616d706c65036e657400c0390001000100000e100004c0000228
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  _sip._tcp.example.com. IN SRV
+  ;ANSWER
+  _sip._tcp.example.com. 3600 IN SRV 10 60 5060 sip1.example.com.
+  _sip._tcp.example.com. 3600 IN SRV 20 0 5060 sip2.example.net.
+  ;AUTHORITY
+  ;ADDITIONAL
+  sip1.example.com. 3600 IN A 192.0.2.40
+-- serve zones/example.com.zone example.com host.dev.example.com A 100
+  wire 71 00648100000100000001000104686f737403646576076578616d706c6503636f6d0000010001c0110002000100000e100005026e73c011c0320001000100000e100004c000023c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR RD
+  ;QUESTION
+  host.dev.example.com. IN A
+  ;ANSWER
+  ;AUTHORITY
+  dev.example.com. 3600 IN NS ns.dev.example.com.
+  ;ADDITIONAL
+  ns.dev.example.com. 3600 IN A 192.0.2.60
+-- serve zones/example.com.zone example.com dev.example.com NS 100
+  wire 66 00648100000100000001000103646576076578616d706c6503636f6d0000020001c00c0002000100000e100005026e73c00cc02d0001000100000e100004c000023c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR RD
+  ;QUESTION
+  dev.example.com. IN NS
+  ;ANSWER
+  ;AUTHORITY
+  dev.example.com. 3600 IN NS ns.dev.example.com.
+  ;ADDITIONAL
+  ns.dev.example.com. 3600 IN A 192.0.2.60
+-- serve zones/example.com.zone example.com example.com ANY 100
+  wire 342 006485000001000a00000000076578616d706c6503636f6d0000ff0001c00c0006000100000e100027036e7331c00c0a686f73746d6173746572c00c78c3dd5500001c2000000384001275000000012cc00c0002000100000e100002c029c00c0002000100000e100011036e7332076578616d706c65036e657400c00c000f000100000e100009000a046d61696cc00cc00c000f000100000e10000a0014056d61696c32c06ec00c0010000100000e10002827763d73706631206d7820696e636c7564653a5f7370662e6578616d706c652e6e6574202d616c6cc00c0101000100000e100016000569737375656c657473656e63727970742e6f7267c00c0101000100000e1000220005696f6465666d61696c746f3a7365637572697479406578616d706c652e636f6dc00c0001000100000e100004c000020ac00c001c000100000e10001020010db8000000000000000000000010
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN ANY
+  ;ANSWER
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  example.com. 3600 IN NS ns1.example.com.
+  example.com. 3600 IN NS ns2.example.net.
+  example.com. 3600 IN MX 10 mail.example.com.
+  example.com. 3600 IN MX 20 mail2.example.net.
+  example.com. 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+  example.com. 3600 IN CAA 0 issue "letsencrypt.org"
+  example.com. 3600 IN CAA 0 iodef "mailto:security@example.com"
+  example.com. 3600 IN A 192.0.2.10
+  example.com. 3600 IN AAAA 2001:db8::10
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com intranet.corp.example.com A 100
+  wire 77 00648500000100020000000008696e7472616e657404636f7270076578616d706c6503636f6d0000010001c00c0005000100000e1000060376706ec015c0370001000100000e100004c6336401
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  intranet.corp.example.com. IN A
+  ;ANSWER
+  intranet.corp.example.com. 3600 IN CNAME vpn.corp.example.com.
+  vpn.corp.example.com. 3600 IN A 198.51.100.1
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com www.example.org A 100
+  wire 33 00648105000100000000000003777777076578616d706c65036f72670000010001
+  id 100
+  opcode QUERY
+  rcode REFUSED
+  flags QR RD
+  ;QUESTION
+  www.example.org. IN A
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com legacy.example.com TXT 100
+  wire 92 006485000001000100000000066c6567616379076578616d706c6503636f6d0000100001c00c0010000100000e10002c0f61202271756f7465642220776f72640974776f20776f7264730a73656d693b636f6c6f6e05746162097800
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  legacy.example.com. IN TXT
+  ;ANSWER
+  legacy.example.com. 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com _443._tcp.www.example.com TLSA 100
+  wire 90 006485000001000100000000045f343433045f74637003777777076578616d706c6503636f6d0000340001c00c0034000100000e1000230301010123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  _443._tcp.www.example.com. IN TLSA
+  ;ANSWER
+  _443._tcp.www.example.com. 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com office.example.com TYPE65280 100
+  wire 52 006485000001000100000000066f6666696365076578616d706c6503636f6d00ff000001c00cff00000100000e1000040a0b0c0d
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  office.example.com. IN TYPE65280
+  ;ANSWER
+  office.example.com. 3600 IN TYPE65280 \# 4 0a0b0c0d
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com mixed.case.example.com MX 100
+  wire 93 006485000001000100000002056d697865640463617365076578616d706c6503636f6d00000f0001c00c000f000100000e1000090005044d41494cc017c036000100010000012c0004c0000219c036000100010000012c0004c000021a
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  mixed.case.example.com. IN MX
+  ;ANSWER
+  mixed.case.example.com. 3600 IN MX 5 MAIL.example.com.
+  ;AUTHORITY
+  ;ADDITIONAL
+  MAIL.example.com. 300 IN A 192.0.2.25
+  MAIL.example.com. 300 IN A 192.0.2.26
+-- serve zones/example.com.zone example.com example.com CAA 100
+  wire 109 006485000001000200000000076578616d706c6503636f6d0001010001c00c0101000100000e100016000569737375656c657473656e63727970742e6f7267c00c0101000100000e1000220005696f6465666d61696c746f3a7365637572697479406578616d706c652e636f6d
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN CAA
+  ;ANSWER
+  example.com. 3600 IN CAA 0 issue "letsencrypt.org"
+  example.com. 3600 IN CAA 0 iodef "mailto:security@example.com"
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com big.example.com TXT 100
+  wire 633 00648500000100080000000003626967076578616d706c6503636f6d0000100001c00c0010000100000e10003e3d7265636f7264206f6e65206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e10003e3d7265636f72642074776f206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e1000403f7265636f7264207468726565206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e10003f3e7265636f726420666f7572206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e10003f3e7265636f72642066697665206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e10003e3d7265636f726420736978206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e1000403f7265636f726420736576656e206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67c00c0010000100000e1000403f7265636f7264206569676874206f662074686520626967207365742c20706164646564206f757420746f206d616b652074686520616e73776572206c6f6e67
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  big.example.com. IN TXT
+  ;ANSWER
+  big.example.com. 3600 IN TXT "record one of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record two of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record three of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record four of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record five of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record six of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+  big.example.com. 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com www2.example.com A 100
+  wire 66 0064850000010002000000000477777732076578616d706c6503636f6d0000010001c00c0001000100000e100004c000020bc00c0001000100000e100004c000020c
+  id 100
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  www2.example.com. IN A
+  ;ANSWER
+  www2.example.com. 3600 IN A 192.0.2.11
+  www2.example.com. 3600 IN A 192.0.2.12
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com big.example.com TXT 101 udp
+  ! TooBig: The DNS message is too big.
+  wire 33 00658700000100000000000003626967076578616d706c6503636f6d0000100001
+  id 101
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA TC RD
+  ;QUESTION
+  big.example.com. IN TXT
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.com.zone example.com example.com ANY 102 udp
+  wire 342 006685000001000a00000000076578616d706c6503636f6d0000ff0001c00c0006000100000e100027036e7331c00c0a686f73746d6173746572c00c78c3dd5500001c2000000384001275000000012cc00c0002000100000e100002c029c00c0002000100000e100011036e7332076578616d706c65036e657400c00c000f000100000e100009000a046d61696cc00cc00c000f000100000e10000a0014056d61696c32c06ec00c0010000100000e10002827763d73706631206d7820696e636c7564653a5f7370662e6578616d706c652e6e6574202d616c6cc00c0101000100000e100016000569737375656c657473656e63727970742e6f7267c00c0101000100000e1000220005696f6465666d61696c746f3a7365637572697479406578616d706c652e636f6dc00c0001000100000e100004c000020ac00c001c000100000e10001020010db8000000000000000000000010
+  id 102
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  example.com. IN ANY
+  ;ANSWER
+  example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  example.com. 3600 IN NS ns1.example.com.
+  example.com. 3600 IN NS ns2.example.net.
+  example.com. 3600 IN MX 10 mail.example.com.
+  example.com. 3600 IN MX 20 mail2.example.net.
+  example.com. 3600 IN TXT "v=spf1 mx include:_spf.example.net -all"
+  example.com. 3600 IN CAA 0 issue "letsencrypt.org"
+  example.com. 3600 IN CAA 0 iodef "mailto:security@example.com"
+  example.com. 3600 IN A 192.0.2.10
+  example.com. 3600 IN AAAA 2001:db8::10
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/2.0.192.in-addr.arpa.zone 2.0.192.in-addr.arpa 103.2.0.192.in-addr.arpa PTR 103
+  wire 76 00678500000100010000000003313033013201300331393207696e2d61646472046172706100000c0001c00c000c000100015180001608646863702d313033076578616d706c6503636f6d00
+  id 103
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  103.2.0.192.in-addr.arpa. IN PTR
+  ;ANSWER
+  103.2.0.192.in-addr.arpa. 86400 IN PTR dhcp-103.example.com.
+  ;AUTHORITY
+  ;ADDITIONAL
+-- serve zones/example.net.zone example.net cdn.example.net A 104
+  wire 67 0068850000010001000000000363646e076578616d706c65036e65740000010001c00c000500010000003c001604656467650363646e076578616d706c65036f726700
+  id 104
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  cdn.example.net. IN A
+  ;ANSWER
+  cdn.example.net. 60 IN CNAME edge.cdn.example.org.
+  ;AUTHORITY
+  ;ADDITIONAL
+-- servewire zones/example.com.zone example.com 000e0100000200000000000003777777076578616d706c6503636f6d0000010001076578616d706c6503636f6d00000f0001
+  wire 39 000e8501000200000000000003777777076578616d706c6503636f6d0000010001c010000f0001
+  id 14
+  opcode QUERY
+  rcode FORMERR
+  flags QR AA RD
+  ;QUESTION
+  www.example.com. IN A
+  example.com. IN MX
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- servewire zones/example.com.zone example.com 000f010000010000000000000776657273696f6e0462696e640000100003
+  wire 30 000f810500010000000000000776657273696f6e0462696e640000100003
+  id 15
+  opcode QUERY
+  rcode REFUSED
+  flags QR RD
+  ;QUESTION
+  version.bind. CH TXT
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+-- servewire zones/example.com.zone example.com 12348180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c02d000100010000003c0004c000020a
+! FormError: specified query message is not a query
+-- servewire zones/example.com.zone example.com 00120100000100000000000003777777076578616d706c6503636f6d000001000100
+! TrailingJunk: The DNS packet passed to from_wire() has extra junk at the end of it.
+-- servewire zones/example.com.zone example.com 0011000000000000000000
+! ShortHeader: The DNS packet passed to from_wire() is too short.
+-- wire answer 12348180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c02d000100010000003c0004c000020a
+  id 4660
+  opcode QUERY
+  rcode NOERROR
+  flags QR RD RA
+  ;QUESTION
+  www.example.com. IN A
+  ;ANSWER
+  www.example.com. 300 IN CNAME web.example.net.
+  web.example.net. 60 IN A 192.0.2.10
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 12348180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c02d000100010000003c0004c000020a
+-- wire merge_ttl 00078400000100030000000003777777076578616d706c6503636f6d0000010001c00c000100010000012c0004c000020103575757074558414d504c4503434f4d00000100010000003c0004c0000202c00c00010001800000000004c0000203
+  id 7
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA
+  ;QUESTION
+  www.example.com. IN A
+  ;ANSWER
+  www.example.com. 0 IN A 192.0.2.1
+  www.example.com. 0 IN A 192.0.2.2
+  www.example.com. 0 IN A 192.0.2.3
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 00078400000100030000000003777777076578616d706c6503636f6d0000010001c00c00010001000000000004c0000201c00c00010001000000000004c0000202c00c00010001000000000004c0000203
+-- wire two_cnames 00088180000100020000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c000f0161076578616d706c65036e657400c00c000500010000012c000f0162076578616d706c65036e657400
+  id 8
+  opcode QUERY
+  rcode NOERROR
+  flags QR RD RA
+  ;QUESTION
+  www.example.com. IN A
+  ;ANSWER
+  www.example.com. 300 IN CNAME b.example.net.
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 00088180000100010000000003777777076578616d706c6503636f6d0000010001c00c000500010000012c000f0162076578616d706c65036e657400
+-- wire nxdomain 000981830001000000010000046e6f7065076578616d706c6503636f6d0000010001c011000600010000012c003d036e7331076578616d706c6503636f6d000a686f73746d6173746572076578616d706c6503636f6d0078c3dd5500001c2000000384001275000000012c
+  id 9
+  opcode QUERY
+  rcode NXDOMAIN
+  flags QR RD RA
+  ;QUESTION
+  nope.example.com. IN A
+  ;ANSWER
+  ;AUTHORITY
+  example.com. 300 IN SOA ns1.example.com. hostmaster.example.com. 2026102101 7200 900 1209600 300
+  ;ADDITIONAL
+  rewire 000981830001000000010000046e6f7065076578616d706c6503636f6d0000010001c011000600010000012c0027036e7331c0110a686f73746d6173746572c01178c3dd5500001c2000000384001275000000012c
+-- wire alltypes 000a850000000012000000000174076578616d706c65036f7267000001000100000e100004c63364070174076578616d706c65036f726700001c000100000e10001020010db8000000000000ff00004200010174076578616d706c65036f726700001c000100000e10001000000000000000000000ffffc00002010174076578616d706c65036f726700001c000100000e100010000000000000000000000000000000010174076578616d706c65036f726700001c000100000e100010fe8000000000000000000000000000000174076578616d706c65036f7267000002000100000e100010026e73076578616d706c65036f7267000174076578616d706c65036f726700000c000100000e10001204686f7374076578616d706c65036f7267000174076578616d706c65036f726700000f000100000e1000120005026d78076578616d706c65036f7267000174076578616d706c65036f7267000010000100000e10000e056669727374000662696e00ff220174076578616d706c65036f7267000063000100000e10000c0b763d73706631202d616c6c0174076578616d706c65036f7267000021000100000e1000170001000201bb03737663076578616d706c65036f7267000174076578616d706c65036f7267000101000100000e1000150005697373756563612e6578616d706c652e6e65740174076578616d706c65036f726700000d000100000e10000b0341524d06506c616e20390174076578616d706c65036f726700002c000100000e1000160101000102030405060708090a0b0c0d0e0f101112130174076578616d706c65036f7267000034000100000e100049030101000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041424344450174076578616d706c65036f7267000027000100000e10000f056f74686572076578616d706c65000174076578616d706c65036f726700ff00000100000e100004deadbeef0174076578616d706c65036f726700ff00000100000e100000
+  id 10
+  opcode QUERY
+  rcode NOERROR
+  flags QR AA RD
+  ;QUESTION
+  ;ANSWER
+  t.example.org. 3600 IN A 198.51.100.7
+  t.example.org. 3600 IN AAAA 2001:db8::ff00:42:1
+  t.example.org. 3600 IN AAAA ::ffff:192.0.2.1
+  t.example.org. 3600 IN AAAA ::1
+  t.example.org. 3600 IN AAAA fe80::
+  t.example.org. 3600 IN NS ns.example.org.
+  t.example.org. 3600 IN PTR host.example.org.
+  t.example.org. 3600 IN MX 5 mx.example.org.
+  t.example.org. 3600 IN TXT "first" "" "bin\000\255\""
+  t.example.org. 3600 IN SPF "v=spf1 -all"
+  t.example.org. 3600 IN SRV 1 2 443 svc.example.org.
+  t.example.org. 3600 IN CAA 0 issue "ca.example.net"
+  t.example.org. 3600 IN HINFO "ARM" "Plan 9"
+  t.example.org. 3600 IN SSHFP 1 1 000102030405060708090a0b0c0d0e0f10111213
+  t.example.org. 3600 IN TLSA 3 1 1 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f 404142434445
+  t.example.org. 3600 IN DNAME other.example.
+  t.example.org. 3600 IN TYPE65280 \# 4 deadbeef
+  t.example.org. 3600 IN TYPE65280 \# 0 
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000a850000000012000000000174076578616d706c65036f7267000001000100000e100004c6336407c00c001c000100000e10001020010db8000000000000ff0000420001c00c001c000100000e10001000000000000000000000ffffc0000201c00c001c000100000e10001000000000000000000000000000000001c00c001c000100000e100010fe800000000000000000000000000000c00c0002000100000e100005026e73c00ec00c000c000100000e10000704686f7374c00ec00c000f000100000e1000070005026d78c00ec00c0010000100000e10000e056669727374000662696e00ff22c00c0063000100000e10000c0b763d73706631202d616c6cc00c0021000100000e10000c0001000201bb03737663c00ec00c0101000100000e1000150005697373756563612e6578616d706c652e6e6574c00c000d000100000e10000b0341524d06506c616e2039c00c002c000100000e1000160101000102030405060708090a0b0c0d0e0f10111213c00c0034000100000e100049030101000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445c00c0027000100000e10000f056f74686572076578616d706c6500c00cff00000100000e100004deadbeefc00cff00000100000e100000
+-- wire notify 000b24000001000000000000076578616d706c6503636f6d0000060001
+  id 11
+  opcode NOTIFY
+  rcode NOERROR
+  flags AA
+  ;QUESTION
+  example.com. IN SOA
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000b24000001000000000000076578616d706c6503636f6d0000060001
+-- wire opcode3 000c18000000000000000000
+  id 12
+  opcode 3
+  rcode NOERROR
+  flags 
+  ;QUESTION
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000c18000000000000000000
+-- wire rcode12 000d87bc0000000000000000
+  id 13
+  opcode QUERY
+  rcode 12
+  flags QR AA TC RD RA AD CD
+  ;QUESTION
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000d87bc0000000000000000
+-- wire two_questions 000e0100000200000000000003777777076578616d706c6503636f6d0000010001076578616d706c6503636f6d00000f0001
+  id 14
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  www.example.com. IN A
+  example.com. IN MX
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000e0100000200000000000003777777076578616d706c6503636f6d0000010001c010000f0001
+-- wire chaos 000f010000010000000000000776657273696f6e0462696e640000100003
+  id 15
+  opcode QUERY
+  rcode NOERROR
+  flags RD
+  ;QUESTION
+  version.bind. CH TXT
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 000f010000010000000000000776657273696f6e0462696e640000100003
+-- wire escaped_name 00108000000100000000000003612e620673702061636504007fc3a90773656d693b40240000010001
+  id 16
+  opcode QUERY
+  rcode NOERROR
+  flags QR
+  ;QUESTION
+  a\.b.sp\032ace.\000\127\195\169.semi\;\@\$. IN A
+  ;ANSWER
+  ;AUTHORITY
+  ;ADDITIONAL
+  rewire 00108000000100000000000003612e620673702061636504007fc3a90773656d693b40240000010001
+-- wire short 0011000000000000000000
+! ShortHeader: The DNS packet passed to from_wire() is too short.
+-- wire empty 
+! ShortHeader: The DNS packet passed to from_wire() is too short.
+-- wire trailing 00120100000100000000000003777777076578616d706c6503636f6d000001000100
+! TrailingJunk: The DNS packet passed to from_wire() has extra junk at the end of it.
+-- wire forward_pointer 001301000001000000000000c02800010001
+! BadPointer: A DNS compression pointer points forward instead of backward.
+-- wire self_pointer 001401000001000000000000c00c00010001
+! BadPointer: A DNS compression pointer points forward instead of backward.
+-- wire pointer_loop 00150100000100010000000003777777076578616d706c6503636f6d00000100010178c02100010001000000000000
+! BadPointer: A DNS compression pointer points forward instead of backward.
+-- wire label_type 001601000001000000000000416162630000010001
+! BadLabelType: The label type in DNS name wire format is unknown.
+-- wire truncated_name 001701000001000000000000037777
+! FormError: DNS message is malformed.
+-- wire truncated_question 00180100000100000000000003777777076578616d706c6503636f6d0000
+! FormError: DNS message is malformed.
+-- wire rdlen_too_big 00198180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c000ac0000201
+! FormError: DNS message is malformed.
+-- wire a_short 001a8180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c0003c00002
+! FormError: Text input is malformed.
+-- wire aaaa_short 001b8180000100010000000003777777076578616d706c6503636f6d0000010001c00c001c00010000003c000400000000
+! FormError: IPv6 addresses are 16 bytes long
+-- wire mx_leftover 001c8180000100010000000003777777076578616d706c6503636f6d0000010001c00c000f00010000003c00060001c00c0000
+! FormError: DNS message is malformed.
+-- wire txt_overrun 001d8180000100010000000003777777076578616d706c6503636f6d0000010001c00c001000010000003c000409616263
+! FormError: DNS message is malformed.
+-- wire txt_empty 00268180000100010000000003777777076578616d706c6503636f6d0000010001c00c001000010000003c0000
+! FormError: the list of strings must not be empty
+-- wire caa_bad_tag 00278180000100010000000003777777076578616d706c6503636f6d0000010001c00c010100010000003c00050002612d62
+! FormError: tag is not alphanumeric
+-- wire opt_in_answer 001e8180000100010000000003777777076578616d706c6503636f6d00000100010000291000000000000000
+! BadEDNS: An OPT record occurred somewhere other than
+the additional data section.
+-- wire tsig_in_answer 001f8180000100010000000003777777076578616d706c6503636f6d0000010001c00c00fa00ff000000000000
+! BadTSIG: A TSIG record occurred somewhere other than the end of
+the additional data section.
+-- wire name_too_long 00208180000100010000000003777777076578616d706c6503636f6d00000100013c6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613c6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262623c6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363633c6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464643c656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565c00c000100010000003c0004c0000201
+! NameTooLong: A DNS name is > 255 octets long.
+-- wire soa_short 00218180000100010000000003777777076578616d706c6503636f6d0000010001c00c000600010000003c000e0000000000010000000200000003
+! FormError: DNS message is malformed.
+-- wire caa_short 00228180000100010000000003777777076578616d706c6503636f6d0000010001c00c010100010000003c00050005697373
+! FormError: DNS message is malformed.
+-- wire srv_short 00238180000100010000000003777777076578616d706c6503636f6d0000010001c00c002100010000003c0003000100
+! FormError: DNS message is malformed.
+-- wire rr_header_short 00248180000100010000000003777777076578616d706c6503636f6d0000010001c00c000100
+! FormError: DNS message is malformed.
+-- wire count_too_big 00258180000100020000000003777777076578616d706c6503636f6d0000010001c00c000100010000003c0004c0000201
+! FormError: DNS message is malformed.
+-- diff zones/example.com.zone zones/example.com.next.zone example.com
+  - @ 3600 IN SOA ns1 hostmaster 2026102101 7200 900 1209600 300
+  - @ 3600 IN MX 20 mail2.example.net.
+  - @ 3600 IN CAA 0 issue "letsencrypt.org"
+  - @ 3600 IN CAA 0 iodef "mailto:security@example.com"
+  + @ 3600 IN SOA ns1 hostmaster 2026102201 7200 900 1209600 300
+  + @ 3600 IN MX 30 mail3
+  - _dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+  + _dmarc 3600 IN TXT "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+  - _sip._tcp 3600 IN SRV 10 60 5060 sip1
+  - _sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+  ~ api A ttl 600 -> 300
+  - big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+  - big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+  - Mixed.Case 3600 IN MX 5 MAIL
+  - *.cdn 3600 IN CNAME cdn.example.net.
+  - corp 3600 IN TXT "corp"
+  - intranet.corp 3600 IN CNAME vpn.corp
+  - vpn.corp 3600 IN A 198.51.100.1
+  - db 3600 IN HINFO "x86_64" "Linux 6.1"
+  - dev 3600 IN NS ns.dev
+  - ns.dev 3600 IN A 192.0.2.60
+  - legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+  - mail 300 IN A 192.0.2.26
+  ~ mail A ttl 300 -> 3600
+  + mail3 3600 IN A 192.0.2.27
+  - ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+  - office 3600 IN TYPE65280 \# 4 0a0b0c0d
+  - printer 3600 IN A 192.0.2.99
+  - sip1 3600 IN A 192.0.2.40
+  + status 3600 IN A 192.0.2.80
+  - _443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  - WWW2 3600 IN A 192.0.2.11
+  - WWW2 3600 IN A 192.0.2.12
+  32 removed, 5 added, 2 ttl changes
+-- diff zones/example.com.next.zone zones/example.com.zone example.com
+  - @ 3600 IN SOA ns1 hostmaster 2026102201 7200 900 1209600 300
+  - @ 3600 IN MX 30 mail3
+  + @ 3600 IN SOA ns1 hostmaster 2026102101 7200 900 1209600 300
+  + @ 3600 IN MX 20 mail2.example.net.
+  + @ 3600 IN CAA 0 issue "letsencrypt.org"
+  + @ 3600 IN CAA 0 iodef "mailto:security@example.com"
+  - _dmarc 3600 IN TXT "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+  + _dmarc 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+  + _sip._tcp 3600 IN SRV 10 60 5060 sip1
+  + _sip._tcp 3600 IN SRV 20 0 5060 sip2.example.net.
+  ~ api A ttl 300 -> 600
+  + big 3600 IN TXT "record one of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record two of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record three of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record four of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record five of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record six of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record seven of the big set, padded out to make the answer long"
+  + big 3600 IN TXT "record eight of the big set, padded out to make the answer long"
+  + Mixed.Case 3600 IN MX 5 MAIL
+  + *.cdn 3600 IN CNAME cdn.example.net.
+  + corp 3600 IN TXT "corp"
+  + intranet.corp 3600 IN CNAME vpn.corp
+  + vpn.corp 3600 IN A 198.51.100.1
+  + db 3600 IN HINFO "x86_64" "Linux 6.1"
+  + dev 3600 IN NS ns.dev
+  + ns.dev 3600 IN A 192.0.2.60
+  + legacy 3600 IN TXT "a \"quoted\" word" "two words" "semi;colon" "tab\009x" ""
+  ~ mail A ttl 3600 -> 300
+  + mail 300 IN A 192.0.2.26
+  - mail3 3600 IN A 192.0.2.27
+  + ns1 3600 IN SSHFP 4 2 9b1e6c8a2f0d4e3b7a5c1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a
+  + office 3600 IN TYPE65280 \# 4 0a0b0c0d
+  + printer 3600 IN A 192.0.2.99
+  + sip1 3600 IN A 192.0.2.40
+  - status 3600 IN A 192.0.2.80
+  + _443._tcp.www 3600 IN TLSA 3 1 1 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  + WWW2 3600 IN A 192.0.2.11
+  + WWW2 3600 IN A 192.0.2.12
+  5 removed, 32 added, 2 ttl changes
+-- diff cases/merge.zone cases/inherit.zone example.com
+  - @ 300 IN MX 10 mx1
+  - @ 60 IN NS ns2
+  ~ @ NS ttl 60 -> 300
+  - @ 100 IN SOA ns hostmaster 2 2 2 2 2
+  ~ @ SOA ttl 100 -> 300
+  + @ 300 IN SOA ns hostmaster 1 1 1 1 1
+  - alias 300 IN CNAME two
+  + host 300 IN A 192.0.2.3
+  + host 300 IN MX 10 host
+  - ns 300 IN A 192.0.2.9
+  + ns 300 IN A 192.0.2.2
+  + ns 300 IN AAAA 2001:db8::1
+  - txt 300 IN TXT "Hello"
+  - txt 300 IN TXT "hello"
+  7 removed, 5 added, 2 ttl changes
