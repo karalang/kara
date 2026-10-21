@@ -46,7 +46,7 @@ fn clamp_slope(s: f64) -> f64 {
     s
 }
 
-pub fn run() with writes(Display, Input, Timer) suspends panics {
+pub fn run() with writes(Display, Input, Timer) suspends panics blocks {
     let w = grid_w();
     let h = grid_h();
     let spf = steps_per_frame();

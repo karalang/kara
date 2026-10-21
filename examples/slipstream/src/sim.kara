@@ -413,7 +413,7 @@ fn fan_stream(coll: ref Vec[LbmNode], workers: i64, u0: f64, s: f64) -> Vec[LbmN
 // simulation state from frame to frame. The collide pass joins before the stream
 // pass starts (stream reads the whole collided grid), so the two are sequenced
 // but each is internally parallel.
-pub fn substep(grid: Vec[LbmNode], s: f64, workers: i64) -> Vec[LbmNode] with panics {
+pub fn substep(grid: Vec[LbmNode], s: f64, workers: i64) -> Vec[LbmNode] with panics blocks {
     let coll = fan_collide(grid, workers);
     fan_stream(coll, workers, inflow(), s)
 }

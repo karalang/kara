@@ -692,11 +692,23 @@ struct StmtEffect {
 /// coroutine fan-out (design.md:9044 `http_get` — true double-drop, wants
 /// dispatcher routing) stays gated pending A2b-2.
 fn effects_mark_coroutine_boundary(effects: &[StmtEffect]) -> bool {
-    effects.iter().any(|e| {
-        matches!(e.verb, EffectVerbKind::Suspends)
-            || (matches!(e.verb, EffectVerbKind::Sends | EffectVerbKind::Receives)
-                && e.resource == "Network")
-    })
+    // A channel receive that may wait: `receives(Channel)` with `blocks`.
+    // `Receiver.recv` carried `suspends` until B-2026-10-21-70 gave it the
+    // spec's `blocks` instead, so the pair is what keeps a recv, and a function
+    // that wraps one, serial. `receives` alone (a `try_recv`, or a declared
+    // `with receives(rx)`) still fans out.
+    let waits_on_channel = effects
+        .iter()
+        .any(|e| matches!(e.verb, EffectVerbKind::Receives) && e.resource == "Channel")
+        && effects
+            .iter()
+            .any(|e| matches!(e.verb, EffectVerbKind::Blocks));
+    waits_on_channel
+        || effects.iter().any(|e| {
+            matches!(e.verb, EffectVerbKind::Suspends)
+                || (matches!(e.verb, EffectVerbKind::Sends | EffectVerbKind::Receives)
+                    && e.resource == "Network")
+        })
 }
 
 /// True iff `stmt` is a direct, pure `sleep_ms(...)` timer-park call — the only

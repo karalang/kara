@@ -25843,7 +25843,7 @@ fn wasm_threads_instantiate_threaded_export_taskgroup_e2e() {
         "effect resource Host;\n\
          host fn notify(v: i64) with writes(Host);\n\n\
          #[target(wasm_browser)]\n\
-         pub fn compute(n: i64) -> i64 with writes(Host) {\n    \
+         pub fn compute(n: i64) -> i64 with writes(Host) blocks {\n    \
              let mut g: TaskGroup = TaskGroup.new();\n    \
              let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n    \
              let mut i: i64 = 0;\n    \

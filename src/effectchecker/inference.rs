@@ -1353,7 +1353,16 @@ impl<'a> super::EffectChecker<'a> {
                 // here; the seed list lives in the constructor's
                 // `STDLIB_METHOD_MAP`). Conservative over-approximation is
                 // acceptable; false negatives are not.
-                if let Some(quals) = method_sym.and_then(|m| self.stdlib_method_seeds.get(&m)) {
+                //
+                // Skipped when the typechecker resolved the call to a method
+                // with a body, i.e. one the walker infers for itself: a user
+                // type's own `send` or `recv` is not a channel operation, and
+                // matching it by name gave it the channel's effects (B-2026-10-21-81).
+                let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
+                if let Some(quals) = method_sym
+                    .filter(|_| !resolved_to_body)
+                    .and_then(|m| self.stdlib_method_seeds.get(&m))
+                {
                     for &qualified in quals {
                         calls.push((qualified, expr.span));
                     }

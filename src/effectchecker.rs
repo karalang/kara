@@ -1483,13 +1483,6 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects
                 .insert(self.interner.intern(stdlib_fn), set);
         }
-        // Receiver.recv suspends (blocks until a message arrives).
-        {
-            let mut set = EffectSet::new();
-            set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
-            self.inferred_effects
-                .insert(self.interner.intern("Receiver.recv"), set);
-        }
         // B-2026-08-22-20 — the CHANNEL COMMUNICATION effects. design.md:6070
         // declares `send` with `sends(tx)` and the `recv` family with
         // `receives(rx)`, but the compiler seeded `Sender.send` with
@@ -1512,8 +1505,8 @@ impl<'a> EffectChecker<'a> {
         // over-reporting, never under-reporting.
         //
         // MERGED into the existing entries rather than inserted over them: the
-        // two seeds above already own these keys, and `insert` would drop
-        // `send`'s `allocates(Heap)` and `recv`'s `suspends` on the floor.
+        // seed above already owns `send`, and `insert` would drop
+        // `send`'s `allocates(Heap)` on the floor.
         //
         // `try_send` / `recv_blocking` are spec'd at :6070 but do not exist as
         // methods yet ("no method 'try_send' on type 'Sender'"), so they are
@@ -1539,11 +1532,9 @@ impl<'a> EffectChecker<'a> {
                 let set = self.inferred_effects.entry(key).or_default();
                 set.add(effect.clone(), EffectOrigin::Direct(builtin_span));
             }
-            // B-2026-08-22-21 — `recv_blocking` additionally carries `blocks`,
-            // where `recv` carries `suspends` (design.md:6099 vs :6094). The
-            // two execution verbs are what drive scheduler placement, so this
-            // is the entire observable difference between the two methods:
-            // they lower to the same runtime entry and return the same value.
+            // B-2026-08-22-21 — `recv_blocking` additionally carries `blocks`.
+            // `recv` gets the same `blocks` below (B-2026-10-21-70: it carried
+            // `suspends` until then, which v1 does not have).
             {
                 let blocks_effect = Effect {
                     verb: EffectVerbKind::Blocks,
@@ -1927,6 +1918,85 @@ impl<'a> EffectChecker<'a> {
                 seed(name, &[r("FileSystem")]);
             }
             seed("FileSystem.write", &[w("FileSystem")]);
+            // The rest of the `fs` surface (library/io.md § Files). Their baked
+            // `with` clauses are documentation like the ones above, so until
+            // they were seeded a `pub fn` calling `fs.exists(p)` needed no
+            // declaration at all (B-2026-10-21-62).
+            for name in [
+                "FileSystem.exists",
+                "FileSystem.metadata",
+                "FileSystem.read_dir",
+                "FileSystem.read_bytes",
+                "FileSystem.read_link",
+                "FileSystem.symlink_metadata",
+                "File.seek",
+            ] {
+                seed(name, &[r("FileSystem")]);
+            }
+            for name in [
+                "FileSystem.create_dir",
+                "FileSystem.create_dir_all",
+                "FileSystem.remove_file",
+                "FileSystem.remove_dir",
+                "FileSystem.remove_dir_all",
+                "FileSystem.rename",
+                "FileSystem.write_bytes",
+                "FileSystem.symlink",
+                "FileSystem.set_permissions",
+                "FileSystem.set_modified",
+            ] {
+                seed(name, &[w("FileSystem")]);
+            }
+            seed("FileSystem.copy", &[r("FileSystem"), w("FileSystem")]);
+        }
+
+        // `blocks` on every operation that may park the OS thread
+        // (B-2026-10-21-62, B-2026-10-21-70). design.md § `blocks`: "In v1 all
+        // I/O blocks the thread it runs on", and unlike `allocates(Heap)` and
+        // `panics` it is not default-permitted, so a `pub fn` that reads a
+        // file must say so. library/io.md gives `blocks` to every file and
+        // network operation, so it is added to every seed above that carries
+        // a `FileSystem` or `Network` effect rather than listed again; the
+        // seeds without one (constructors, `BufReader.new`) touch nothing.
+        // library/concurrency.md gives it to `send` and `recv` (they wait on a
+        // full or empty channel) and to `TaskGroup.spawn` and
+        // `TaskHandle.join`; `try_send` and `try_recv` never wait and get
+        // none. `Receiver.recv` carried `suspends` here before, which v1 does
+        // not have (it returns with coroutines in M4a), so a `pub fn` that
+        // declared the spec's `blocks` was refused.
+        {
+            let blocks = Effect {
+                verb: EffectVerbKind::Blocks,
+                resource: String::new(),
+            };
+            let mut keys: Vec<Symbol> = self
+                .inferred_effects
+                .iter()
+                .filter(|(_, set)| {
+                    set.effects.iter().any(|t| {
+                        matches!(
+                            t.effect.verb,
+                            EffectVerbKind::Reads
+                                | EffectVerbKind::Writes
+                                | EffectVerbKind::Sends
+                                | EffectVerbKind::Receives
+                        ) && (t.effect.resource == "FileSystem" || t.effect.resource == "Network")
+                    })
+                })
+                .map(|(k, _)| *k)
+                .collect();
+            for name in [
+                "Sender.send",
+                "Receiver.recv",
+                "TaskGroup.spawn",
+                "TaskHandle.join",
+            ] {
+                keys.push(self.interner.intern(name));
+            }
+            for key in keys {
+                let set = self.inferred_effects.entry(key).or_default();
+                set.add(blocks.clone(), EffectOrigin::Direct(builtin_span));
+            }
         }
 
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are

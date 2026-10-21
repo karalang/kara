@@ -5237,8 +5237,10 @@ fn test_sender_send_infers_allocates_heap() {
 }
 
 #[test]
-fn test_receiver_recv_infers_suspends() {
-    // Receiver.recv() blocks until a message arrives — infers `suspends`.
+fn test_receiver_recv_infers_blocks() {
+    // Receiver.recv() waits until a message arrives, so it infers `blocks`
+    // (library/concurrency.md). It inferred `suspends` until B-2026-10-21-70,
+    // an effect v1 does not have.
     let result = effectcheck_ok(
         "fn do_recv(r: Receiver[i64]) -> i64 {
              r.recv()
@@ -5249,8 +5251,16 @@ fn test_receiver_recv_infers_suspends() {
         inferred
             .effects
             .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "Expected blocks for Receiver.recv(), got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        !inferred
+            .effects
+            .iter()
             .any(|e| e.effect.verb == EffectVerbKind::Suspends),
-        "Expected suspends for Receiver.recv(), got: {:?}",
+        "Receiver.recv() must not infer suspends, got: {:?}",
         inferred.effects
     );
 }
@@ -5259,11 +5269,13 @@ fn test_receiver_recv_infers_suspends() {
 fn test_extern_c_export_suspends_rejected() {
     // Producer-mode export boundary (additive-interop Slice 3½; design.md
     // § Exported C ABI): a `pub extern "C" fn` whose body suspends (here
-    // via `Receiver.recv()`) cannot be exported to C — the v1 boundary is
-    // synchronous-only. E0414 / ExternExportSuspendsUnsupported.
+    // via `sleep_ms`; `Receiver.recv()` blocks since B-2026-10-21-70)
+    // cannot be exported to C — the v1 boundary is synchronous-only.
+    // E0414 / ExternExportSuspendsUnsupported.
     let errors = effectcheck_errors(
-        "pub extern \"C\" fn drain(r: Receiver[i64]) -> i64 {
-             r.recv()
+        "pub extern \"C\" fn drain() -> i64 {
+             sleep_ms(1);
+             0
          }",
     );
     assert!(
@@ -6747,8 +6759,8 @@ fn tcp_tls_ws_network_effects_propagate_to_callers() {
 }
 
 #[test]
-fn network_yield_table_excludes_receiver_recv_suspends() {
-    // `Receiver.recv` carries `suspends` (no Network resource). The spec at
+fn network_yield_table_excludes_receiver_recv() {
+    // `Receiver.recv` carries `blocks` (no Network resource). The spec at
     // phase-6 line 26 explicitly excludes `suspends` from the
     // state-machine-transform candidate set — those functions stay
     // thread-blocking at v1 even though they suspend the calling task.
@@ -6759,7 +6771,7 @@ fn network_yield_table_excludes_receiver_recv_suspends() {
         .expect("Receiver.recv must be seeded by the effect-checker");
     assert!(
         !set_has_network_yield_effect(&receiver_recv),
-        "Receiver.recv carries `suspends`, not `sends`/`receives(Network)` — \
+        "Receiver.recv carries `blocks`, not `sends`/`receives(Network)` — \
          must NOT classify as network-boundary: {:?}",
         receiver_recv.effects
     );
@@ -7526,11 +7538,12 @@ fn profile_slice3_kernel_rejects_blocks() {
 
 #[test]
 fn profile_slice3_kernel_rejects_suspends() {
-    // The `suspends` effect is inferred from `Receiver.recv()`, which
-    // the effect checker seeds with `suspends`.
+    // The `suspends` effect is inferred from `sleep_ms`, which the effect
+    // checker seeds with `suspends` (`Receiver.recv()` did until
+    // B-2026-10-21-70 gave it `blocks`).
     let errors = profile_compat_errors(
         "#[profile(kernel)]\n\
-         pub fn yields(r: Receiver[i64]) -> i64 with suspends { r.recv() }",
+         pub fn yields() with suspends { sleep_ms(1); }",
     );
     assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
     assert!(errors[0].message.contains("suspends"));
@@ -9201,7 +9214,7 @@ fn test_pub_fn_with_filesystem_effects_declared_accepts_file_methods() {
     // a `pub fn` that declares both reads/writes(FileSystem) is
     // accepted when calling open + create + write + flush + read.
     effectcheck_ok(
-        "pub fn driver() with reads(FileSystem) writes(FileSystem) {
+        "pub fn driver() with reads(FileSystem) writes(FileSystem) blocks {
              let _ = File.open(\"x.txt\");
              let _ = File.create(\"y.txt\");
          }",
@@ -9247,7 +9260,7 @@ fn test_pub_fn_calling_bufreader_read_line_must_declare_reads_filesystem() {
 fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_methods() {
     let result = effectcheck_full_pipeline(
         "pub fn slurp(br: ref BufReader[File], buf: mut ref String, raw: mut Slice[u8]) \
-             with reads(FileSystem) {
+             with reads(FileSystem) blocks {
              let _ = br.read_line(buf);
              let _ = br.read_to_string(buf);
              let _ = br.read(raw);
@@ -9294,7 +9307,7 @@ fn test_pub_fn_calling_bufreader_lines_must_declare_reads_filesystem() {
 #[test]
 fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
     let result = effectcheck_full_pipeline(
-        "pub fn dump(br: ref BufReader[File]) with reads(FileSystem) {
+        "pub fn dump(br: ref BufReader[File]) with reads(FileSystem) blocks {
              for line in br.lines() {
                  match line {
                      Ok(_) => {}
@@ -9441,7 +9454,7 @@ fn test_pub_fn_calling_bufwriter_write_must_declare_writes_filesystem() {
 #[test]
 fn test_pub_fn_with_writes_filesystem_declared_accepts_bufwriter_methods() {
     let result = effectcheck_full_pipeline(
-        "pub fn dump(bw: ref BufWriter[File], raw: Slice[u8]) with writes(FileSystem) {
+        "pub fn dump(bw: ref BufWriter[File], raw: Slice[u8]) with writes(FileSystem) blocks {
              let _ = bw.write(raw);
              let _ = bw.flush();
          }",
@@ -10265,7 +10278,7 @@ fn test_dataframe_write_csv_undeclared_writes_filesystem_errors() {
 #[test]
 fn test_dataframe_write_csv_declared_writes_filesystem_ok() {
     let result = effectcheck_full_pipeline(
-        "pub fn save(df: ref DataFrame) with writes(FileSystem) { df.write_csv(\"/tmp/x.csv\"); }",
+        "pub fn save(df: ref DataFrame) with writes(FileSystem) blocks { df.write_csv(\"/tmp/x.csv\"); }",
     );
     assert!(
         result.errors.is_empty(),
@@ -10292,7 +10305,7 @@ fn test_dataframe_read_csv_undeclared_reads_filesystem_errors() {
 #[test]
 fn test_dataframe_read_csv_declared_reads_filesystem_ok() {
     let result = effectcheck_full_pipeline(
-        "pub fn load() with reads(FileSystem) { let _ = DataFrame.read_csv(\"/tmp/x.csv\"); }",
+        "pub fn load() with reads(FileSystem) blocks { let _ = DataFrame.read_csv(\"/tmp/x.csv\"); }",
     );
     assert!(
         result.errors.is_empty(),
@@ -10951,7 +10964,8 @@ fn test_channel_recv_infers_receives_channel() {
             inferred.effects
         );
     }
-    // `recv`'s own `suspends` seed shares its key and must survive the merge.
+    // `recv`'s own `blocks` seed shares its key and must survive the merge
+    // (it was `suspends` until B-2026-10-21-70).
     let result = effectcheck_ok(
         "fn r() {\n\
          \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
@@ -10963,8 +10977,8 @@ fn test_channel_recv_infers_receives_channel() {
         inferred
             .effects
             .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
-        "the suspends seed on Receiver.recv must not be clobbered, got: {:?}",
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "the blocks seed on Receiver.recv must not be clobbered, got: {:?}",
         inferred.effects
     );
 }
@@ -10972,7 +10986,7 @@ fn test_channel_recv_infers_receives_channel() {
 /// B-2026-08-22-21 — the two channel methods that did not exist when
 /// B-2026-08-22-20 seeded the other three. `try_send` joins `send`'s
 /// `sends(Channel)` + `allocates(Heap)` pair; `recv_blocking` joins `recv`'s
-/// `receives(Channel)` but with `blocks` where `recv` has `suspends`.
+/// `receives(Channel)` and `blocks`, which `recv` has too since B-2026-10-21-70.
 ///
 /// THE `blocks` / `suspends` SPLIT IS THE POINT, not a detail: design.md's two
 /// execution verbs drive scheduler placement, so `recv_blocking` is not a
@@ -11060,7 +11074,7 @@ fn test_public_fn_must_declare_channel_send() {
     // `effectcheck_ok` asserts the clean result, so it is the right helper for
     // this half; `effectcheck_errors` panics when there are no errors.
     effectcheck_ok(
-        "pub fn push(tx: Sender[i64], v: i64) with sends(tx) allocates(Heap) {\n\
+        "pub fn push(tx: Sender[i64], v: i64) with sends(tx) allocates(Heap) blocks {\n\
          \x20   tx.send(v);\n\
          }",
     );
@@ -12854,5 +12868,124 @@ fn test_resolved_method_call_reaches_no_other_impl() {
             .iter()
             .map(|g| g.functions.clone())
             .collect::<Vec<_>>()
+    );
+}
+
+// ── `blocks` on I/O, channel and task operations (B-2026-10-21-62/-70) ──
+//
+// design.md § `blocks`: in v1 all I/O blocks the thread it runs on, and
+// `blocks` is not default-permitted. library/io.md gives it to every file and
+// network operation; library/concurrency.md to `send`, `recv`,
+// `TaskGroup.spawn` and `TaskHandle.join`.
+
+fn real_errors(result: &EffectCheckResult) -> Vec<String> {
+    result
+        .errors
+        .iter()
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
+        .map(|e| e.message.clone())
+        .collect()
+}
+
+#[test]
+fn pub_fn_reading_a_file_must_declare_blocks() {
+    for body in [
+        "fs.read_to_string(p).is_ok()",
+        "fs.exists(p)",
+        "File.open(p).is_ok()",
+    ] {
+        let result = effectcheck_full_pipeline(&format!(
+            "pub fn f(p: Str) -> bool with reads(FileSystem) {{ {body} }}"
+        ));
+        let errs = real_errors(&result);
+        assert!(
+            errs.iter().any(|m| m.contains("blocks")),
+            "`{body}` without `blocks` must be refused, got: {errs:?}"
+        );
+        let result = effectcheck_full_pipeline(&format!(
+            "pub fn f(p: Str) -> bool with reads(FileSystem) blocks {{ {body} }}"
+        ));
+        let errs = real_errors(&result);
+        assert!(
+            errs.is_empty(),
+            "`{body}` with `blocks` must pass, got: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn fs_exists_carries_reads_filesystem() {
+    // `fs.exists` had no seed, so a `pub fn` calling it needed no
+    // declaration at all.
+    let result = effectcheck_full_pipeline("pub fn f(p: Str) -> bool { fs.exists(p) }");
+    let errs = real_errors(&result);
+    assert!(
+        errs.iter().any(|m| m.contains("reads(FileSystem)")),
+        "an undeclared fs.exists must be refused, got: {errs:?}"
+    );
+}
+
+#[test]
+fn channel_send_and_recv_carry_blocks_not_suspends() {
+    let result = effectcheck_full_pipeline(
+        "pub fn put(tx: Sender[i64]) with sends(tx) { let _ = tx.send(1); }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.iter().any(|m| m.contains("blocks")),
+        "a send without `blocks` must be refused, got: {errs:?}"
+    );
+    let result = effectcheck_full_pipeline(
+        "pub fn get(rx: Receiver[i64]) with receives(rx) blocks { let _ = rx.recv(); }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.is_empty(),
+        "the spec's recv declaration must pass, got: {errs:?}"
+    );
+    // `try_send` and `try_recv` never wait.
+    let result = effectcheck_full_pipeline(
+        "pub fn poll(tx: Sender[i64], rx: Receiver[i64]) \
+         with sends(tx) receives(rx) { let _ = tx.try_send(1); let _ = rx.try_recv(); }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.is_empty(),
+        "try_send/try_recv need no `blocks`, got: {errs:?}"
+    );
+}
+
+#[test]
+fn task_group_spawn_and_join_carry_blocks() {
+    let result = effectcheck_full_pipeline(
+        "pub fn run_one() -> i64 {
+             let g = TaskGroup.new();
+             let h = g.spawn(|| 1);
+             h.join()
+         }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.iter().any(|m| m.contains("blocks")),
+        "spawn and join without `blocks` must be refused, got: {errs:?}"
+    );
+}
+
+#[test]
+fn user_method_named_send_is_not_a_channel_op() {
+    // B-2026-10-21-81: the name-only stdlib method map matched a user type's
+    // own `send` / `recv` and gave it the channel's effects.
+    let result = effectcheck_full_pipeline(
+        "pub struct S { x: i64 }
+         impl S {
+             fn send(self, v: i64) -> i64 { self.x + v }
+             fn recv(self) -> i64 { self.x }
+         }
+         pub fn f(s: S) -> i64 { s.send(1) + s.recv() }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.is_empty(),
+        "a user `send`/`recv` has no effects, got: {errs:?}"
     );
 }
