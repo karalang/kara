@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 751 |
+| miscompile | 752 |
 | run-vs-build | 609 |
 | leak | 605 |
 | double-free | 427 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2980 |
+| codegen | 2981 |
 | interp | 1001 |
 | typecheck | 523 |
 | ownership | 125 |
@@ -173,6 +173,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-1 | 2026-10-21 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = || { let o = Opts { sub: Some(s) }; match o.sub { Some(s) => println(s), None => .. } };` is error[ownership] "value 'o.sub' was moved into a closure (captured at line 5:15), used again here", with the capture span and the use span both the scrutinee `o.sub`. The same body outside a closure passes, and `__mir-run` prints `bob` | — |
 | B-2026-10-21-2 | 2026-10-21 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receiver, and refuses `mut ref self` calls on that receiver inside the loop body | — |
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
+| B-2026-10-21-4 | 2026-10-21 | codegen | high | On the compiled MIR backend (`__mir-llvm-run`, `__mir-llvm-asan`, `build --mir`), the library `max_by_key` / `min_by_key` over a `SortedMap` or `Map` iterator returns the wrong item: the key of one entry with the value of another, or a garbage value; `__mir-run` is right, and the same calls over a `Vec` of tuples are right on both backends | — |
 
 ### Relocated
 
