@@ -3513,12 +3513,12 @@ The function commits to "some concrete type that implements `Trait`", and the ca
 
 ```kara
 fn make_counter(start: i64) -> impl Iterator[Item = i64] {
-    (start..).into_iter()       // concrete: RangeFromIter[i64]
+    start..                     // concrete: RangeFrom[i64]
 }
 
 let it = make_counter(0);                            // it: impl Iterator[Item = i64]
 let first_three: Vec[i64] = it.take(3).collect();   // OK: Iterator methods are visible
-// let r: RangeFromIter[i64] = it;                  // error: the concrete type cannot be named
+// let r: RangeFrom[i64] = it;                  // error: the concrete type cannot be named
 ```
 
 **Inline associated-type bindings are part of the promise.** `[Item = i64]` is a two-sided commitment:
