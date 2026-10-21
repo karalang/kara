@@ -5493,12 +5493,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
                 left,
                 right,
-            } => self.range_value(e, left, right, *op == AstBinOp::RangeInclusive, dest),
+            } => self.range_value(e, left, Some(right), *op == AstBinOp::RangeInclusive, dest),
             ExprKind::Range {
                 start: Some(left),
                 end: Some(right),
                 inclusive,
-            } => self.range_value(e, left, right, *inclusive, dest),
+            } => self.range_value(e, left, Some(right), *inclusive, dest),
+            // B-2026-10-21-46 — `a..` as a value is the library's `RangeFrom`.
+            ExprKind::Range {
+                start: Some(left),
+                end: None,
+                inclusive: false,
+            } => self.range_value(e, left, None, false, dest),
             ExprKind::Binary { op, left, right } => self.binary(op.clone(), left, right, dest),
             ExprKind::Unary { op, operand } => {
                 // B-2026-10-14-33 — `-a` / `~a` on a user type with an
@@ -5893,24 +5899,28 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// `a..b` or `a..=b` as a value: the library's `Range` or
-    /// `RangeInclusive`, which a held or adapted range iterates through.
+    /// `a..b`, `a..=b` or `a..` as a value: the library's `Range`,
+    /// `RangeInclusive` or `RangeFrom`, which a held or adapted range
+    /// iterates through.
     fn range_value(
         &mut self,
         e: &'a Expr,
         left: &'a Expr,
-        right: &'a Expr,
+        right: Option<&'a Expr>,
         inclusive: bool,
         dest: Place,
     ) -> R<()> {
         let t = self.expr_ty(e)?;
-        let (Some((_, st)), Some((_, et))) = (
-            self.field_of(t, None, "start"),
-            self.field_of(t, None, "end"),
-        ) else {
+        let Some((_, st)) = self.field_of(t, None, "start") else {
             return self.unsupported(e.span, "a range value");
         };
-        let mut ops = vec![self.operand_at(left, st)?, self.operand_at(right, et)?];
+        let mut ops = vec![self.operand_at(left, st)?];
+        if let Some(right) = right {
+            let Some((_, et)) = self.field_of(t, None, "end") else {
+                return self.unsupported(e.span, "a range value");
+            };
+            ops.push(self.operand_at(right, et)?);
+        }
         if inclusive {
             ops.push(bool_const(self.tys().bool(), false));
         }
@@ -17154,6 +17164,7 @@ pub fn library_sources_end(user_len: usize) -> usize {
 const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     "Range",
     "RangeInclusive",
+    "RangeFrom",
     "IoError",
     // The HTTP client types, whose methods the typechecker dispatches by
     // name (B-2026-10-18-10). Not `Response`: a server program declares its
@@ -17265,6 +17276,7 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "Ordering",
     "Range",
     "RangeInclusive",
+    "RangeFrom",
     "Serialize",
     "Deserialize",
     "Serializer",

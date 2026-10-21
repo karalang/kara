@@ -6553,7 +6553,7 @@ fn deref_of_an_item_of_a_named_iter_is_accepted_and_runs() {
     let src = "fn main() {\n\
          \x20   let w = vec![4, 6, 9];\n\
          \x20   let it = w.iter();\n\
-         \x20   let mut it = (0..3).into_iter();\n\
+         \x20   let mut it = (0..3).iter();\n\
          \x20   let Some(k) = it.next() else { return; };\n\
          \x20   println(f\"{*k}\");\n\
          }\n";
@@ -10927,5 +10927,52 @@ fn atomic_swap_on_a_borrowed_parameter_is_accepted() {
              println(tick(c));\n\
          }\n",
         "1\n",
+    );
+}
+
+/// B-2026-10-21-46: an open range `a..` is the library's `RangeFrom`, an
+/// iterator, so it takes adaptors and stops when they do. `.into_iter()` on
+/// any range takes the "already an iterator" fix-it, whose edit starts at
+/// the `.` even when the receiver is parenthesised.
+#[test]
+fn an_open_range_takes_iterator_adaptors() {
+    let src = "fn main() {\n\
+         \x20   let s: i64 = (1..).take(3).sum();\n\
+         \x20   let n = 15;\n\
+         \x20   let k = (1..).take_while(|k| k * (k + 1) / 2 <= n)\n\
+         \x20       .filter(|k| (n - k * (k + 1) / 2) % k == 0).count();\n\
+         \x20   let mut r = 5..;\n\
+         \x20   let a = r.next();\n\
+         \x20   let b = r.next();\n\
+         \x20   let c: Vec[i64] = (10..).iter().step_by(5).take(3).collect();\n\
+         \x20   println(f\"{s} {k} {a == Some(5)} {b == Some(6)} {c.len()} {(3..).contains(7)}\");\n\
+         }\n";
+    let want = "6 4 true true 3 true\n";
+    accepted("open-range-adaptors", src);
+    let (dir, path) = fixture("open-range-adaptors", src);
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    rejected_then_fixed_by(
+        "open-range-into-iter",
+        "fn main() {\n\
+             let s: i64 = (1..).into_iter().take(2).sum();\n\
+             let t: i64 = (0..3).into_iter().sum();\n\
+             println(f\"{s} {t} {(0..4).len()}\");\n\
+         }\n",
+        "no method 'into_iter' on type 'RangeFrom', which is already an iterator",
+        "let s: i64 = (1..).take(2).sum();",
     );
 }

@@ -813,6 +813,7 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "Vec",
     "Range",
     "RangeInclusive",
+    "RangeFrom",
     "Set",
     "SortedSet",
     "Map",

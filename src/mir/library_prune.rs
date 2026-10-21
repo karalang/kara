@@ -65,6 +65,7 @@ const ALWAYS_KEPT: &[&str] = &[
     "range_inclusive",
     "Range",
     "RangeInclusive",
+    "RangeFrom",
     "Ordering",
     // `for`, `?`, conversions and collecting.
     "iter",

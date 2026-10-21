@@ -86,7 +86,13 @@ impl<'a> super::TypeChecker<'a> {
                 });
             }
         }
-        if method == "iter" || method == "into_iter" {
+        // On the MIR pipeline a range is the library's iterator struct, so
+        // `.into_iter()` on one takes the "already an iterator" fix-it the
+        // other library iterators do (B-2026-10-21-46).
+        let library_range = self.library_methods_from_source
+            && matches!(obj_ty, Type::Named { name, .. }
+                if matches!(name.as_str(), "Range" | "RangeInclusive" | "RangeFrom"));
+        if (method == "iter" || method == "into_iter") && !library_range {
             if let Some(item_ty) = iterator_item_type_for(obj_ty) {
                 if !args.is_empty() {
                     self.type_error(

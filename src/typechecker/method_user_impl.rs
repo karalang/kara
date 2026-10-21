@@ -1410,8 +1410,8 @@ impl<'a> super::TypeChecker<'a> {
                         && args.is_empty()
                         && self.library_iter_item_type(receiver_for_lookup).is_some()
                     {
-                        let from = object.span.offset + object.span.length;
                         let to = span.offset + span.length;
+                        let from = no_arg_call_start(object, method, to);
                         if to > from {
                             self.type_error_with_fix_it(
                                 format!(
@@ -1439,8 +1439,8 @@ impl<'a> super::TypeChecker<'a> {
                         && args.is_empty()
                         && self.library_iter_item_type(receiver_for_lookup).is_some()
                     {
-                        let from = object.span.offset + object.span.length;
                         let to = span.offset + span.length;
+                        let from = no_arg_call_start(object, method, to);
                         if to > from {
                             self.type_error_with_fix_it(
                                 format!(
@@ -1633,3 +1633,12 @@ const VEC_ONLY_METHODS: &[&str] = &[
     "len", "is_empty", "iter", "get", "first", "last", "pop", "push", "join", "sort", "reverse",
     "contains", "swap", "truncate", "remove", "insert", "concat",
 ];
+
+/// Where `.method()` starts in a no-argument call ending at `to`. A
+/// parenthesised receiver's span stops inside its `)`, so the end of the
+/// receiver is not the start of the call (B-2026-10-21-46).
+fn no_arg_call_start(object: &Expr, method: &str, to: usize) -> usize {
+    let object_end = object.span.offset + object.span.length;
+    to.saturating_sub(method.len() + ".()".len())
+        .max(object_end)
+}
