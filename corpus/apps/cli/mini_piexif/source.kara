@@ -1,0 +1,4468 @@
+// mini_piexif: piexif 1.1.3, the pure-Python Exif library photo tools
+// use to read and rewrite the metadata cameras put in JPEG, TIFF and
+// WebP files:
+// - load(), from a file name (reading only as far as the Exif segment)
+//   or from bytes, with every TIFF value type, little- and big-endian
+//   files, thumbnails and key_is_name;
+// - dump(), which lays an exif dict out as a big-endian TIFF block, with
+//   its type checks and the errors struct.pack gives;
+// - insert(), remove() and transplant() on JPEG files, and the WebP
+//   chunk handling (VP8, VP8L, VP8X, EXIF, XMP, ANIM) for insert and
+//   remove;
+// - helper.UserComment's load and dump;
+// - five programs over a folder of holiday photos: a report, a library
+//   organised by capture date, a camera clock fix with geotagging from a
+//   GPS track, a privacy strip for sharing, and thumbnail extraction.
+//
+// The inputs are data/jobs.jsonl and the images beside it, made by mk.py.
+// expected.out is the output of oracle.py, which runs the same jobs and
+// programs through piexif itself (the copy in piexif/).
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 97 { c - 87 } else { c - 48 }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let d = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < d.len() {
+        out.push((hex_val(d[i] as i64) * 16 + hex_val(d[i + 1] as i64)) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.exists("data/out".to_string()) {
+        if let Err(e) = fs.remove_dir_all("data/out".to_string()) {
+            return Err(f"cannot clear data/out: {e}");
+        }
+    }
+    for file in data_files() {
+        let mut dir = "data".to_string();
+        let parts: Vec[Str] = file.path.split("/").collect();
+        let mut i = 0;
+        while i + 1 < parts.len() {
+            dir = f"{dir}/{parts[i]}";
+            i += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        let p = f"data/{file.path}";
+        let r = if file.hex { fs.write_bytes(p.clone(), unhex(file.body)) } else { fs.write(p.clone(), file.body.clone()) };
+        if let Err(e) = r {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(failure(e));
+    }
+}
+// ------------------------------------------------------------ Python values
+
+// A value json.loads gives: integers keep their digits, so one past 64
+// bits prints as Python prints it; objects keep their keys in order, and
+// a repeated key keeps its first place and takes its last value.
+#[derive(Clone)]
+enum J {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[J]),
+    Obj(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: J,
+}
+
+// A raised exception: its class name and str().
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn failure(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push((0xC0 | (cp >> 6)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp < 0x10000 {
+        out.push((0xE0 | (cp >> 12)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (cp >> 18)) as u8);
+        out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn is_surrogate(cp: i64) -> bool {
+    cp >= 0xD800 and cp <= 0xDFFF
+}
+
+fn hex4(cp: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = 12;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn ascii_string(s: ref Vec[i64], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i] as u8);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+
+// ---------------------------------------------------------- decoding
+
+// The C scanner in Modules/_json.c, over code points.
+struct Scanner {
+    s: Vec[i64],
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn hex_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+impl Scanner {
+    fn at(ref self, i: i64) -> i64 {
+        if i >= 0 and i < self.s.len() { self.s[i] } else { -1 }
+    }
+
+    // JSONDecodeError's message: the line and column are counted from the
+    // newlines before the position.
+    fn fail(ref self, msg: Str, pos: i64) -> Exc {
+        let mut line = 1;
+        let mut last = -1;
+        let mut i = 0;
+        while i < pos {
+            if self.s[i] == 10 {
+                line += 1;
+                last = i;
+            }
+            i += 1;
+        }
+        exc("JSONDecodeError", f"{msg}: line {line} column {pos - last} (char {pos})")
+    }
+
+    fn skip_ws(ref self, start: i64) -> i64 {
+        let mut i = start;
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c != 32 and c != 9 and c != 10 and c != 13 {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    fn matches(ref self, i: i64, word: Str) -> bool {
+        let w = word.bytes();
+        if i + w.len() > self.s.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if self.s[i + k] != w[k] as i64 {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+
+    fn scan_once(ref self, idx: i64) -> Result[(J, i64), Exc] {
+        let c = self.at(idx);
+        if c == 34 {
+            let (text, end) = self.scan_string(idx + 1)?;
+            return Ok((J.Str(cps_string(text)), end));
+        }
+        if c == 123 {
+            return self.parse_object(idx + 1);
+        }
+        if c == 91 {
+            return self.parse_array(idx + 1);
+        }
+        if c == 110 and self.matches(idx, "null") {
+            return Ok((J.Null, idx + 4));
+        }
+        if c == 116 and self.matches(idx, "true") {
+            return Ok((J.Bool(true), idx + 4));
+        }
+        if c == 102 and self.matches(idx, "false") {
+            return Ok((J.Bool(false), idx + 5));
+        }
+        if c == 78 and self.matches(idx, "NaN") {
+            return Ok((J.Float(0.0 / 0.0), idx + 3));
+        }
+        if c == 73 and self.matches(idx, "Infinity") {
+            return Ok((J.Float(1.0 / 0.0), idx + 8));
+        }
+        if c == 45 and self.matches(idx, "-Infinity") {
+            return Ok((J.Float(-1.0 / 0.0), idx + 9));
+        }
+        self.match_number(idx)
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?, then int() or float()
+    // of the text. Anything else at a value's place is "Expecting value".
+    fn match_number(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let end_idx = self.s.len() - 1;
+        let mut idx = start;
+        if self.at(idx) == 45 {
+            idx += 1;
+            if idx > end_idx {
+                return Err(self.fail("Expecting value", start));
+            }
+        }
+        let c = self.at(idx);
+        if c >= 49 and c <= 57 {
+            idx += 1;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        } else if c == 48 {
+            idx += 1;
+        } else {
+            return Err(self.fail("Expecting value", start));
+        }
+        let mut is_float = false;
+        if idx < end_idx and self.s[idx] == 46 and is_digit(self.s[idx + 1]) {
+            is_float = true;
+            idx += 2;
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+        }
+        if idx < end_idx and (self.s[idx] == 101 or self.s[idx] == 69) {
+            let e_start = idx;
+            idx += 1;
+            if idx < end_idx and (self.s[idx] == 45 or self.s[idx] == 43) {
+                idx += 1;
+            }
+            while idx <= end_idx and is_digit(self.s[idx]) {
+                idx += 1;
+            }
+            if is_digit(self.s[idx - 1]) {
+                is_float = true;
+            } else {
+                idx = e_start;
+            }
+        }
+        let text = ascii_string(self.s, start, idx);
+        if is_float {
+            return match f64.parse(text) {
+                Ok(x) => Ok((J.Float(x), idx)),
+                Err(_) => Err(exc("ValueError", f"could not convert string to float: '{text}'")),
+            };
+        }
+        let digits = if self.s[start] == 45 { idx - start - 1 } else { idx - start };
+        if digits > 4300 {
+            return Err(exc("ValueError", f"Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"));
+        }
+        if text == "-0" {
+            return Ok((J.Int("0".to_string()), idx));
+        }
+        Ok((J.Int(text), idx))
+    }
+
+    fn hex_escape(ref self, at: i64) -> Option[i64] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let d = hex_value(self.at(at + k));
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            k += 1;
+        }
+        Some(v)
+    }
+
+    // scanstring: `start` is just past the opening quote.
+    fn scan_string(ref self, start: i64) -> Result[(Vec[i64], i64), Exc] {
+        let len = self.s.len();
+        let begin = start - 1;
+        let mut out: Vec[i64] = Vec.new();
+        let mut end = start;
+        loop {
+            let mut next = end;
+            let mut c = 0;
+            while next < len {
+                c = self.s[next];
+                if c == 34 or c == 92 {
+                    break;
+                }
+                if c <= 0x1F {
+                    return Err(self.fail("Invalid control character at", next));
+                }
+                out.push(c);
+                next += 1;
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            next += 1;
+            if c == 34 {
+                return Ok((out, next));
+            }
+            if next == len {
+                return Err(self.fail("Unterminated string starting at", begin));
+            }
+            let e = self.s[next];
+            if e != 117 {
+                end = next + 1;
+                let ch = match e {
+                    34 => 34,
+                    92 => 92,
+                    47 => 47,
+                    98 => 8,
+                    102 => 12,
+                    110 => 10,
+                    114 => 13,
+                    116 => 9,
+                    _ => 0,
+                };
+                if ch == 0 {
+                    return Err(self.fail("Invalid \\escape", end - 2));
+                }
+                out.push(ch);
+            } else {
+                next += 1;
+                end = next + 4;
+                if end >= len {
+                    return Err(self.fail("Invalid \\uXXXX escape", next - 1));
+                }
+                let mut cp = match self.hex_escape(next) {
+                    Some(v) => v,
+                    None => return Err(self.fail("Invalid \\uXXXX escape", end - 5)),
+                };
+                // A high surrogate followed by an escaped low one is a pair;
+                // followed by anything else it stays on its own.
+                if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and self.s[end] == 92 and self.s[end + 1] == 117 {
+                    let low = match self.hex_escape(end + 2) {
+                        Some(v) => v,
+                        None => return Err(self.fail("Invalid \\uXXXX escape", end + 1)),
+                    };
+                    if low >= 0xDC00 and low <= 0xDFFF {
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                        end += 6;
+                    }
+                }
+                out.push(cp);
+            }
+        }
+    }
+
+    fn parse_object(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut members: Vec[Member] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 125 {
+            loop {
+                if self.at(idx) != 34 {
+                    return Err(self.fail("Expecting property name enclosed in double quotes", idx));
+                }
+                let (key, after_key) = self.scan_string(idx + 1)?;
+                idx = self.skip_ws(after_key);
+                if self.at(idx) != 58 {
+                    return Err(self.fail("Expecting ':' delimiter", idx));
+                }
+                idx = self.skip_ws(idx + 1);
+                let (val, after_val) = self.scan_once(idx)?;
+                put_member(mut members, cps_string(key), val);
+                idx = self.skip_ws(after_val);
+                if self.at(idx) == 125 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 125 {
+                    return Err(self.fail("Illegal trailing comma before end of object", comma));
+                }
+            }
+        }
+        Ok((J.Obj(members), idx + 1))
+    }
+
+    fn parse_array(ref self, start: i64) -> Result[(J, i64), Exc] {
+        let mut items: Vec[J] = Vec.new();
+        let mut idx = self.skip_ws(start);
+        if self.at(idx) != 93 {
+            loop {
+                let (val, after) = self.scan_once(idx)?;
+                items.push(val);
+                idx = self.skip_ws(after);
+                if self.at(idx) == 93 {
+                    break;
+                }
+                if self.at(idx) != 44 {
+                    return Err(self.fail("Expecting ',' delimiter", idx));
+                }
+                let comma = idx;
+                idx = self.skip_ws(idx + 1);
+                if self.at(idx) == 93 {
+                    return Err(self.fail("Illegal trailing comma before end of array", comma));
+                }
+            }
+        }
+        Ok((J.Arr(items), idx + 1))
+    }
+}
+
+// dict(pairs): a key seen again keeps its place and takes the new value.
+fn put_member(members: mut ref Vec[Member], key: own String, val: own J) {
+    let mut j = 0;
+    while j < members.len() {
+        if members[j].key == key {
+            members[j].val = val;
+            return;
+        }
+        j += 1;
+    }
+    members.push(Member { key: key, val: val });
+}
+
+// A str from code points. A lone surrogate, which a str can hold but a
+// Kara String cannot, becomes U+FFFD.
+fn cps_string(cps: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in cps.iter() {
+        if is_surrogate(*c) {
+            push_utf8(mut out, 0xFFFD);
+        } else {
+            push_utf8(mut out, *c);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn string_cps(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+// json.loads on a str.
+fn loads_cps(text: ref Vec[i64]) -> Result[J, Exc] {
+    let sc = Scanner { s: text.clone() };
+    if sc.at(0) == 0xFEFF {
+        return Err(sc.fail("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
+    }
+    let start = sc.skip_ws(0);
+    let (value, end) = sc.scan_once(start)?;
+    let stop = sc.skip_ws(end);
+    if stop != sc.s.len() {
+        return Err(sc.fail("Extra data", stop));
+    }
+    Ok(value)
+}
+
+fn loads_str(text: ref String) -> Result[J, Exc] {
+    loads_cps(string_cps(text))
+}
+
+// The error bytes.decode("utf-8") raises: the bad byte, or the bytes from
+// a sequence's start up to the one that does not fit.
+fn utf8_error(b: ref Vec[u8], start: i64, end: i64, reason: Str) -> Exc {
+    if end - start == 1 {
+        return exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{b[start]:02x} in position {start}: {reason}");
+    }
+    exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+}
+
+fn is_cont(c: u8) -> bool {
+    c >= 0x80 and c <= 0xBF
+}
+
+// bytes.decode("utf-8", "surrogatepass"), as json.loads decodes bytes.
+// An encoded surrogate (ED A0..BF 80..BF) is let through.
+fn utf8_decode(b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as i64);
+            i += 1;
+            continue;
+        }
+        if c < 0xC2 or c > 0xF4 {
+            return Err(utf8_error(b, i, i + 1, "invalid start byte"));
+        }
+        let need = if c < 0xE0 { 1 } else if c < 0xF0 { 2 } else { 3 };
+        // The range the second byte must fall in.
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c == 0xE0 {
+            lo = 0xA0;
+        } else if c == 0xF0 {
+            lo = 0x90;
+        } else if c == 0xF4 {
+            hi = 0x8F;
+        }
+        // ED A0..BF starts a surrogate, which strict UTF-8 rejects at the
+        // second byte; when the third byte does not complete it, the error
+        // is that one.
+        let surrogate = c == 0xED and n > i + 1 and b[i + 1] >= 0xA0 and b[i + 1] <= 0xBF;
+        if surrogate and (n <= i + 2 or not is_cont(b[i + 2])) {
+            return Err(utf8_error(b, i, i + 1, "invalid continuation byte"));
+        }
+        let mut k = 1;
+        while k <= need {
+            if i + k >= n {
+                return Err(utf8_error(b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k];
+            let ok = if k == 1 { d >= lo and d <= hi } else { is_cont(d) };
+            if not ok {
+                return Err(utf8_error(b, i, i + k, "invalid continuation byte"));
+            }
+            k += 1;
+        }
+        let mut cp = if need == 1 { (c as i64) & 0x1F } else if need == 2 { (c as i64) & 0x0F } else { (c as i64) & 0x07 };
+        for j in 1..(need + 1) {
+            cp = (cp << 6) | ((b[i + j] as i64) & 0x3F);
+        }
+        out.push(cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// json.loads on bytes: the encoding is detected (only UTF-8, with or
+// without its BOM, is handled here), the bytes are decoded, and the text
+// is loaded. A decode error is a ValueError, as JSONDecodeError is.
+fn loads_bytes(b: ref Vec[u8]) -> Result[J, Exc] {
+    let mut body = b.clone();
+    if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF {
+        body = Vec.new();
+        for i in 3..b.len() {
+            body.push(b[i]);
+        }
+    }
+    let cps = utf8_decode(body)?;
+    loads_cps(cps)
+}
+// ------------------------------------------------------------ Python values
+
+// A value piexif reads or writes: an int, a float, bytes, a str, a tuple
+// or None. A dict spec's list becomes a tuple.
+#[derive(Clone)]
+enum Pv {
+    Nil,
+    Int(i64),
+    Float(f64),
+    Bytes(Vec[u8]),
+    Str(String),
+    Tup(Vec[Pv]),
+}
+
+fn type_name(v: ref Pv) -> Str {
+    match v {
+        Pv.Nil => "NoneType",
+        Pv.Int(_) => "int",
+        Pv.Float(_) => "float",
+        Pv.Bytes(_) => "bytes",
+        Pv.Str(_) => "str",
+        Pv.Tup(_) => "tuple",
+    }
+}
+
+fn type_error(msg: own String) -> Exc {
+    exc("TypeError", msg)
+}
+
+fn value_error(msg: Str) -> Exc {
+    exc("ValueError", msg.to_string())
+}
+
+// len(v).
+fn py_len(v: ref Pv) -> Result[i64, Exc] {
+    match v {
+        Pv.Bytes(b) => Ok(b.len()),
+        Pv.Str(s) => Ok(s.chars().count() as i64),
+        Pv.Tup(t) => Ok(t.len()),
+        _ => Err(type_error(f"object of type '{type_name(v)}' has no len()")),
+    }
+}
+
+// The items *v spreads into a call: a bytes' ints, a str's one-letter
+// strs, a tuple's items.
+fn py_items(v: ref Pv) -> Result[Vec[Pv], Exc] {
+    match v {
+        Pv.Bytes(b) => {
+            let mut out: Vec[Pv] = Vec.new();
+            for c in b.iter() {
+                out.push(Pv.Int(*c as i64));
+            }
+            Ok(out)
+        }
+        Pv.Str(s) => {
+            let mut out: Vec[Pv] = Vec.new();
+            for c in s.chars() {
+                out.push(Pv.Str(c.to_string()));
+            }
+            Ok(out)
+        }
+        Pv.Tup(t) => Ok(t.clone()),
+        _ => Err(type_error(f"'{type_name(v)}' object is not iterable")),
+    }
+}
+
+// --------------------------------------------------------------- bytes
+
+fn asc(s: Str) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        out.push(c);
+    }
+    out
+}
+
+fn bv(xs: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in xs.iter() {
+        out.push(*x as u8);
+    }
+    out
+}
+
+fn py_index(i: i64, n: i64) -> i64 {
+    if i < 0 {
+        if i + n < 0 { 0 } else { i + n }
+    } else if i > n {
+        n
+    } else {
+        i
+    }
+}
+
+// b[start:end], clamped and with negative indexes as Python has them.
+fn sl(b: ref Vec[u8], start: i64, end: i64) -> Vec[u8] {
+    let n = b.len();
+    let a = py_index(start, n);
+    let z = py_index(end, n);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = a;
+    while i < z {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn from(b: ref Vec[u8], start: i64) -> Vec[u8] {
+    sl(b, start, b.len())
+}
+
+fn cat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    for c in b.iter() {
+        out.push(*c);
+    }
+    out
+}
+
+fn append(out: mut ref Vec[u8], b: ref Vec[u8]) {
+    for c in b.iter() {
+        out.push(*c);
+    }
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(0);
+        i += 1;
+    }
+    out
+}
+
+fn starts(b: ref Vec[u8], at: i64, want: ref Vec[u8]) -> bool {
+    sl(b, at, at + want.len()) == *want
+}
+
+// The first place want occurs in b at or after from, or -1.
+fn find_bytes(b: ref Vec[u8], want: ref Vec[u8], start: i64) -> i64 {
+    let mut i = start;
+    while i + want.len() <= b.len() {
+        if starts(b, i, want) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// b.replace(old, new) for a non-empty old.
+fn replace_bytes(b: ref Vec[u8], old: ref Vec[u8], new: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if i + old.len() <= b.len() and starts(b, i, old) {
+            append(mut out, new);
+            i += old.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// Python's comparison of two bytes.
+fn bytes_cmp(a: ref Vec[u8], b: ref Vec[u8]) -> i64 {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if a.len() < b.len() { -1 } else if a.len() > b.len() { 1 } else { 0 }
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for c in b.iter() {
+        s.push_str(hex_n(*c as i64, 2));
+    }
+    s
+}
+
+// A str's code points as bytes, as .encode("latin-1") gives them; None
+// when one is past U+00FF.
+fn latin1(s: ref String) -> Option[Vec[u8]] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        let cp = c as i64;
+        if cp > 255 {
+            return None;
+        }
+        out.push(cp as u8);
+    }
+    Some(out)
+}
+
+fn from_latin1(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b.iter() {
+        push_utf8(mut out, *c as i64);
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// ------------------------------------------------------------- struct
+
+fn struct_error(msg: own String) -> Exc {
+    exc("error", msg)
+}
+
+fn fmt_size(f: Str) -> i64 {
+    if f == "B" or f == "b" {
+        1
+    } else if f == "H" or f == "h" {
+        2
+    } else if f == "d" {
+        8
+    } else {
+        4
+    }
+}
+
+fn read_uint(b: ref Vec[u8], at: i64, size: i64, little: bool) -> i64 {
+    let mut v = 0;
+    let mut k = 0;
+    while k < size {
+        let c = if little { b[at + size - 1 - k] } else { b[at + k] };
+        v = v * 256 + c as i64;
+        k += 1;
+    }
+    v
+}
+
+// struct.unpack(endian + f * count, b) for an integer format f.
+fn unpack_ints(little: bool, f: Str, count: i64, b: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let size = fmt_size(f);
+    if b.len() != size * count {
+        return Err(struct_error(f"unpack requires a buffer of {size * count} bytes"));
+    }
+    let signed = f == "b" or f == "h" or f == "l";
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < count {
+        let mut v = read_uint(b, i * size, size, little);
+        if signed and v >= (1 << (size * 8 - 1)) {
+            v -= 1 << (size * 8);
+        }
+        out.push(v);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn unpack_one(little: bool, f: Str, b: ref Vec[u8]) -> Result[i64, Exc] {
+    let v = unpack_ints(little, f, 1, b)?;
+    Ok(v[0])
+}
+
+// struct.unpack for "f" (a 32-bit float widened) or "d".
+fn unpack_floats(little: bool, f: Str, count: i64, b: ref Vec[u8]) -> Result[Vec[f64], Exc] {
+    let size = fmt_size(f);
+    if b.len() != size * count {
+        return Err(struct_error(f"unpack requires a buffer of {size * count} bytes"));
+    }
+    let mut out: Vec[f64] = Vec.new();
+    let mut i = 0;
+    while i < count {
+        let mut bits: u64 = 0;
+        let mut k = 0;
+        while k < size {
+            let c = if little { b[i * size + size - 1 - k] } else { b[i * size + k] };
+            bits = bits * 256 + c as u64;
+            k += 1;
+        }
+        if size == 4 {
+            out.push((bits as u32).bits_as_f32() as f64);
+        } else {
+            out.push(bits.bits_as_f64());
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn put_uint(out: mut ref Vec[u8], v: i64, size: i64) {
+    let mut k = size - 1;
+    while k >= 0 {
+        out.push(((v >> (k * 8)) & 255) as u8);
+        k -= 1;
+    }
+}
+
+fn be16(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_uint(mut out, v, 2);
+    out
+}
+
+fn be32(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    put_uint(mut out, v, 4);
+    out
+}
+
+fn le32(v: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        out.push(((v >> (k * 8)) & 255) as u8);
+        k += 1;
+    }
+    out
+}
+
+// struct.pack(">" + f, v) for an integer format, appended to out.
+fn pack_int(out: mut ref Vec[u8], f: Str, v: ref Pv) -> Result[(), Exc] {
+    let n = match v {
+        Pv.Int(n) => *n,
+        _ => return Err(struct_error("required argument is not an integer".to_string())),
+    };
+    let size = fmt_size(f);
+    let signed = f == "b" or f == "h" or f == "l";
+    let (lo, hi) = if signed {
+        (-(1 << (size * 8 - 1)), (1 << (size * 8 - 1)) - 1)
+    } else {
+        (0, (1 << (size * 8)) - 1)
+    };
+    if n < lo or n > hi {
+        return Err(struct_error(f"'{f}' format requires {lo} <= number <= {hi}"));
+    }
+    put_uint(mut out, n, size);
+    Ok(())
+}
+
+// struct.pack(">f") or ">d" of an int or a float.
+fn pack_float(out: mut ref Vec[u8], double: bool, v: ref Pv) -> Result[(), Exc] {
+    let x = match v {
+        Pv.Float(x) => *x,
+        Pv.Int(n) => *n as f64,
+        _ => return Err(struct_error("required argument is not a float".to_string())),
+    };
+    if double {
+        let bits = x.to_bits();
+        let mut k = 7;
+        while k >= 0 {
+            out.push(((bits >> ((k * 8) as u64)) & 255) as u8);
+            k -= 1;
+        }
+    } else {
+        let f = x as f32;
+        let back = f as f64;
+        if (back > 3.5e38 or back < -3.5e38) and x <= 1.7e308 and x >= -1.7e308 {
+            return Err(exc("OverflowError", "float too large to pack with f format".to_string()));
+        }
+        let bits = x.to_bits32();
+        let mut k = 3;
+        while k >= 0 {
+            out.push(((bits >> ((k * 8) as u32)) & 255) as u8);
+            k -= 1;
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------- repr
+
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b.iter() {
+        if *c == 39 {
+            has_single = true;
+        } else if *c == 34 {
+            has_double = true;
+        }
+    }
+    let quote: u8 = if has_single and not has_double { 34 } else { 39 };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(98);
+    out.push(quote);
+    for c in b.iter() {
+        let x = *c;
+        if x == quote or x == 92 {
+            out.push(92);
+            out.push(x);
+        } else if x == 9 {
+            append(mut out, asc("\\t"));
+        } else if x == 10 {
+            append(mut out, asc("\\n"));
+        } else if x == 13 {
+            append(mut out, asc("\\r"));
+        } else if x < 0x20 or x >= 0x7F {
+            append(mut out, asc("\\x"));
+            append(mut out, asc(hex_n(x as i64, 2)));
+        } else {
+            out.push(x);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap()
+}
+
+// Whether str.isprintable() holds for one code point, for the ones these
+// programs meet: the C0 and C1 controls, DEL, no-break space and the
+// soft hyphen are not.
+fn printable(cp: i64) -> bool {
+    not (cp < 0x20 or (cp >= 0x7F and cp <= 0xA0) or cp == 0xAD)
+}
+
+fn str_repr(s: ref String) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s.chars() {
+        if c == '\'' {
+            has_single = true;
+        } else if c == '"' {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let cp = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(cp) {
+            out.push_str("\\x");
+            out.push_str(hex_n(cp, 2));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn pv_repr(v: ref Pv) -> String {
+    match v {
+        Pv.Nil => "None".to_string(),
+        Pv.Int(n) => f"{n}",
+        Pv.Float(x) => f"{x}",
+        Pv.Bytes(b) => bytes_repr(b),
+        Pv.Str(s) => str_repr(s),
+        Pv.Tup(t) => {
+            let mut s = "(".to_string();
+            let mut i = 0;
+            while i < t.len() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(pv_repr(t[i]));
+                i += 1;
+            }
+            if t.len() == 1 {
+                s.push_str(",");
+            }
+            s.push_str(")");
+            s
+        }
+    }
+}
+
+// ------------------------------------------------------------ exif dicts
+
+// A key of an IFD dict: a tag number, or with key_is_name its name.
+#[derive(Clone)]
+enum Key {
+    Num(i64),
+    Name(String),
+}
+
+fn key_eq(a: ref Key, b: ref Key) -> bool {
+    match (a, b) {
+        (Key.Num(x), Key.Num(y)) => *x == *y,
+        (Key.Name(x), Key.Name(y)) => *x == *y,
+        _ => false,
+    }
+}
+
+fn key_repr(k: ref Key) -> String {
+    match k {
+        Key.Num(n) => f"{n}",
+        Key.Name(s) => str_repr(s),
+    }
+}
+
+// str(key), as dump's error message shows it.
+fn key_str(k: ref Key) -> String {
+    match k {
+        Key.Num(n) => f"{n}",
+        Key.Name(s) => s.clone(),
+    }
+}
+
+#[derive(Clone)]
+struct Entry {
+    key: Key,
+    val: Pv,
+}
+
+// One key of an exif dict: an IFD's dict, or "thumbnail" and its value.
+#[derive(Clone)]
+struct Slot {
+    name: String,
+    entries: Vec[Entry],
+    thumb: Pv,
+}
+
+#[derive(Clone)]
+struct XDict {
+    slots: Vec[Slot],
+}
+
+impl XDict {
+    fn find(ref self, name: Str) -> i64 {
+        let mut i = 0;
+        while i < self.slots.len() {
+            if self.slots[i].name == name {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    fn has(ref self, name: Str) -> bool {
+        self.find(name) >= 0
+    }
+
+    // d[name] for an IFD, or a KeyError.
+    fn ifd(ref self, name: Str) -> Result[Vec[Entry], Exc] {
+        let i = self.find(name);
+        if i < 0 {
+            return Err(key_error_str(name));
+        }
+        Ok(self.slots[i].entries.clone())
+    }
+
+    fn put_ifd(mut ref self, name: Str, entries: own Vec[Entry]) {
+        let i = self.find(name);
+        if i < 0 {
+            self.slots.push(Slot { name: name.to_string(), entries: entries, thumb: Pv.Nil });
+        } else {
+            self.slots[i].entries = entries;
+        }
+    }
+
+    fn thumbnail(ref self) -> Option[Pv] {
+        let i = self.find("thumbnail");
+        if i < 0 { None } else { Some(self.slots[i].thumb.clone()) }
+    }
+
+    fn put_thumbnail(mut ref self, v: own Pv) {
+        let i = self.find("thumbnail");
+        if i < 0 {
+            self.slots.push(Slot { name: "thumbnail".to_string(), entries: Vec.new(), thumb: v });
+        } else {
+            self.slots[i].thumb = v;
+        }
+    }
+}
+
+fn key_error_str(name: Str) -> Exc {
+    exc("KeyError", str_repr(name.to_string()))
+}
+
+fn new_dict() -> XDict {
+    let mut d = XDict { slots: Vec.new() };
+    for name in vec!["0th", "Exif", "GPS", "Interop", "1st"] {
+        d.put_ifd(name, Vec.new());
+    }
+    d.put_thumbnail(Pv.Nil);
+    d
+}
+
+fn entry_find(entries: ref Vec[Entry], key: ref Key) -> i64 {
+    let mut i = 0;
+    while i < entries.len() {
+        if key_eq(entries[i].key, key) {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn has_tag(entries: ref Vec[Entry], tag: i64) -> bool {
+    entry_find(entries, Key.Num(tag)) >= 0
+}
+
+fn get_tag(entries: ref Vec[Entry], tag: i64) -> Option[Pv] {
+    let i = entry_find(entries, Key.Num(tag));
+    if i < 0 { None } else { Some(entries[i].val.clone()) }
+}
+
+// d[key] = v: a new key goes at the end, an old one keeps its place.
+fn set_key(entries: mut ref Vec[Entry], key: own Key, v: own Pv) {
+    let i = entry_find(entries, key);
+    if i < 0 {
+        entries.push(Entry { key: key, val: v });
+    } else {
+        entries[i].val = v;
+    }
+}
+
+fn set_tag(entries: mut ref Vec[Entry], tag: i64, v: own Pv) {
+    set_key(mut entries, Key.Num(tag), v);
+}
+
+fn del_tag(entries: mut ref Vec[Entry], tag: i64) -> bool {
+    let i = entry_find(entries, Key.Num(tag));
+    if i < 0 {
+        return false;
+    }
+    entries.remove(i);
+    true
+}
+
+fn int_of(v: ref Pv) -> i64 {
+    match v {
+        Pv.Int(n) => *n,
+        _ => 0,
+    }
+}
+// ------------------------------------------------------------- JPEG segments
+
+fn invalid_image(msg: Str) -> Exc {
+    exc("InvalidImageDataError", msg.to_string())
+}
+
+fn soi() -> Vec[u8] {
+    bv(vec![0xFF, 0xD8])
+}
+
+// _common.split_into_segments: the segments up to SOS, then SOS and the
+// rest of the file as one piece.
+fn split_into_segments(data: ref Vec[u8]) -> Result[Vec[Vec[u8]], Exc] {
+    if sl(data, 0, 2) != soi() {
+        return Err(invalid_image("Given data isn't JPEG."));
+    }
+    let sos = bv(vec![0xFF, 0xDA]);
+    let mut head = 2;
+    let mut segments: Vec[Vec[u8]] = Vec.new();
+    segments.push(soi());
+    loop {
+        if sl(data, head, head + 2) == sos {
+            segments.push(from(data, head));
+            break;
+        } else {
+            let length = unpack_one(false, "H", sl(data, head + 2, head + 4))?;
+            let end_point = head + length + 2;
+            segments.push(sl(data, head, end_point));
+            head = end_point;
+        }
+        if head >= data.len() {
+            return Err(invalid_image("Wrong JPEG data."));
+        }
+    }
+    Ok(segments)
+}
+
+fn is_exif_app1(seg: ref Vec[u8]) -> bool {
+    let mut want = asc("Exif");
+    want.push(0);
+    want.push(0);
+    sl(seg, 0, 2) == bv(vec![0xFF, 0xE1]) and sl(seg, 4, 10) == want
+}
+
+fn get_exif_seg(segments: ref Vec[Vec[u8]]) -> Option[Vec[u8]] {
+    for seg in segments.iter() {
+        if is_exif_app1(seg) {
+            return Some(seg.clone());
+        }
+    }
+    None
+}
+
+// _common.merge_segments. exif is the new APP1 segment; an empty one
+// leaves the Exif out (Some(empty) is b"", None is None).
+fn merge_segments(segs: own Vec[Vec[u8]], exif: ref Option[Vec[u8]]) -> Vec[u8] {
+    let mut segments = segs;
+    let app0 = bv(vec![0xFF, 0xE0]);
+    let truthy = match exif {
+        Some(e) => e.len() > 0,
+        None => false,
+    };
+    let is_none = match exif {
+        Some(_) => false,
+        None => true,
+    };
+    let e = match exif {
+        Some(e) => e.clone(),
+        None => Vec.new(),
+    };
+    if sl(segments[1], 0, 2) == app0 and segments.len() > 2 and is_exif_app1(segments[2]) {
+        if truthy {
+            segments[2] = e;
+            segments.remove(1);
+        } else if is_none {
+            segments.remove(2);
+        } else {
+            segments.remove(1);
+        }
+    } else if sl(segments[1], 0, 2) == app0 {
+        if truthy {
+            segments[1] = e;
+        }
+    } else if is_exif_app1(segments[1]) {
+        if truthy {
+            segments[1] = e;
+        } else if is_none {
+            segments.remove(1);
+        }
+    } else if truthy {
+        segments.insert(1, e);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for s in segments.iter() {
+        append(mut out, s);
+    }
+    out
+}
+
+// A file opened for reading: f.read(n) gives at most n bytes, and all
+// that is left when n is negative.
+struct FileReader {
+    data: Vec[u8],
+    pos: i64,
+}
+
+impl FileReader {
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let end = if n < 0 { self.data.len() } else { self.pos + n };
+        let out = sl(self.data, self.pos, end);
+        self.pos += out.len();
+        out
+    }
+}
+
+fn open_file(path: ref String) -> Result[Vec[u8], Exc] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => Ok(b),
+        Err(_) => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")),
+    }
+}
+
+// _common.read_exif_from_file: the segments are read one by one until an
+// APP1 holding Exif.
+fn read_exif_from_file(path: ref String) -> Result[Option[Vec[u8]], Exc] {
+    let mut f = FileReader { data: open_file(path)?, pos: 0 };
+    let data = f.read(6);
+    if sl(data, 0, 2) != soi() {
+        return Err(invalid_image("Given data isn't JPEG."));
+    }
+    let mut head = sl(data, 2, 6);
+    let app1 = bv(vec![0xFF, 0xE1]);
+    let mut exif: Option[Vec[u8]] = None;
+    while head.len() == 4 {
+        let length = unpack_one(false, "H", sl(head, 2, 4))?;
+        if sl(head, 0, 2) == app1 {
+            let segment_data = f.read(length - 2);
+            if sl(segment_data, 0, 4) != asc("Exif") {
+                head = f.read(4);
+                continue;
+            }
+            exif = Some(cat(head, segment_data));
+            break;
+        } else if head[0] == 0xFF {
+            let _ = f.read(length - 2);
+            head = f.read(4);
+        } else {
+            break;
+        }
+    }
+    Ok(exif)
+}
+
+// ------------------------------------------------------------------ WebP
+
+#[derive(Clone)]
+struct Chunk {
+    fourcc: Vec[u8],
+    length_bytes: Vec[u8],
+    data: Vec[u8],
+}
+
+fn is_webp(data: ref Vec[u8]) -> bool {
+    sl(data, 0, 4) == asc("RIFF") and sl(data, 8, 12) == asc("WEBP")
+}
+
+fn webp_split(data: ref Vec[u8]) -> Result[Vec[Chunk], Exc] {
+    if not is_webp(data) {
+        return Err(value_error("Not WebP"));
+    }
+    let webp_length = unpack_one(true, "L", sl(data, 4, 8))?;
+    let file_size = 8 + webp_length;
+    let mut pointer = 12;
+    let mut chunks: Vec[Chunk] = Vec.new();
+    while pointer + 4 + 4 < file_size {
+        let fourcc = sl(data, pointer, pointer + 4);
+        pointer += 4;
+        let chunk_length_bytes = sl(data, pointer, pointer + 4);
+        let chunk_length = unpack_one(true, "L", chunk_length_bytes)?;
+        pointer += 4;
+        let chunk_data = sl(data, pointer, pointer + chunk_length);
+        chunks.push(Chunk { fourcc: fourcc, length_bytes: chunk_length_bytes, data: chunk_data });
+        let padding = if chunk_length % 2 == 1 { 1 } else { 0 };
+        pointer += chunk_length + padding;
+    }
+    Ok(chunks)
+}
+
+fn merge_chunks(chunks: ref Vec[Chunk]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in chunks.iter() {
+        append(mut out, c.fourcc);
+        append(mut out, c.length_bytes);
+        append(mut out, c.data);
+        if c.data.len() % 2 == 1 {
+            out.push(0);
+        }
+    }
+    out
+}
+
+fn three_le(b: ref Vec[u8]) -> Result[i64, Exc] {
+    let mut v = b.clone();
+    v.push(0);
+    unpack_one(true, "L", v)
+}
+
+fn byte_at(b: ref Vec[u8], i: i64) -> Result[i64, Exc] {
+    let one = sl(b, i, i + 1);
+    if one.len() != 1 {
+        return Err(type_error("ord() expected a character, but string of length 0 found".to_string()));
+    }
+    Ok(one[0] as i64)
+}
+
+fn size_from_vp8x(c: ref Chunk) -> Result[(i64, i64), Exc] {
+    let w = three_le(sl(c.data, -6, -3))? + 1;
+    let h = three_le(from(c.data, -3))? + 1;
+    Ok((w, h))
+}
+
+fn size_from_vp8(c: ref Chunk) -> Result[Option[(i64, i64)], Exc] {
+    let begin = find_bytes(c.data, bv(vec![0x9D, 0x01, 0x2A]), 0);
+    if begin < 0 {
+        return Ok(None);
+    }
+    let start = begin + 3;
+    let w = unpack_one(true, "H", sl(c.data, start, start + 2))?;
+    let h = unpack_one(true, "H", sl(c.data, start + 2, start + 4))?;
+    Ok(Some((w, h)))
+}
+
+fn vp8l_alpha(data: ref Vec[u8]) -> Result[bool, Exc] {
+    Ok(((byte_at(data, 4)? >> 4) & 1) == 1)
+}
+
+fn size_from_vp8l(c: ref Chunk) -> Result[(i64, i64), Exc] {
+    let b1 = byte_at(c.data, 1)?;
+    let b2 = byte_at(c.data, 2)?;
+    let b3 = byte_at(c.data, 3)?;
+    let b4 = byte_at(c.data, 4)?;
+    let w = ((b2 & 0x3F) << 8 | b1) + 1;
+    let h = ((b4 & 0x0F) << 10 | b3 << 2 | (b2 & 0xC0) >> 6) + 1;
+    Ok((w, h))
+}
+
+fn size_from_anmf(c: ref Chunk) -> Result[(i64, i64), Exc] {
+    let w = three_le(sl(c.data, 6, 9))? + 1;
+    let h = three_le(sl(c.data, 9, 12))? + 1;
+    Ok((w, h))
+}
+
+// _webp.set_vp8x: a VP8X chunk first, with the flags of the chunks there
+// and the canvas size of the last image chunk.
+fn set_vp8x(chunks: own Vec[Chunk]) -> Result[Vec[Chunk], Exc] {
+    let mut chunks = chunks;
+    let mut size: Option[(i64, i64)] = None;
+    let mut size_none = false;
+    let mut flags: Vec[i64] = vec![0, 0, 0, 0, 0, 0, 0, 0];
+    for c in chunks.iter() {
+        if c.fourcc == asc("VP8X") {
+            size = Some(size_from_vp8x(c)?);
+        } else if c.fourcc == asc("VP8 ") {
+            match size_from_vp8(c)? {
+                Some(s) => size = Some(s),
+                None => size_none = true,
+            }
+        } else if c.fourcc == asc("VP8L") {
+            if vp8l_alpha(c.data)? {
+                flags[3] = 1;
+            }
+            size = Some(size_from_vp8l(c)?);
+        } else if c.fourcc == asc("ANMF") {
+            size = Some(size_from_anmf(c)?);
+        } else if c.fourcc == asc("ICCP") {
+            flags[2] = 1;
+        } else if c.fourcc == asc("ALPH") {
+            flags[3] = 1;
+        } else if c.fourcc == asc("EXIF") {
+            flags[4] = 1;
+        } else if c.fourcc == asc("XMP ") {
+            flags[5] = 1;
+        } else if c.fourcc == asc("ANIM") {
+            flags[6] = 1;
+        }
+    }
+    if size_none {
+        return Err(type_error("cannot unpack non-iterable NoneType object".to_string()));
+    }
+    let (w, h) = match size {
+        Some(s) => s,
+        None => return Err(type_error("unsupported operand type(s) for -: 'NoneType' and 'int'".to_string())),
+    };
+    if chunks.len() > 0 and chunks[0].fourcc == asc("VP8X") {
+        chunks.remove(0);
+    }
+    let mut flag_byte = 0;
+    for f in flags.iter() {
+        flag_byte = flag_byte * 2 + *f;
+    }
+    let mut data: Vec[u8] = Vec.new();
+    data.push(flag_byte as u8);
+    append(mut data, zeros(3));
+    append(mut data, sl(le32(w - 1), 0, 3));
+    append(mut data, sl(le32(h - 1), 0, 3));
+    chunks.insert(0, Chunk { fourcc: asc("VP8X"), length_bytes: le32(10), data: data });
+    Ok(chunks)
+}
+
+fn webp_file_header(chunks: ref Vec[Chunk]) -> Result[Vec[u8], Exc] {
+    let mut length = 4;
+    for c in chunks.iter() {
+        let mut n = unpack_one(true, "L", c.length_bytes)?;
+        if n % 2 == 1 {
+            n += 1;
+        }
+        length += 8 + n;
+    }
+    let mut out = asc("RIFF");
+    append(mut out, le32(length));
+    append(mut out, asc("WEBP"));
+    Ok(out)
+}
+
+// _webp.get_exif: the EXIF chunk's data with its padding byte, or None.
+fn webp_get_exif(data: ref Vec[u8]) -> Result[Option[Vec[u8]], Exc] {
+    if not is_webp(data) {
+        return Err(value_error("Not WebP"));
+    }
+    if sl(data, 12, 16) != asc("VP8X") {
+        return Err(value_error("doesnot have exif"));
+    }
+    let webp_length = unpack_one(true, "L", sl(data, 4, 8))?;
+    let file_size = 8 + webp_length;
+    let mut pointer = 12;
+    while pointer < file_size {
+        let fourcc = sl(data, pointer, pointer + 4);
+        pointer += 4;
+        let mut chunk_length = unpack_one(true, "L", sl(data, pointer, pointer + 4))?;
+        if chunk_length % 2 == 1 {
+            chunk_length += 1;
+        }
+        pointer += 4;
+        if fourcc == asc("EXIF") {
+            return Ok(Some(sl(data, pointer, pointer + chunk_length)));
+        }
+        pointer += chunk_length;
+    }
+    Ok(None)
+}
+
+// Removes the EXIF chunks the way `for index, chunk in enumerate(chunks):
+// chunks.pop(index)` does, skipping the chunk after each one removed.
+fn pop_exif_chunks(chunks: mut ref Vec[Chunk]) {
+    let mut i = 0;
+    while i < chunks.len() {
+        if chunks[i].fourcc == asc("EXIF") {
+            chunks.remove(i);
+        }
+        i += 1;
+    }
+}
+
+fn webp_insert(webp: ref Vec[u8], exif: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut chunks = webp_split(webp)?;
+    let exif_chunk = Chunk { fourcc: asc("EXIF"), length_bytes: le32(exif.len()), data: exif.clone() };
+    pop_exif_chunks(mut chunks);
+    let mut xmp_index = -1;
+    let mut animation_index = -1;
+    let mut i = 0;
+    while i < chunks.len() {
+        if chunks[i].fourcc == asc("XMP ") {
+            xmp_index = i;
+        } else if chunks[i].fourcc == asc("ANIM") {
+            animation_index = i;
+        }
+        i += 1;
+    }
+    if xmp_index >= 0 {
+        chunks.insert(xmp_index, exif_chunk);
+    } else if animation_index >= 0 {
+        chunks.insert(animation_index, exif_chunk);
+    } else {
+        chunks.push(exif_chunk);
+    }
+    let chunks = set_vp8x(chunks)?;
+    let mut out = webp_file_header(chunks)?;
+    append(mut out, merge_chunks(chunks));
+    Ok(out)
+}
+
+fn webp_remove(webp: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut chunks = webp_split(webp)?;
+    pop_exif_chunks(mut chunks);
+    let chunks = set_vp8x(chunks)?;
+    let mut out = webp_file_header(chunks)?;
+    append(mut out, merge_chunks(chunks));
+    Ok(out)
+}
+
+// ------------------------------------------------------------------ load
+
+// _ExifReader: the TIFF block and its byte order.
+struct Reader {
+    tiftag: Vec[u8],
+    has: bool,
+    little: bool,
+}
+
+fn is_tiff(b: ref Vec[u8]) -> bool {
+    let h = sl(b, 0, 2);
+    h == asc("II") or h == asc("MM")
+}
+
+fn reader_of(t: own Option[Vec[u8]]) -> Reader {
+    match t {
+        Some(b) => Reader { tiftag: b, has: true, little: false },
+        None => Reader { tiftag: Vec.new(), has: false, little: false },
+    }
+}
+
+fn reader_from_bytes(data: ref Vec[u8]) -> Result[Reader, Exc] {
+    if sl(data, 0, 2) == soi() {
+        let segments = split_into_segments(data)?;
+        return Ok(reader_of(match get_exif_seg(segments) {
+            Some(app1) => Some(from(app1, 10)),
+            None => None,
+        }));
+    }
+    if is_tiff(data) {
+        return Ok(reader_of(Some(data.clone())));
+    }
+    if is_webp(data) {
+        return Ok(reader_of(webp_get_exif(data)?));
+    }
+    if sl(data, 0, 4) == asc("Exif") {
+        return Ok(reader_of(Some(from(data, 6))));
+    }
+    Err(exc("TypeError", "expected str, bytes or os.PathLike object".to_string()))
+}
+
+fn reader_from_file(path: ref String) -> Result[Reader, Exc] {
+    let all = open_file(path)?;
+    let magic = sl(all, 0, 2);
+    if magic == soi() {
+        return Ok(reader_of(match read_exif_from_file(path)? {
+            Some(app1) => Some(from(app1, 10)),
+            None => None,
+        }));
+    }
+    if is_tiff(magic) {
+        return Ok(reader_of(Some(all)));
+    }
+    if is_webp(sl(all, 0, 12)) {
+        return Ok(reader_of(webp_get_exif(all)?));
+    }
+    Err(invalid_image("Given file is neither JPEG nor TIFF."))
+}
+
+impl Reader {
+    fn u(ref self, f: Str, b: ref Vec[u8]) -> Result[i64, Exc] {
+        unpack_one(self.little, f, b)
+    }
+
+    fn at(ref self, start: i64, end: i64) -> Vec[u8] {
+        sl(self.tiftag, start, end)
+    }
+
+    // get_ifd_dict: the IFD's known tags in the order they are stored,
+    // and for the 0th IFD the four bytes after them (first_ifd_pointer).
+    fn get_ifd_dict(ref self, pointer: i64, ifd_name: Str) -> Result[(Vec[Entry], Vec[u8]), Exc] {
+        let mut entries: Vec[Entry] = Vec.new();
+        let tag_count = self.u("H", self.at(pointer, pointer + 2))?;
+        let offset = pointer + 2;
+        let mut x = 0;
+        while x < tag_count {
+            let p = offset + 12 * x;
+            let tag = self.u("H", self.at(p, p + 2))?;
+            let value_type = self.u("H", self.at(p + 2, p + 4))?;
+            let value_num = self.u("L", self.at(p + 4, p + 8))?;
+            let value = self.at(p + 8, p + 12);
+            if tag_info(ifd_name, tag).is_some() {
+                let v = self.convert_value(value_type, value_num, value, tag)?;
+                set_tag(mut entries, tag, v);
+            }
+            x += 1;
+        }
+        let mut first = Vec.new();
+        if ifd_name == "0th" {
+            let p = offset + 12 * tag_count;
+            first = self.at(p, p + 4);
+        }
+        Ok((entries, first))
+    }
+
+    fn ints(ref self, f: Str, length: i64, b: ref Vec[u8]) -> Result[Pv, Exc] {
+        let vs = unpack_ints(self.little, f, length, b)?;
+        let mut out: Vec[Pv] = Vec.new();
+        for v in vs.iter() {
+            out.push(Pv.Int(*v));
+        }
+        Ok(Pv.Tup(out))
+    }
+
+    fn floats(ref self, f: Str, length: i64, b: ref Vec[u8]) -> Result[Pv, Exc] {
+        let vs = unpack_floats(self.little, f, length, b)?;
+        let mut out: Vec[Pv] = Vec.new();
+        for v in vs.iter() {
+            out.push(Pv.Float(*v));
+        }
+        Ok(Pv.Tup(out))
+    }
+
+    fn rationals(ref self, f: Str, length: i64, pointer: i64) -> Result[Pv, Exc] {
+        if length > 1 {
+            let mut out: Vec[Pv] = Vec.new();
+            let mut x = 0;
+            while x < length {
+                let n = self.u(f, self.at(pointer + x * 8, pointer + 4 + x * 8))?;
+                let d = self.u(f, self.at(pointer + 4 + x * 8, pointer + 8 + x * 8))?;
+                out.push(Pv.Tup(vec![Pv.Int(n), Pv.Int(d)]));
+                x += 1;
+            }
+            Ok(Pv.Tup(out))
+        } else {
+            let n = self.u(f, self.at(pointer, pointer + 4))?;
+            let d = self.u(f, self.at(pointer + 4, pointer + 8))?;
+            Ok(Pv.Tup(vec![Pv.Int(n), Pv.Int(d)]))
+        }
+    }
+
+    fn convert_value(ref self, t: i64, length: i64, value: ref Vec[u8], tag: i64) -> Result[Pv, Exc] {
+        let data = if t == 1 or t == 6 {
+            let f = if t == 1 { "B" } else { "b" };
+            if length > 4 {
+                let p = self.u("L", value)?;
+                self.ints(f, length, self.at(p, p + length))?
+            } else {
+                self.ints(f, length, sl(value, 0, length))?
+            }
+        } else if t == 2 {
+            if length > 4 {
+                let p = self.u("L", value)?;
+                Pv.Bytes(self.at(p, p + length - 1))
+            } else {
+                Pv.Bytes(sl(value, 0, length - 1))
+            }
+        } else if t == 3 or t == 8 {
+            let f = if t == 3 { "H" } else { "h" };
+            if length > 2 {
+                let p = self.u("L", value)?;
+                self.ints(f, length, self.at(p, p + length * 2))?
+            } else {
+                self.ints(f, length, sl(value, 0, length * 2))?
+            }
+        } else if t == 4 or t == 9 {
+            let f = if t == 4 { "L" } else { "l" };
+            if length > 1 {
+                let p = self.u("L", value)?;
+                self.ints(f, length, self.at(p, p + length * 4))?
+            } else {
+                self.ints(f, length, value)?
+            }
+        } else if t == 5 or t == 10 {
+            let p = self.u("L", value)?;
+            self.rationals(if t == 5 { "L" } else { "l" }, length, p)?
+        } else if t == 7 {
+            if length > 4 {
+                let p = self.u("L", value)?;
+                Pv.Bytes(self.at(p, p + length))
+            } else {
+                Pv.Bytes(sl(value, 0, length))
+            }
+        } else if t == 11 {
+            if length > 1 {
+                let p = self.u("L", value)?;
+                self.floats("f", length, self.at(p, p + length * 4))?
+            } else {
+                self.floats("f", length, value)?
+            }
+        } else if t == 12 {
+            let p = self.u("L", value)?;
+            self.floats("d", length, self.at(p, p + length * 8))?
+        } else {
+            return Err(exc("ValueError", f"Exif might be wrong. Got incorrect value type to decode.\ntag: {tag}\ntype: {t}"));
+        };
+        // A tuple of one value is the value; a rational's own pair stays.
+        if (t == 5 or t == 10) and length <= 1 {
+            return Ok(data);
+        }
+        match data {
+            Pv.Tup(items) => {
+                if items.len() == 1 { Ok(items[0].clone()) } else { Ok(Pv.Tup(items)) }
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn sub_ifd(ref self, pointer: ref Pv, name: Str) -> Result[Vec[Entry], Exc] {
+        match pointer {
+            Pv.Int(p) => {
+                let (entries, _) = self.get_ifd_dict(*p, name)?;
+                Ok(entries)
+            }
+            _ => Err(type_error(f"can only concatenate {type_name(pointer)} (not \"int\") to {type_name(pointer)}")),
+        }
+    }
+}
+
+// piexif.load.
+fn load_reader(r: own Reader) -> Result[XDict, Exc] {
+    let mut d = new_dict();
+    if not r.has {
+        return Ok(d);
+    }
+    let mut r = r;
+    r.little = sl(r.tiftag, 0, 2) == asc("II");
+    let pointer = r.u("L", r.at(4, 8))?;
+    let (zeroth, first_ifd_pointer) = r.get_ifd_dict(pointer, "0th")?;
+    d.put_ifd("0th", zeroth.clone());
+    if let Some(p) = get_tag(zeroth, 34665) {
+        d.put_ifd("Exif", r.sub_ifd(p, "Exif")?);
+    }
+    if let Some(p) = get_tag(zeroth, 34853) {
+        d.put_ifd("GPS", r.sub_ifd(p, "GPS")?);
+    }
+    let exif = d.ifd("Exif")?;
+    if let Some(p) = get_tag(exif, 40965) {
+        d.put_ifd("Interop", r.sub_ifd(p, "Interop")?);
+    }
+    if first_ifd_pointer != zeros(4) {
+        let p = r.u("L", first_ifd_pointer)?;
+        let (first, _) = r.get_ifd_dict(p, "1st")?;
+        d.put_ifd("1st", first.clone());
+        if let (Some(a), Some(n)) = (get_tag(first, 513), get_tag(first, 514)) {
+            let start = int_of(a);
+            d.put_thumbnail(Pv.Bytes(r.at(start, start + int_of(n))));
+        }
+    }
+    Ok(d)
+}
+
+fn load_file(path: ref String) -> Result[XDict, Exc] {
+    load_reader(reader_from_file(path)?)
+}
+
+fn load_bytes(data: ref Vec[u8]) -> Result[XDict, Exc] {
+    load_reader(reader_from_bytes(data)?)
+}
+
+// key_is_name=True: each IFD's keys become the tags' names.
+fn key_names(d: ref XDict) -> XDict {
+    let mut out = XDict { slots: Vec.new() };
+    for name in vec!["0th", "Exif", "1st", "GPS", "Interop"] {
+        let mut entries: Vec[Entry] = Vec.new();
+        let i = d.find(name);
+        for e in d.slots[i].entries.iter() {
+            let n = match e.key {
+                Key.Num(t) => match tag_info(name, t) {
+                    Some((tn, _)) => tn.to_string(),
+                    None => f"{t}",
+                },
+                Key.Name(s) => s.clone(),
+            };
+            set_key(mut entries, Key.Name(n), e.val.clone());
+        }
+        out.put_ifd(name, entries);
+    }
+    out.put_thumbnail(d.thumbnail().unwrap_or(Pv.Nil));
+    out
+}
+// ------------------------------------------------------------------ dump
+
+// _dump._get_thumbnail: the JPEG without its APPn segments.
+fn get_thumbnail(jpeg: ref Vec[u8]) -> Result[Vec[u8], Exc] {
+    let mut segments = split_into_segments(jpeg)?;
+    let lo = bv(vec![0xFF, 0xE0]);
+    let hi = bv(vec![0xFF, 0xEF]);
+    loop {
+        if segments.len() < 2 {
+            return Err(exc("IndexError", "list index out of range".to_string()));
+        }
+        let m = sl(segments[1], 0, 2);
+        if bytes_cmp(lo, m) <= 0 and bytes_cmp(m, hi) <= 0 {
+            segments.remove(1);
+        } else {
+            break;
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for s in segments.iter() {
+        append(mut out, s);
+    }
+    Ok(out)
+}
+
+fn unbound(name: Str) -> Exc {
+    exc("UnboundLocalError", f"cannot access local variable '{name}' where it is not associated with a value")
+}
+
+fn invalid_type() -> Exc {
+    value_error("Got invalid type to convert.")
+}
+
+// num, den = v: the pair of a rational, or the error unpacking gives.
+fn pair(v: ref Pv) -> Result[(Pv, Pv), Exc] {
+    match v {
+        Pv.Int(_) => Err(type_error("cannot unpack non-iterable int object".to_string())),
+        Pv.Float(_) => Err(type_error("cannot unpack non-iterable float object".to_string())),
+        Pv.Nil => Err(type_error("cannot unpack non-iterable NoneType object".to_string())),
+        _ => {
+            let items = py_items(v)?;
+            if items.len() > 2 {
+                return Err(value_error("too many values to unpack (expected 2)"));
+            }
+            if items.len() < 2 {
+                return Err(exc("ValueError", f"not enough values to unpack (expected 2, got {items.len()})"));
+            }
+            Ok((items[0].clone(), items[1].clone()))
+        }
+    }
+}
+
+fn pack_all(f: Str, items: ref Vec[Pv]) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    for v in items.iter() {
+        if f == "f" or f == "d" {
+            pack_float(mut out, f == "d", v)?;
+        } else {
+            pack_int(mut out, f, v)?;
+        }
+    }
+    Ok(out)
+}
+
+// raw_value[0], with the error indexing gives.
+fn first_item(v: ref Pv) -> Result[Pv, Exc] {
+    let items = py_items(v)?;
+    if items.len() == 0 {
+        let what = match v {
+            Pv.Str(_) => "string index out of range",
+            Pv.Tup(_) => "tuple index out of range",
+            _ => "index out of range",
+        };
+        return Err(exc("IndexError", what.to_string()));
+    }
+    Ok(items[0].clone())
+}
+
+// _value_to_bytes: the count, the four bytes of the entry and the bytes
+// stored past the IFD.
+fn value_to_bytes(raw: ref Pv, value_type: i64, offset: i64) -> Result[(Vec[u8], Vec[u8], Vec[u8]), Exc] {
+    let mut four_bytes_over: Vec[u8] = Vec.new();
+    let mut value_str: Vec[u8] = Vec.new();
+    let mut length = 0;
+    // The plain numeric types: format, how many fit in the entry, and the
+    // size of one.
+    let simple = match value_type {
+        1 => Some(("B", 4)),
+        3 => Some(("H", 2)),
+        4 => Some(("L", 1)),
+        9 => Some(("l", 1)),
+        6 => Some(("b", 4)),
+        8 => Some(("h", 2)),
+        11 => Some(("f", 1)),
+        _ => None,
+    };
+    if let Some((f, fits)) = simple {
+        length = py_len(raw)?;
+        let items = py_items(raw)?;
+        if length <= fits {
+            value_str = pack_all(f, items)?;
+            append(mut value_str, zeros((fits - length) * fmt_size(f)));
+            if fits == 1 {
+                // Long, SLong and Float pack exactly one value; none packs
+                // to nothing.
+                value_str = pack_all(f, items)?;
+            }
+        } else {
+            value_str = be32(offset);
+            four_bytes_over = pack_all(f, items)?;
+        }
+    } else if value_type == 2 {
+        let new_value = match raw {
+            Pv.Str(s) => match latin1(s) {
+                Some(b) => b,
+                None => return Err(invalid_type()),
+            },
+            Pv.Bytes(b) => b.clone(),
+            _ => return Err(invalid_type()),
+        };
+        let mut new_value = new_value;
+        new_value.push(0);
+        length = new_value.len();
+        if length > 4 {
+            value_str = be32(offset);
+            four_bytes_over = new_value;
+        } else {
+            value_str = cat(new_value, zeros(4 - length));
+        }
+    } else if value_type == 5 or value_type == 10 {
+        let f = if value_type == 5 { "L" } else { "l" };
+        let head = first_item(raw)?;
+        let mut new_value: Vec[u8] = Vec.new();
+        match head {
+            Pv.Int(_) => {
+                length = 1;
+                let (num, den) = pair(raw)?;
+                pack_int(mut new_value, f, num)?;
+                pack_int(mut new_value, f, den)?;
+            }
+            Pv.Tup(_) => {
+                let items = py_items(raw)?;
+                length = items.len();
+                for v in items.iter() {
+                    let (num, den) = pair(v)?;
+                    pack_int(mut new_value, f, num)?;
+                    pack_int(mut new_value, f, den)?;
+                }
+            }
+            _ => return Err(unbound("new_value")),
+        }
+        value_str = be32(offset);
+        four_bytes_over = new_value;
+    } else if value_type == 7 {
+        length = py_len(raw)?;
+        let b = match raw {
+            Pv.Bytes(b) => b.clone(),
+            _ => return Err(invalid_type()),
+        };
+        if length > 4 {
+            value_str = be32(offset);
+            four_bytes_over = b;
+        } else {
+            value_str = cat(b, zeros(4 - length));
+        }
+    } else if value_type == 12 {
+        length = py_len(raw)?;
+        value_str = be32(offset);
+        four_bytes_over = pack_all("d", py_items(raw)?)?;
+    }
+    Ok((be32(length), value_str, four_bytes_over))
+}
+
+fn is_pointer_tag(ifd: Str, key: ref Key) -> bool {
+    let t = match key {
+        Key.Num(t) => *t,
+        Key.Name(_) => return false,
+    };
+    (ifd == "0th" and (t == 34665 or t == 34853)) or (ifd == "Exif" and t == 40965) or (ifd == "1st" and (t == 513 or t == 514))
+}
+
+fn sort_keys(entries: ref Vec[Entry]) -> Vec[Entry] {
+    let mut out = entries.clone();
+    let mut i = 1;
+    while i < out.len() {
+        let mut j = i;
+        while j > 0 and key_less(out[j].key, out[j - 1].key) {
+            let tmp = out[j].clone();
+            out[j] = out[j - 1].clone();
+            out[j - 1] = tmp;
+            j -= 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn key_less(a: ref Key, b: ref Key) -> bool {
+    match (a, b) {
+        (Key.Num(x), Key.Num(y)) => *x < *y,
+        (Key.Name(x), Key.Name(y)) => *x < *y,
+        (Key.Num(_), Key.Name(_)) => true,
+        _ => false,
+    }
+}
+
+// _dict_to_bytes: the IFD's count and entries, and the values stored
+// after it.
+fn dict_to_bytes(entries: ref Vec[Entry], ifd: Str, ifd_offset: i64) -> Result[(Vec[u8], Vec[u8]), Exc] {
+    let tag_count = entries.len();
+    let mut out = be16(tag_count);
+    let entries_length = if ifd == "0th" or ifd == "1st" { 2 + tag_count * 12 + 4 } else { 2 + tag_count * 12 };
+    let mut values: Vec[u8] = Vec.new();
+    for e in sort_keys(entries).iter() {
+        if is_pointer_tag(ifd, e.key) {
+            continue;
+        }
+        let tag = match e.key {
+            Key.Num(t) => t,
+            Key.Name(_) => return Err(exc("KeyError", key_repr(e.key))),
+        };
+        let value_type = match tag_info(ifd, tag) {
+            Some((_, t)) => t,
+            None => return Err(exc("KeyError", f"{tag}")),
+        };
+        let raw = match e.val {
+            Pv.Int(_) => Pv.Tup(vec![e.val.clone()]),
+            Pv.Float(_) => Pv.Tup(vec![e.val.clone()]),
+            _ => e.val.clone(),
+        };
+        let offset = 8 + entries_length + ifd_offset + values.len();
+        let (length_str, value_str, four_bytes_over) = match value_to_bytes(raw, value_type, offset) {
+            Ok(r) => r,
+            Err(x) => {
+                if x.kind == "ValueError" {
+                    return Err(exc("ValueError", f"\"dump\" got wrong type of exif value.\n{key_str(e.key)} in {ifd} IFD. Got as <class '{type_name(e.val)}'>."));
+                }
+                return Err(x);
+            }
+        };
+        append(mut out, be16(tag));
+        append(mut out, be16(value_type));
+        append(mut out, length_str);
+        append(mut out, value_str);
+        append(mut values, four_bytes_over);
+    }
+    Ok((out, values))
+}
+
+fn pointer_entry(tag: i64, at: i64) -> Vec[u8] {
+    let mut out = be16(tag);
+    append(mut out, be16(4));
+    append(mut out, be32(1));
+    append(mut out, be32(at));
+    out
+}
+
+fn nonempty(d: ref XDict, name: Str) -> bool {
+    let i = d.find(name);
+    i >= 0 and d.slots[i].entries.len() > 0
+}
+
+// piexif.dump.
+fn dump(original: ref XDict) -> Result[Vec[u8], Exc] {
+    let mut d = original.clone();
+    let mut header = asc("Exif");
+    append(mut header, bv(vec![0, 0, 0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8]));
+    let mut zeroth: Vec[Entry] = if d.has("0th") { d.ifd("0th")? } else { Vec.new() };
+    let mut exif_is = false;
+    let mut gps_is = false;
+    let mut interop_is = false;
+    let mut first_is = false;
+    let mut exif_ifd: Vec[Entry] = Vec.new();
+    let mut gps_ifd: Vec[Entry] = Vec.new();
+    let mut interop_ifd: Vec[Entry] = Vec.new();
+    let mut first_ifd: Vec[Entry] = Vec.new();
+
+    if nonempty(d, "Exif") or nonempty(d, "Interop") {
+        set_tag(mut zeroth, 34665, Pv.Int(1));
+        exif_is = true;
+        exif_ifd = d.ifd("Exif")?;
+        if nonempty(d, "Interop") {
+            set_tag(mut exif_ifd, 40965, Pv.Int(1));
+            interop_is = true;
+            interop_ifd = d.ifd("Interop")?;
+        } else {
+            del_tag(mut exif_ifd, 40965);
+        }
+    } else {
+        del_tag(mut zeroth, 34665);
+    }
+    if nonempty(d, "GPS") {
+        set_tag(mut zeroth, 34853, Pv.Int(1));
+        gps_is = true;
+        gps_ifd = d.ifd("GPS")?;
+    } else {
+        del_tag(mut zeroth, 34853);
+    }
+    let thumb = d.thumbnail();
+    let has_thumb = match thumb {
+        Some(Pv.Nil) => false,
+        Some(_) => true,
+        None => false,
+    };
+    if d.has("1st") and has_thumb {
+        first_is = true;
+        first_ifd = d.ifd("1st")?;
+        set_tag(mut first_ifd, 513, Pv.Int(1));
+        set_tag(mut first_ifd, 514, Pv.Int(1));
+        d.put_ifd("1st", first_ifd.clone());
+    }
+
+    let (z0, z1) = dict_to_bytes(zeroth, "0th", 0)?;
+    let zeroth_length = z0.len() + (if exif_is { 12 } else { 0 }) + (if gps_is { 12 } else { 0 }) + 4 + z1.len();
+
+    let mut exif_set: (Vec[u8], Vec[u8]) = (Vec.new(), Vec.new());
+    let mut exif_length = 0;
+    if exif_is {
+        exif_set = dict_to_bytes(exif_ifd, "Exif", zeroth_length)?;
+        exif_length = exif_set.0.len() + (if interop_is { 12 } else { 0 }) + exif_set.1.len();
+    }
+    let mut gps_bytes: Vec[u8] = Vec.new();
+    if gps_is {
+        let (g0, g1) = dict_to_bytes(gps_ifd, "GPS", zeroth_length + exif_length)?;
+        gps_bytes = cat(g0, g1);
+    }
+    let gps_length = gps_bytes.len();
+    let mut interop_bytes: Vec[u8] = Vec.new();
+    if interop_is {
+        let (i0, i1) = dict_to_bytes(interop_ifd, "Interop", zeroth_length + exif_length + gps_length)?;
+        interop_bytes = cat(i0, i1);
+    }
+    let interop_length = interop_bytes.len();
+    let mut first_set: (Vec[u8], Vec[u8]) = (Vec.new(), Vec.new());
+    let mut thumbnail: Vec[u8] = Vec.new();
+    if first_is {
+        first_set = dict_to_bytes(first_ifd, "1st", zeroth_length + exif_length + gps_length + interop_length)?;
+        let jpeg = match thumb {
+            Some(Pv.Bytes(b)) => b,
+            Some(_) => return Err(invalid_image("Given data isn't JPEG.")),
+            None => Vec.new(),
+        };
+        thumbnail = get_thumbnail(jpeg)?;
+        if thumbnail.len() > 64000 {
+            return Err(value_error("Given thumbnail is too large. max 64kB"));
+        }
+    }
+    let exif_pointer = if exif_is { pointer_entry(34665, 8 + zeroth_length) } else { Vec.new() };
+    let gps_pointer = if gps_is { pointer_entry(34853, 8 + zeroth_length + exif_length) } else { Vec.new() };
+    let interop_pointer = if interop_is { pointer_entry(40965, 8 + zeroth_length + exif_length + gps_length) } else { Vec.new() };
+    let mut first_bytes: Vec[u8] = Vec.new();
+    let mut first_ifd_pointer = zeros(4);
+    if first_is {
+        let pointer_value = 8 + zeroth_length + exif_length + gps_length + interop_length;
+        first_ifd_pointer = be32(pointer_value);
+        let thumbnail_pointer = pointer_value + first_set.0.len() + 24 + 4 + first_set.1.len();
+        first_bytes = first_set.0.clone();
+        append(mut first_bytes, bv(vec![0x02, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01]));
+        append(mut first_bytes, be32(thumbnail_pointer));
+        append(mut first_bytes, bv(vec![0x02, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01]));
+        append(mut first_bytes, be32(thumbnail.len()));
+        append(mut first_bytes, zeros(4));
+        append(mut first_bytes, first_set.1);
+        append(mut first_bytes, thumbnail);
+    }
+    let mut out = header;
+    append(mut out, z0);
+    append(mut out, exif_pointer);
+    append(mut out, gps_pointer);
+    append(mut out, first_ifd_pointer);
+    append(mut out, z1);
+    if exif_is {
+        append(mut out, exif_set.0);
+        append(mut out, interop_pointer);
+        append(mut out, exif_set.1);
+    }
+    append(mut out, gps_bytes);
+    append(mut out, interop_bytes);
+    append(mut out, first_bytes);
+    Ok(out)
+}
+
+// ------------------------------------------------- insert, remove, transplant
+
+fn exif_header() -> Vec[u8] {
+    let mut h = asc("Exif");
+    h.push(0);
+    h.push(0);
+    h
+}
+
+fn write_file(path: ref String, data: ref Vec[u8]) -> Result[(), Exc] {
+    match fs.write_bytes(path.clone(), data.clone()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(exc("OSError", f"{e}")),
+    }
+}
+
+// piexif.insert(exif, image_file, new_file).
+fn insert(exif: ref Vec[u8], image: ref String, new_file: ref String) -> Result[(), Exc] {
+    if sl(exif, 0, 6) != exif_header() {
+        return Err(value_error("Given data is not exif data"));
+    }
+    let image_data = open_file(image)?;
+    let new_data = if sl(image_data, 0, 2) == soi() {
+        if exif.len() + 2 > 65535 {
+            return Err(struct_error("'H' format requires 0 <= number <= 65535".to_string()));
+        }
+        let mut seg = bv(vec![0xFF, 0xE1]);
+        append(mut seg, be16(exif.len() + 2));
+        append(mut seg, exif);
+        let segments = split_into_segments(image_data)?;
+        merge_segments(segments, Some(seg))
+    } else if is_webp(image_data) {
+        webp_insert(image_data, from(exif, 6))?
+    } else {
+        return Err(invalid_image(""));
+    };
+    write_file(new_file, new_data)
+}
+
+// piexif.remove(src_file, new_file).
+fn remove(src: ref String, new_file: ref String) -> Result[(), Exc] {
+    let src_data = open_file(src)?;
+    let new_data = if sl(src_data, 0, 2) == soi() {
+        let segments = split_into_segments(src_data)?;
+        match get_exif_seg(segments) {
+            Some(e) => replace_bytes(src_data, e, Vec.new()),
+            None => src_data.clone(),
+        }
+    } else if is_webp(src_data) {
+        match webp_remove(src_data) {
+            Ok(b) => b,
+            Err(e) => {
+                if e.kind != "ValueError" {
+                    return Err(exc("NameError", "name 'e' is not defined".to_string()));
+                }
+                src_data.clone()
+            }
+        }
+    } else {
+        return Err(unbound("file_type"));
+    };
+    write_file(new_file, new_data)
+}
+
+// piexif.transplant(exif_src_file, image_file, new_file).
+fn transplant(exif_src: ref String, image: ref String, new_file: ref String) -> Result[(), Exc] {
+    let src_data = open_file(exif_src)?;
+    let segments = split_into_segments(src_data)?;
+    let exif = match get_exif_seg(segments) {
+        Some(e) => e,
+        None => return Err(value_error("not found exif in input")),
+    };
+    let image_data = open_file(image)?;
+    let segments = split_into_segments(image_data)?;
+    write_file(new_file, merge_segments(segments, Some(exif)))
+}
+
+// ------------------------------------------------------------ UserComment
+
+fn uc_prefix(encoding: Str) -> Vec[u8] {
+    let mut p = if encoding == "ascii" { asc("ASCII") } else if encoding == "jis" { asc("JIS") } else { asc("UNICODE") };
+    while p.len() < 8 {
+        p.push(0);
+    }
+    p
+}
+
+fn push_cp(out: mut ref String, cp: i64) {
+    out.push(char.try_from(cp as u32).unwrap());
+}
+
+// helper.UserComment.load: the body decoded with errors="replace". The
+// JIS decoder knows ASCII and the half-width katakana only.
+fn uc_load(data: ref Vec[u8]) -> Result[String, Exc] {
+    if data.len() < 8 {
+        return Err(value_error("not enough data to decode UserComment"));
+    }
+    let prefix = sl(data, 0, 8);
+    let body = from(data, 8);
+    if prefix == zeros(8) {
+        return Err(value_error("prefix is UNDEFINED, unable to decode UserComment"));
+    }
+    let mut out = String.new();
+    if prefix == uc_prefix("ascii") {
+        for c in body.iter() {
+            push_cp(mut out, if *c < 128 { *c as i64 } else { 0xFFFD });
+        }
+    } else if prefix == uc_prefix("jis") {
+        for c in body.iter() {
+            let x = *c as i64;
+            let cp = if x < 128 { x } else if x >= 0xA1 and x <= 0xDF { x + 0xFEC0 } else { 0xFFFD };
+            push_cp(mut out, cp);
+        }
+    } else if prefix == uc_prefix("unicode") {
+        let mut i = 0;
+        while i < body.len() {
+            if i + 1 >= body.len() {
+                push_cp(mut out, 0xFFFD);
+                break;
+            }
+            let u = (body[i] as i64) * 256 + body[i + 1] as i64;
+            i += 2;
+            if u >= 0xD800 and u <= 0xDBFF {
+                if i + 1 < body.len() {
+                    let v = (body[i] as i64) * 256 + body[i + 1] as i64;
+                    if v >= 0xDC00 and v <= 0xDFFF {
+                        push_cp(mut out, 0x10000 + ((u - 0xD800) << 10) + (v - 0xDC00));
+                        i += 2;
+                        continue;
+                    }
+                }
+                push_cp(mut out, 0xFFFD);
+            } else if u >= 0xDC00 and u <= 0xDFFF {
+                push_cp(mut out, 0xFFFD);
+            } else {
+                push_cp(mut out, u);
+            }
+        }
+    } else {
+        return Err(value_error("unable to determine appropriate encoding"));
+    }
+    Ok(out)
+}
+
+// helper.UserComment.dump, encoding with errors="replace".
+fn uc_dump(data: ref String, encoding: ref String) -> Result[Vec[u8], Exc] {
+    if *encoding != "ascii" and *encoding != "jis" and *encoding != "unicode" {
+        return Err(exc("ValueError", f"encoding {str_repr(encoding)} must be one of ('ascii', 'jis', 'unicode')"));
+    }
+    let mut out = uc_prefix(encoding);
+    for c in data.chars() {
+        let cp = c as i64;
+        if *encoding == "unicode" {
+            if cp >= 0x10000 {
+                let v = cp - 0x10000;
+                put_uint(mut out, 0xD800 + (v >> 10), 2);
+                put_uint(mut out, 0xDC00 + (v & 0x3FF), 2);
+            } else {
+                put_uint(mut out, cp, 2);
+            }
+        } else if cp < 128 {
+            out.push(cp as u8);
+        } else if *encoding == "jis" and cp >= 0xFF61 and cp <= 0xFF9F {
+            out.push((cp - 0xFEC0) as u8);
+        } else {
+            out.push(63);
+        }
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------------ jobs
+
+fn jget(j: ref J, key: Str) -> Option[J] {
+    match j {
+        J.Obj(members) => {
+            for m in members.iter() {
+                if m.key == key {
+                    return Some(m.val.clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn str_int(s: ref String) -> i64 {
+    let n: Option[i64] = s.parse();
+    n.unwrap_or(0)
+}
+
+fn jstr(j: ref J) -> String {
+    match j {
+        J.Str(s) => s.clone(),
+        J.Int(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn jint(j: ref J) -> i64 {
+    match j {
+        J.Int(s) => str_int(s),
+        _ => 0,
+    }
+}
+
+fn jarr(j: ref J) -> Vec[J] {
+    match j {
+        J.Arr(items) => items.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// A str of code points below 256 as the bytes they stand for.
+fn jbytes(j: ref J) -> Vec[u8] {
+    latin1(jstr(j)).unwrap_or(Vec.new())
+}
+
+#[derive(Clone)]
+enum Var {
+    D(XDict),
+    B(Vec[u8]),
+}
+
+struct Env {
+    names: Vec[String],
+    vals: Vec[Var],
+}
+
+impl Env {
+    fn find(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.names.len() {
+            if self.names[i] == *name {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    fn get(ref self, name: ref String) -> Result[Var, Exc] {
+        let i = self.find(name);
+        if i < 0 {
+            return Err(exc("KeyError", str_repr(name)));
+        }
+        Ok(self.vals[i].clone())
+    }
+
+    fn dict(ref self, name: ref String) -> Result[XDict, Exc] {
+        match self.get(name)? {
+            Var.D(d) => Ok(d),
+            Var.B(_) => Err(type_error("byte indices must be integers or slices, not str".to_string())),
+        }
+    }
+
+    fn bytes(ref self, name: ref String) -> Result[Vec[u8], Exc] {
+        match self.get(name)? {
+            Var.B(b) => Ok(b),
+            Var.D(_) => Err(type_error("expected bytes".to_string())),
+        }
+    }
+
+    fn put(mut ref self, name: ref String, v: own Var) {
+        let i = self.find(name);
+        if i < 0 {
+            self.names.push(name.clone());
+            self.vals.push(v);
+        } else {
+            self.vals[i] = v;
+        }
+    }
+}
+
+fn data_path(p: ref String) -> String {
+    f"data/{p}"
+}
+
+fn read_data(p: ref String) -> Result[Vec[u8], Exc] {
+    open_file(data_path(p))
+}
+
+fn spec_val(s: ref J, env: ref Env) -> Result[Pv, Exc] {
+    match s {
+        J.Arr(items) => {
+            let mut out: Vec[Pv] = Vec.new();
+            for x in items.iter() {
+                out.push(spec_val(x, env)?);
+            }
+            Ok(Pv.Tup(out))
+        }
+        J.Obj(_) => {
+            if let Some(b) = jget(s, "b") {
+                let mut out = jbytes(b);
+                if let Some(t) = jget(s, "then") {
+                    let piece = jbytes(t);
+                    let mut k = 0;
+                    let n = jint(jget(s, "times").unwrap());
+                    while k < n {
+                        append(mut out, piece);
+                        k += 1;
+                    }
+                }
+                return Ok(Pv.Bytes(out));
+            }
+            if let Some(f) = jget(s, "f") {
+                return Ok(match f {
+                    J.Float(x) => Pv.Float(x),
+                    other => Pv.Float(jint(other) as f64),
+                });
+            }
+            if let Some(p) = jget(s, "file") {
+                return Ok(Pv.Bytes(read_data(jstr(p))?));
+            }
+            if let Some(v) = jget(s, "v") {
+                return Ok(Pv.Bytes(env.bytes(jstr(v))?));
+            }
+            Ok(Pv.Nil)
+        }
+        J.Str(t) => Ok(Pv.Str(t.clone())),
+        J.Int(_) => Ok(Pv.Int(jint(s))),
+        J.Float(x) => Ok(Pv.Float(*x)),
+        J.Bool(b) => Ok(Pv.Int(if *b { 1 } else { 0 })),
+        J.Null => Ok(Pv.Nil),
+    }
+}
+
+fn spec_dict(spec: ref J, env: ref Env) -> Result[XDict, Exc] {
+    let mut d = XDict { slots: Vec.new() };
+    if let J.Obj(members) = spec {
+        for m in members.iter() {
+            if m.key == "thumbnail" {
+                d.put_thumbnail(spec_val(m.val, env)?);
+            } else {
+                let mut entries: Vec[Entry] = Vec.new();
+                if let J.Obj(tags) = m.val {
+                    for t in tags.iter() {
+                        set_tag(mut entries, str_int(t.key), spec_val(t.val, env)?);
+                    }
+                }
+                d.put_ifd(m.key, entries);
+            }
+        }
+    }
+    Ok(d)
+}
+
+fn hexdump(b: ref Vec[u8]) {
+    let mut i = 0;
+    while i < b.len() {
+        println(f"    {hex_n(i, 4)}: {hex_of(sl(b, i, i + 32))}");
+        i += 32;
+    }
+}
+
+fn show_dict(name: ref String, d: ref XDict) {
+    println(f"  {name} = {{");
+    for s in d.slots.iter() {
+        if s.name == "thumbnail" {
+            println(f"    thumbnail: {pv_repr(s.thumb)}");
+        } else if s.entries.len() == 0 {
+            println(f"    {s.name}: {{}}");
+        } else {
+            println(f"    {s.name}:");
+            for e in s.entries.iter() {
+                println(f"      {key_repr(e.key)}: {pv_repr(e.val)}");
+            }
+        }
+    }
+    println("  }");
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}".replace("\n", "\\n")
+}
+
+fn step(s: ref Vec[J], env: mut ref Env) -> Result[(), Exc] {
+    let op = jstr(s[0]);
+    if op == "load" or op == "loadb" or op == "loadn" {
+        let name = jstr(s[1]);
+        let p = jstr(s[2]);
+        let d = if op == "loadb" { load_bytes(read_data(p)?)? } else { load_file(data_path(p))? };
+        let d = if op == "loadn" { key_names(d) } else { d };
+        env.put(name, Var.D(d));
+        println(f"  {name} loaded");
+    } else if op == "loadx" {
+        let name = jstr(s[1]);
+        let b = match spec_val(s[2], env)? {
+            Pv.Bytes(b) => b,
+            _ => Vec.new(),
+        };
+        env.put(name, Var.D(load_bytes(b)?));
+        println(f"  {name} loaded");
+    } else if op == "bytes" {
+        let b = match spec_val(s[2], env)? {
+            Pv.Bytes(b) => b,
+            _ => Vec.new(),
+        };
+        env.put(jstr(s[1]), Var.B(b));
+    } else if op == "dict" {
+        let d = spec_dict(s[2], env)?;
+        env.put(jstr(s[1]), Var.D(d));
+    } else if op == "dump" {
+        let name = jstr(s[1]);
+        let src = jstr(s[2]);
+        let b = dump(env.dict(src)?)?;
+        println(f"  {name} = dump({src}): {b.len()} bytes");
+        env.put(name, Var.B(b));
+    } else if op == "insert" {
+        let exif = env.bytes(jstr(s[1]))?;
+        insert(exif, data_path(jstr(s[2])), data_path(jstr(s[3])))?;
+        println(f"  inserted {jstr(s[1])} into {jstr(s[2])} as {jstr(s[3])}");
+    } else if op == "remove" {
+        remove(data_path(jstr(s[1])), data_path(jstr(s[2])))?;
+        println(f"  removed Exif from {jstr(s[1])} as {jstr(s[2])}");
+    } else if op == "transplant" {
+        transplant(data_path(jstr(s[1])), data_path(jstr(s[2])), data_path(jstr(s[3])))?;
+        println(f"  transplanted {jstr(s[1])} into {jstr(s[2])} as {jstr(s[3])}");
+    } else if op == "show" {
+        let name = jstr(s[1]);
+        match env.get(name)? {
+            Var.D(d) => show_dict(name, d),
+            Var.B(b) => println(f"  {name} = {bytes_repr(b)}"),
+        }
+    } else if op == "file" {
+        let p = jstr(s[1]);
+        let b = read_data(p)?;
+        println(f"  {p}: {b.len()} bytes");
+        hexdump(b);
+    } else if op == "set" or op == "del" {
+        let name = jstr(s[1]);
+        let mut d = env.dict(name)?;
+        let ifd = jstr(s[2]);
+        if op == "set" and ifd == "thumbnail" {
+            d.put_thumbnail(spec_val(s[4], env)?);
+        } else {
+            let mut entries = d.ifd(ifd)?;
+            let tag = jint(s[3]);
+            if op == "set" {
+                set_tag(mut entries, tag, spec_val(s[4], env)?);
+            } else if not del_tag(mut entries, tag) {
+                return Err(exc("KeyError", f"{tag}"));
+            }
+            d.put_ifd(ifd, entries);
+        }
+        env.put(name, Var.D(d));
+    } else if op == "ucload" {
+        let b = match spec_val(s[1], env)? {
+            Pv.Bytes(b) => b,
+            _ => Vec.new(),
+        };
+        let text = uc_load(b)?;
+        println(f"  UserComment.load({bytes_repr(b)}) = {str_repr(text)}");
+    } else if op == "ucdump" {
+        let text = jstr(s[1]);
+        let enc = jstr(s[2]);
+        let b = uc_dump(text, enc)?;
+        println(f"  UserComment.dump({str_repr(text)}, {str_repr(enc)}) = {bytes_repr(b)}");
+    }
+    Ok(())
+}
+
+fn run_jobs() -> Result[(), Exc] {
+    let _ = fs.create_dir_all("data/out".to_string());
+    let text = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(exc("OSError", f"{e}")),
+    };
+    for line in text.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let j = loads_str(line.to_string())?;
+        println(f"== {jstr(jget(j, "name").unwrap())}");
+        let mut env = Env { names: Vec.new(), vals: Vec.new() };
+        for s in jarr(jget(j, "steps").unwrap()).iter() {
+            let parts = jarr(s);
+            if let Err(e) = step(parts, mut env) {
+                println(f"  {jstr(parts[0])}: error {err_line(e)}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+// --------------------------------------------------------- photo programs
+
+const DATE_TIME: i64 = 306;
+const MAKE: i64 = 271;
+const MODEL: i64 = 272;
+const ORIENTATION_TAG: i64 = 274;
+const COMPRESSION: i64 = 259;
+const ARTIST: i64 = 315;
+const EXPOSURE_TIME: i64 = 33434;
+const F_NUMBER: i64 = 33437;
+const ISO: i64 = 34855;
+const DATE_TIME_ORIGINAL: i64 = 36867;
+const OFFSET_TIME_ORIGINAL: i64 = 36881;
+const FOCAL_LENGTH: i64 = 37386;
+const MAKER_NOTE: i64 = 37500;
+const USER_COMMENT: i64 = 37510;
+const CAMERA_OWNER: i64 = 42032;
+const BODY_SERIAL: i64 = 42033;
+const LENS_MODEL: i64 = 42036;
+
+fn photos() -> Result[Vec[String], Exc] {
+    match fs.read_dir("data/photos".to_string()) {
+        Ok(names) => {
+            let mut names = names;
+            names.sort();
+            Ok(names)
+        }
+        Err(e) => Err(exc("OSError", f"{e}")),
+    }
+}
+
+fn file_size(p: ref String) -> i64 {
+    match fs.metadata(p.clone()) {
+        Ok(m) => m.len,
+        Err(_) => -1,
+    }
+}
+
+fn entries_of(d: ref XDict, name: Str) -> Vec[Entry] {
+    d.ifd(name).unwrap_or(Vec.new())
+}
+
+fn py_space(c: char) -> bool {
+    let cp = c as i64;
+    (cp >= 9 and cp <= 13) or (cp >= 28 and cp <= 32) or cp == 133 or cp == 160
+}
+
+// bytes.decode("latin-1").strip().
+fn text(v: ref Pv) -> String {
+    let b = match v {
+        Pv.Bytes(b) => b.clone(),
+        _ => Vec.new(),
+    };
+    let cs: Vec[char] = from_latin1(b).chars().collect();
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and py_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    let mut out = String.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn rat(v: ref Pv) -> (i64, i64) {
+    match v {
+        Pv.Tup(t) => {
+            if t.len() >= 2 { (int_of(t[0]), int_of(t[1])) } else { (0, 1) }
+        }
+        _ => (0, 1),
+    }
+}
+
+fn tenths(n: i64, d: i64) -> String {
+    let t = (n * 10 + d / 2) / d;
+    f"{t / 10}.{t % 10}"
+}
+
+fn is_bytes(v: ref Pv, want: Str) -> bool {
+    match v {
+        Pv.Bytes(b) => *b == asc(want),
+        _ => false,
+    }
+}
+
+// Degrees, minutes and seconds as micro-degrees, rounded half up.
+fn decimal_deg(v: ref Pv, r: ref Pv) -> i64 {
+    let parts = match v {
+        Pv.Tup(t) => t.clone(),
+        _ => Vec.new(),
+    };
+    let (dn, dd) = rat(parts[0]);
+    let (mn, md) = rat(parts[1]);
+    let (sn, sd) = rat(parts[2]);
+    let den = dd * md * sd * 3600;
+    let num = dn * md * sd * 3600 + mn * dd * sd * 60 + sn * dd * md;
+    let micro = (num * 2000000 + den) / (2 * den);
+    if is_bytes(r, "S") or is_bytes(r, "W") { -micro } else { micro }
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn micro_text(m: i64) -> String {
+    let sign = if m < 0 { "-" } else { "" };
+    let a = if m < 0 { -m } else { m };
+    f"{sign}{a / 1000000}.{pad(a % 1000000, 6)}"
+}
+
+fn orientation(v: ref Pv) -> Str {
+    match v {
+        Pv.Int(1) => "normal",
+        Pv.Int(2) => "mirrored",
+        Pv.Int(3) => "rotated 180",
+        Pv.Int(4) => "flipped",
+        Pv.Int(5) => "mirrored, rotated 90 CCW",
+        Pv.Int(6) => "rotated 90 CW",
+        Pv.Int(7) => "mirrored, rotated 90 CW",
+        Pv.Int(8) => "rotated 90 CCW",
+        _ => "unknown",
+    }
+}
+
+fn taken(d: ref XDict) -> Option[String] {
+    if let Some(v) = get_tag(entries_of(d, "Exif"), DATE_TIME_ORIGINAL) {
+        return Some(text(v));
+    }
+    if let Some(v) = get_tag(entries_of(d, "0th"), DATE_TIME) {
+        return Some(text(v));
+    }
+    None
+}
+
+fn camera(d: ref XDict) -> String {
+    let z = entries_of(d, "0th");
+    let make = text(get_tag(z, MAKE).unwrap_or(Pv.Bytes(Vec.new())));
+    let model = text(get_tag(z, MODEL).unwrap_or(Pv.Bytes(Vec.new())));
+    if model.starts_with(make.as_str()) {
+        return if model.len() == 0 { "unknown".to_string() } else { model };
+    }
+    let both = f"{make} {model}".trim().to_string();
+    if both.len() == 0 { "unknown".to_string() } else { both }
+}
+
+fn report() -> Result[(), Exc] {
+    println("== program: photo report");
+    let mut cams: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for name in photos()?.iter() {
+        let d = match load_file(f"data/photos/{name}") {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"{name}: cannot read: {err_line(e)}");
+                continue;
+            }
+        };
+        let z = entries_of(d, "0th");
+        let e = entries_of(d, "Exif");
+        let g = entries_of(d, "GPS");
+        println(name);
+        let cam = camera(d);
+        let mut found = false;
+        let mut i = 0;
+        while i < cams.len() {
+            if cams[i] == cam {
+                counts[i] += 1;
+                found = true;
+            }
+            i += 1;
+        }
+        if not found {
+            cams.push(cam.clone());
+            counts.push(1);
+        }
+        println(f"  camera: {cam}");
+        let t = taken(d).unwrap_or(String.new());
+        let shown = if t.len() == 0 { "-".to_string() } else { t };
+        let off = match get_tag(e, OFFSET_TIME_ORIGINAL) {
+            Some(Pv.Bytes(b)) => if b.len() > 0 { f" {text(Pv.Bytes(b))}" } else { String.new() },
+            _ => String.new(),
+        };
+        println(f"  taken: {shown}{off}");
+        if let Some(v) = get_tag(e, EXPOSURE_TIME) {
+            let (n, dd) = rat(v);
+            let s = if n >= dd and n % dd == 0 { f"{n / dd}" } else { f"{n}/{dd}" };
+            println(f"  exposure: {s} s");
+        }
+        if let Some(v) = get_tag(e, F_NUMBER) {
+            let (n, dd) = rat(v);
+            println(f"  aperture: f/{tenths(n, dd)}");
+        }
+        if let Some(v) = get_tag(e, ISO) {
+            println(f"  iso: {pv_repr(v)}");
+        }
+        if let Some(v) = get_tag(e, FOCAL_LENGTH) {
+            let (n, dd) = rat(v);
+            let s = if n % dd == 0 { f"{n / dd}" } else { tenths(n, dd) };
+            println(f"  focal length: {s} mm");
+        }
+        if let Some(v) = get_tag(e, LENS_MODEL) {
+            println(f"  lens: {text(v)}");
+        }
+        if let Some(v) = get_tag(z, ORIENTATION_TAG) {
+            println(f"  orientation: {orientation(v)}");
+        }
+        if has_tag(g, 2) and has_tag(g, 4) {
+            let lat = decimal_deg(get_tag(g, 2).unwrap(), get_tag(g, 1).unwrap_or(Pv.Bytes(asc("N"))));
+            let lon = decimal_deg(get_tag(g, 4).unwrap(), get_tag(g, 3).unwrap_or(Pv.Bytes(asc("E"))));
+            let mut alt = String.new();
+            if let Some(v) = get_tag(g, 6) {
+                let (n, dd) = rat(v);
+                let below = int_of(get_tag(g, 5).unwrap_or(Pv.Int(0))) == 1;
+                alt = f", {if below { "-" } else { "" }}{tenths(n, dd)} m";
+            }
+            println(f"  gps: {micro_text(lat)}, {micro_text(lon)}{alt}");
+        }
+        if let Some(v) = get_tag(e, USER_COMMENT) {
+            let b = match v {
+                Pv.Bytes(b) => b,
+                _ => Vec.new(),
+            };
+            match uc_load(b) {
+                Ok(c) => println(f"  comment: {c}"),
+                Err(x) => {
+                    if x.kind != "ValueError" {
+                        return Err(x);
+                    }
+                    println(f"  comment: unreadable ({x.msg})");
+                }
+            }
+        }
+        let mut secret: Vec[String] = Vec.new();
+        if g.len() > 0 {
+            secret.push("location".to_string());
+        }
+        for (tag, label) in vec![(ARTIST, "artist"), (CAMERA_OWNER, "owner"), (BODY_SERIAL, "serial number"), (MAKER_NOTE, "maker note")] {
+            if has_tag(z, tag) or has_tag(e, tag) {
+                secret.push(label.to_string());
+            }
+        }
+        if secret.len() > 0 {
+            println(f"  private: {secret.join(", ")}");
+        }
+        match d.thumbnail() {
+            Some(Pv.Bytes(th)) => {
+                if th.len() > 0 {
+                    println(f"  thumbnail: {th.len()} bytes");
+                } else {
+                    println("  thumbnail: none");
+                }
+            }
+            _ => println("  thumbnail: none"),
+        }
+    }
+    println("cameras:");
+    let mut order: Vec[String] = cams.clone();
+    order.sort();
+    for cam in order.iter() {
+        let mut i = 0;
+        while i < cams.len() {
+            if cams[i] == *cam {
+                println(f"  {cam}: {counts[i]}");
+            }
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
+fn slug(s: ref String) -> String {
+    let mut out: Vec[char] = Vec.new();
+    for c in s.chars() {
+        let cp = c as i64;
+        let lower = if cp >= 65 and cp <= 90 { ((cp + 32) as u8) as char } else { c };
+        let lcp = lower as i64;
+        if (lcp >= 97 and lcp <= 122) or (lcp >= 48 and lcp <= 57) {
+            out.push(lower);
+        } else if out.len() > 0 and out[out.len() - 1] != '-' {
+            out.push('-');
+        }
+    }
+    let mut lo = 0;
+    let mut hi = out.len();
+    while lo < hi and out[lo] == '-' {
+        lo += 1;
+    }
+    while hi > lo and out[hi - 1] == '-' {
+        hi -= 1;
+    }
+    let mut r = String.new();
+    let mut i = lo;
+    while i < hi {
+        r.push(out[i]);
+        i += 1;
+    }
+    r
+}
+
+// os.path.splitext: (stem, ext), where a leading dot is not an extension.
+fn splitext(name: ref String) -> (String, String) {
+    let b = asc(name.as_str());
+    let mut i = b.len() - 1;
+    while i > 0 {
+        if b[i] == 46 {
+            let mut j = 0;
+            let mut all_dots = true;
+            while j < i {
+                if b[j] != 46 {
+                    all_dots = false;
+                }
+                j += 1;
+            }
+            if all_dots {
+                return (name.clone(), String.new());
+            }
+            return (from_latin1(sl(b, 0, i)), from_latin1(from(b, i)));
+        }
+        i -= 1;
+    }
+    (name.clone(), String.new())
+}
+
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let cp = c as i64;
+        out.push(if cp >= 65 and cp <= 90 { ((cp + 32) as u8) as char } else { c });
+    }
+    out
+}
+
+fn ensure_dir(p: ref String) -> Result[(), Exc] {
+    match fs.create_dir_all(p.clone()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(exc("OSError", f"{e}")),
+    }
+}
+
+fn parent(p: ref String) -> String {
+    let b = asc(p.as_str());
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == 47 {
+            return from_latin1(sl(b, 0, i));
+        }
+        i -= 1;
+    }
+    String.new()
+}
+
+fn copy_file(src: ref String, dst: ref String) -> Result[(), Exc] {
+    let b = open_file(src)?;
+    write_file(dst, b)
+}
+
+// os.walk's (dirpath, files) pairs, in any order.
+fn walk(dir: ref String, out: mut ref Vec[(String, Vec[String])]) -> Result[(), Exc] {
+    let names = match fs.read_dir(dir.clone()) {
+        Ok(n) => n,
+        Err(e) => return Err(exc("OSError", f"{e}")),
+    };
+    let mut files: Vec[String] = Vec.new();
+    let mut subdirs: Vec[String] = Vec.new();
+    for n in names.iter() {
+        let p = f"{dir}/{n}";
+        match fs.metadata(p.clone()) {
+            Ok(m) => {
+                if m.is_dir {
+                    subdirs.push(p);
+                } else {
+                    files.push(n.clone());
+                }
+            }
+            Err(e) => return Err(exc("OSError", f"{e}")),
+        }
+    }
+    out.push((dir.clone(), files));
+    for s in subdirs.iter() {
+        walk(s, mut out)?;
+    }
+    Ok(())
+}
+
+fn organize() -> Result[(), Exc] {
+    println("== program: organize");
+    let root = "data/out/library".to_string();
+    let mut lines: Vec[String] = Vec.new();
+    let mut used: Vec[String] = Vec.new();
+    for name in photos()?.iter() {
+        let src = f"data/photos/{name}";
+        let d = match load_file(src) {
+            Ok(d) => d,
+            Err(e) => {
+                lines.push(f"{name} skipped ({e.kind})");
+                continue;
+            }
+        };
+        let ext = ascii_lower(splitext(name).1);
+        let rel = match taken(d) {
+            None => f"undated/{name}",
+            Some(t) => {
+                let halves: Vec[Str] = t.split(" ").collect();
+                let date: Vec[Str] = halves[0].split(":").collect();
+                let time = halves[1].replace(":", "");
+                let base = f"{date[0]}/{date[1]}-{date[2]}/{time}_{slug(camera(d))}";
+                let mut rel = base.clone();
+                let mut n = 1;
+                while used.contains(f"{rel}{ext}") {
+                    n += 1;
+                    rel = f"{base}-{n}";
+                }
+                f"{rel}{ext}"
+            }
+        };
+        used.push(rel.clone());
+        let dst = f"{root}/{rel}";
+        ensure_dir(parent(dst))?;
+        copy_file(src, dst)?;
+        lines.push(f"{name} -> {rel}");
+    }
+    let index = f"{root}/index.txt";
+    let body = f"{lines.join("\n")}\n";
+    if let Err(e) = fs.write(index.clone(), body) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    match fs.read_to_string(index.clone()) {
+        Ok(t) => print(t),
+        Err(e) => return Err(exc("OSError", f"{e}")),
+    }
+    let mut dirs: Vec[(String, Vec[String])] = Vec.new();
+    walk(root, mut dirs)?;
+    let mut keys: Vec[String] = Vec.new();
+    for (p, _) in dirs.iter() {
+        keys.push(p.clone());
+    }
+    keys.sort();
+    for k in keys.iter() {
+        for (p, files) in dirs.iter() {
+            if *p != *k {
+                continue;
+            }
+            let mut fs_sorted = files.clone();
+            fs_sorted.sort();
+            for f in fs_sorted.iter() {
+                let full = f"{p}/{f}";
+                let rel = from_latin1(from(asc(full.as_str()), root.len() + 1));
+                println(f"  {rel} {file_size(full)}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn to_int(s: ref String) -> i64 {
+    let t = if s.starts_with("+") { s.slice(1, s.len()).to_string() } else { s.clone() };
+    str_int(t)
+}
+
+fn parse_micro(s: ref String) -> i64 {
+    let neg = s.starts_with("-");
+    let body = if neg { s.slice(1, s.len()).to_string() } else { s.clone() };
+    let parts: Vec[Str] = body.splitn(2, ".").collect();
+    let whole = to_int(parts[0].to_string());
+    let mut frac = if parts.len() > 1 { parts[1].to_string() } else { String.new() };
+    frac.push_str("000000");
+    let v = whole * 1000000 + to_int(frac.slice(0, 6).to_string());
+    if neg { -v } else { v }
+}
+
+fn parse_tenths(s: ref String) -> i64 {
+    let parts: Vec[Str] = s.splitn(2, ".").collect();
+    let mut frac = if parts.len() > 1 { parts[1].to_string() } else { String.new() };
+    frac.push_str("0");
+    to_int(parts[0].to_string()) * 10 + to_int(frac.slice(0, 1).to_string())
+}
+
+fn r1(n: i64, d: i64) -> Pv {
+    Pv.Tup(vec![Pv.Int(n), Pv.Int(d)])
+}
+
+fn dms(micro: i64) -> Pv {
+    let total = if micro < 0 { -micro } else { micro };
+    let d = total / 1000000;
+    let m_full = (total % 1000000) * 60;
+    let m = m_full / 1000000;
+    let s100 = ((m_full % 1000000) * 6000 + 500000) / 1000000;
+    Pv.Tup(vec![r1(d, 1), r1(m, 1), r1(s100, 100)])
+}
+
+fn offset_seconds(off: ref String) -> i64 {
+    let sign = if off.starts_with("-") { -1 } else { 1 };
+    sign * (to_int(off.slice(1, 3).to_string()) * 3600 + to_int(off.slice(4, 6).to_string()) * 60)
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// Seconds since 1970 of a time read as UTC, from six numbers split out
+// of the text by any of the given separators.
+fn seconds_of(s: ref String) -> i64 {
+    let mut nums: Vec[i64] = Vec.new();
+    let mut cur = 0;
+    let mut in_num = false;
+    for c in s.chars() {
+        let cp = c as i64;
+        if cp >= 48 and cp <= 57 {
+            cur = cur * 10 + cp - 48;
+            in_num = true;
+        } else if in_num {
+            nums.push(cur);
+            cur = 0;
+            in_num = false;
+        }
+    }
+    if in_num {
+        nums.push(cur);
+    }
+    days_from_civil(nums[0], nums[1], nums[2]) * 86400 + nums[3] * 3600 + nums[4] * 60 + nums[5]
+}
+
+fn exif_time(secs: i64) -> String {
+    let days = if secs >= 0 { secs / 86400 } else { (secs - 86399) / 86400 };
+    let rest = secs - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    f"{pad(y, 4)}:{pad(m, 2)}:{pad(d, 2)} {pad(rest / 3600, 2)}:{pad(rest / 60 % 60, 2)}:{pad(rest % 60, 2)}"
+}
+
+#[derive(Clone)]
+struct Fix {
+    cam: String,
+    shift: i64,
+    off: String,
+}
+
+fn read_text(p: Str) -> Result[String, Exc] {
+    match fs.read_to_string(p.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(exc("OSError", f"{e}")),
+    }
+}
+
+fn geotag() -> Result[(), Exc] {
+    println("== program: clock fix and geotag");
+    let mut track: Vec[(i64, i64, i64, i64)] = Vec.new();
+    let csv = read_text("data/track.csv")?;
+    let mut first = true;
+    for line in csv.lines() {
+        if first {
+            first = false;
+            continue;
+        }
+        let cols: Vec[Str] = line.trim().split(",").collect();
+        track.push((seconds_of(cols[0].to_string()), parse_micro(cols[1].to_string()), parse_micro(cols[2].to_string()), parse_tenths(cols[3].to_string())));
+    }
+    let mut fixes: Vec[Fix] = Vec.new();
+    for line in read_text("data/clock.txt")?.lines() {
+        if line.starts_with("#") or line.trim().len() == 0 {
+            continue;
+        }
+        let parts: Vec[Str] = line.split_whitespace().collect();
+        let n = parts.len();
+        let mut cam = String.new();
+        let mut i = 0;
+        while i + 2 < n {
+            if i > 0 {
+                cam.push_str(" ");
+            }
+            cam.push_str(parts[i]);
+            i += 1;
+        }
+        let f = Fix { cam: cam, shift: to_int(parts[n - 2].to_string()), off: parts[n - 1].to_string() };
+        let mut j = 0;
+        let mut replaced = false;
+        while j < fixes.len() {
+            if fixes[j].cam == f.cam {
+                fixes[j] = f.clone();
+                replaced = true;
+            }
+            j += 1;
+        }
+        if not replaced {
+            fixes.push(f);
+        }
+    }
+    ensure_dir("data/out/tagged".to_string())?;
+    for name in photos()?.iter() {
+        let src = f"data/photos/{name}";
+        let mut d = match load_file(src) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"{name}: skipped ({e.kind})");
+                continue;
+            }
+        };
+        let mut e = entries_of(d, "Exif");
+        let t = match get_tag(e, DATE_TIME_ORIGINAL) {
+            Some(v) => text(v),
+            None => {
+                println(f"{name}: no capture time");
+                continue;
+            }
+        };
+        let cam = camera(d);
+        let mut shift = 0;
+        let mut off: Option[String] = None;
+        for f in fixes.iter() {
+            if f.cam == cam {
+                shift = f.shift;
+                off = Some(f.off.clone());
+            }
+        }
+        if let Some(v) = get_tag(e, OFFSET_TIME_ORIGINAL) {
+            off = Some(text(v));
+        }
+        let off = match off {
+            Some(o) => o,
+            None => {
+                println(f"{name}: no time zone for {cam}");
+                continue;
+            }
+        };
+        let local = seconds_of(t) + shift;
+        let utc = local - offset_seconds(off);
+        let new_t = exif_time(local);
+        let mut msg = f"{name}: {t} -> {new_t} {off}";
+        set_tag(mut e, DATE_TIME_ORIGINAL, Pv.Bytes(asc(new_t.as_str())));
+        set_tag(mut e, OFFSET_TIME_ORIGINAL, Pv.Bytes(asc(off.as_str())));
+        d.put_ifd("Exif", e);
+        let mut best: Option[(i64, i64, i64, i64)] = None;
+        for p in track.iter() {
+            let closer = match best {
+                None => true,
+                Some(b) => (p.0 - utc).abs() < (b.0 - utc).abs(),
+            };
+            if closer {
+                best = Some(*p);
+            }
+        }
+        if entries_of(d, "GPS").len() > 0 {
+            msg.push_str(", has a location");
+        } else {
+            match best {
+                Some((when, lat, lon, ele)) => {
+                    let gap = (when - utc).abs();
+                    if gap > 900 {
+                        msg.push_str(", no track point within 15 min");
+                    } else {
+                        let mut g: Vec[Entry] = Vec.new();
+                        set_tag(mut g, 0, Pv.Tup(vec![Pv.Int(2), Pv.Int(3), Pv.Int(0), Pv.Int(0)]));
+                        set_tag(mut g, 1, Pv.Bytes(asc(if lat < 0 { "S" } else { "N" })));
+                        set_tag(mut g, 2, dms(lat));
+                        set_tag(mut g, 3, Pv.Bytes(asc(if lon < 0 { "W" } else { "E" })));
+                        set_tag(mut g, 4, dms(lon));
+                        set_tag(mut g, 5, Pv.Int(if ele < 0 { 1 } else { 0 }));
+                        set_tag(mut g, 6, r1(ele.abs(), 10));
+                        d.put_ifd("GPS", g);
+                        msg.push_str(f", at {micro_text(lat)}, {micro_text(lon)} ({gap} s from the track)");
+                    }
+                }
+                None => msg.push_str(", no track point within 15 min"),
+            }
+        }
+        println(msg);
+        let out = f"data/out/tagged/{name}";
+        insert(dump(d)?, src, out)?;
+        let again = load_file(out)?;
+        let g = entries_of(again, "GPS");
+        let when = text(get_tag(entries_of(again, "Exif"), DATE_TIME_ORIGINAL).unwrap_or(Pv.Nil));
+        let gps = if g.len() > 0 {
+            f", gps {pv_repr(get_tag(g, 2).unwrap_or(Pv.Nil))} {pv_repr(get_tag(g, 4).unwrap_or(Pv.Nil))}"
+        } else {
+            String.new()
+        };
+        println(f"  written: {file_size(out)} bytes, time {when}{gps}");
+    }
+    Ok(())
+}
+
+fn share() -> Result[(), Exc] {
+    println("== program: strip for sharing");
+    ensure_dir("data/out/share".to_string())?;
+    let secret = vec![("0th", ARTIST), ("Exif", CAMERA_OWNER), ("Exif", BODY_SERIAL), ("Exif", MAKER_NOTE), ("Exif", USER_COMMENT)];
+    for name in photos()?.iter() {
+        let src = f"data/photos/{name}";
+        let out = f"data/out/share/{name}";
+        let mut d = match load_file(src) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"{name}: not shared ({err_line(e)})");
+                continue;
+            }
+        };
+        let mut gone: Vec[String] = Vec.new();
+        let g = entries_of(d, "GPS");
+        if g.len() > 0 {
+            gone.push(f"GPS ({g.len()} tags)");
+            d.put_ifd("GPS", Vec.new());
+        }
+        for (ifd, tag) in secret.iter() {
+            let mut entries = entries_of(d, *ifd);
+            if del_tag(mut entries, *tag) {
+                let label = match tag_info(*ifd, *tag) {
+                    Some((n, _)) => n.to_string(),
+                    None => f"{tag}",
+                };
+                gone.push(label);
+                d.put_ifd(*ifd, entries);
+            }
+        }
+        let has_thumb = match d.thumbnail() {
+            Some(Pv.Nil) => false,
+            None => false,
+            _ => true,
+        };
+        if has_thumb {
+            gone.push("thumbnail".to_string());
+            d.put_thumbnail(Pv.Nil);
+            d.put_ifd("1st", Vec.new());
+        }
+        let mut any = false;
+        for i in vec!["0th", "Exif", "GPS", "Interop", "1st"] {
+            if entries_of(d, i).len() > 0 {
+                any = true;
+            }
+        }
+        let how = if not any {
+            remove(src, out)?;
+            "no Exif"
+        } else {
+            insert(dump(d)?, src, out)?;
+            "rewritten"
+        };
+        let check = load_file(out)?;
+        let mut left = 0;
+        for i in vec!["0th", "Exif", "GPS", "Interop", "1st"] {
+            left += entries_of(check, i).len();
+        }
+        println(f"{name}: {how}, {file_size(src)} -> {file_size(out)} bytes, {left} tags kept");
+        if gone.len() > 0 {
+            println(f"  removed: {gone.join(", ")}");
+        }
+        assert(entries_of(check, "GPS").len() == 0);
+    }
+    Ok(())
+}
+
+fn thumbs() -> Result[(), Exc] {
+    println("== program: thumbnails");
+    ensure_dir("data/out/thumbs".to_string())?;
+    for name in photos()?.iter() {
+        let d = match load_file(f"data/photos/{name}") {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let th = match d.thumbnail() {
+            Some(Pv.Bytes(b)) => b,
+            _ => continue,
+        };
+        if th.len() == 0 {
+            continue;
+        }
+        let stem = splitext(name).0;
+        write_file(f"data/out/thumbs/{stem}.jpg", th)?;
+        let comp = match get_tag(entries_of(d, "1st"), COMPRESSION) {
+            Some(v) => pv_repr(v),
+            None => "-".to_string(),
+        };
+        println(f"{stem}.jpg: {th.len()} bytes, starts {hex_of(sl(th, 0, 4))}, ends {hex_of(sl(th, -2, th.len()))}, compression {comp}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), Exc] {
+    run_jobs()?;
+    report()?;
+    organize()?;
+    geotag()?;
+    share()?;
+    thumbs()?;
+    Ok(())
+}
+// ------------------------------------------------------------- the tag table
+
+// piexif's TAGS: each IFD's tags with their names and types. The 0th and
+// 1st IFDs both use the Image table.
+fn tag_info(ifd: Str, tag: i64) -> Option[(Str, i64)] {
+    let t = if ifd == "0th" or ifd == "1st" { "Image" } else { ifd };
+    if t == "Image" {
+        return image_tag(tag);
+    }
+    if t == "Exif" {
+        return exif_tag(tag);
+    }
+    if t == "GPS" {
+        return gps_tag(tag);
+    }
+    if t == "Interop" {
+        return interop_tag(tag);
+    }
+    None
+}
+
+fn image_tag(tag: i64) -> Option[(Str, i64)] {
+    match tag {
+        11 => Some(("ProcessingSoftware", 2)),
+        254 => Some(("NewSubfileType", 4)),
+        255 => Some(("SubfileType", 3)),
+        256 => Some(("ImageWidth", 4)),
+        257 => Some(("ImageLength", 4)),
+        258 => Some(("BitsPerSample", 3)),
+        259 => Some(("Compression", 3)),
+        262 => Some(("PhotometricInterpretation", 3)),
+        263 => Some(("Threshholding", 3)),
+        264 => Some(("CellWidth", 3)),
+        265 => Some(("CellLength", 3)),
+        266 => Some(("FillOrder", 3)),
+        269 => Some(("DocumentName", 2)),
+        270 => Some(("ImageDescription", 2)),
+        271 => Some(("Make", 2)),
+        272 => Some(("Model", 2)),
+        273 => Some(("StripOffsets", 4)),
+        274 => Some(("Orientation", 3)),
+        277 => Some(("SamplesPerPixel", 3)),
+        278 => Some(("RowsPerStrip", 4)),
+        279 => Some(("StripByteCounts", 4)),
+        282 => Some(("XResolution", 5)),
+        283 => Some(("YResolution", 5)),
+        284 => Some(("PlanarConfiguration", 3)),
+        290 => Some(("GrayResponseUnit", 3)),
+        291 => Some(("GrayResponseCurve", 3)),
+        292 => Some(("T4Options", 4)),
+        293 => Some(("T6Options", 4)),
+        296 => Some(("ResolutionUnit", 3)),
+        301 => Some(("TransferFunction", 3)),
+        305 => Some(("Software", 2)),
+        306 => Some(("DateTime", 2)),
+        315 => Some(("Artist", 2)),
+        316 => Some(("HostComputer", 2)),
+        317 => Some(("Predictor", 3)),
+        318 => Some(("WhitePoint", 5)),
+        319 => Some(("PrimaryChromaticities", 5)),
+        320 => Some(("ColorMap", 3)),
+        321 => Some(("HalftoneHints", 3)),
+        322 => Some(("TileWidth", 3)),
+        323 => Some(("TileLength", 3)),
+        324 => Some(("TileOffsets", 3)),
+        325 => Some(("TileByteCounts", 3)),
+        330 => Some(("SubIFDs", 4)),
+        332 => Some(("InkSet", 3)),
+        333 => Some(("InkNames", 2)),
+        334 => Some(("NumberOfInks", 3)),
+        336 => Some(("DotRange", 1)),
+        337 => Some(("TargetPrinter", 2)),
+        338 => Some(("ExtraSamples", 3)),
+        339 => Some(("SampleFormat", 3)),
+        340 => Some(("SMinSampleValue", 3)),
+        341 => Some(("SMaxSampleValue", 3)),
+        342 => Some(("TransferRange", 3)),
+        343 => Some(("ClipPath", 1)),
+        344 => Some(("XClipPathUnits", 4)),
+        345 => Some(("YClipPathUnits", 4)),
+        346 => Some(("Indexed", 3)),
+        347 => Some(("JPEGTables", 7)),
+        351 => Some(("OPIProxy", 3)),
+        512 => Some(("JPEGProc", 4)),
+        513 => Some(("JPEGInterchangeFormat", 4)),
+        514 => Some(("JPEGInterchangeFormatLength", 4)),
+        515 => Some(("JPEGRestartInterval", 3)),
+        517 => Some(("JPEGLosslessPredictors", 3)),
+        518 => Some(("JPEGPointTransforms", 3)),
+        519 => Some(("JPEGQTables", 4)),
+        520 => Some(("JPEGDCTables", 4)),
+        521 => Some(("JPEGACTables", 4)),
+        529 => Some(("YCbCrCoefficients", 5)),
+        530 => Some(("YCbCrSubSampling", 3)),
+        531 => Some(("YCbCrPositioning", 3)),
+        532 => Some(("ReferenceBlackWhite", 5)),
+        700 => Some(("XMLPacket", 1)),
+        18246 => Some(("Rating", 3)),
+        18249 => Some(("RatingPercent", 3)),
+        32781 => Some(("ImageID", 2)),
+        33421 => Some(("CFARepeatPatternDim", 3)),
+        33422 => Some(("CFAPattern", 1)),
+        33423 => Some(("BatteryLevel", 5)),
+        33432 => Some(("Copyright", 2)),
+        33434 => Some(("ExposureTime", 5)),
+        34377 => Some(("ImageResources", 1)),
+        34665 => Some(("ExifTag", 4)),
+        34675 => Some(("InterColorProfile", 7)),
+        34853 => Some(("GPSTag", 4)),
+        34857 => Some(("Interlace", 3)),
+        34858 => Some(("TimeZoneOffset", 4)),
+        34859 => Some(("SelfTimerMode", 3)),
+        37387 => Some(("FlashEnergy", 5)),
+        37388 => Some(("SpatialFrequencyResponse", 7)),
+        37389 => Some(("Noise", 7)),
+        37390 => Some(("FocalPlaneXResolution", 5)),
+        37391 => Some(("FocalPlaneYResolution", 5)),
+        37392 => Some(("FocalPlaneResolutionUnit", 3)),
+        37393 => Some(("ImageNumber", 4)),
+        37394 => Some(("SecurityClassification", 2)),
+        37395 => Some(("ImageHistory", 2)),
+        37397 => Some(("ExposureIndex", 5)),
+        37398 => Some(("TIFFEPStandardID", 1)),
+        37399 => Some(("SensingMethod", 3)),
+        40091 => Some(("XPTitle", 1)),
+        40092 => Some(("XPComment", 1)),
+        40093 => Some(("XPAuthor", 1)),
+        40094 => Some(("XPKeywords", 1)),
+        40095 => Some(("XPSubject", 1)),
+        50341 => Some(("PrintImageMatching", 7)),
+        50706 => Some(("DNGVersion", 1)),
+        50707 => Some(("DNGBackwardVersion", 1)),
+        50708 => Some(("UniqueCameraModel", 2)),
+        50709 => Some(("LocalizedCameraModel", 1)),
+        50710 => Some(("CFAPlaneColor", 1)),
+        50711 => Some(("CFALayout", 3)),
+        50712 => Some(("LinearizationTable", 3)),
+        50713 => Some(("BlackLevelRepeatDim", 3)),
+        50714 => Some(("BlackLevel", 5)),
+        50715 => Some(("BlackLevelDeltaH", 10)),
+        50716 => Some(("BlackLevelDeltaV", 10)),
+        50717 => Some(("WhiteLevel", 3)),
+        50718 => Some(("DefaultScale", 5)),
+        50719 => Some(("DefaultCropOrigin", 3)),
+        50720 => Some(("DefaultCropSize", 3)),
+        50721 => Some(("ColorMatrix1", 10)),
+        50722 => Some(("ColorMatrix2", 10)),
+        50723 => Some(("CameraCalibration1", 10)),
+        50724 => Some(("CameraCalibration2", 10)),
+        50725 => Some(("ReductionMatrix1", 10)),
+        50726 => Some(("ReductionMatrix2", 10)),
+        50727 => Some(("AnalogBalance", 5)),
+        50728 => Some(("AsShotNeutral", 3)),
+        50729 => Some(("AsShotWhiteXY", 5)),
+        50730 => Some(("BaselineExposure", 10)),
+        50731 => Some(("BaselineNoise", 5)),
+        50732 => Some(("BaselineSharpness", 5)),
+        50733 => Some(("BayerGreenSplit", 4)),
+        50734 => Some(("LinearResponseLimit", 5)),
+        50735 => Some(("CameraSerialNumber", 2)),
+        50736 => Some(("LensInfo", 5)),
+        50737 => Some(("ChromaBlurRadius", 5)),
+        50738 => Some(("AntiAliasStrength", 5)),
+        50739 => Some(("ShadowScale", 10)),
+        50740 => Some(("DNGPrivateData", 1)),
+        50741 => Some(("MakerNoteSafety", 3)),
+        50778 => Some(("CalibrationIlluminant1", 3)),
+        50779 => Some(("CalibrationIlluminant2", 3)),
+        50780 => Some(("BestQualityScale", 5)),
+        50781 => Some(("RawDataUniqueID", 1)),
+        50827 => Some(("OriginalRawFileName", 1)),
+        50828 => Some(("OriginalRawFileData", 7)),
+        50829 => Some(("ActiveArea", 3)),
+        50830 => Some(("MaskedAreas", 3)),
+        50831 => Some(("AsShotICCProfile", 7)),
+        50832 => Some(("AsShotPreProfileMatrix", 10)),
+        50833 => Some(("CurrentICCProfile", 7)),
+        50834 => Some(("CurrentPreProfileMatrix", 10)),
+        50879 => Some(("ColorimetricReference", 3)),
+        50931 => Some(("CameraCalibrationSignature", 1)),
+        50932 => Some(("ProfileCalibrationSignature", 1)),
+        50934 => Some(("AsShotProfileName", 1)),
+        50935 => Some(("NoiseReductionApplied", 5)),
+        50936 => Some(("ProfileName", 1)),
+        50937 => Some(("ProfileHueSatMapDims", 4)),
+        50938 => Some(("ProfileHueSatMapData1", 11)),
+        50939 => Some(("ProfileHueSatMapData2", 11)),
+        50940 => Some(("ProfileToneCurve", 11)),
+        50941 => Some(("ProfileEmbedPolicy", 4)),
+        50942 => Some(("ProfileCopyright", 1)),
+        50964 => Some(("ForwardMatrix1", 10)),
+        50965 => Some(("ForwardMatrix2", 10)),
+        50966 => Some(("PreviewApplicationName", 1)),
+        50967 => Some(("PreviewApplicationVersion", 1)),
+        50968 => Some(("PreviewSettingsName", 1)),
+        50969 => Some(("PreviewSettingsDigest", 1)),
+        50970 => Some(("PreviewColorSpace", 4)),
+        50971 => Some(("PreviewDateTime", 2)),
+        50972 => Some(("RawImageDigest", 7)),
+        50973 => Some(("OriginalRawFileDigest", 7)),
+        50974 => Some(("SubTileBlockSize", 4)),
+        50975 => Some(("RowInterleaveFactor", 4)),
+        50981 => Some(("ProfileLookTableDims", 4)),
+        50982 => Some(("ProfileLookTableData", 11)),
+        51008 => Some(("OpcodeList1", 7)),
+        51009 => Some(("OpcodeList2", 7)),
+        51022 => Some(("OpcodeList3", 7)),
+        60606 => Some(("ZZZTestSlong1", 9)),
+        60607 => Some(("ZZZTestSlong2", 9)),
+        60608 => Some(("ZZZTestSByte", 6)),
+        60609 => Some(("ZZZTestSShort", 8)),
+        60610 => Some(("ZZZTestDFloat", 12)),
+        _ => None,
+    }
+}
+
+fn exif_tag(tag: i64) -> Option[(Str, i64)] {
+    match tag {
+        33434 => Some(("ExposureTime", 5)),
+        33437 => Some(("FNumber", 5)),
+        34850 => Some(("ExposureProgram", 3)),
+        34852 => Some(("SpectralSensitivity", 2)),
+        34855 => Some(("ISOSpeedRatings", 3)),
+        34856 => Some(("OECF", 7)),
+        34864 => Some(("SensitivityType", 3)),
+        34865 => Some(("StandardOutputSensitivity", 4)),
+        34866 => Some(("RecommendedExposureIndex", 4)),
+        34867 => Some(("ISOSpeed", 4)),
+        34868 => Some(("ISOSpeedLatitudeyyy", 4)),
+        34869 => Some(("ISOSpeedLatitudezzz", 4)),
+        36864 => Some(("ExifVersion", 7)),
+        36867 => Some(("DateTimeOriginal", 2)),
+        36868 => Some(("DateTimeDigitized", 2)),
+        36880 => Some(("OffsetTime", 2)),
+        36881 => Some(("OffsetTimeOriginal", 2)),
+        36882 => Some(("OffsetTimeDigitized", 2)),
+        37121 => Some(("ComponentsConfiguration", 7)),
+        37122 => Some(("CompressedBitsPerPixel", 5)),
+        37377 => Some(("ShutterSpeedValue", 10)),
+        37378 => Some(("ApertureValue", 5)),
+        37379 => Some(("BrightnessValue", 10)),
+        37380 => Some(("ExposureBiasValue", 10)),
+        37381 => Some(("MaxApertureValue", 5)),
+        37382 => Some(("SubjectDistance", 5)),
+        37383 => Some(("MeteringMode", 3)),
+        37384 => Some(("LightSource", 3)),
+        37385 => Some(("Flash", 3)),
+        37386 => Some(("FocalLength", 5)),
+        37396 => Some(("SubjectArea", 3)),
+        37500 => Some(("MakerNote", 7)),
+        37510 => Some(("UserComment", 7)),
+        37520 => Some(("SubSecTime", 2)),
+        37521 => Some(("SubSecTimeOriginal", 2)),
+        37522 => Some(("SubSecTimeDigitized", 2)),
+        37888 => Some(("Temperature", 10)),
+        37889 => Some(("Humidity", 5)),
+        37890 => Some(("Pressure", 5)),
+        37891 => Some(("WaterDepth", 10)),
+        37892 => Some(("Acceleration", 5)),
+        37893 => Some(("CameraElevationAngle", 10)),
+        40960 => Some(("FlashpixVersion", 7)),
+        40961 => Some(("ColorSpace", 3)),
+        40962 => Some(("PixelXDimension", 4)),
+        40963 => Some(("PixelYDimension", 4)),
+        40964 => Some(("RelatedSoundFile", 2)),
+        40965 => Some(("InteroperabilityTag", 4)),
+        41483 => Some(("FlashEnergy", 5)),
+        41484 => Some(("SpatialFrequencyResponse", 7)),
+        41486 => Some(("FocalPlaneXResolution", 5)),
+        41487 => Some(("FocalPlaneYResolution", 5)),
+        41488 => Some(("FocalPlaneResolutionUnit", 3)),
+        41492 => Some(("SubjectLocation", 3)),
+        41493 => Some(("ExposureIndex", 5)),
+        41495 => Some(("SensingMethod", 3)),
+        41728 => Some(("FileSource", 7)),
+        41729 => Some(("SceneType", 7)),
+        41730 => Some(("CFAPattern", 7)),
+        41985 => Some(("CustomRendered", 3)),
+        41986 => Some(("ExposureMode", 3)),
+        41987 => Some(("WhiteBalance", 3)),
+        41988 => Some(("DigitalZoomRatio", 5)),
+        41989 => Some(("FocalLengthIn35mmFilm", 3)),
+        41990 => Some(("SceneCaptureType", 3)),
+        41991 => Some(("GainControl", 3)),
+        41992 => Some(("Contrast", 3)),
+        41993 => Some(("Saturation", 3)),
+        41994 => Some(("Sharpness", 3)),
+        41995 => Some(("DeviceSettingDescription", 7)),
+        41996 => Some(("SubjectDistanceRange", 3)),
+        42016 => Some(("ImageUniqueID", 2)),
+        42032 => Some(("CameraOwnerName", 2)),
+        42033 => Some(("BodySerialNumber", 2)),
+        42034 => Some(("LensSpecification", 5)),
+        42035 => Some(("LensMake", 2)),
+        42036 => Some(("LensModel", 2)),
+        42037 => Some(("LensSerialNumber", 2)),
+        42240 => Some(("Gamma", 5)),
+        _ => None,
+    }
+}
+
+fn gps_tag(tag: i64) -> Option[(Str, i64)] {
+    match tag {
+        0 => Some(("GPSVersionID", 1)),
+        1 => Some(("GPSLatitudeRef", 2)),
+        2 => Some(("GPSLatitude", 5)),
+        3 => Some(("GPSLongitudeRef", 2)),
+        4 => Some(("GPSLongitude", 5)),
+        5 => Some(("GPSAltitudeRef", 1)),
+        6 => Some(("GPSAltitude", 5)),
+        7 => Some(("GPSTimeStamp", 5)),
+        8 => Some(("GPSSatellites", 2)),
+        9 => Some(("GPSStatus", 2)),
+        10 => Some(("GPSMeasureMode", 2)),
+        11 => Some(("GPSDOP", 5)),
+        12 => Some(("GPSSpeedRef", 2)),
+        13 => Some(("GPSSpeed", 5)),
+        14 => Some(("GPSTrackRef", 2)),
+        15 => Some(("GPSTrack", 5)),
+        16 => Some(("GPSImgDirectionRef", 2)),
+        17 => Some(("GPSImgDirection", 5)),
+        18 => Some(("GPSMapDatum", 2)),
+        19 => Some(("GPSDestLatitudeRef", 2)),
+        20 => Some(("GPSDestLatitude", 5)),
+        21 => Some(("GPSDestLongitudeRef", 2)),
+        22 => Some(("GPSDestLongitude", 5)),
+        23 => Some(("GPSDestBearingRef", 2)),
+        24 => Some(("GPSDestBearing", 5)),
+        25 => Some(("GPSDestDistanceRef", 2)),
+        26 => Some(("GPSDestDistance", 5)),
+        27 => Some(("GPSProcessingMethod", 7)),
+        28 => Some(("GPSAreaInformation", 7)),
+        29 => Some(("GPSDateStamp", 2)),
+        30 => Some(("GPSDifferential", 3)),
+        31 => Some(("GPSHPositioningError", 5)),
+        _ => None,
+    }
+}
+
+fn interop_tag(tag: i64) -> Option[(Str, i64)] {
+    match tag {
+        1 => Some(("InteroperabilityIndex", 2)),
+        _ => None,
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# camera model, seconds to add to its clock, and the offset it was in\n");
+    t.push_str("Canon EOS R6 -3600 +01:00\n");
+    t.push_str("SONY ILCE-7M4 +125 +01:00\n");
+    t.push_str("Canon EOS R6 Mark II 0 +01:00\n");
+    v.push(DataFile { path: "clock.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("524946464400000057454250565038580a000000020000001f0000130000414e494d06000000000000000000414e4d46");
+    t.push_str("180000000000000000001f0000130000000000005650382000000000");
+    v.push(DataFile { path: "img/anim.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe1000c4578697600004d4d002affdb004300010203040506070809");
+    t.push_str("0a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343536373839");
+    t.push_str("3a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cd");
+    t.push_str("f2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/app1_not_exif.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe200244943435f50524f46494c4500010100000000000000000000");
+    t.push_str("00000000000000000000ffe1002245786966000049492a0008000000010012010300010000000300000000000000ffdb");
+    t.push_str("0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d");
+    t.push_str("2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11");
+    t.push_str("365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/app2_icc.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100224578696600004d4d002a000000080001010f0002000000010000000000000000ffdb0043000102030405");
+    t.push_str("060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435");
+    t.push_str("363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef1439");
+    t.push_str("5e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/ascii_count_1.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe1002245786966000049492a000800000001000f010d00040000007a7a7a7a00000000ffdb0043000102030405");
+    t.push_str("060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435");
+    t.push_str("363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef1439");
+    t.push_str("5e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/bad_type.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe103534578696600004d4d002a00000008000b010f000200000006");
+    t.push_str("00000092011000020000000d00000098011200030000000100010000011a000500000001000000a5011b000500000001");
+    t.push_str("000000ad0128000300000001000200000131000200000017000000b50132000200000014000000cc013b000200000009");
+    t.push_str("000000e08769000400000001000000e98825000400000001000001e50000028143616e6f6e0043616e6f6e20454f5320");
+    t.push_str("523600000000480000000100000048000000014669726d776172652056657273696f6e20312e382e3100323032363a30");
+    t.push_str("373a31342030393a31323a333000416e61205275697a00000c829a0005000000010000017b829d000500000001000001");
+    t.push_str("83882700030000000100c8000090000007000000043032333190030002000000140000018b9004000200000014000001");
+    t.push_str("9f920a000500000001000001b3a40300030000000100000000a43100020000000d000001bba433000200000006000001");
+    t.push_str("c8a434000200000017000001cea0050004000000010000027300000001000000fa000000280000000a323032363a3037");
+    t.push_str("3a31342030393a31323a333000323032363a30373a31342030393a31323a333000000000550000000130383330323130");
+    t.push_str("30303132330043616e6f6e00524638356d6d204632204d4143524f2049532053544d0000070000000100000004020200");
+    t.push_str("0000010002000000024e00000000020005000000030000023b0003000200000002570000000004000500000003000002");
+    t.push_str("5300050001000000010000000000060005000000010000026b00000028000000010000001a0000000100001233000000");
+    t.push_str("640000004f000000010000003a000000010000160800000064000009060000000a000100010002000000045239380000");
+    t.push_str("06010300030000000100060000011a000500000001000002cf011b000500000001000002d70128000300000001000200");
+    t.push_str("000201000400000001000002df02020004000000010000006c0000000000000048000000010000004800000001ffd8ff");
+    t.push_str("db0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c");
+    t.push_str("2d2e2f303132333435363738393a3b3c3d3e3f40ffda0008010100003f0003080d12171c21262b30353a3f44494e5358");
+    t.push_str("5d62676c71767bffd9ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122");
+    t.push_str("232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc000110800100010030122000211010311");
+    t.push_str("01ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186ab");
+    t.push_str("d0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/canon_be.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100724578696600004d4d002a000000080003010f00020000000d000000320110000200000007ffda000c0301");
+    t.push_str("0002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489ae");
+    t.push_str("d3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/cut_exif.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100724578696600004d4d002a000000080003010f00020000000d0000");
+    v.push(DataFile { path: "img/cut_ifd.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe100424578696600004d4d002a000000080002010f000200000006");
+    t.push_str("00000026011000020000000e0000002c000000004170706c65006950686f6e652031352050726f00ffdb004300010203");
+    t.push_str("0405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233");
+    t.push_str("3435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef");
+    t.push_str("14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/exif_only_0th.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646a400000057454250565038580a000000080000003f00002f000056503820190000003001009d012a40003000");
+    t.push_str("0000000000000000000000000000000045584946640000004d4d002a000000080003010f000200000007000000320110");
+    t.push_str("0002000000080000003a87690004000000010000004200000000476f6f676c650000506978656c203800000190030002");
+    t.push_str("0000001400000050323032363a30383a30312031383a33303a303500");
+    v.push(DataFile { path: "img/extended.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100344578696600004d4d002a000000080001010f000200000002580000000000001a00010103000300000001");
+    t.push_str("0006000000000000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223");
+    t.push_str("2425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9f");
+    t.push_str("c4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/first_no_thumb.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946461c000000574542505650384c0f0000002f3fc00b100000000000000000000000");
+    v.push(DataFile { path: "img/lossless.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("52494646260000005745425056503820190000003001009d012a4000300000000000000000000000000000000000");
+    v.push(DataFile { path: "img/lossy.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe1053e45786966000049492a00080000001a000b000200060000004601000002010300030000004c0100000d01");
+    t.push_str("020004000000616263000f0102001200000052010000100102000c000000640100001201030001000000060000001a01");
+    t.push_str("050001000000700100001b0105000100000078010000280103000100000002000000310102000a000000800100003201");
+    t.push_str("0200140000008a0100003b01020001000000000000003e010500020000009e0100005001010006000000ae0100001302");
+    t.push_str("03000100000002000000bc020100040000003c782f3e6987040001000000ee01000025880400010000005a030000419c");
+    t.push_str("0300010000004d0000001bc60a0001000000b401000021c60a0002000000bc010000fac60b0003000000cc010000fcc6");
+    t.push_str("0b00010000000000803ec0ec060005000000d8010000c1ec080002000000feff3075c2ec0c0002000000de0100005604");
+    t.push_str("00006e6f2d6e756c0800080008004e494b4f4e20434f52504f524154494f4e004e494b4f4e205a20365f32002c010000");
+    t.push_str("010000002c010000010000005665722e30312e313000323032363a30353a30322031373a34343a30390039010000e803");
+    t.push_str("000049010000e8030000010203040506ffffffff0300000007000000fefffffffbffffff040000000000c03fcdcccc3d");
+    t.push_str("000040c0fd04807f0000000000000000e03f00000000000002c011009a82050001000000bc0200009d82050001000000");
+    t.push_str("c40200002788030001000000200300000090070004000000303233320390020014000000cc0200000490020014000000");
+    t.push_str("e002000001920a0001000000f402000004920a0001000000fc0200000a92050001000000040300007c92070012000000");
+    t.push_str("0c03000086920700150000001e03000000a00700040000003031303005a00400010000003c04000002a4030001000000");
+    t.push_str("0000000031a40200080000003403000034a40200170000003c0300001cea0700060000005403000001000000c8000000");
+    t.push_str("1c0000000a000000323032363a30353a30322031373a34343a303900323032363a30353a30322031373a34343a303900");
+    t.push_str("d0a2740040420f00ffffffff0300000032000000010000004e696b6f6e00021100004d4d002a00000008415343494900");
+    t.push_str("00002073686f74206174206475736b0036303132333435004e494b4b4f52205a2032342d37306d6d20662f3420530000");
+    t.push_str("1cea000000080a000000010004000000020300000100020002000000530000000200050003000000d403000003000200");
+    t.push_str("02000000450000000400050003000000ec03000005000100010000000000000006000500010000000404000007000500");
+    t.push_str("030000000c0400001b0007000b000000240400001d0002000b0000003004000021000000010000003300000001000000");
+    t.push_str("780c00006400000097000000010000000c00000001000000900f000064000000a8160000640000000700000001000000");
+    t.push_str("2c000000010000000900000001000000415343494900000047505300323032363a30353a303200000200010002000400");
+    t.push_str("00005239380002000700040000003031303006000301030001000000060000001a01050001000000a40400001b010500");
+    t.push_str("01000000ac0400002801030001000000020000000102040001000000b404000002020400010000008200000000000000");
+    t.push_str("48000000010000004800000001000000ffd8ffe000104a46494600010100004800480000ffdb00430001020304050607");
+    t.push_str("08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031323334353637");
+    t.push_str("38393a3b3c3d3e3f40ffda0008010100003f00030c151e273039424b545d666f78818a939ca5aeb7c0c9d2dbe4edf604");
+    t.push_str("ffd9ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526272829");
+    t.push_str("2a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffc4001f0000");
+    t.push_str("010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f000b30557a9fc4e9");
+    t.push_str("0e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/nikon_le.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526272829");
+    t.push_str("2a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda000c0301");
+    t.push_str("0002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489ae");
+    t.push_str("d3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/no_app0.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffdb0043000102030405060708090a0b0c0d0e0f1011121314151617");
+    t.push_str("18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40");
+    v.push(DataFile { path: "img/no_sos.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("474946383961010001000000003b");
+    v.push(DataFile { path: "img/not_jpeg.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffdb0043000102030405060708090a0b0c0d0e0f1011121314151617");
+    t.push_str("18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010");
+    t.push_str("001003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda00");
+    t.push_str("0c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f");
+    t.push_str("6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/plain.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4578696600004d4d002a000000080001010f0002000000080000001a000000005261774578696600");
+    v.push(DataFile { path: "img/raw_exif.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe1002a4578696600004d4d002a000000080001011a0005000000030000001a000000000000004800000001ffdb");
+    t.push_str("0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d");
+    t.push_str("2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11");
+    t.push_str("365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/short_rational.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100bb45786966000049492a000800000000000e00000003000301030001000000060000000102040001000000");
+    t.push_str("3800000002020400010000007b00000000000000ffd8ffe000104a46494600010100004800480000ffdb004300010203");
+    t.push_str("0405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233");
+    t.push_str("3435363738393a3b3c3d3e3f40ffda0008010100003f00030507090b0d0f11131517191b1d1f21232527292b2dffd9ff");
+    t.push_str("db0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c");
+    t.push_str("2d2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec");
+    t.push_str("11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/thumb_only.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d4d002a000000080002010000030000000100080000010f0002000000090000002600000000426967205363616e0000");
+    v.push(DataFile { path: "img/tiff_be.tif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("49492a000800000005000001040001000000100000000101040001000000100000000301030001000000010000000f01");
+    t.push_str("02000c0000004a000000698704000100000056000000000000005363616e6e657220496e6300010000a3070001000000");
+    t.push_str("0300000000000000000000000000000000000000");
+    v.push(DataFile { path: "img/tiff_le.tif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe100284578696600004d4d002a000000080001010f000200000006");
+    t.push_str("0000001a00000000466972737400ffe1002a4578696600004d4d002a000000080001010f0002000000070000001a0000");
+    t.push_str("00005365636f6e640000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021");
+    t.push_str("22232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b3055");
+    t.push_str("7a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/two_exif.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946464c00000057454250565038580a000000040000003f00002f000056503820190000003001009d012a40003000");
+    t.push_str("00000000000000000000000000000000584d50200c0000003c783a786d706d6574612f3e");
+    v.push(DataFile { path: "img/xmp.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe10059687474703a2f2f6e732e61646f62652e636f6d2f7861702f312e302f003c783a786d706d65746120786d");
+    t.push_str("6c6e733a783d2261646f62653a6e733a6d6574612f223e3c7264663a5244462f3e3c2f783a786d706d6574613effe100");
+    t.push_str("5e4578696600004d4d002a000000080002013100020000000d000000268769000400000001000000340000000047494d");
+    t.push_str("5020322e31302e333800000001900300020000001400000042323032353a31323a33312032333a35393a353900ffdb00");
+    t.push_str("43000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e");
+    t.push_str("2f303132333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda000c03010002110311");
+    t.push_str("003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d4267");
+    t.push_str("8cb1d6ffd9");
+    v.push(DataFile { path: "img/xmp_first.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe1002e45786966000049492a000800000002000201030000000000000000000f01020000000000000000000000");
+    t.push_str("0000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526272829");
+    t.push_str("2a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587d");
+    t.push_str("a2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "img/zero_count.jpg".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"name\": \"load img/anim.webp\", \"steps\": [[\"load\", \"d\", \"img/anim.webp\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/app1_not_exif.jpg\", \"steps\": [[\"load\", \"d\", \"img/app1_not_exif.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/app2_icc.jpg\", \"steps\": [[\"load\", \"d\", \"img/app2_icc.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/ascii_count_1.jpg\", \"steps\": [[\"load\", \"d\", \"img/ascii_count_1.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/bad_type.jpg\", \"steps\": [[\"load\", \"d\", \"img/bad_type.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/canon_be.jpg\", \"steps\": [[\"load\", \"d\", \"img/canon_be.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/cut_exif.jpg\", \"steps\": [[\"load\", \"d\", \"img/cut_exif.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/cut_ifd.jpg\", \"steps\": [[\"load\", \"d\", \"img/cut_ifd.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/exif_only_0th.jpg\", \"steps\": [[\"load\", \"d\", \"img/exif_only_0th.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/extended.webp\", \"steps\": [[\"load\", \"d\", \"img/extended.webp\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/first_no_thumb.jpg\", \"steps\": [[\"load\", \"d\", \"img/first_no_thumb.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/lossless.webp\", \"steps\": [[\"load\", \"d\", \"img/lossless.webp\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/lossy.webp\", \"steps\": [[\"load\", \"d\", \"img/lossy.webp\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/nikon_le.jpg\", \"steps\": [[\"load\", \"d\", \"img/nikon_le.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/no_app0.jpg\", \"steps\": [[\"load\", \"d\", \"img/no_app0.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/no_sos.jpg\", \"steps\": [[\"load\", \"d\", \"img/no_sos.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/not_jpeg.jpg\", \"steps\": [[\"load\", \"d\", \"img/not_jpeg.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/plain.jpg\", \"steps\": [[\"load\", \"d\", \"img/plain.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/raw_exif.bin\", \"steps\": [[\"load\", \"d\", \"img/raw_exif.bin\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/short_rational.jpg\", \"steps\": [[\"load\", \"d\", \"img/short_rational.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/thumb_only.jpg\", \"steps\": [[\"load\", \"d\", \"img/thumb_only.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/tiff_be.tif\", \"steps\": [[\"load\", \"d\", \"img/tiff_be.tif\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/tiff_le.tif\", \"steps\": [[\"load\", \"d\", \"img/tiff_le.tif\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/two_exif.jpg\", \"steps\": [[\"load\", \"d\", \"img/two_exif.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/xmp.webp\", \"steps\": [[\"load\", \"d\", \"img/xmp.webp\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/xmp_first.jpg\", \"steps\": [[\"load\", \"d\", \"img/xmp_first.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load img/zero_count.jpg\", \"steps\": [[\"load\", \"d\", \"img/zero_count.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load by name\", \"steps\": [[\"loadn\", \"d\", \"img/nikon_le.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load by name, big-endian\", \"steps\": [[\"loadn\", \"d\", \"img/canon_be.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load bytes\", \"steps\": [[\"loadb\", \"d\", \"img/xmp_first.jpg\"], [\"show\", \"d\"], [\"loadb\", \"e\", \"img/tiff_be.tif\"], [\"show\", \"e\"], [\"loadb\", \"w\", \"img/extended.webp\"], [\"show\", \"w\"]]}\n");
+    t.push_str("{\"name\": \"load bytes of an XMP-first file finds the Exif segment\", \"steps\": [[\"loadb\", \"d\", \"img/two_exif.jpg\"], [\"show\", \"d\"], [\"load\", \"e\", \"img/two_exif.jpg\"], [\"show\", \"e\"]]}\n");
+    t.push_str("{\"name\": \"load raw Exif bytes\", \"steps\": [[\"loadx\", \"d\", {\"b\": \"Exif\\u0000\\u0000MM\\u0000*\\u0000\\u0000\\u0000\\b\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"load a webp without VP8X\", \"steps\": [[\"load\", \"d\", \"img/lossy.webp\"]]}\n");
+    t.push_str("{\"name\": \"load short TIFF\", \"steps\": [[\"loadx\", \"d\", {\"b\": \"II*\\u0000\\b\\u0000\"}]]}\n");
+    t.push_str("{\"name\": \"load TIFF with a bad pointer\", \"steps\": [[\"loadx\", \"d\", {\"b\": \"MM\\u0000*\\u0000\\u0000\\u0000@\\u0000\\u0001\"}]]}\n");
+    t.push_str("{\"name\": \"load a JPEG whose segment walk runs off\", \"steps\": [[\"loadx\", \"d\", {\"b\": \"\\u00ff\\u00d8\\u00ff\\u00e0\\u0000\\u0002\"}]]}\n");
+    t.push_str("{\"name\": \"load a JPEG with only SOI\", \"steps\": [[\"loadx\", \"d\", {\"b\": \"\\u00ff\\u00d8\"}]]}\n");
+    t.push_str("{\"name\": \"dump and load back\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"Kaabe\", \"272\": \"K-1\", \"282\": [72, 1], \"283\": [72, 1], \"296\": 2, \"274\": 1, \"258\": [8, 8, 8], \"306\": \"2026:10:21 12:00:00\"}, \"Exif\": {\"36867\": \"2026:10:21 12:00:00\", \"33434\": [1, 125], \"37510\": {\"b\": \"ASCII\\u0000\\u0000\\u0000hi\"}, \"37380\": [-2, 3], \"34855\": 400}, \"GPS\": {\"0\": [2, 3, 0, 0], \"1\": \"N\", \"2\": [[1, 1], [2, 1], [3, 1]]}, \"Interop\": {\"1\": \"R98\"}, \"1st\": {\"259\": 6}, \"thumbnail\": {\"file\": \"img/plain.jpg\"}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump empty\", \"steps\": [[\"dict\", \"x\", {}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"], [\"dict\", \"y\", {\"0th\": {}, \"Exif\": {}, \"GPS\": {}, \"Interop\": {}, \"1st\": {}, \"thumbnail\": null}], [\"dump\", \"c\", \"y\"], [\"show\", \"c\"]]}\n");
+    t.push_str("{\"name\": \"dump drops stale pointer tags\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"34665\": 999, \"34853\": 5, \"271\": \"A\"}, \"Exif\": {\"40965\": 1}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump Interop without Exif\", \"steps\": [[\"dict\", \"x\", {\"0th\": {}, \"Interop\": {\"1\": \"R03\"}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 1st without a thumbnail\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"A\"}, \"1st\": {\"259\": 6}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"]]}\n");
+    t.push_str("{\"name\": \"dump thumbnail without 1st\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"A\"}, \"thumbnail\": {\"file\": \"img/plain.jpg\"}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"]]}\n");
+    t.push_str("{\"name\": \"dump a thumbnail's APP segments are dropped\", \"steps\": [[\"dict\", \"x\", {\"1st\": {\"259\": 6}, \"thumbnail\": {\"file\": \"img/app2_icc.jpg\"}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump every type\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"336\": [1, 2, 3, 4, 5], \"11\": \"\", \"269\": \"abc\", \"270\": \"four\", \"271\": {\"b\": \"raw\\u00e9\"}, \"305\": \"caf\\u00e9\", \"274\": [3], \"258\": [1, 2], \"301\": [1, 2, 3], \"254\": 0, \"273\": [1, 2], \"282\": [[1, 2]], \"318\": [[1, 2], [3, 4]], \"60608\": [-1, 2], \"60609\": [-300], \"60610\": [0.5, -1.5], \"50940\": [0.1], \"50938\": 2.5, \"50715\": [-1, 2], \"50721\": [[1, -2], [-3, 4]], \"37398\": [1, 0, 0, 0], \"700\": {\"b\": \"<x/>\"}, \"530\": [2, 2]}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump short undefined\", \"steps\": [[\"dict\", \"x\", {\"Exif\": {\"36864\": {\"b\": \"02\"}, \"37500\": {\"b\": \"\"}}}], [\"dump\", \"b\", \"x\"], [\"show\", \"b\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump an unknown tag\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"9999\": 1}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump a str where bytes belong\", \"steps\": [[\"dict\", \"x\", {\"Exif\": {\"37500\": \"text\"}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump bytes where a short belongs\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"274\": {\"b\": \"ab\"}}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump a non-latin-1 string\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"\\u2603\"}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump an int where ASCII belongs\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": 5}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 274 70000\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"274\": 70000}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 254 -1\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"254\": -1}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 336 [256]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"336\": [256]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 60608 [200]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"60608\": [200]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 282 [-1, 2]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"282\": [-1, 2]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 60609 [40000]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"60609\": [40000]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 50715 [3000000000, 1]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"50715\": [3000000000, 1]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 301 [1, -1, 2]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"301\": [1, -1, 2]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump out of range: 273 [5, 4294967296]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"273\": [5, 4294967296]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 282 as [1, 2, 3]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"282\": [1, 2, 3]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 282 as 72\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"282\": 72}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 318 as [[1, 2], [3, 4, 5]]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"318\": [[1, 2], [3, 4, 5]]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 274 as \\\"x\\\"\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"274\": \"x\"}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 254 as 1.5\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"254\": 1.5}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump Exif 36864 as [1, 2]\", \"steps\": [[\"dict\", \"x\", {\"Exif\": {\"36864\": [1, 2]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 271 as [1, 2]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": [1, 2]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 50715 as [0.5, 2]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"50715\": [0.5, 2]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 50940 as 5\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"50940\": 5}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 60610 as [1, 2]\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"60610\": [1, 2]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump 0th 336 as bytes\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"336\": {\"b\": \"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\"}}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump GPS 2 as [[1, 1], [2, 1]]\", \"steps\": [[\"dict\", \"x\", {\"GPS\": {\"2\": [[1, 1], [2, 1]]}}], [\"dump\", \"b\", \"x\"], [\"loadx\", \"d\", {\"v\": \"b\"}], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"dump a rational given as floats\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"282\": [0.5, 1]}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump a too-large thumbnail\", \"steps\": [[\"dict\", \"x\", {\"1st\": {\"259\": 6}, \"thumbnail\": {\"b\": \"\\u00ff\\u00d8\\u00ff\\u00da\", \"then\": \"x\", \"times\": 64001}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"dump a thumbnail that is not a JPEG\", \"steps\": [[\"dict\", \"x\", {\"1st\": {\"259\": 6}, \"thumbnail\": {\"b\": \"PNG\"}}], [\"dump\", \"b\", \"x\"]]}\n");
+    t.push_str("{\"name\": \"insert into a file with APP0\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"Kaabe\"}}], [\"dump\", \"b\", \"x\"], [\"insert\", \"b\", \"img/plain.jpg\", \"out/plain_exif.jpg\"], [\"file\", \"out/plain_exif.jpg\"], [\"load\", \"d\", \"out/plain_exif.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"insert replaces an existing Exif\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"Replaced\"}}], [\"dump\", \"b\", \"x\"], [\"insert\", \"b\", \"img/exif_only_0th.jpg\", \"out/replaced.jpg\"], [\"file\", \"out/replaced.jpg\"], [\"load\", \"d\", \"out/replaced.jpg\"], [\"show\", \"d\"]]}\n");
+    t.push_str("{\"name\": \"insert without APP0\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"NoApp0\"}}], [\"dump\", \"b\", \"x\"], [\"insert\", \"b\", \"img/no_app0.jpg\", \"out/no_app0.jpg\"], [\"file\", \"out/no_app0.jpg\"], [\"insert\", \"b\", \"img/thumb_only.jpg\", \"out/thumb_only.jpg\"], [\"file\", \"out/thumb_only.jpg\"], [\"insert\", \"b\", \"img/xmp_first.jpg\", \"out/xmp_first.jpg\"], [\"file\", \"out/xmp_first.jpg\"]]}\n");
+    t.push_str("{\"name\": \"insert into webp\", \"steps\": [[\"dict\", \"x\", {\"0th\": {\"271\": \"Kaabe\", \"272\": \"Web\"}}], [\"dump\", \"b\", \"x\"], [\"insert\", \"b\", \"img/lossy.webp\", \"out/lossy.webp\"], [\"file\", \"out/lossy.webp\"], [\"load\", \"d\", \"out/lossy.webp\"], [\"show\", \"d\"], [\"insert\", \"b\", \"img/lossless.webp\", \"out/lossless.webp\"], [\"file\", \"out/lossless.webp\"], [\"insert\", \"b\", \"img/xmp.webp\", \"out/xmp.webp\"], [\"file\", \"out/xmp.webp\"], [\"insert\", \"b\", \"img/anim.webp\", \"out/anim.webp\"], [\"file\", \"out/anim.webp\"], [\"insert\", \"b\", \"img/extended.webp\", \"out/extended.webp\"], [\"file\", \"out/extended.webp\"], [\"load\", \"e\", \"out/extended.webp\"], [\"show\", \"e\"]]}\n");
+    t.push_str("{\"name\": \"insert data that is not Exif\", \"steps\": [[\"bytes\", \"junk\", {\"b\": \"Exif\\u0000MM\"}], [\"insert\", \"junk\", \"img/plain.jpg\", \"out/x.jpg\"]]}\n");
+    t.push_str("{\"name\": \"insert into a file that is not an image\", \"steps\": [[\"dict\", \"x\", {}], [\"dump\", \"b\", \"x\"], [\"insert\", \"b\", \"img/not_jpeg.jpg\", \"out/x.jpg\"]]}\n");
+    t.push_str("{\"name\": \"remove\", \"steps\": [[\"remove\", \"img/canon_be.jpg\", \"out/canon_clean.jpg\"], [\"file\", \"out/canon_clean.jpg\"], [\"load\", \"d\", \"out/canon_clean.jpg\"], [\"show\", \"d\"], [\"remove\", \"img/plain.jpg\", \"out/plain_clean.jpg\"], [\"file\", \"out/plain_clean.jpg\"], [\"remove\", \"img/two_exif.jpg\", \"out/two_clean.jpg\"], [\"file\", \"out/two_clean.jpg\"], [\"remove\", \"img/extended.webp\", \"out/extended_clean.webp\"], [\"file\", \"out/extended_clean.webp\"], [\"remove\", \"img/lossy.webp\", \"out/lossy_clean.webp\"], [\"file\", \"out/lossy_clean.webp\"], [\"remove\", \"img/xmp.webp\", \"out/xmp_clean.webp\"], [\"file\", \"out/xmp_clean.webp\"]]}\n");
+    t.push_str("{\"name\": \"transplant\", \"steps\": [[\"transplant\", \"img/canon_be.jpg\", \"img/plain.jpg\", \"out/t1.jpg\"], [\"load\", \"d\", \"out/t1.jpg\"], [\"show\", \"d\"], [\"transplant\", \"img/nikon_le.jpg\", \"img/exif_only_0th.jpg\", \"out/t2.jpg\"], [\"file\", \"out/t2.jpg\"], [\"transplant\", \"img/xmp_first.jpg\", \"img/no_app0.jpg\", \"out/t3.jpg\"], [\"file\", \"out/t3.jpg\"], [\"transplant\", \"img/plain.jpg\", \"img/canon_be.jpg\", \"out/t4.jpg\"]]}\n");
+    t.push_str("{\"name\": \"edit and write back\", \"steps\": [[\"load\", \"d\", \"img/canon_be.jpg\"], [\"set\", \"d\", \"0th\", 315, \"Ana Ruiz-Ortega\"], [\"set\", \"d\", \"Exif\", 36867, {\"b\": \"2026:07:14 10:12:30\"}], [\"del\", \"d\", \"GPS\", 2], [\"del\", \"d\", \"GPS\", 4], [\"set\", \"d\", \"0th\", 274, 6], [\"set\", \"d\", \"thumbnail\", 0, null], [\"dump\", \"b\", \"d\"], [\"insert\", \"b\", \"img/canon_be.jpg\", \"out/edited.jpg\"], [\"load\", \"e\", \"out/edited.jpg\"], [\"show\", \"e\"]]}\n");
+    t.push_str("{\"name\": \"round trip of a little-endian file\", \"steps\": [[\"load\", \"d\", \"img/nikon_le.jpg\"], [\"dump\", \"b\", \"d\"], [\"insert\", \"b\", \"img/plain.jpg\", \"out/nikon_be.jpg\"], [\"load\", \"e\", \"out/nikon_be.jpg\"], [\"show\", \"e\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"ASCII\\u0000\\u0000\\u0000hello\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"UNICODE\\u0000\\u0000h\\u0000i\\u00d8=\\u00de\\u0000\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"UNICODE\\u0000\\u0000a\\u00d8\\u0000\\u0000b\\u0000\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"UNICODE\\u0000\\u0000a\\u0000b\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"UNICODE\\u0000\\u00dc\\u0000\\u0000z\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"JIS\\u0000\\u0000\\u0000\\u0000\\u0000plain text\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"ASCII\\u0000\\u0000\\u0000caf\\u00e9\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000blank\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"ASCII\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"EBCDIC\\u0000\\u0000x\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.load\", \"steps\": [[\"ucload\", {\"b\": \"ASCII\\u0000\\u0000\\u0000\"}]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"hello\", \"ascii\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"caf\\u00e9 \\u2603\", \"ascii\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"h\\u00e9 \\ud83d\\ude00\", \"unicode\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"plain\", \"jis\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"x\", \"latin-1\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"\", \"unicode\"]]}\n");
+    t.push_str("{\"name\": \"UserComment.dump\", \"steps\": [[\"ucdump\", \"a\\u0000b\", \"ascii\"]]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe1029045786966000049492a000800000006000f01020005000000");
+    t.push_str("5600000010010200090000005c0000001201030001000000080000003201020014000000660000006987040001000000");
+    t.push_str("7a000000258804000100000050010000de010000534f4e590000494c43452d374d340000323032363a30373a31352030");
+    t.push_str("363a30353a31300009009a82050001000000e80000009d82050001000000f00000002788030001000000400600000390");
+    t.push_str("020014000000f80000000a920500010000000c0100007c9207001c0000001401000030a40200090000003001000031a4");
+    t.push_str("0200080000003a01000034a402000d00000042010000010000003c000000380000000a000000323032363a30373a3135");
+    t.push_str("2030363a30353a3130002300000001000000534f4e592044534320000000000102030405060708090a0b0c0d0e0f416e");
+    t.push_str("61205275697a0000343837323231310046452033356d6d2046312e380000070000000100040000000202000001000200");
+    t.push_str("020000004e0000000200050003000000a60100000300020002000000570000000400050003000000be01000005000100");
+    t.push_str("01000000000000000600050001000000d601000026000000010000002900000001000000be1400006400000009000000");
+    t.push_str("010000001900000001000000da07000064000000b00400000a0000000300030103000100000006000000010204000100");
+    t.push_str("00000802000002020400010000008000000000000000ffd8ffe000104a46494600010100004800480000ffdb00430001");
+    t.push_str("02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031");
+    t.push_str("32333435363738393a3b3c3d3e3f40ffda0008010100003f00030a11181f262d343b424950575e656c737a81888f969d");
+    t.push_str("a4abb2b9ffd9ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425");
+    t.push_str("262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda");
+    t.push_str("000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a");
+    t.push_str("3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/DSC00417.JPG".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe103084578696600004d4d002a00000008000a010f000200000006");
+    t.push_str("00000086011000020000000d0000008c011200030000000100010000011a00050000000100000099011b000500000001");
+    t.push_str("000000a10128000300000001000200000132000200000014000000a9013b000200000009000000bd8769000400000001");
+    t.push_str("000000c68825000400000001000001a90000023743616e6f6e0043616e6f6e20454f5320523600000000480000000100");
+    t.push_str("00004800000001323032363a30373a31342030393a31323a333000416e61205275697a000009829a0005000000010000");
+    t.push_str("0134829d0005000000010000013c882700030000000100c8000090030002000000140000014490040002000000140000");
+    t.push_str("0158920a0005000000010000016c928600070000001100000174a43100020000000d00000185a4340002000000170000");
+    t.push_str("019200000001000000fa000000200000000a323032363a30373a31342030393a31323a333000323032363a30373a3134");
+    t.push_str("2030393a31323a33300000000018000000014153434949000000486f6c69646179203130383330323130303031323300");
+    t.push_str("524632342d3130356d6d204634204c2049532055534d00000700000001000000040203000000010002000000024e0000");
+    t.push_str("000002000500000003000001ff0003000200000002570000000004000500000003000002170005000100000001000000");
+    t.push_str("0000060005000000010000022f00000026000000010000002a0000000100000c30000000640000000900000001000000");
+    t.push_str("0800000001000008e800000064000001fe0000000a0006010300030000000100060000011a0005000000010000028501");
+    t.push_str("1b0005000000010000028d01280003000000010002000002010004000000010000029502020004000000010000006b00");
+    t.push_str("00000000000048000000010000004800000001ffd8ffdb0043000102030405060708090a0b0c0d0e0f10111213141516");
+    t.push_str("1718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda00080101");
+    t.push_str("00003f0003070b0f13171b1f23272b2f33373b3f43474b4f53575b5fffd9ffdb0043000102030405060708090a0b0c0d");
+    t.push_str("0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d");
+    t.push_str("3e3f40ffc00011080010001003012200021101031101ffc4001f00000105010101010101000000000000000001020304");
+    t.push_str("05060708090a0bffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cd");
+    t.push_str("f2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/IMG_0001.JPG".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe1026f4578696600004d4d002a000000080009010f000200000006");
+    t.push_str("0000007a011000020000000d00000080011200030000000100010000011a0005000000010000008d011b000500000001");
+    t.push_str("0000009501280003000000010002000001320002000000140000009d013b000200000009000000b18769000400000001");
+    t.push_str("000000ba0000019d43616e6f6e0043616e6f6e20454f532052360000000048000000010000004800000001323032363a");
+    t.push_str("30373a31342031333a34303a303200416e61205275697a000009829a00050000000100000128829d0005000000010000");
+    t.push_str("013088270003000000010190000090030002000000140000013890040002000000140000014c920a0005000000010000");
+    t.push_str("0160928600070000001100000168a43100020000000d00000179a4340002000000170000018600000001000001f40000");
+    t.push_str("00240000000a323032363a30373a31342031333a34303a303200323032363a30373a31342031333a34303a3032000000");
+    t.push_str("0030000000014153434949000000486f6c69646179203230383330323130303031323300524632342d3130356d6d2046");
+    t.push_str("34204c2049532055534d000006010300030000000100060000011a000500000001000001eb011b000500000001000001");
+    t.push_str("f30128000300000001000200000201000400000001000001fb02020004000000010000006c0000000000000048000000");
+    t.push_str("010000004800000001ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    t.push_str("2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda0008010100003f0003080d12171c");
+    t.push_str("21262b30353a3f44494e53585d62676c71767bffd9ffdb0043000102030405060708090a0b0c0d0e0f10111213141516");
+    t.push_str("1718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc000110800");
+    t.push_str("10001003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda");
+    t.push_str("000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a");
+    t.push_str("3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/IMG_0002.JPG".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe102704578696600004d4d002a000000080009010f000200000006");
+    t.push_str("0000007a011000020000000d00000080011200030000000100010000011a0005000000010000008d011b000500000001");
+    t.push_str("0000009501280003000000010002000001320002000000140000009d013b000200000009000000b18769000400000001");
+    t.push_str("000000ba0000019d43616e6f6e0043616e6f6e20454f532052360000000048000000010000004800000001323032363a");
+    t.push_str("30373a31342030393a31323a333000416e61205275697a000009829a00050000000100000128829d0005000000010000");
+    t.push_str("013088270003000000010320000090030002000000140000013890040002000000140000014c920a0005000000010000");
+    t.push_str("0160928600070000001100000168a43100020000000d00000179a4340002000000170000018600000001000002ee0000");
+    t.push_str("00280000000a323032363a30373a31342030393a31323a333000323032363a30373a31342030393a31323a3330000000");
+    t.push_str("0048000000014153434949000000486f6c69646179203330383330323130303031323300524632342d3130356d6d2046");
+    t.push_str("34204c2049532055534d000006010300030000000100060000011a000500000001000001eb011b000500000001000001");
+    t.push_str("f30128000300000001000200000201000400000001000001fb02020004000000010000006d0000000000000048000000");
+    t.push_str("010000004800000001ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    t.push_str("2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda0008010100003f0003090f151b21");
+    t.push_str("272d33393f454b51575d63696f757b81878d9399ffd9ffdb0043000102030405060708090a0b0c0d0e0f101112131415");
+    t.push_str("161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc0001108");
+    t.push_str("0010001003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bff");
+    t.push_str("da000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f5");
+    t.push_str("1a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/IMG_0003.JPG".to_string(), hex: true, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffe102794578696600004d4d002a000000080009010f000200000006");
+    t.push_str("0000007a011000020000001500000080011200030000000100010000011a00050000000100000095011b000500000001");
+    t.push_str("0000009d0128000300000001000200000132000200000014000000a5013b000200000009000000b98769000400000001");
+    t.push_str("000000c2000001a543616e6f6e0043616e6f6e20454f53205236204d61726b2049490000000048000000010000004800");
+    t.push_str("000001323032363a30373a31352032333a32303a343500416e61205275697a000009829a00050000000100000130829d");
+    t.push_str("00050000000100000138882700030000000106400000900300020000001400000140900400020000001400000154920a");
+    t.push_str("00050000000100000168928600070000001100000170a43100020000000d00000181a4340002000000170000018e0000");
+    t.push_str("0001000003e80000002c0000000a323032363a30373a31352032333a32303a343500323032363a30373a31352032333a");
+    t.push_str("32303a34350000000060000000014153434949000000486f6c6964617920343130323034343030313837370052463234");
+    t.push_str("2d3130356d6d204634204c2049532055534d000006010300030000000100060000011a000500000001000001f3011b00");
+    t.push_str("0500000001000001fb01280003000000010002000002010004000000010000020302020004000000010000006e000000");
+    t.push_str("0000000048000000010000004800000001ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718");
+    t.push_str("191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda000801010000");
+    t.push_str("3f00030a11181f262d343b424950575e656c737a81888f969da4abb2b9ffd9ffdb0043000102030405060708090a0b0c");
+    t.push_str("0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c");
+    t.push_str("3d3e3f40ffc00011080010001003012200021101031101ffc4001f000001050101010101010000000000000000010203");
+    t.push_str("0405060708090a0bffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8");
+    t.push_str("cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/IMG_0107.JPG".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe1018245786966000049492a000800000006000f010200070000005600000010010200080000005e0000001201");
+    t.push_str("0300010000000100000032010200140000006600000069870400010000007a0000002588040001000000f80000000000");
+    t.push_str("0000476f6f676c650000506978656c203800323032363a30383a30312031383a33303a30350006009a82050001000000");
+    t.push_str("c40000009d82050001000000cc00000027880300010000002d0000000390020014000000d40000001190020007000000");
+    t.push_str("e80000000a92050001000000f000000001000000e8030000a800000064000000323032363a30383a30312031383a3330");
+    t.push_str("3a3035002b30323a303000009a1a0000e803000006000100020002000000530000000200050003000000420100000300");
+    t.push_str("0200020000005700000004000500030000005a0100000500010001000000010000000600050001000000720100001600");
+    t.push_str("000001000000390000000100000028050000640000002b000000010000000c000000010000004e0c0000640000002300");
+    t.push_str("00000a000000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425");
+    t.push_str("262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda");
+    t.push_str("000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a");
+    t.push_str("3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/PXL_20260801_183005123.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe100724578696600004d4d002a000000080003010f00020000000d00000032011000020000000700000040ffda");
+    t.push_str("000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a");
+    t.push_str("3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/broken.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe10059687474703a2f2f6e732e61646f62652e636f6d2f7861702f312e302f003c783a786d706d65746120786d");
+    t.push_str("6c6e733a783d2261646f62653a6e733a6d6574612f223e3c7264663a5244462f3e3c2f783a786d706d6574613effe100");
+    t.push_str("8a4578696600004d4d002a000000080004010f0002000000060000003e011000020000000d0000004401310002000000");
+    t.push_str("0d000000528769000400000001000000600000000043616e6f6e0043616e6f6e20454f53205236000047494d5020322e");
+    t.push_str("31302e33380000000190030002000000140000006e323032363a30373a31342031333a34303a303200ffdb0043000102");
+    t.push_str("030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132");
+    t.push_str("333435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda000c03010002110311003f000b");
+    t.push_str("30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ff");
+    t.push_str("d9");
+    v.push(DataFile { path: "photos/edited.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("shopping: milk, eggs\n");
+    v.push(DataFile { path: "photos/notes.txt.jpg".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffdb0043000102030405060708090a0b0c0d0e0f1011121314151617");
+    t.push_str("18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010");
+    t.push_str("001003012200021101031101ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14");
+    t.push_str("395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9");
+    v.push(DataFile { path: "photos/scan_0042.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946461c000000574542505650384c0f0000002f3fc00b100000000000000000000000");
+    v.push(DataFile { path: "photos/screenshot.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946461201000057454250565038580a000000080000003f00002f000056503820190000003001009d012a40003000");
+    t.push_str("0000000000000000000000000000000045584946d20000004d4d002a000000080004010f0002000000070000003e0110");
+    t.push_str("0002000000080000004687690004000000010000004e88250004000000010000007000000000476f6f676c6500005069");
+    t.push_str("78656c203800000190030002000000140000005c323032363a30383a30322031303a30313a3030000004000100020000");
+    t.push_str("00024e0000000002000500000003000000a20003000200000002570000000004000500000003000000ba000000260000");
+    t.push_str("00010000002b0000000100000078000000640000000900000001000000090000000100000ce400000064");
+    v.push(DataFile { path: "photos/vacation.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("time,lat,lon,ele\n");
+    t.push_str("2026-07-14T06:50:00Z,38.700100,-9.170200,12.0\n");
+    t.push_str("2026-07-14T07:05:00Z,38.705400,-9.141900,48.5\n");
+    t.push_str("2026-07-14T07:20:00Z,38.713200,-9.133600,90.0\n");
+    t.push_str("2026-07-14T11:30:00Z,38.691500,-9.215800,4.2\n");
+    t.push_str("2026-07-14T12:45:00Z,38.676300,-9.326900,-2.0\n");
+    t.push_str("2026-07-15T05:00:00Z,38.697700,-9.420600,30.0\n");
+    t.push_str("2026-07-15T05:10:00Z,38.700100,-9.424300,35.5\n");
+    t.push_str("2026-07-15T22:00:00Z,38.721300,-9.139500,77.0\n");
+    v.push(DataFile { path: "track.csv".to_string(), hex: false, body: t });
+}

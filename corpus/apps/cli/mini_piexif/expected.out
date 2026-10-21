@@ -1,0 +1,1352 @@
+== load img/anim.webp
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/app1_not_exif.jpg
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/app2_icc.jpg
+  d loaded
+  d = {
+    0th:
+      274: 3
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/ascii_count_1.jpg
+  d loaded
+  d = {
+    0th:
+      271: b''
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/bad_type.jpg
+  load: error ValueError: Exif might be wrong. Got incorrect value type to decode.\ntag: 271\ntype: 13
+== load img/canon_be.jpg
+  d loaded
+  d = {
+    0th:
+      271: b'Canon'
+      272: b'Canon EOS R6'
+      274: 1
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      305: b'Firmware Version 1.8.1'
+      306: b'2026:07:14 09:12:30'
+      315: b'Ana Ruiz'
+      34665: 233
+      34853: 485
+    Exif:
+      33434: (1, 250)
+      33437: (40, 10)
+      34855: 200
+      36864: b'0231'
+      36867: b'2026:07:14 09:12:30'
+      36868: b'2026:07:14 09:12:30'
+      37386: (85, 1)
+      41987: 0
+      42033: b'083021000123'
+      42035: b'Canon'
+      42036: b'RF85mm F2 MACRO IS STM'
+      40965: 627
+    GPS:
+      0: (2, 2, 0, 0)
+      1: b'N'
+      2: ((40, 1), (26, 1), (4659, 100))
+      3: b'W'
+      4: ((79, 1), (58, 1), (5640, 100))
+      5: 0
+      6: (2310, 10)
+    Interop:
+      1: b'R98'
+    1st:
+      259: 6
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      513: 735
+      514: 108
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x08\r\x12\x17\x1c!&+05:?DINSX]bglqv{\xff\xd9'
+  }
+== load img/cut_exif.jpg
+  load: error error: unpack requires a buffer of 2 bytes
+== load img/cut_ifd.jpg
+  load: error error: unpack requires a buffer of 4 bytes
+== load img/exif_only_0th.jpg
+  d loaded
+  d = {
+    0th:
+      271: b'Apple'
+      272: b'iPhone 15 Pro'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/extended.webp
+  d loaded
+  d = {
+    0th:
+      271: b'Google'
+      272: b'Pixel 8'
+      34665: 66
+    Exif:
+      36867: b'2026:08:01 18:30:05'
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/first_no_thumb.jpg
+  d loaded
+  d = {
+    0th:
+      271: b'X'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st:
+      259: 6
+    thumbnail: None
+  }
+== load img/lossless.webp
+  load: error ValueError: doesnot have exif
+== load img/lossy.webp
+  load: error ValueError: doesnot have exif
+== load img/nikon_le.jpg
+  d loaded
+  d = {
+    0th:
+      11: b'no-nu'
+      258: (8, 8, 8)
+      269: b'abc'
+      271: b'NIKON CORPORATION'
+      272: b'NIKON Z 6_2'
+      274: 6
+      282: (300, 1)
+      283: (300, 1)
+      296: 2
+      305: b'Ver.01.10'
+      306: b'2026:05:02 17:44:09'
+      315: b''
+      318: ((313, 1000), (329, 1000))
+      336: (1, 2, 3, 4, 5, 6)
+      531: 2
+      700: (60, 120, 47, 62)
+      34665: 494
+      34853: 858
+      50715: (-1, 3)
+      50721: ((7, -2), (-5, 4))
+      50938: (1.5, 0.10000000149011612, -3.0)
+      50940: 0.25
+      60608: (-3, 4, -128, 127, 0)
+      60609: (-2, 30000)
+      60610: (0.5, -2.25)
+    Exif:
+      33434: (1, 200)
+      33437: (28, 10)
+      34855: 800
+      36864: b'0232'
+      36867: b'2026:05:02 17:44:09'
+      36868: b'2026:05:02 17:44:09'
+      37377: (7643856, 1000000)
+      37380: (-1, 3)
+      37386: (50, 1)
+      37500: b'Nikon\x00\x02\x11\x00\x00MM\x00*\x00\x00\x00\x08'
+      37510: b'ASCII\x00\x00\x00 shot at dusk'
+      40960: b'0100'
+      40965: 1084
+      41986: 0
+      42033: b'6012345'
+      42036: b'NIKKOR Z 24-70mm f/4 S'
+    GPS:
+      0: (2, 3, 0, 0)
+      1: b'S'
+      2: ((33, 1), (51, 1), (3192, 100))
+      3: b'E'
+      4: ((151, 1), (12, 1), (3984, 100))
+      5: 0
+      6: (5800, 100)
+      7: ((7, 1), (44, 1), (9, 1))
+      27: b'ASCII\x00\x00\x00GPS'
+      29: b'2026:05:02'
+    Interop:
+      1: b'R98'
+    1st:
+      259: 6
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      513: 1204
+      514: 130
+    thumbnail: b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x0c\x15\x1e\'09BKT]fox\x81\x8a\x93\x9c\xa5\xae\xb7\xc0\xc9\xd2\xdb\xe4\xed\xf6\x04\xff\xd9'
+  }
+== load img/no_app0.jpg
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/no_sos.jpg
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/not_jpeg.jpg
+  load: error InvalidImageDataError: Given file is neither JPEG nor TIFF.
+== load img/plain.jpg
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/raw_exif.bin
+  load: error InvalidImageDataError: Given file is neither JPEG nor TIFF.
+== load img/short_rational.jpg
+  load: error error: unpack requires a buffer of 4 bytes
+== load img/thumb_only.jpg
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st:
+      259: 6
+      513: 56
+      514: 123
+    thumbnail: b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x05\x07\t\x0b\r\x0f\x11\x13\x15\x17\x19\x1b\x1d\x1f!#%\')+-\xff\xd9'
+  }
+== load img/tiff_be.tif
+  d loaded
+  d = {
+    0th:
+      256: 8
+      271: b'Big Scan'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/tiff_le.tif
+  d loaded
+  d = {
+    0th:
+      256: 16
+      257: 16
+      259: 1
+      271: b'Scanner Inc'
+      34665: 86
+    Exif:
+      41728: b'\x03'
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/two_exif.jpg
+  d loaded
+  d = {
+    0th:
+      271: b'First'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/xmp.webp
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/xmp_first.jpg
+  d loaded
+  d = {
+    0th:
+      305: b'GIMP 2.10.38'
+      34665: 52
+    Exif:
+      36867: b'2025:12:31 23:59:59'
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load img/zero_count.jpg
+  d loaded
+  d = {
+    0th:
+      258: ()
+      271: b'\x00\x00\x00'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load by name
+  d loaded
+  d = {
+    0th:
+      'ProcessingSoftware': b'no-nu'
+      'BitsPerSample': (8, 8, 8)
+      'DocumentName': b'abc'
+      'Make': b'NIKON CORPORATION'
+      'Model': b'NIKON Z 6_2'
+      'Orientation': 6
+      'XResolution': (300, 1)
+      'YResolution': (300, 1)
+      'ResolutionUnit': 2
+      'Software': b'Ver.01.10'
+      'DateTime': b'2026:05:02 17:44:09'
+      'Artist': b''
+      'WhitePoint': ((313, 1000), (329, 1000))
+      'DotRange': (1, 2, 3, 4, 5, 6)
+      'YCbCrPositioning': 2
+      'XMLPacket': (60, 120, 47, 62)
+      'ExifTag': 494
+      'GPSTag': 858
+      'BlackLevelDeltaH': (-1, 3)
+      'ColorMatrix1': ((7, -2), (-5, 4))
+      'ProfileHueSatMapData1': (1.5, 0.10000000149011612, -3.0)
+      'ProfileToneCurve': 0.25
+      'ZZZTestSByte': (-3, 4, -128, 127, 0)
+      'ZZZTestSShort': (-2, 30000)
+      'ZZZTestDFloat': (0.5, -2.25)
+    Exif:
+      'ExposureTime': (1, 200)
+      'FNumber': (28, 10)
+      'ISOSpeedRatings': 800
+      'ExifVersion': b'0232'
+      'DateTimeOriginal': b'2026:05:02 17:44:09'
+      'DateTimeDigitized': b'2026:05:02 17:44:09'
+      'ShutterSpeedValue': (7643856, 1000000)
+      'ExposureBiasValue': (-1, 3)
+      'FocalLength': (50, 1)
+      'MakerNote': b'Nikon\x00\x02\x11\x00\x00MM\x00*\x00\x00\x00\x08'
+      'UserComment': b'ASCII\x00\x00\x00 shot at dusk'
+      'FlashpixVersion': b'0100'
+      'InteroperabilityTag': 1084
+      'ExposureMode': 0
+      'BodySerialNumber': b'6012345'
+      'LensModel': b'NIKKOR Z 24-70mm f/4 S'
+    1st:
+      'Compression': 6
+      'XResolution': (72, 1)
+      'YResolution': (72, 1)
+      'ResolutionUnit': 2
+      'JPEGInterchangeFormat': 1204
+      'JPEGInterchangeFormatLength': 130
+    GPS:
+      'GPSVersionID': (2, 3, 0, 0)
+      'GPSLatitudeRef': b'S'
+      'GPSLatitude': ((33, 1), (51, 1), (3192, 100))
+      'GPSLongitudeRef': b'E'
+      'GPSLongitude': ((151, 1), (12, 1), (3984, 100))
+      'GPSAltitudeRef': 0
+      'GPSAltitude': (5800, 100)
+      'GPSTimeStamp': ((7, 1), (44, 1), (9, 1))
+      'GPSProcessingMethod': b'ASCII\x00\x00\x00GPS'
+      'GPSDateStamp': b'2026:05:02'
+    Interop:
+      'InteroperabilityIndex': b'R98'
+    thumbnail: b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x0c\x15\x1e\'09BKT]fox\x81\x8a\x93\x9c\xa5\xae\xb7\xc0\xc9\xd2\xdb\xe4\xed\xf6\x04\xff\xd9'
+  }
+== load by name, big-endian
+  d loaded
+  d = {
+    0th:
+      'Make': b'Canon'
+      'Model': b'Canon EOS R6'
+      'Orientation': 1
+      'XResolution': (72, 1)
+      'YResolution': (72, 1)
+      'ResolutionUnit': 2
+      'Software': b'Firmware Version 1.8.1'
+      'DateTime': b'2026:07:14 09:12:30'
+      'Artist': b'Ana Ruiz'
+      'ExifTag': 233
+      'GPSTag': 485
+    Exif:
+      'ExposureTime': (1, 250)
+      'FNumber': (40, 10)
+      'ISOSpeedRatings': 200
+      'ExifVersion': b'0231'
+      'DateTimeOriginal': b'2026:07:14 09:12:30'
+      'DateTimeDigitized': b'2026:07:14 09:12:30'
+      'FocalLength': (85, 1)
+      'WhiteBalance': 0
+      'BodySerialNumber': b'083021000123'
+      'LensMake': b'Canon'
+      'LensModel': b'RF85mm F2 MACRO IS STM'
+      'InteroperabilityTag': 627
+    1st:
+      'Compression': 6
+      'XResolution': (72, 1)
+      'YResolution': (72, 1)
+      'ResolutionUnit': 2
+      'JPEGInterchangeFormat': 735
+      'JPEGInterchangeFormatLength': 108
+    GPS:
+      'GPSVersionID': (2, 2, 0, 0)
+      'GPSLatitudeRef': b'N'
+      'GPSLatitude': ((40, 1), (26, 1), (4659, 100))
+      'GPSLongitudeRef': b'W'
+      'GPSLongitude': ((79, 1), (58, 1), (5640, 100))
+      'GPSAltitudeRef': 0
+      'GPSAltitude': (2310, 10)
+    Interop:
+      'InteroperabilityIndex': b'R98'
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x08\r\x12\x17\x1c!&+05:?DINSX]bglqv{\xff\xd9'
+  }
+== load bytes
+  d loaded
+  d = {
+    0th:
+      305: b'GIMP 2.10.38'
+      34665: 52
+    Exif:
+      36867: b'2025:12:31 23:59:59'
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+  e loaded
+  e = {
+    0th:
+      256: 8
+      271: b'Big Scan'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+  w loaded
+  w = {
+    0th:
+      271: b'Google'
+      272: b'Pixel 8'
+      34665: 66
+    Exif:
+      36867: b'2026:08:01 18:30:05'
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load bytes of an XMP-first file finds the Exif segment
+  d loaded
+  d = {
+    0th:
+      271: b'First'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+  e loaded
+  e = {
+    0th:
+      271: b'First'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load raw Exif bytes
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== load a webp without VP8X
+  load: error ValueError: doesnot have exif
+== load short TIFF
+  loadx: error error: unpack requires a buffer of 4 bytes
+== load TIFF with a bad pointer
+  loadx: error error: unpack requires a buffer of 2 bytes
+== load a JPEG whose segment walk runs off
+  loadx: error InvalidImageDataError: Wrong JPEG data.
+== load a JPEG with only SOI
+  loadx: error error: unpack requires a buffer of 2 bytes
+== dump and load back
+  b = dump(x): 613 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\n\x01\x02\x00\x03\x00\x00\x00\x03\x00\x00\x00\x86\x01\x0f\x00\x02\x00\x00\x00\x06\x00\x00\x00\x8c\x01\x10\x00\x02\x00\x00\x00\x04K-1\x00\x01\x12\x00\x03\x00\x00\x00\x01\x00\x01\x00\x00\x01\x1a\x00\x05\x00\x00\x00\x01\x00\x00\x00\x92\x01\x1b\x00\x05\x00\x00\x00\x01\x00\x00\x00\x9a\x01(\x00\x03\x00\x00\x00\x01\x00\x02\x00\x00\x012\x00\x02\x00\x00\x00\x14\x00\x00\x00\xa2\x87i\x00\x04\x00\x00\x00\x01\x00\x00\x00\xb6\x88%\x00\x04\x00\x00\x00\x01\x00\x00\x01.\x00\x00\x01z\x00\x08\x00\x08\x00\x08Kaabe\x00\x00\x00\x00H\x00\x00\x00\x01\x00\x00\x00H\x00\x00\x00\x012026:10:21 12:00:00\x00\x00\x06\x82\x9a\x00\x05\x00\x00\x00\x01\x00\x00\x01\x00\x88\'\x00\x03\x00\x00\x00\x01\x01\x90\x00\x00\x90\x03\x00\x02\x00\x00\x00\x14\x00\x00\x01\x08\x92\x04\x00\n\x00\x00\x00\x01\x00\x00\x01\x1c\x92\x86\x00\x07\x00\x00\x00\n\x00\x00\x01$\xa0\x05\x00\x04\x00\x00\x00\x01\x00\x00\x01l\x00\x00\x00\x01\x00\x00\x00}2026:10:21 12:00:00\x00\xff\xff\xff\xfe\x00\x00\x00\x03ASCII\x00\x00\x00hi\x00\x03\x00\x00\x00\x01\x00\x00\x00\x04\x02\x03\x00\x00\x00\x01\x00\x02\x00\x00\x00\x02N\x00\x00\x00\x00\x02\x00\x05\x00\x00\x00\x03\x00\x00\x01T\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x03\x00\x00\x00\x01\x00\x01\x00\x01\x00\x02\x00\x00\x00\x04R98\x00\x00\x03\x01\x03\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x02\x01\x00\x04\x00\x00\x00\x01\x00\x00\x01\xa4\x02\x02\x00\x04\x00\x00\x00\x01\x00\x00\x00\xbb\x00\x00\x00\x00\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01"\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00\x0b0Uz\x9f\xc4\xe9\x0e3X}\xa2\xc7\xec\x116[\x80\xa5\xca\xef\x149^\x83\xa8\xcd\xf2\x17<a\x86\xab\xd0\xf5\x1a?d\x89\xae\xd3\xf8\x1dBg\x8c\xb1\xd6\xff\xd9'
+  d loaded
+  d = {
+    0th:
+      258: (8, 8, 8)
+      271: b'Kaabe'
+      272: b'K-1'
+      274: 1
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      306: b'2026:10:21 12:00:00'
+      34665: 182
+      34853: 302
+    Exif:
+      33434: (1, 125)
+      34855: 400
+      36867: b'2026:10:21 12:00:00'
+      37380: (-2, 3)
+      37510: b'ASCII\x00\x00\x00hi'
+      40965: 364
+    GPS:
+      0: (2, 3, 0, 0)
+      1: b'N'
+      2: ((1, 1), (2, 1), (3, 1))
+    Interop:
+      1: b'R98'
+    1st:
+      259: 6
+      513: 420
+      514: 187
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01"\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00\x0b0Uz\x9f\xc4\xe9\x0e3X}\xa2\xc7\xec\x116[\x80\xa5\xca\xef\x149^\x83\xa8\xcd\xf2\x17<a\x86\xab\xd0\xf5\x1a?d\x89\xae\xd3\xf8\x1dBg\x8c\xb1\xd6\xff\xd9'
+  }
+== dump empty
+  b = dump(x): 20 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00'
+  c = dump(y): 20 bytes
+  c = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00'
+== dump drops stale pointer tags
+  b = dump(x): 46 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x02\x01\x0f\x00\x02\x00\x00\x00\x02A\x00\x00\x00\x87i\x00\x04\x00\x00\x00\x01\x00\x00\x00&\x00\x00\x00\x00\x00\x00'
+  d loaded
+  d = {
+    0th:
+      271: b'A'
+      34665: 38
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump Interop without Exif
+  dump: error KeyError: 'Exif'
+== dump 1st without a thumbnail
+  b = dump(x): 32 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x01\x01\x0f\x00\x02\x00\x00\x00\x02A\x00\x00\x00\x00\x00\x00\x00'
+== dump thumbnail without 1st
+  b = dump(x): 32 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x01\x01\x0f\x00\x02\x00\x00\x00\x02A\x00\x00\x00\x00\x00\x00\x00'
+== dump a thumbnail's APP segments are dropped
+  b = dump(x): 197 bytes
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st:
+      259: 6
+      513: 56
+      514: 135
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00\x0b0Uz\x9f\xc4\xe9\x0e3X}\xa2\xc7\xec\x116[\x80\xa5\xca\xef\x149^\x83\xa8\xcd\xf2\x17<a\x86\xab\xd0\xf5\x1a?d\x89\xae\xd3\xf8\x1dBg\x8c\xb1\xd6\xff\xd9'
+  }
+== dump every type
+  b = dump(x): 394 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x17\x00\x0b\x00\x02\x00\x00\x00\x01\x00\x00\x00\x00\x00\xfe\x00\x04\x00\x00\x00\x01\x00\x00\x00\x00\x01\x02\x00\x03\x00\x00\x00\x02\x00\x01\x00\x02\x01\r\x00\x02\x00\x00\x00\x04abc\x00\x01\x0e\x00\x02\x00\x00\x00\x05\x00\x00\x01"\x01\x0f\x00\x02\x00\x00\x00\x05\x00\x00\x01\'\x01\x11\x00\x04\x00\x00\x00\x02\x00\x00\x01,\x01\x12\x00\x03\x00\x00\x00\x01\x00\x03\x00\x00\x01\x1a\x00\x05\x00\x00\x00\x01\x00\x00\x014\x01-\x00\x03\x00\x00\x00\x03\x00\x00\x01<\x011\x00\x02\x00\x00\x00\x05\x00\x00\x01B\x01>\x00\x05\x00\x00\x00\x02\x00\x00\x01G\x01P\x00\x01\x00\x00\x00\x05\x00\x00\x01W\x02\x12\x00\x03\x00\x00\x00\x02\x00\x02\x00\x02\x02\xbc\x00\x01\x00\x00\x00\x04<x/>\x92\x16\x00\x01\x00\x00\x00\x04\x01\x00\x00\x00\xc6\x1b\x00\n\x00\x00\x00\x01\x00\x00\x01\\\xc6!\x00\n\x00\x00\x00\x02\x00\x00\x01d\xc6\xfa\x00\x0b\x00\x00\x00\x01@ \x00\x00\xc6\xfc\x00\x0b\x00\x00\x00\x01=\xcc\xcc\xcd\xec\xc0\x00\x06\x00\x00\x00\x02\xff\x02\x00\x00\xec\xc1\x00\x08\x00\x00\x00\x01\xfe\xd4\x00\x00\xec\xc2\x00\x0c\x00\x00\x00\x02\x00\x00\x01t\x00\x00\x00\x00four\x00raw\xe9\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x02\x00\x01\x00\x02\x00\x03caf\xe9\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x04\x01\x02\x03\x04\x05\xff\xff\xff\xff\x00\x00\x00\x02\x00\x00\x00\x01\xff\xff\xff\xfe\xff\xff\xff\xfd\x00\x00\x00\x04?\xe0\x00\x00\x00\x00\x00\x00\xbf\xf8\x00\x00\x00\x00\x00\x00'
+  d loaded
+  d = {
+    0th:
+      11: b''
+      254: 0
+      258: (1, 2)
+      269: b'abc'
+      270: b'four'
+      271: b'raw\xe9'
+      273: (1, 2)
+      274: 3
+      282: (1, 2)
+      301: (1, 2, 3)
+      305: b'caf\xe9'
+      318: ((1, 2), (3, 4))
+      336: (1, 2, 3, 4, 5)
+      530: (2, 2)
+      700: (60, 120, 47, 62)
+      37398: (1, 0, 0, 0)
+      50715: (-1, 2)
+      50721: ((1, -2), (-3, 4))
+      50938: 2.5
+      50940: 0.10000000149011612
+      60608: (-1, 2)
+      60609: -300
+      60610: (0.5, -1.5)
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump short undefined
+  b = dump(x): 58 bytes
+  b = b'Exif\x00\x00MM\x00*\x00\x00\x00\x08\x00\x01\x87i\x00\x04\x00\x00\x00\x01\x00\x00\x00\x1a\x00\x00\x00\x00\x00\x02\x90\x00\x00\x07\x00\x00\x00\x0202\x00\x00\x92|\x00\x07\x00\x00\x00\x00\x00\x00\x00\x00'
+  d loaded
+  d = {
+    0th:
+      34665: 26
+    Exif:
+      36864: b'02'
+      37500: b''
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump an unknown tag
+  dump: error KeyError: 9999
+== dump a str where bytes belong
+  dump: error ValueError: "dump" got wrong type of exif value.\n37500 in Exif IFD. Got as <class 'str'>.
+== dump bytes where a short belongs
+  b = dump(x): 32 bytes
+== dump a non-latin-1 string
+  dump: error ValueError: "dump" got wrong type of exif value.\n271 in 0th IFD. Got as <class 'str'>.
+== dump an int where ASCII belongs
+  dump: error ValueError: "dump" got wrong type of exif value.\n271 in 0th IFD. Got as <class 'int'>.
+== dump out of range: 274 70000
+  dump: error error: 'H' format requires 0 <= number <= 65535
+== dump out of range: 254 -1
+  dump: error error: 'L' format requires 0 <= number <= 4294967295
+== dump out of range: 336 [256]
+  dump: error error: 'B' format requires 0 <= number <= 255
+== dump out of range: 60608 [200]
+  dump: error error: 'b' format requires -128 <= number <= 127
+== dump out of range: 282 [-1, 2]
+  dump: error error: 'L' format requires 0 <= number <= 4294967295
+== dump out of range: 60609 [40000]
+  dump: error error: 'h' format requires -32768 <= number <= 32767
+== dump out of range: 50715 [3000000000, 1]
+  dump: error error: 'l' format requires -2147483648 <= number <= 2147483647
+== dump out of range: 301 [1, -1, 2]
+  dump: error error: 'H' format requires 0 <= number <= 65535
+== dump out of range: 273 [5, 4294967296]
+  dump: error error: 'L' format requires 0 <= number <= 4294967295
+== dump 0th 282 as [1, 2, 3]
+  dump: error ValueError: "dump" got wrong type of exif value.\n282 in 0th IFD. Got as <class 'tuple'>.
+== dump 0th 282 as 72
+  dump: error ValueError: "dump" got wrong type of exif value.\n282 in 0th IFD. Got as <class 'int'>.
+== dump 0th 318 as [[1, 2], [3, 4, 5]]
+  dump: error ValueError: "dump" got wrong type of exif value.\n318 in 0th IFD. Got as <class 'tuple'>.
+== dump 0th 274 as "x"
+  dump: error error: required argument is not an integer
+== dump 0th 254 as 1.5
+  dump: error error: required argument is not an integer
+== dump Exif 36864 as [1, 2]
+  dump: error ValueError: "dump" got wrong type of exif value.\n36864 in Exif IFD. Got as <class 'tuple'>.
+== dump 0th 271 as [1, 2]
+  dump: error ValueError: "dump" got wrong type of exif value.\n271 in 0th IFD. Got as <class 'tuple'>.
+== dump 0th 50715 as [0.5, 2]
+  dump: error UnboundLocalError: cannot access local variable 'new_value' where it is not associated with a value
+== dump 0th 50940 as 5
+  b = dump(x): 32 bytes
+  d loaded
+  d = {
+    0th:
+      50940: 5.0
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump 0th 60610 as [1, 2]
+  b = dump(x): 48 bytes
+  d loaded
+  d = {
+    0th:
+      60610: (1.0, 2.0)
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump 0th 336 as bytes
+  b = dump(x): 38 bytes
+  d loaded
+  d = {
+    0th:
+      336: (1, 2, 3, 4, 5, 6)
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump GPS 2 as [[1, 1], [2, 1]]
+  b = dump(x): 62 bytes
+  d loaded
+  d = {
+    0th:
+      34853: 26
+    Exif: {}
+    GPS:
+      2: ((1, 1), (2, 1))
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== dump a rational given as floats
+  dump: error UnboundLocalError: cannot access local variable 'new_value' where it is not associated with a value
+== dump a too-large thumbnail
+  dump: error ValueError: Given thumbnail is too large. max 64kB
+== dump a thumbnail that is not a JPEG
+  dump: error InvalidImageDataError: Given data isn't JPEG.
+== insert into a file with APP0
+  b = dump(x): 38 bytes
+  inserted b into img/plain.jpg as out/plain_exif.jpg
+  out/plain_exif.jpg: 229 bytes
+    0000: ffd8ffe100284578696600004d4d002a000000080001010f0002000000060000
+    0020: 001a000000004b6161626500ffdb0043000102030405060708090a0b0c0d0e0f
+    0040: 101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f
+    0060: 303132333435363738393a3b3c3d3e3f40ffc000110800100010030122000211
+    0080: 01031101ffc4001f000001050101010101010000000000000000010203040506
+    00a0: 0708090a0bffda000c03010002110311003f000b30557a9fc4e90e33587da2c7
+    00c0: ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d4267
+    00e0: 8cb1d6ffd9
+  d loaded
+  d = {
+    0th:
+      271: b'Kaabe'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== insert replaces an existing Exif
+  b = dump(x): 41 bytes
+  inserted b into img/exif_only_0th.jpg as out/replaced.jpg
+  out/replaced.jpg: 180 bytes
+    0000: ffd8ffe1002b4578696600004d4d002a000000080001010f0002000000090000
+    0020: 001a000000005265706c6163656400ffdb0043000102030405060708090a0b0c
+    0040: 0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c
+    0060: 2d2e2f303132333435363738393a3b3c3d3e3f40ffda000c0301000211031100
+    0080: 3f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c
+    00a0: 6186abd0f51a3f6489aed3f81d42678cb1d6ffd9
+  d loaded
+  d = {
+    0th:
+      271: b'Replaced'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== insert without APP0
+  b = dump(x): 39 bytes
+  inserted b into img/no_app0.jpg as out/no_app0.jpg
+  out/no_app0.jpg: 197 bytes
+    0000: ffd8ffe100294578696600004d4d002a000000080001010f0002000000070000
+    0020: 001a000000004e6f4170703000ffdb0043000102030405060708090a0b0c0d0e
+    0040: 0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e
+    0060: 2f303132333435363738393a3b3c3d3e3f40ffc0001108001000100301220002
+    0080: 1101031101ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7
+    00a0: ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d4267
+    00c0: 8cb1d6ffd9
+  inserted b into img/thumb_only.jpg as out/thumb_only.jpg
+  out/thumb_only.jpg: 178 bytes
+    0000: ffd8ffe100294578696600004d4d002a000000080001010f0002000000070000
+    0020: 001a000000004e6f4170703000ffdb0043000102030405060708090a0b0c0d0e
+    0040: 0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e
+    0060: 2f303132333435363738393a3b3c3d3e3f40ffda000c03010002110311003f00
+    0080: 0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186
+    00a0: abd0f51a3f6489aed3f81d42678cb1d6ffd9
+  inserted b into img/xmp_first.jpg as out/xmp_first.jpg
+  out/xmp_first.jpg: 384 bytes
+    0000: ffd8ffe100294578696600004d4d002a000000080001010f0002000000070000
+    0020: 001a000000004e6f4170703000ffe10059687474703a2f2f6e732e61646f6265
+    0040: 2e636f6d2f7861702f312e302f003c783a786d706d65746120786d6c6e733a78
+    0060: 3d2261646f62653a6e733a6d6574612f223e3c7264663a5244462f3e3c2f783a
+    0080: 786d706d6574613effe1005e4578696600004d4d002a00000008000201310002
+    00a0: 0000000d000000268769000400000001000000340000000047494d5020322e31
+    00c0: 302e333800000001900300020000001400000042323032353a31323a33312032
+    00e0: 333a35393a353900ffdb0043000102030405060708090a0b0c0d0e0f10111213
+    0100: 1415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233
+    0120: 3435363738393a3b3c3d3e3f40ffc00011080010001003012200021101031101
+    0140: ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7ec11365b80
+    0160: a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9
+== insert into webp
+  b = dump(x): 50 bytes
+  inserted b into img/lossy.webp as out/lossy.webp
+  out/lossy.webp: 116 bytes
+    0000: 524946466c00000057454250565038580a000000080000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+    0040: 455849462c0000004d4d002a000000080002010f000200000006000000260110
+    0060: 00020000000457656200000000004b6161626500
+  d loaded
+  d = {
+    0th:
+      271: b'Kaabe'
+      272: b'Web'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+  inserted b into img/lossless.webp as out/lossless.webp
+  out/lossless.webp: 106 bytes
+    0000: 524946466200000057454250565038580a000000180000003f00002f00005650
+    0020: 384c0f0000002f3fc00b100000000000000000000000455849462c0000004d4d
+    0040: 002a000000080002010f00020000000600000026011000020000000457656200
+    0060: 000000004b6161626500
+  inserted b into img/xmp.webp as out/xmp.webp
+  out/xmp.webp: 136 bytes
+    0000: 524946468000000057454250565038580a0000000c0000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+    0040: 455849462c0000004d4d002a000000080002010f000200000006000000260110
+    0060: 00020000000457656200000000004b6161626500584d50200c0000003c783a78
+    0080: 6d706d6574612f3e
+  inserted b into img/anim.webp as out/anim.webp
+  out/anim.webp: 128 bytes
+    0000: 524946467800000057454250565038580a0000000a0000001f00001300004558
+    0020: 49462c0000004d4d002a000000080002010f0002000000060000002601100002
+    0040: 0000000457656200000000004b6161626500414e494d06000000000000000000
+    0060: 414e4d46180000000000000000001f0000130000000000005650382000000000
+  inserted b into img/extended.webp as out/extended.webp
+  out/extended.webp: 116 bytes
+    0000: 524946466c00000057454250565038580a000000080000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+    0040: 455849462c0000004d4d002a000000080002010f000200000006000000260110
+    0060: 00020000000457656200000000004b6161626500
+  e loaded
+  e = {
+    0th:
+      271: b'Kaabe'
+      272: b'Web'
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+== insert data that is not Exif
+  insert: error ValueError: Given data is not exif data
+== insert into a file that is not an image
+  b = dump(x): 20 bytes
+  insert: error InvalidImageDataError: 
+== remove
+  removed Exif from img/canon_be.jpg as out/canon_clean.jpg
+  out/canon_clean.jpg: 172 bytes
+    0000: ffd8ffe000104a46494600010100004800480000ffdb00430001020304050607
+    0020: 08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627
+    0040: 28292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010
+    0060: 001003012200021101031101ffda000c03010002110311003f000b30557a9fc4
+    0080: e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f64
+    00a0: 89aed3f81d42678cb1d6ffd9
+  d loaded
+  d = {
+    0th: {}
+    Exif: {}
+    GPS: {}
+    Interop: {}
+    1st: {}
+    thumbnail: None
+  }
+  removed Exif from img/plain.jpg as out/plain_clean.jpg
+  out/plain_clean.jpg: 205 bytes
+    0000: ffd8ffe000104a46494600010100004800480000ffdb00430001020304050607
+    0020: 08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627
+    0040: 28292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080010
+    0060: 001003012200021101031101ffc4001f00000105010101010101000000000000
+    0080: 00000102030405060708090a0bffda000c03010002110311003f000b30557a9f
+    00a0: c4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f
+    00c0: 6489aed3f81d42678cb1d6ffd9
+  removed Exif from img/two_exif.jpg as out/two_clean.jpg
+  out/two_clean.jpg: 197 bytes
+    0000: ffd8ffe000104a46494600010100004800480000ffe1002a4578696600004d4d
+    0020: 002a000000080001010f0002000000070000001a000000005365636f6e640000
+    0040: ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b
+    0060: 1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b
+    0080: 3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587da2c7
+    00a0: ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d4267
+    00c0: 8cb1d6ffd9
+  removed Exif from img/extended.webp as out/extended_clean.webp
+  out/extended_clean.webp: 64 bytes
+    0000: 524946463800000057454250565038580a000000000000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+  removed Exif from img/lossy.webp as out/lossy_clean.webp
+  out/lossy_clean.webp: 64 bytes
+    0000: 524946463800000057454250565038580a000000000000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+  removed Exif from img/xmp.webp as out/xmp_clean.webp
+  out/xmp_clean.webp: 84 bytes
+    0000: 524946464c00000057454250565038580a000000040000003f00002f00005650
+    0020: 3820190000003001009d012a4000300000000000000000000000000000000000
+    0040: 584d50200c0000003c783a786d706d6574612f3e
+== transplant
+  transplanted img/canon_be.jpg into img/plain.jpg as out/t1.jpg
+  d loaded
+  d = {
+    0th:
+      271: b'Canon'
+      272: b'Canon EOS R6'
+      274: 1
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      305: b'Firmware Version 1.8.1'
+      306: b'2026:07:14 09:12:30'
+      315: b'Ana Ruiz'
+      34665: 233
+      34853: 485
+    Exif:
+      33434: (1, 250)
+      33437: (40, 10)
+      34855: 200
+      36864: b'0231'
+      36867: b'2026:07:14 09:12:30'
+      36868: b'2026:07:14 09:12:30'
+      37386: (85, 1)
+      41987: 0
+      42033: b'083021000123'
+      42035: b'Canon'
+      42036: b'RF85mm F2 MACRO IS STM'
+      40965: 627
+    GPS:
+      0: (2, 2, 0, 0)
+      1: b'N'
+      2: ((40, 1), (26, 1), (4659, 100))
+      3: b'W'
+      4: ((79, 1), (58, 1), (5640, 100))
+      5: 0
+      6: (2310, 10)
+    Interop:
+      1: b'R98'
+    1st:
+      259: 6
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      513: 735
+      514: 108
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x08\r\x12\x17\x1c!&+05:?DINSX]bglqv{\xff\xd9'
+  }
+  transplanted img/nikon_le.jpg into img/exif_only_0th.jpg as out/t2.jpg
+  out/t2.jpg: 1479 bytes
+    0000: ffd8ffe1053e45786966000049492a00080000001a000b000200060000004601
+    0020: 000002010300030000004c0100000d01020004000000616263000f0102001200
+    0040: 000052010000100102000c000000640100001201030001000000060000001a01
+    0060: 050001000000700100001b010500010000007801000028010300010000000200
+    0080: 0000310102000a0000008001000032010200140000008a0100003b0102000100
+    00a0: 0000000000003e010500020000009e0100005001010006000000ae0100001302
+    00c0: 03000100000002000000bc020100040000003c782f3e6987040001000000ee01
+    00e0: 000025880400010000005a030000419c0300010000004d0000001bc60a000100
+    0100: 0000b401000021c60a0002000000bc010000fac60b0003000000cc010000fcc6
+    0120: 0b00010000000000803ec0ec060005000000d8010000c1ec080002000000feff
+    0140: 3075c2ec0c0002000000de010000560400006e6f2d6e756c0800080008004e49
+    0160: 4b4f4e20434f52504f524154494f4e004e494b4f4e205a20365f32002c010000
+    0180: 010000002c010000010000005665722e30312e313000323032363a30353a3032
+    01a0: 2031373a34343a30390039010000e803000049010000e8030000010203040506
+    01c0: ffffffff0300000007000000fefffffffbffffff040000000000c03fcdcccc3d
+    01e0: 000040c0fd04807f0000000000000000e03f00000000000002c011009a820500
+    0200: 01000000bc0200009d82050001000000c4020000278803000100000020030000
+    0220: 0090070004000000303233320390020014000000cc0200000490020014000000
+    0240: e002000001920a0001000000f402000004920a0001000000fc0200000a920500
+    0260: 01000000040300007c920700120000000c03000086920700150000001e030000
+    0280: 00a00700040000003031303005a00400010000003c04000002a4030001000000
+    02a0: 0000000031a40200080000003403000034a40200170000003c0300001cea0700
+    02c0: 060000005403000001000000c80000001c0000000a000000323032363a30353a
+    02e0: 30322031373a34343a303900323032363a30353a30322031373a34343a303900
+    0300: d0a2740040420f00ffffffff0300000032000000010000004e696b6f6e000211
+    0320: 00004d4d002a0000000841534349490000002073686f74206174206475736b00
+    0340: 36303132333435004e494b4b4f52205a2032342d37306d6d20662f3420530000
+    0360: 1cea000000080a00000001000400000002030000010002000200000053000000
+    0380: 0200050003000000d40300000300020002000000450000000400050003000000
+    03a0: ec03000005000100010000000000000006000500010000000404000007000500
+    03c0: 030000000c0400001b0007000b000000240400001d0002000b00000030040000
+    03e0: 21000000010000003300000001000000780c0000640000009700000001000000
+    0400: 0c00000001000000900f000064000000a8160000640000000700000001000000
+    0420: 2c00000001000000090000000100000041534349490000004750530032303236
+    0440: 3a30353a30320000020001000200040000005239380002000700040000003031
+    0460: 303006000301030001000000060000001a01050001000000a40400001b010500
+    0480: 01000000ac0400002801030001000000020000000102040001000000b4040000
+    04a0: 0202040001000000820000000000000048000000010000004800000001000000
+    04c0: ffd8ffe000104a46494600010100004800480000ffdb00430001020304050607
+    04e0: 08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627
+    0500: 28292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffda0008010100
+    0520: 003f00030c151e273039424b545d666f78818a939ca5aeb7c0c9d2dbe4edf604
+    0540: ffd9ffdb0043000102030405060708090a0b0c0d0e0f10111213141516171819
+    0560: 1a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343536373839
+    0580: 3a3b3c3d3e3f40ffda000c03010002110311003f000b30557a9fc4e90e33587d
+    05a0: a2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d
+    05c0: 42678cb1d6ffd9
+  transplanted img/xmp_first.jpg into img/no_app0.jpg as out/t3.jpg
+  out/t3.jpg: 250 bytes
+    0000: ffd8ffe1005e4578696600004d4d002a000000080002013100020000000d0000
+    0020: 00268769000400000001000000340000000047494d5020322e31302e33380000
+    0040: 0001900300020000001400000042323032353a31323a33312032333a35393a35
+    0060: 3900ffdb0043000102030405060708090a0b0c0d0e0f10111213141516171819
+    0080: 1a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343536373839
+    00a0: 3a3b3c3d3e3f40ffc00011080010001003012200021101031101ffda000c0301
+    00c0: 0002110311003f000b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e
+    00e0: 83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6ffd9
+  transplant: error ValueError: not found exif in input
+== edit and write back
+  d loaded
+  b = dump(d): 582 bytes
+  inserted b into img/canon_be.jpg as out/edited.jpg
+  e loaded
+  e = {
+    0th:
+      271: b'Canon'
+      272: b'Canon EOS R6'
+      274: 6
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      305: b'Firmware Version 1.8.1'
+      306: b'2026:07:14 09:12:30'
+      315: b'Ana Ruiz-Ortega'
+      34665: 240
+      34853: 492
+    Exif:
+      33434: (1, 250)
+      33437: (40, 10)
+      34855: 200
+      36864: b'0231'
+      36867: b'2026:07:14 10:12:30'
+      36868: b'2026:07:14 09:12:30'
+      37386: (85, 1)
+      41987: 0
+      42033: b'083021000123'
+      42035: b'Canon'
+      42036: b'RF85mm F2 MACRO IS STM'
+      40965: 562
+    GPS:
+      0: (2, 2, 0, 0)
+      1: b'N'
+      3: b'W'
+      5: 0
+      6: (2310, 10)
+    Interop:
+      1: b'R98'
+    1st: {}
+    thumbnail: None
+  }
+== round trip of a little-endian file
+  d loaded
+  b = dump(d): 1275 bytes
+  inserted b into img/plain.jpg as out/nikon_be.jpg
+  e loaded
+  e = {
+    0th:
+      11: b'no-nu'
+      258: (8, 8, 8)
+      269: b'abc'
+      271: b'NIKON CORPORATION'
+      272: b'NIKON Z 6_2'
+      274: 6
+      282: (300, 1)
+      283: (300, 1)
+      296: 2
+      305: b'Ver.01.10'
+      306: b'2026:05:02 17:44:09'
+      315: b''
+      318: ((313, 1000), (329, 1000))
+      336: (1, 2, 3, 4, 5, 6)
+      531: 2
+      700: (60, 120, 47, 62)
+      50715: (-1, 3)
+      50721: ((7, -2), (-5, 4))
+      50938: (1.5, 0.10000000149011612, -3.0)
+      50940: 0.25
+      60608: (-3, 4, -128, 127, 0)
+      60609: (-2, 30000)
+      60610: (0.5, -2.25)
+      34665: 481
+      34853: 825
+    Exif:
+      33434: (1, 200)
+      33437: (28, 10)
+      34855: 800
+      36864: b'0232'
+      36867: b'2026:05:02 17:44:09'
+      36868: b'2026:05:02 17:44:09'
+      37377: (7643856, 1000000)
+      37380: (-1, 3)
+      37386: (50, 1)
+      37500: b'Nikon\x00\x02\x11\x00\x00MM\x00*\x00\x00\x00\x08'
+      37510: b'ASCII\x00\x00\x00 shot at dusk'
+      40960: b'0100'
+      41986: 0
+      42033: b'6012345'
+      42036: b'NIKKOR Z 24-70mm f/4 S'
+      40965: 1049
+    GPS:
+      0: (2, 3, 0, 0)
+      1: b'S'
+      2: ((33, 1), (51, 1), (3192, 100))
+      3: b'E'
+      4: ((151, 1), (12, 1), (3984, 100))
+      5: 0
+      6: (5800, 100)
+      7: ((7, 1), (44, 1), (9, 1))
+      27: b'ASCII\x00\x00\x00GPS'
+      29: b'2026:05:02'
+    Interop:
+      1: b'R98'
+    1st:
+      259: 6
+      282: (72, 1)
+      283: (72, 1)
+      296: 2
+      513: 1157
+      514: 112
+    thumbnail: b'\xff\xd8\xff\xdb\x00C\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x03\x0c\x15\x1e\'09BKT]fox\x81\x8a\x93\x9c\xa5\xae\xb7\xc0\xc9\xd2\xdb\xe4\xed\xf6\x04\xff\xd9'
+  }
+== UserComment.load
+  UserComment.load(b'ASCII\x00\x00\x00hello') = 'hello'
+== UserComment.load
+  UserComment.load(b'UNICODE\x00\x00h\x00i\xd8=\xde\x00') = 'hi😀'
+== UserComment.load
+  UserComment.load(b'UNICODE\x00\x00a\xd8\x00\x00b\x00') = 'a�b�'
+== UserComment.load
+  UserComment.load(b'UNICODE\x00\x00a\x00b') = 'ab'
+== UserComment.load
+  UserComment.load(b'UNICODE\x00\xdc\x00\x00z') = '�z'
+== UserComment.load
+  UserComment.load(b'JIS\x00\x00\x00\x00\x00plain text') = 'plain text'
+== UserComment.load
+  UserComment.load(b'ASCII\x00\x00\x00caf\xe9') = 'caf�'
+== UserComment.load
+  ucload: error ValueError: prefix is UNDEFINED, unable to decode UserComment
+== UserComment.load
+  ucload: error ValueError: not enough data to decode UserComment
+== UserComment.load
+  ucload: error ValueError: unable to determine appropriate encoding
+== UserComment.load
+  UserComment.load(b'ASCII\x00\x00\x00') = ''
+== UserComment.dump
+  UserComment.dump('hello', 'ascii') = b'ASCII\x00\x00\x00hello'
+== UserComment.dump
+  UserComment.dump('café ☃', 'ascii') = b'ASCII\x00\x00\x00caf? ?'
+== UserComment.dump
+  UserComment.dump('hé 😀', 'unicode') = b'UNICODE\x00\x00h\x00\xe9\x00 \xd8=\xde\x00'
+== UserComment.dump
+  UserComment.dump('plain', 'jis') = b'JIS\x00\x00\x00\x00\x00plain'
+== UserComment.dump
+  ucdump: error ValueError: encoding 'latin-1' must be one of ('ascii', 'jis', 'unicode')
+== UserComment.dump
+  UserComment.dump('', 'unicode') = b'UNICODE\x00'
+== UserComment.dump
+  UserComment.dump('a\x00b', 'ascii') = b'ASCII\x00\x00\x00a\x00b'
+== program: photo report
+DSC00417.JPG
+  camera: SONY ILCE-7M4
+  taken: 2026:07:15 06:05:10
+  exposure: 1/60 s
+  aperture: f/5.6
+  iso: 1600
+  focal length: 35 mm
+  lens: FE 35mm F1.8
+  orientation: rotated 90 CCW
+  gps: 38.698083, -9.422250, 120.0 m
+  private: location, owner, serial number, maker note
+  thumbnail: 128 bytes
+IMG_0001.JPG
+  camera: Canon EOS R6
+  taken: 2026:07:14 09:12:30
+  exposure: 1/250 s
+  aperture: f/3.2
+  iso: 200
+  focal length: 24 mm
+  lens: RF24-105mm F4 L IS USM
+  orientation: normal
+  gps: 38.708667, -9.139667, 51.0 m
+  comment: Holiday 1
+  private: location, artist, serial number
+  thumbnail: 107 bytes
+IMG_0002.JPG
+  camera: Canon EOS R6
+  taken: 2026:07:14 13:40:02
+  exposure: 1/500 s
+  aperture: f/3.6
+  iso: 400
+  focal length: 48 mm
+  lens: RF24-105mm F4 L IS USM
+  orientation: normal
+  comment: Holiday 2
+  private: artist, serial number
+  thumbnail: 108 bytes
+IMG_0003.JPG
+  camera: Canon EOS R6
+  taken: 2026:07:14 09:12:30
+  exposure: 1/750 s
+  aperture: f/4.0
+  iso: 800
+  focal length: 72 mm
+  lens: RF24-105mm F4 L IS USM
+  orientation: normal
+  comment: Holiday 3
+  private: artist, serial number
+  thumbnail: 109 bytes
+IMG_0107.JPG
+  camera: Canon EOS R6 Mark II
+  taken: 2026:07:15 23:20:45
+  exposure: 1/1000 s
+  aperture: f/4.4
+  iso: 1600
+  focal length: 96 mm
+  lens: RF24-105mm F4 L IS USM
+  orientation: normal
+  comment: Holiday 4
+  private: artist, serial number
+  thumbnail: 110 bytes
+PXL_20260801_183005123.jpg
+  camera: Google Pixel 8
+  taken: 2026:08:01 18:30:05 +02:00
+  exposure: 1/1000 s
+  aperture: f/1.7
+  iso: 45
+  focal length: 6.8 mm
+  orientation: normal
+  gps: -22.953667, -43.208750, -3.5 m
+  private: location
+  thumbnail: none
+broken.jpg: cannot read: error: unpack requires a buffer of 2 bytes
+edited.jpg
+  camera: Canon EOS R6
+  taken: 2026:07:14 13:40:02
+  thumbnail: none
+notes.txt.jpg: cannot read: InvalidImageDataError: Given file is neither JPEG nor TIFF.
+scan_0042.jpg
+  camera: unknown
+  taken: -
+  thumbnail: none
+screenshot.webp: cannot read: ValueError: doesnot have exif
+vacation.webp
+  camera: Google Pixel 8
+  taken: 2026:08:02 10:01:00
+  gps: 38.717000, -9.159167
+  private: location
+  thumbnail: none
+cameras:
+  Canon EOS R6: 4
+  Canon EOS R6 Mark II: 1
+  Google Pixel 8: 2
+  SONY ILCE-7M4: 1
+  unknown: 1
+== program: organize
+DSC00417.JPG -> 2026/07-15/060510_sony-ilce-7m4.jpg
+IMG_0001.JPG -> 2026/07-14/091230_canon-eos-r6.jpg
+IMG_0002.JPG -> 2026/07-14/134002_canon-eos-r6.jpg
+IMG_0003.JPG -> 2026/07-14/091230_canon-eos-r6-2.jpg
+IMG_0107.JPG -> 2026/07-15/232045_canon-eos-r6-mark-ii.jpg
+PXL_20260801_183005123.jpg -> 2026/08-01/183005_google-pixel-8.jpg
+broken.jpg skipped (error)
+edited.jpg -> 2026/07-14/134002_canon-eos-r6-2.jpg
+notes.txt.jpg skipped (InvalidImageDataError)
+scan_0042.jpg -> undated/scan_0042.jpg
+screenshot.webp skipped (ValueError)
+vacation.webp -> 2026/08-02/100100_google-pixel-8.webp
+  index.txt 588
+  2026/07-14/091230_canon-eos-r6-2.jpg 831
+  2026/07-14/091230_canon-eos-r6.jpg 983
+  2026/07-14/134002_canon-eos-r6-2.jpg 385
+  2026/07-14/134002_canon-eos-r6.jpg 830
+  2026/07-15/060510_sony-ilce-7m4.jpg 830
+  2026/07-15/232045_canon-eos-r6-mark-ii.jpg 840
+  2026/08-01/183005_google-pixel-8.jpg 542
+  2026/08-02/100100_google-pixel-8.webp 282
+  undated/scan_0042.jpg 172
+== program: clock fix and geotag
+DSC00417.JPG: 2026:07:15 06:05:10 -> 2026:07:15 06:07:15 +01:00, has a location
+  written: 809 bytes, time 2026:07:15 06:07:15, gps ((38, 1), (41, 1), (5310, 100)) ((9, 1), (25, 1), (2010, 100))
+IMG_0001.JPG: 2026:07:14 09:12:30 -> 2026:07:14 08:12:30 +01:00, has a location
+  written: 984 bytes, time 2026:07:14 08:12:30, gps ((38, 1), (42, 1), (3120, 100)) ((9, 1), (8, 1), (2280, 100))
+IMG_0002.JPG: 2026:07:14 13:40:02 -> 2026:07:14 12:40:02 +01:00, at 38.691500, -9.215800 (602 s from the track)
+  written: 985 bytes, time 2026:07:14 12:40:02, gps ((38, 1), (41, 1), (2940, 100)) ((9, 1), (12, 1), (5688, 100))
+IMG_0003.JPG: 2026:07:14 09:12:30 -> 2026:07:14 08:12:30 +01:00, at 38.705400, -9.141900 (450 s from the track)
+  written: 986 bytes, time 2026:07:14 08:12:30, gps ((38, 1), (42, 1), (1944, 100)) ((9, 1), (8, 1), (3084, 100))
+IMG_0107.JPG: 2026:07:15 23:20:45 -> 2026:07:15 23:20:45 +01:00, no track point within 15 min
+  written: 841 bytes, time 2026:07:15 23:20:45
+PXL_20260801_183005123.jpg: 2026:08:01 18:30:05 -> 2026:08:01 18:30:05 +02:00, has a location
+  written: 540 bytes, time 2026:08:01 18:30:05, gps ((22, 1), (57, 1), (1320, 100)) ((43, 1), (12, 1), (3150, 100))
+broken.jpg: skipped (error)
+edited.jpg: 2026:07:14 13:40:02 -> 2026:07:14 12:40:02 +01:00, at 38.691500, -9.215800 (602 s from the track)
+  written: 696 bytes, time 2026:07:14 12:40:02, gps ((38, 1), (41, 1), (2940, 100)) ((9, 1), (12, 1), (5688, 100))
+notes.txt.jpg: skipped (InvalidImageDataError)
+scan_0042.jpg: no capture time
+screenshot.webp: skipped (ValueError)
+vacation.webp: no time zone for Google Pixel 8
+== program: strip for sharing
+DSC00417.JPG: rewritten, 830 -> 403 bytes, 11 tags kept
+  removed: GPS (7 tags), CameraOwnerName, BodySerialNumber, MakerNote, thumbnail
+IMG_0001.JPG: rewritten, 983 -> 535 bytes, 15 tags kept
+  removed: GPS (7 tags), Artist, BodySerialNumber, UserComment, thumbnail
+IMG_0002.JPG: rewritten, 830 -> 535 bytes, 15 tags kept
+  removed: Artist, BodySerialNumber, UserComment, thumbnail
+IMG_0003.JPG: rewritten, 831 -> 535 bytes, 15 tags kept
+  removed: Artist, BodySerialNumber, UserComment, thumbnail
+IMG_0107.JPG: rewritten, 840 -> 543 bytes, 15 tags kept
+  removed: Artist, BodySerialNumber, UserComment, thumbnail
+PXL_20260801_183005123.jpg: rewritten, 542 -> 398 bytes, 11 tags kept
+  removed: GPS (6 tags)
+broken.jpg: not shared (error: unpack requires a buffer of 2 bytes)
+edited.jpg: rewritten, 385 -> 523 bytes, 5 tags kept
+notes.txt.jpg: not shared (InvalidImageDataError: Given file is neither JPEG nor TIFF.)
+scan_0042.jpg: no Exif, 172 -> 172 bytes, 0 tags kept
+screenshot.webp: not shared (ValueError: doesnot have exif)
+vacation.webp: rewritten, 282 -> 172 bytes, 4 tags kept
+  removed: GPS (4 tags)
+== program: thumbnails
+DSC00417.jpg: 128 bytes, starts ffd8ffe0, ends ffd9, compression 6
+IMG_0001.jpg: 107 bytes, starts ffd8ffdb, ends ffd9, compression 6
+IMG_0002.jpg: 108 bytes, starts ffd8ffdb, ends ffd9, compression 6
+IMG_0003.jpg: 109 bytes, starts ffd8ffdb, ends ffd9, compression 6
+IMG_0107.jpg: 110 bytes, starts ffd8ffdb, ends ffd9, compression 6
