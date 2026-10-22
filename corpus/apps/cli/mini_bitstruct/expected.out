@@ -1,0 +1,56 @@
+37
+da
+ff
+fc18
+c8ce
+c8
+aaa5
+b0
+882a
+8f2a
+4869
+616263
+dead
+cafe00
+37
+ce
+aaa5
+b4
+0201
+030201
+010203
+d01f8300
+d018e0e0
+d01fc100
+
+3 7
+-1
+-1000
+200 -50
+True False True True 0
+Hi
+dead
+3 7
+258
+1 2 3
+1 5 -1000
+2730 5
+1 2 5
+171 205
+171
+3 7
+8
+16
+40
+0
+110055443322
+00221155443399887766
+7766554433221100
+"u8" requires 0 <= integer <= 255 (got 256)
+"u8" requires 0 <= integer <= 255 (got -1)
+"s4" requires -8 <= integer <= 7 (got 8)
+"s4" requires -8 <= integer <= 7 (got -9)
+bad char 'q' in format
+bad format 'u0'
+bad format 'u3x'
+unpack requires at least 16 bits to unpack (got 8)

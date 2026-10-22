@@ -1,0 +1,796 @@
+// mini_bitstruct — a port of the pure-Python core of the `bitstruct` library
+// (Erik Moqvist, MIT): pack and unpack values to and from arbitrary bit
+// widths, the way `struct` works at the byte level. A format string is a run
+// of type-size groups (u/s unsigned/signed integer, b bool, t text, r raw
+// bytes, p/P zero/one padding), with optional bit-order and byte-order markers
+// (`<` least-significant first, `>` most-significant first).
+//
+// The engine works on a vector of 0/1 bits built with integer arithmetic only
+// (no bitwise operators), converting to and from bytes at the ends — the same
+// bit layout the library produces via its bin()/hexlify string tricks, so the
+// packed bytes are byte-identical. The float ('f') format and the dict /
+// pack_into APIs are out of scope (see README); every other surface, including
+// the exact Error messages, is reproduced.
+
+struct Parsed {
+    ok: bool,
+    msg: String,
+    tcode: Vec[i64],
+    size: Vec[i64],
+    endian: Vec[i64],
+    border: i64,
+}
+
+struct FieldBits {
+    ok: bool,
+    msg: String,
+    bits: Vec[i64],
+}
+
+struct PackRes {
+    ok: bool,
+    msg: String,
+    bytes: Vec[i64],
+}
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn char1(code: i64) -> String {
+    let mut one: Vec[u8] = Vec.new();
+    one.push(code as u8);
+    String.from_utf8(one).unwrap_or("")
+}
+
+fn hex_digit(c: u8) -> i64 {
+    if c >= 48 and c <= 57 {
+        (c - 48) as i64
+    } else if c >= 97 and c <= 102 {
+        (c - 97 + 10) as i64
+    } else if c >= 65 and c <= 70 {
+        (c - 65 + 10) as i64
+    } else {
+        0
+    }
+}
+
+fn hex_to_bytes(s: String) -> Vec[i64] {
+    let b = str_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_digit(b[i]) * 16 + hex_digit(b[i + 1]));
+        i = i + 2;
+    }
+    out
+}
+
+fn byte_hex(v: i64) -> String {
+    let digits = "0123456789abcdef";
+    let db = str_bytes(digits);
+    let mut one: Vec[u8] = Vec.new();
+    one.push(db[v / 16]);
+    one.push(db[v % 16]);
+    String.from_utf8(one).unwrap_or("")
+}
+
+fn bytes_to_hex(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        s.push_str(byte_hex(v[i]));
+        i = i + 1;
+    }
+    s
+}
+
+// append byte `b` as 8 bits, most-significant first
+fn byte_bits(b: i64, out: mut ref Vec[i64]) {
+    let mut tmp: Vec[i64] = Vec.new();
+    let mut x = b;
+    let mut k = 0;
+    while k < 8 {
+        tmp.push(x % 2);
+        x = x / 2;
+        k = k + 1;
+    }
+    let mut i = tmp.len();
+    while i > 0 {
+        i = i - 1;
+        out.push(tmp[i]);
+    }
+}
+
+fn bytes_to_bits(data: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < data.len() {
+        byte_bits(data[i], mut out);
+        i = i + 1;
+    }
+    out
+}
+
+fn bits_to_bytes(bits: ref Vec[i64]) -> Vec[i64] {
+    let mut bb: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() {
+        bb.push(bits[i]);
+        i = i + 1;
+    }
+    let tail = bb.len() % 8;
+    if tail != 0 {
+        let mut p = 0;
+        while p < 8 - tail {
+            bb.push(0);
+            p = p + 1;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < bb.len() {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 8 {
+            v = v * 2 + bb[j + k];
+            k = k + 1;
+        }
+        out.push(v);
+        j = j + 8;
+    }
+    out
+}
+
+// size-bit unsigned value, most-significant first
+fn uint_bits(value: i64, size: i64) -> Vec[i64] {
+    let mut tmp: Vec[i64] = Vec.new();
+    let mut x = value;
+    let mut k = 0;
+    while k < size {
+        tmp.push(x % 2);
+        x = x / 2;
+        k = k + 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = tmp.len();
+    while i > 0 {
+        i = i - 1;
+        out.push(tmp[i]);
+    }
+    out
+}
+
+fn uint_val(bits: ref Vec[i64]) -> i64 {
+    let mut v = 0;
+    let mut i = 0;
+    while i < bits.len() {
+        v = v * 2 + bits[i];
+        i = i + 1;
+    }
+    v
+}
+
+fn bad_format_msg(fmt: String) -> String {
+    let mut s = String.new();
+    s.push_str("bad format '");
+    s.push_str(fmt);
+    s.push_str("'");
+    s
+}
+
+fn bad_char_msg(t: i64) -> String {
+    let mut s = String.new();
+    s.push_str("bad char '");
+    s.push_str(char1(t));
+    s.push_str("' in format");
+    s
+}
+
+fn is_letter(c: u8) -> bool {
+    (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+}
+
+fn is_space(c: u8) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13 or c == 11 or c == 12
+}
+
+fn good_type(t: i64) -> bool {
+    t == 117 or t == 115 or t == 102 or t == 98 or t == 116 or t == 114 or t == 112 or t == 80
+}
+
+fn parse_format(fmt: String) -> Parsed {
+    let mut tcode: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    let mut endian: Vec[i64] = Vec.new();
+    let b = str_bytes(fmt.clone());
+    let mut n = b.len();
+    let mut border = 62;
+    if n > 0 {
+        let last = b[n - 1];
+        if last == 60 or last == 62 {
+            border = last as i64;
+            n = n - 1;
+        }
+    }
+    let mut cur_endian = 62;
+    let mut i = 0;
+    let mut ok = true;
+    let mut msg = String.new();
+    let mut go = true;
+    while go and i < n {
+        let mut c = b[i];
+        let mut e = 0;
+        if c == 60 or c == 62 {
+            e = c as i64;
+            i = i + 1;
+            if i >= n {
+                ok = false;
+                msg = bad_format_msg(fmt.clone());
+                go = false;
+            } else {
+                c = b[i];
+            }
+        }
+        if go {
+            if is_letter(c) == false {
+                ok = false;
+                msg = bad_format_msg(fmt.clone());
+                go = false;
+            } else {
+                let t = c as i64;
+                i = i + 1;
+                let mut ds: i64 = 0;
+                let mut hasd = false;
+                while i < n and b[i] >= 48 and b[i] <= 57 {
+                    ds = ds * 10 + (b[i] - 48) as i64;
+                    hasd = true;
+                    i = i + 1;
+                }
+                while i < n and is_space(b[i]) {
+                    i = i + 1;
+                }
+                if hasd == false {
+                    ok = false;
+                    msg = bad_format_msg(fmt.clone());
+                    go = false;
+                } else if ds == 0 {
+                    ok = false;
+                    msg = bad_format_msg(fmt.clone());
+                    go = false;
+                } else if good_type(t) == false {
+                    ok = false;
+                    msg = bad_char_msg(t);
+                    go = false;
+                } else {
+                    if e != 0 {
+                        cur_endian = e;
+                    }
+                    tcode.push(t);
+                    size.push(ds);
+                    endian.push(cur_endian);
+                }
+            }
+        }
+    }
+    Parsed { ok: ok, msg: msg, tcode: tcode, size: size, endian: endian, border: border }
+}
+
+fn pack_field(t: i64, size: i64, tok: String) -> FieldBits {
+    let mut emsg = String.new();
+    if t == 117 or t == 98 {
+        let mut value = 0;
+        if t == 98 {
+            value = if parse_int(tok.clone()) != 0 { 1 } else { 0 };
+        } else {
+            value = parse_int(tok.clone());
+        }
+        let maximum = pow2(size) - 1;
+        if value < 0 or value > maximum {
+            emsg.push_str("\"u");
+            emsg.push_str(itoa(size));
+            emsg.push_str("\" requires 0 <= integer <= ");
+            emsg.push_str(itoa(maximum));
+            emsg.push_str(" (got ");
+            emsg.push_str(itoa(value));
+            emsg.push_str(")");
+            return FieldBits { ok: false, msg: emsg, bits: Vec.new() };
+        }
+        return FieldBits { ok: true, msg: emsg, bits: uint_bits(value, size) };
+    }
+    if t == 115 {
+        let value = parse_int(tok.clone());
+        let minimum = -pow2(size - 1);
+        let maximum = -minimum - 1;
+        if value < minimum or value > maximum {
+            emsg.push_str("\"s");
+            emsg.push_str(itoa(size));
+            emsg.push_str("\" requires ");
+            emsg.push_str(itoa(minimum));
+            emsg.push_str(" <= integer <= ");
+            emsg.push_str(itoa(maximum));
+            emsg.push_str(" (got ");
+            emsg.push_str(itoa(value));
+            emsg.push_str(")");
+            return FieldBits { ok: false, msg: emsg, bits: Vec.new() };
+        }
+        let mut v = value;
+        if v < 0 {
+            v = v + pow2(size);
+        }
+        return FieldBits { ok: true, msg: emsg, bits: uint_bits(v, size) };
+    }
+    // text (116) or raw (114): bytes padded to size/8 bytes, first `size` bits
+    let mut enc: Vec[i64] = Vec.new();
+    if t == 116 {
+        let eb = str_bytes(tok.clone());
+        let mut k = 0;
+        while k < eb.len() {
+            enc.push(eb[k] as i64);
+            k = k + 1;
+        }
+    } else {
+        enc = hex_to_bytes(tok.clone());
+    }
+    let nbytes = size / 8;
+    while enc.len() < nbytes {
+        enc.push(0);
+    }
+    let allbits = bytes_to_bits(enc);
+    let mut bits: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < size and j < allbits.len() {
+        bits.push(allbits[j]);
+        j = j + 1;
+    }
+    FieldBits { ok: true, msg: emsg, bits: bits }
+}
+
+fn place_pack(bits: mut ref Vec[i64], value_bits: ref Vec[i64], endian: i64, border: i64, is_rt: bool) {
+    let mut vb: Vec[i64] = Vec.new();
+    if endian == 60 {
+        let mut i = value_bits.len();
+        while i > 0 {
+            i = i - 1;
+            vb.push(value_bits[i]);
+        }
+    } else {
+        let mut i = 0;
+        while i < value_bits.len() {
+            vb.push(value_bits[i]);
+            i = i + 1;
+        }
+    }
+    if border == 62 or is_rt {
+        let mut i = 0;
+        while i < vb.len() {
+            bits.push(vb[i]);
+            i = i + 1;
+        }
+    } else {
+        let cur = bits.len() % 8;
+        let mut ao = vb.len() - (8 - cur);
+        let mut vlen = vb.len();
+        while ao > 0 {
+            let mut k = ao;
+            while k < vlen {
+                bits.push(vb[k]);
+                k = k + 1;
+            }
+            vlen = ao;
+            ao = ao - 8;
+        }
+        let mut k2 = 0;
+        while k2 < vlen {
+            bits.push(vb[k2]);
+            k2 = k2 + 1;
+        }
+    }
+}
+
+fn do_pack(p: ref Parsed, tokens: ref Vec[String]) -> PackRes {
+    let mut bits: Vec[i64] = Vec.new();
+    let mut ai = 0;
+    let mut fi = 0;
+    while fi < p.tcode.len() {
+        let t = p.tcode[fi];
+        let sz = p.size[fi];
+        if t == 112 {
+            let mut z = 0;
+            while z < sz {
+                bits.push(0);
+                z = z + 1;
+            }
+        } else if t == 80 {
+            let mut z = 0;
+            while z < sz {
+                bits.push(1);
+                z = z + 1;
+            }
+        } else {
+            let fb = pack_field(t, sz, tokens[ai].clone());
+            ai = ai + 1;
+            if fb.ok == false {
+                return PackRes { ok: false, msg: fb.msg, bytes: Vec.new() };
+            }
+            let is_rt = t == 114 or t == 116;
+            place_pack(mut bits, fb.bits, p.endian[fi], p.border, is_rt);
+        }
+        fi = fi + 1;
+    }
+    PackRes { ok: true, msg: String.new(), bytes: bits_to_bytes(bits) }
+}
+
+fn place_unpack(bits: ref Vec[i64], offset: i64, size: i64, endian: i64, border: i64, is_rt: bool) -> Vec[i64] {
+    let mut vb: Vec[i64] = Vec.new();
+    if border == 62 or is_rt {
+        let mut k = offset;
+        while k < offset + size {
+            vb.push(bits[k]);
+            k = k + 1;
+        }
+    } else {
+        let mut tmp: Vec[i64] = Vec.new();
+        let mut k = offset;
+        while k < offset + size {
+            tmp.push(bits[k]);
+            k = k + 1;
+        }
+        let mut ao = size - ((offset + size) % 8);
+        let mut tlen = tmp.len();
+        while ao > 0 {
+            let mut k2 = ao;
+            let mut end = ao + 8;
+            if end > tlen {
+                end = tlen;
+            }
+            while k2 < end {
+                vb.push(tmp[k2]);
+                k2 = k2 + 1;
+            }
+            tlen = ao;
+            ao = ao - 8;
+        }
+        let mut k3 = 0;
+        while k3 < tlen {
+            vb.push(tmp[k3]);
+            k3 = k3 + 1;
+        }
+    }
+    if endian == 60 {
+        let mut rev: Vec[i64] = Vec.new();
+        let mut i = vb.len();
+        while i > 0 {
+            i = i - 1;
+            rev.push(vb[i]);
+        }
+        return rev;
+    }
+    vb
+}
+
+fn field_unpack(t: i64, size: i64, vb: ref Vec[i64]) -> String {
+    if t == 117 {
+        return itoa(uint_val(vb));
+    }
+    if t == 98 {
+        if uint_val(vb) != 0 {
+            return "True";
+        }
+        return "False";
+    }
+    if t == 115 {
+        let mut v = uint_val(vb);
+        if vb.len() > 0 and vb[0] == 1 {
+            v = v - pow2(vb.len());
+        }
+        return itoa(v);
+    }
+    // text (116) / raw (114)
+    let by = bits_to_bytes(vb);
+    let nbytes = size / 8;
+    if t == 116 {
+        let mut u: Vec[u8] = Vec.new();
+        let mut i = 0;
+        while i < nbytes and i < by.len() {
+            u.push((by[i] % 256) as u8);
+            i = i + 1;
+        }
+        return String.from_utf8(u).unwrap_or("");
+    }
+    let mut keep: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nbytes and i < by.len() {
+        keep.push(by[i]);
+        i = i + 1;
+    }
+    bytes_to_hex(keep)
+}
+
+fn do_unpack(p: ref Parsed, data: ref Vec[i64], allow_trunc: bool, offset0: i64) -> String {
+    let allbits = bytes_to_bits(data);
+    let mut bits: Vec[i64] = Vec.new();
+    let mut i = offset0;
+    while i < allbits.len() {
+        bits.push(allbits[i]);
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut fi = 0;
+    while fi < p.size.len() {
+        total = total + p.size[fi];
+        fi = fi + 1;
+    }
+    if allow_trunc == false and total > bits.len() {
+        let mut m = String.new();
+        m.push_str("unpack requires at least ");
+        m.push_str(itoa(total));
+        m.push_str(" bits to unpack (got ");
+        m.push_str(itoa(bits.len()));
+        m.push_str(")");
+        return m;
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut offset = 0;
+    let mut stop = false;
+    fi = 0;
+    while fi < p.tcode.len() and stop == false {
+        let t = p.tcode[fi];
+        let sz = p.size[fi];
+        if offset + sz > bits.len() {
+            stop = true;
+        } else {
+            if t != 112 and t != 80 {
+                let is_rt = t == 114 or t == 116;
+                let vb = place_unpack(bits, offset, sz, p.endian[fi], p.border, is_rt);
+                out.push(field_unpack(t, sz, vb));
+            }
+            offset = offset + sz;
+            fi = fi + 1;
+        }
+    }
+    let mut s = String.new();
+    let mut j = 0;
+    while j < out.len() {
+        if j > 0 {
+            s.push_str(" ");
+        }
+        s.push_str(out[j].clone());
+        j = j + 1;
+    }
+    s
+}
+
+fn do_byteswap(fmt: String, data: ref Vec[i64]) -> String {
+    let fb = str_bytes(fmt);
+    let mut out: Vec[i64] = Vec.new();
+    let mut pos = 0;
+    let mut gi = 0;
+    while gi < fb.len() {
+        let cnt = (fb[gi] - 48) as i64;
+        let mut k = pos + cnt;
+        while k > pos {
+            k = k - 1;
+            out.push(data[k]);
+        }
+        pos = pos + cnt;
+        gi = gi + 1;
+    }
+    bytes_to_hex(out)
+}
+
+fn run_job(line: String) -> String {
+    let f = split_fields(line, 9);
+    let op = f[0].clone();
+    if op == "pack" {
+        let p = parse_format(f[1].clone());
+        if p.ok == false {
+            return p.msg;
+        }
+        let tokens = split_fields(f[2].clone(), 32);
+        let r = do_pack(p, tokens);
+        if r.ok == false {
+            return r.msg;
+        }
+        return bytes_to_hex(r.bytes);
+    } else if op == "unpack" or op == "unpackt" {
+        let p = parse_format(f[1].clone());
+        if p.ok == false {
+            return p.msg;
+        }
+        let data = hex_to_bytes(f[2].clone());
+        let trunc = op == "unpackt";
+        return do_unpack(p, data, trunc, 0);
+    } else if op == "unpackfrom" {
+        let p = parse_format(f[1].clone());
+        if p.ok == false {
+            return p.msg;
+        }
+        let off = parse_int(f[2].clone());
+        let data = hex_to_bytes(f[3].clone());
+        return do_unpack(p, data, false, off);
+    } else if op == "calcsize" {
+        let p = parse_format(f[1].clone());
+        if p.ok == false {
+            return p.msg;
+        }
+        let mut total = 0;
+        let mut fi = 0;
+        while fi < p.size.len() {
+            total = total + p.size[fi];
+            fi = fi + 1;
+        }
+        return itoa(total);
+    } else if op == "byteswap" {
+        let data = hex_to_bytes(f[2].clone());
+        return do_byteswap(f[1].clone(), data);
+    }
+    String.new()
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("pack\tu4u4\t3 7\n");
+    s.push_str("pack\tu1u3u4\t1 5 10\n");
+    s.push_str("pack\ts8\t-1\n");
+    s.push_str("pack\ts16\t-1000\n");
+    s.push_str("pack\tu8s8\t200 -50\n");
+    s.push_str("pack\tu7\t100\n");
+    s.push_str("pack\tu12u4\t2730 5\n");
+    s.push_str("pack\tb1b1b1b1u4\t1 0 1 1 0\n");
+    s.push_str("pack\tu5p3u8\t17 42\n");
+    s.push_str("pack\tu5P3u8\t17 42\n");
+    s.push_str("pack\tt16\tHi\n");
+    s.push_str("pack\tt24\tabc\n");
+    s.push_str("pack\tr16\tdead\n");
+    s.push_str("pack\tr24\tcafe00\n");
+    s.push_str("pack\tu4u4<\t3 7\n");
+    s.push_str("pack\t<u4u4\t3 7\n");
+    s.push_str("pack\tu12u4<\t2730 5\n");
+    s.push_str("pack\tu1<u2u3\t1 2 5\n");
+    s.push_str("pack\tu16<\t258\n");
+    s.push_str("pack\tu24<\t66051\n");
+    s.push_str("pack\tu8u8u8<\t1 2 3\n");
+    s.push_str("pack\tu1u3p7s16\t1 5 -1000\n");
+    s.push_str("pack\tu1u3p7s16<\t1 5 -1000\n");
+    s.push_str("pack\t<u1u3p7s16<\t1 5 -1000\n");
+    s.push_str("pack\t\t\n");
+    s.push_str("unpack\tu4u4\t37\n");
+    s.push_str("unpack\ts8\tff\n");
+    s.push_str("unpack\ts16\tfc18\n");
+    s.push_str("unpack\tu8s8\tc8ce\n");
+    s.push_str("unpack\tb1b1b1b1u4\tb0\n");
+    s.push_str("unpack\tt16\t4869\n");
+    s.push_str("unpack\tr16\tdead\n");
+    s.push_str("unpack\tu4u4<\t37\n");
+    s.push_str("unpack\tu16<\t0201\n");
+    s.push_str("unpack\tu8u8u8<\t010203\n");
+    s.push_str("unpack\tu1u3p7s16\td01f8300\n");
+    s.push_str("unpack\tu12u4<\taaa5\n");
+    s.push_str("unpack\tu1<u2u3\tb4\n");
+    s.push_str("unpackt\tu8u8u8\tabcd\n");
+    s.push_str("unpackt\tu8u8\tab\n");
+    s.push_str("unpackfrom\tu4u4\t4\t0370\n");
+    s.push_str("calcsize\tu1s3p4\n");
+    s.push_str("calcsize\tu12u4\n");
+    s.push_str("calcsize\tt24r16\n");
+    s.push_str("calcsize\t\n");
+    s.push_str("byteswap\t24\t001122334455\n");
+    s.push_str("byteswap\t1234\t00112233445566778899\n");
+    s.push_str("byteswap\t8\t0011223344556677\n");
+    s.push_str("pack\tu8\t256\n");
+    s.push_str("pack\tu8\t-1\n");
+    s.push_str("pack\ts4\t8\n");
+    s.push_str("pack\ts4\t-9\n");
+    s.push_str("calcsize\tq3\n");
+    s.push_str("calcsize\tu0\n");
+    s.push_str("calcsize\tu3x\n");
+    s.push_str("unpack\tu16\t00\n");
+    s
+}
