@@ -1,0 +1,137 @@
+// LeetCode #846: Hand of Straights -- walk down to a group's start, with
+// no sort.
+//
+// From any card left in the hand, step down while the value below is
+// still there: the value reached starts groups, since nothing below it
+// remains. Deal out every group that starts there, step up one value,
+// and repeat until the card itself is used up; every value from the
+// start to the card is then gone. The walk passes only values still in
+// the hand, and uses each of them up on the way back, so O(n) expected
+// with a hash map and no sort.
+
+fn is_n_straight_hand(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut counts: Map[i64, i64] = Map.new();
+    for card in hand.iter() {
+        counts[*card] = counts.get_or(*card, 0) + 1;
+    }
+    for card in hand.iter() {
+        let mut start = *card;
+        while counts.get_or(start - 1, 0) > 0 {
+            start -= 1;
+        }
+        while start <= *card {
+            while counts.get_or(start, 0) > 0 {
+                for next in start..start + group_size {
+                    let have = counts.get_or(next, 0);
+                    if have == 0 {
+                        return false;
+                    }
+                    counts[next] = have - 1;
+                }
+            }
+            start += 1;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(hand: Vec[i64], group_size: i64) {
+    println(f"{hand}, {group_size} -> {is_n_straight_hand(hand, group_size)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffle(seed: mut ref i64, cards: mut ref Vec[i64]) {
+    let n = cards.len();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        cards.swap(i, j);
+    }
+}
+
+fn main() {
+    show([1, 2, 3, 6, 2, 3, 4, 7, 8], 3);
+    show([1, 2, 3, 4, 5], 4);
+    show([1], 1);
+    show([5, 1, 5], 1);
+    show([3, 1, 2], 3);
+    show([1, 2, 4], 3);
+    show([2, 1], 2);
+    show([1, 1, 2, 2, 3, 3], 3);
+    show([1, 1, 2, 2, 3, 3], 2);
+    show([1, 2, 3, 4, 5, 6], 2);
+    show([1, 1, 2, 3], 2);
+    show([1, 2, 3, 3, 4, 5], 3);
+    show([1, 2, 3, 4], 3);
+    show([8, 10, 12], 3);
+    show([1, 2, 2, 3, 3, 4], 3);
+    show([0, 1000000000], 1);
+    show([999999998, 1000000000, 999999999], 3);
+    show([4, 3, 2, 3, 4, 5, 6, 5], 4);
+    show([0, 0, 1, 2, 3, 3], 2);
+    // LeetCode's largest hands, 10^4 cards
+    let mut seed = 846;
+    let mut all: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        all.push(i);
+    }
+    shuffle(mut seed, mut all);
+    println(f"0..9999 shuffled, one group of 10000: {is_n_straight_hand(all, 10000)}");
+    println(f"0..9999 shuffled, groups of 16: {is_n_straight_hand(all, 16)}");
+    println(f"0..9999 shuffled, groups of 3: {is_n_straight_hand(all, 3)}");
+    let mut fours: Vec[i64] = Vec.new();
+    for g in 0..2500 {
+        let start = 1000000000 - 4 - (g % 50) * 3;
+        for j in 0..4 {
+            fours.push(start + j);
+        }
+    }
+    shuffle(mut seed, mut fours);
+    println(f"2500 overlapping groups of 4 near 10^9: {is_n_straight_hand(fours, 4)}");
+    fours[0] = fours[0] + 1;
+    println(f"the same with one card moved up one: {is_n_straight_hand(fours, 4)}");
+    let ones: Vec[i64] = Vec.filled(10000, 7);
+    println(f"10000 sevens, groups of 1: {is_n_straight_hand(ones, 1)}");
+    println(f"10000 sevens, groups of 2: {is_n_straight_hand(ones, 2)}");
+    let mut trues = 0;
+    let mut check = 0;
+    for _ in 0..600 {
+        let group_size = 1 + next_random(mut seed) % 4;
+        let groups = 1 + next_random(mut seed) % 6;
+        let kind = next_random(mut seed) % 4;
+        let mut hand: Vec[i64] = Vec.new();
+        if kind == 3 {
+            for _ in 0..group_size * groups {
+                hand.push(next_random(mut seed) % 5);
+            }
+        } else {
+            for _ in 0..groups {
+                let start = next_random(mut seed) % 8;
+                for j in 0..group_size {
+                    hand.push(start + j);
+                }
+            }
+            if kind == 1 {
+                let at = next_random(mut seed) % hand.len();
+                hand[at] = next_random(mut seed) % 10;
+            } else if kind == 2 {
+                hand.push(next_random(mut seed) % 10);
+            }
+        }
+        shuffle(mut seed, mut hand);
+        let ok = is_n_straight_hand(hand, group_size);
+        if ok {
+            trues += 1;
+        }
+        check = (check * 31 + hand.len() * 2 + (if ok { 1 } else { 0 })) % 1000000007;
+    }
+    println(f"600 random hands: {trues} split, checksum {check}");
+}

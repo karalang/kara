@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/846-hand-of-straights/is_n_straight_hand_opened.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "ca0170176"
+extracted_src = "a70cf814"
+model_rev = "583cfb0d"
+model_src = "a70cf814"

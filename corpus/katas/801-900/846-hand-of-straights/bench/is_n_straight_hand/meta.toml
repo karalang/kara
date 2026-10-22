@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/846-hand-of-straights/bench/is_n_straight_hand.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:sortedmap", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "ca0170176"
+extracted_src = "a7e1806e"
+model_rev = "583cfb0d"
+model_src = "a7e1806e"

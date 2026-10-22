@@ -1,0 +1,27 @@
+[1, 2, 3, 6, 2, 3, 4, 7, 8], 3 -> true
+[1, 2, 3, 4, 5], 4 -> false
+[1], 1 -> true
+[5, 1, 5], 1 -> true
+[3, 1, 2], 3 -> true
+[1, 2, 4], 3 -> false
+[2, 1], 2 -> true
+[1, 1, 2, 2, 3, 3], 3 -> true
+[1, 1, 2, 2, 3, 3], 2 -> false
+[1, 2, 3, 4, 5, 6], 2 -> true
+[1, 1, 2, 3], 2 -> false
+[1, 2, 3, 3, 4, 5], 3 -> true
+[1, 2, 3, 4], 3 -> false
+[8, 10, 12], 3 -> false
+[1, 2, 2, 3, 3, 4], 3 -> true
+[0, 1000000000], 1 -> true
+[999999998, 1000000000, 999999999], 3 -> true
+[4, 3, 2, 3, 4, 5, 6, 5], 4 -> true
+[0, 0, 1, 2, 3, 3], 2 -> false
+0..9999 shuffled, one group of 10000: true
+0..9999 shuffled, groups of 16: true
+0..9999 shuffled, groups of 3: false
+2500 overlapping groups of 4 near 10^9: true
+the same with one card moved up one: false
+10000 sevens, groups of 1: true
+10000 sevens, groups of 2: false
+600 random hands: 296 split, checksum 808723045

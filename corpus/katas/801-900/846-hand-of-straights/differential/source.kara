@@ -1,0 +1,309 @@
+// LeetCode #846: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random hands,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn is_n_straight_hand_star(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for card in hand.iter() {
+        counts[*card] = counts.get_or(*card, 0) + 1;
+    }
+    while let Some((low, starts)) = counts.min() {
+        for card in low..low + group_size {
+            let have = counts.get_or(card, 0);
+            if have < starts {
+                return false;
+            }
+            if have == starts {
+                let _ = counts.remove(card);
+            } else {
+                counts[card] = have - starts;
+            }
+        }
+    }
+    true
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn is_n_straight_hand_sorted(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut cards = hand.clone();
+    cards.sort();
+    let mut counts: Map[i64, i64] = Map.new();
+    for card in cards.iter() {
+        counts[*card] = counts.get_or(*card, 0) + 1;
+    }
+    for first in cards.iter() {
+        if counts.get_or(*first, 0) == 0 {
+            continue;
+        }
+        for card in *first..*first + group_size {
+            let have = counts.get_or(card, 0);
+            if have == 0 {
+                return false;
+            }
+            counts[card] = have - 1;
+        }
+    }
+    true
+}
+
+// ---- open-groups arm ------------------------------------------------
+
+fn is_n_straight_hand_opened(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut cards = hand.clone();
+    cards.sort();
+    let mut started: VecDeque[i64] = VecDeque.new();
+    let mut open = 0;
+    let mut last = 0;
+    let mut i = 0;
+    while i < cards.len() {
+        let value = cards[i];
+        let mut count = 0;
+        while i < cards.len() and cards[i] == value {
+            count += 1;
+            i += 1;
+        }
+        if open > 0 and (value != last + 1 or count < open) {
+            return false;
+        }
+        started.push_back(count - open);
+        last = value;
+        open = count;
+        if started.len() == group_size {
+            open -= started.pop_front().unwrap();
+        }
+    }
+    open == 0
+}
+
+// ---- walk-down arm --------------------------------------------------
+
+fn is_n_straight_hand_walkdown(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut counts: Map[i64, i64] = Map.new();
+    for card in hand.iter() {
+        counts[*card] = counts.get_or(*card, 0) + 1;
+    }
+    for card in hand.iter() {
+        let mut start = *card;
+        while counts.get_or(start - 1, 0) > 0 {
+            start -= 1;
+        }
+        while start <= *card {
+            while counts.get_or(start, 0) > 0 {
+                for next in start..start + group_size {
+                    let have = counts.get_or(next, 0);
+                    if have == 0 {
+                        return false;
+                    }
+                    counts[next] = have - 1;
+                }
+            }
+            start += 1;
+        }
+    }
+    true
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: the hand splits when its cards can be
+// dealt into groups of `group_size` cards each, the values of every group
+// being consecutive. Some group holds the first card not yet dealt, so
+// try every choice of `group_size - 1` other undealt cards to go with it,
+// keep the choices whose values are consecutive, and deal the rest the
+// same way.
+fn statement(hand: Vec[i64], group_size: i64) -> bool {
+    let mut dealt: Vec[bool] = Vec.filled(hand.len(), false);
+    deal(hand, group_size, mut dealt)
+}
+
+fn deal(hand: Vec[i64], group_size: i64, dealt: mut ref Vec[bool]) -> bool {
+    let mut first = -1;
+    for i in 0..hand.len() {
+        if first < 0 and not dealt[i] {
+            first = i;
+        }
+    }
+    if first < 0 {
+        return true;
+    }
+    dealt[first] = true;
+    let mut group: Vec[i64] = [first];
+    let ok = choose(hand, group_size, mut dealt, mut group, first + 1);
+    dealt[first] = false;
+    ok
+}
+
+fn choose(hand: Vec[i64], group_size: i64, dealt: mut ref Vec[bool], group: mut ref Vec[i64], from: i64) -> bool {
+    if group.len() == group_size {
+        let mut values: Vec[i64] = group.iter().map(|i| hand[i]).collect();
+        values.sort();
+        for k in 1..values.len() {
+            if values[k] != values[k - 1] + 1 {
+                return false;
+            }
+        }
+        return deal(hand, group_size, mut dealt);
+    }
+    for i in from..hand.len() {
+        if not dealt[i] {
+            dealt[i] = true;
+            group.push(i);
+            let ok = choose(hand, group_size, mut dealt, mut group, i + 1);
+            let _ = group.pop();
+            dealt[i] = false;
+            if ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn splits(arm: i64, hand: Vec[i64], group_size: i64) -> bool {
+    if arm == 0 {
+        is_n_straight_hand_star(hand, group_size)
+    } else if arm == 1 {
+        is_n_straight_hand_sorted(hand, group_size)
+    } else if arm == 2 {
+        is_n_straight_hand_opened(hand, group_size)
+    } else {
+        is_n_straight_hand_walkdown(hand, group_size)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "sorted", "opened", "walkdown"];
+    let properties = ["answer", "shuffled", "shifted", "mirrored", "joined"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut some = 0;
+    let mut seed = 846;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut group_size = 1 + next_random(mut seed) % 4;
+        let mut hand: Vec[i64] = Vec.new();
+        if kind == 0 {
+            // a whole number of groups' worth of cards, values 0 to 5
+            let n = group_size * (1 + next_random(mut seed) % (12 / group_size));
+            for _ in 0..n {
+                hand.push(next_random(mut seed) % 6);
+            }
+        } else if kind == 1 {
+            // dealt from groups, then left alone, or one card changed, or
+            // a run of `group_size` values taken out, which leaves a hand
+            // whose counts can still pass every value but one
+            let groups = 1 + next_random(mut seed) % (12 / group_size);
+            for _ in 0..groups {
+                let start = next_random(mut seed) % 6;
+                for j in 0..group_size {
+                    hand.push(start + j);
+                }
+            }
+            let change = next_random(mut seed) % 3;
+            if change == 1 {
+                let at = next_random(mut seed) % hand.len();
+                hand[at] = next_random(mut seed) % 9;
+            } else if change == 2 and groups > 1 {
+                let from = hand[next_random(mut seed) % hand.len()];
+                let mut taken = hand.clone();
+                let mut all = true;
+                for v in from..from + group_size {
+                    let mut at = -1;
+                    for i in 0..taken.len() {
+                        if at < 0 and taken[i] == v {
+                            at = i;
+                        }
+                    }
+                    if at < 0 {
+                        all = false;
+                    } else {
+                        let _ = taken.remove(at);
+                    }
+                }
+                if all {
+                    hand = taken;
+                }
+            }
+        } else if kind == 2 {
+            // few distinct values, many repeats
+            let n = group_size * (1 + next_random(mut seed) % (12 / group_size));
+            for _ in 0..n {
+                hand.push(next_random(mut seed) % 3);
+            }
+        } else {
+            // any count of cards, groups up to 6
+            group_size = 1 + next_random(mut seed) % 6;
+            let n = 1 + next_random(mut seed) % 12;
+            for _ in 0..n {
+                hand.push(next_random(mut seed) % 8);
+            }
+        }
+        let size = group_size;
+        let want = statement(hand, size);
+        if want {
+            some += 1;
+        }
+        let mut shuffled = hand.clone();
+        let n = shuffled.len();
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            shuffled.swap(i, j);
+        }
+        let shift = next_random(mut seed) % 1000;
+        let shifted: Vec[i64] = hand.iter().map(|x| x + shift).collect();
+        let mirrored: Vec[i64] = hand.iter().map(|x| 1000000000 - x).collect();
+        let mut joined: Vec[i64] = hand.clone();
+        for card in hand.iter() {
+            joined.push(*card + 100);
+        }
+        for arm in 0..4 {
+            let got = splits(arm, hand, size);
+            let oks = [
+                got == want,
+                splits(arm, shuffled, size) == got,
+                splits(arm, shifted, size) == got,
+                splits(arm, mirrored, size) == got,
+                splits(arm, joined, size) == got,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {hand}, {size} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {some} that split, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, sorted {by_arm[1]}, opened {by_arm[2]}, walkdown {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, shuffled {by_property[1]}, shifted {by_property[2]}, mirrored {by_property[3]}, joined {by_property[4]}");
+}

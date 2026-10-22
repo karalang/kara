@@ -1,0 +1,89 @@
+// Benchmark for #846: Hand of Straights -- the open-groups arm (sorted runs
+// and a queue of open groups).
+//
+// The ★ arm keeps its counts in a `SortedMap`, which C does not have, so
+// the bench uses the arm that is the same algorithm in all five
+// languages: sort a copy of the hand, walk its distinct values with
+// their counts, and keep a queue of how many groups each value started;
+// `open` is how many groups still need the next value.
+
+fn is_n_straight_hand(hand: Vec[i64], group_size: i64) -> bool {
+    if hand.len() % group_size != 0 {
+        return false;
+    }
+    let mut cards = hand.clone();
+    cards.sort();
+    let mut started: VecDeque[i64] = VecDeque.new();
+    let mut open = 0;
+    let mut last = 0;
+    let mut i = 0;
+    while i < cards.len() {
+        let value = cards[i];
+        let mut count = 0;
+        while i < cards.len() and cards[i] == value {
+            count += 1;
+            i += 1;
+        }
+        if open > 0 and (value != last + 1 or count < open) {
+            return false;
+        }
+        started.push_back(count - open);
+        last = value;
+        open = count;
+        if started.len() == group_size {
+            open -= started.pop_front().unwrap();
+        }
+    }
+    open == 0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 hands drawn once, each of LeetCode's most cards, 10^4. Hand g
+    // deals groups of size `sizes[g % 8]` whose starts lie in a window
+    // near 10^9, so they overlap, and shuffles them; every fourth hand
+    // then has one card moved up by one, and those do not split. Each
+    // round asks the next hand.
+    let count = 64;
+    let rounds = 3000;
+    let n = 10000;
+    let sizes = [1, 2, 4, 5, 10, 16, 100, 1000];
+    let mut seed: i64 = 846;
+    let mut hands: Vec[Vec[i64]] = Vec.new();
+    let mut group_sizes: Vec[i64] = Vec.new();
+    for g in 0..count {
+        let group_size = sizes[g % 8];
+        let window = 1 + next_random(mut seed) % 20000;
+        let mut hand: Vec[i64] = Vec.new();
+        while hand.len() < n {
+            let start = 999000000 + next_random(mut seed) % window;
+            for j in 0..group_size {
+                hand.push(start + j);
+            }
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            hand.swap(i, j);
+        }
+        if g % 4 == 3 {
+            let at = next_random(mut seed) % n;
+            hand[at] = hand[at] + 1;
+        }
+        hands.push(hand);
+        group_sizes.push(group_size);
+    }
+    let mut splits = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let ok = is_n_straight_hand(hands[round % count], group_sizes[round % count]);
+        if ok {
+            splits += 1;
+        }
+        checksum = (checksum * 31 + round % count + (if ok { 1 } else { 0 })) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} hands: {splits} split, checksum {checksum}");
+}
