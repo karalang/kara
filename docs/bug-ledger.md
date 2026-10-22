@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 333 |
-| codegen-gap | 289 |
+| missing-feature | 334 |
+| codegen-gap | 290 |
 | false-positive | 283 |
-| other | 196 |
+| other | 197 |
 | diagnostics | 187 |
 | perf | 183 |
 | soundness | 134 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3029 |
+| codegen | 3032 |
 | interp | 1039 |
 | typecheck | 564 |
 | ownership | 131 |
@@ -147,7 +147,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | NARROWED AGAIN 2026-10-19 (Thread A, d3124030ef): `std.sync.MutexGuard` has landed (`m.lock()` returns one, and a `lock` block lowers onto it; B-2026-10-19-23). Still specified-only: `std.iter.Extend` and all of `std.log`. PREVIOUSLY: NARROWED AGAIN 2026-10-19 (Thread A, 7794d0fad9): `std.process.exit` (a gated Kāra module over the native; `-> Never` now lowers) and `std.iter.DoubleEndedIterator` (already the library's trait, only its import was missing) have landed. Still specified-only: `std.sync.MutexGuard`, `std.iter.Extend` and all of `std.log`. MEASURED at 7794d0fad9: `Mutex` has no `lock()` method at all (`no method 'lock' on type 'Mutex'`), only the `lock m x { }` block (which does exclude: 8 tasks of 200000 increments each reach 1600000 on `__mir-llvm-run`, three runs of three); `Extend` has no trait signature anywhere in docs/library (README names it; collections.md gives only `Vec.extend[I: IntoIterator[Item = T]]`), and the v2 library has no `IntoIterator` trait; `std.log` needs `key: value` call fields. PREVIOUSLY: NARROWED 2026-10-19 (Thread A, read off prelude::LIBRARY_GLOBAL_MODULES at bdea5d5967): std.time (Instant partly, B-2026-10-15-112; SystemTime, Duration, sleep), std.random.next_u64 and std.uuid.v4 have landed (aff0e47fee, 3c1fb1d390, d0d9258c19); still specified-only are `std.sync.MutexGuard`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit` and all of `std.log`. WAS: Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 | B-2026-10-15-55 | 2026-10-15 | codegen+runtime | medium | On the MIR compiled backend, `starts_with`, `contains`, `ends_with` and String `<` each call out to the runtime (`karac_mir_str_test`) where legacy inlines a length test and memcmp. Kata 677's bench makes 48.2M such calls, 45% of its instructions are their own cost (3.73G against legacy's 2.16G), and it runs at about 1.5 times legacy, the M2 bar | — |
 | B-2026-10-15-56 | 2026-10-15 | codegen+runtime | low | On the MIR compiled backend, the first allocation of a pushed `Vec` (`karac_mir_vec_reserve`) and every `Vec` clone (`karac_mir_vec_alloc`) are out-of-line runtime calls costing some 40 to 70 instructions each beyond the allocator, so kata 679's bench, which builds millions of two- to four-element `Vec[f64]`, runs 17.1G instructions against legacy's 12.9G: 1.5x legacy, at the M2 bar | — |
-| B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
 | B-2026-10-19-32 | 2026-10-19 | typecheck | low | A list literal passed to a method of a generic receiver does not take the parameter's type as its expected type: `best.push([0, 1])` on a `Vec[Array[i64, 2]]` is refused with "expected 'Array[i64, 2]', found 'Vec[i64]'", while the same literal passed to a free function taking `Array[i64, 2]` is accepted | — |
@@ -187,6 +186,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-20 | 2026-10-22 | cli | high | Compile-time evaluation (`#[derive]` expansion and `comptime {}`) runs on the LEGACY tree-walk interpreter (src/comptime.rs), reached from the v2 MIR builder's derive expansion and from Pipeline::lower, so `check`, `fix`, `query` and `build --mir` all depend on src/interpreter* for any program with a derive or a comptime block; M3 deletes that interpreter | — |
 | B-2026-10-22-21 | 2026-10-22 | cli | medium | Features that go to the archive with the legacy backend (wasm component and browser bindings, the exported C ABI `--crate-type staticlib/cdylib`, GPU `gpu.dispatch`, auto-par) have no v2 refusal by name: after legacy is deleted a user would meet an unknown-flag or unknown-name error instead of a diagnostic that says the feature is deferred, as the M4a refusals for TLS server and WebSocket already do | — |
 | B-2026-10-22-22 | 2026-10-22 | typecheck | low | v2's check has no `Iterator.chunks` / `Iterator.windows` (legacy had both; `Vec`/`Slice` chunks and windows exist): `v.iter().chunks(2)` refuses with E0236 "no method 'chunks' on type 'VecIter'" | — |
+| B-2026-10-22-23 | 2026-10-22 | codegen | medium | M3 item 4, mir-llvm half: `karac build --mir` compiles one file only. A project-mode build (many files under src/), the kara.toml link flags ([link] libs/search_paths) and a plain wasm32 target do not go through MIR to LLVM, so legacy codegen cannot be deleted while those builds need it | — |
+| B-2026-10-22-24 | 2026-10-22 | codegen | medium | M3 item 5, codegen half: the MIR backend still reaches into legacy codegen. `src/codegen/mir`, `mir_aot` and `mir_asan` hang off codegen.rs (lines 73-75) and use its driver (create_target_machine, create_unoptimized_target_machine, link_executable, link_executable_with_sanitizer), debug_info::read_debug_info_env, lljit.rs and test_jit_dispatch's runner lookup (locate_karac_jit_runner, SPAWNER_PID_ENV), so deleting codegen.rs and the non-mir codegen/** breaks `build --mir`, `__mir-llvm-run` and `__mir-llvm-asan` | — |
+| B-2026-10-22-25 | 2026-10-22 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend prints INIT then 42 three times on `__mir-run` and fails to build on `__mir-llvm-run`. It is the only corpus program that passes on mir-interp and fails on mir-llvm | — |
 
 ### Relocated
 
@@ -4220,6 +4222,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-48 | interp+codegen | medium | The MIR instance of an impl method binds the impl's type parameters to the target's arguments by POSITION: `impl[T: Clone, I: Iterator] Iterator for… | e6d52d2c4b |
 | B-2026-10-18-49 | interp+codegen | medium | The MIR builder does not lower a struct field typed by an associated-type projection of the struct's parameter: `struct MapIt[I: Iterator] { it: I, f… | 33b2834347 |
 | B-2026-10-18-50 | interp+codegen | medium | On MIR, a `Str` copied out of a local `Vec[Str]` (`w = parts[0]` after `let parts: Vec[Str] = s.split(",").collect()`) stays borrowed from the Vec, s… | af93af3805 |
+| B-2026-10-18-51 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new()… | 606ffe07e2 |
 | B-2026-10-18-53 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a referenc… | e392d00704 |
 | B-2026-10-18-54 | resolver | low | A gated library module's private helper collides with a program's own item of the same name: `import std.uuid.{v4};` beside a program's `fn uuid_hex(… | 1d44b8cdd2 |
 | B-2026-10-19-1 | typecheck | low | An unsolved `Vec.new()` is not pinned by a `Slice[T]` parameter: `fs.write_bytes(path, Vec.new())` and `take(Vec.new())` against `fn take(b: ref Slic… | ecb1a0322e |
