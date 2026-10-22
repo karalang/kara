@@ -1,0 +1,343 @@
+// LeetCode #847: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random graphs,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn shortest_path_length_star(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let all = (1 << n) - 1;
+    let mut seen: Vec[bool] = Vec.filled(n << n, false);
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    for v in 0..n {
+        seen[(1 << v) * n + v] = true;
+        queue.push_back((1 << v, v, 0));
+    }
+    while let Some((mask, v, steps)) = queue.pop_front() {
+        if mask == all {
+            return steps;
+        }
+        for w in graph[v].iter() {
+            let next = mask | (1 << *w);
+            if not seen[next * n + *w] {
+                seen[next * n + *w] = true;
+                queue.push_back((next, *w, steps + 1));
+            }
+        }
+    }
+    0
+}
+
+// ---- travelling-salesman arm ----------------------------------------
+
+fn shortest_path_length_tsp(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let far = 1000000;
+    let mut dist: Vec[i64] = Vec.filled(n * n, far);
+    for v in 0..n {
+        dist[v * n + v] = 0;
+        for w in graph[v].iter() {
+            dist[v * n + *w] = 1;
+        }
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                let through = dist[i * n + k] + dist[k * n + j];
+                if through < dist[i * n + j] {
+                    dist[i * n + j] = through;
+                }
+            }
+        }
+    }
+    let all = (1 << n) - 1;
+    let mut best: Vec[i64] = Vec.filled(n << n, far);
+    for v in 0..n {
+        best[(1 << v) * n + v] = 0;
+    }
+    for set in 1..all + 1 {
+        for v in 0..n {
+            let here = best[set * n + v];
+            if here == far {
+                continue;
+            }
+            for w in 0..n {
+                if set & (1 << w) == 0 {
+                    let next = (set | (1 << w)) * n + w;
+                    best[next] = best[next].min(here + dist[v * n + w]);
+                }
+            }
+        }
+    }
+    let mut answer = far;
+    for v in 0..n {
+        answer = answer.min(best[all * n + v]);
+    }
+    answer
+}
+
+// ---- memoized arm ---------------------------------------------------
+
+fn shortest_path_length_memo(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let mut dist: Vec[i64] = Vec.filled(n * n, -1);
+    for source in 0..n {
+        let mut queue: VecDeque[i64] = VecDeque.new();
+        dist[source * n + source] = 0;
+        queue.push_back(source);
+        while let Some(v) = queue.pop_front() {
+            for w in graph[v].iter() {
+                if dist[source * n + *w] < 0 {
+                    dist[source * n + *w] = dist[source * n + v] + 1;
+                    queue.push_back(*w);
+                }
+            }
+        }
+    }
+    let mut memo: Vec[i64] = Vec.filled(n << n, -1);
+    let mut answer = -1;
+    for v in 0..n {
+        let walk = rest_memo(n, dist, mut memo, 1 << v, v);
+        if answer < 0 or walk < answer {
+            answer = walk;
+        }
+    }
+    answer
+}
+
+fn rest_memo(n: i64, dist: Vec[i64], memo: mut ref Vec[i64], set: i64, v: i64) -> i64 {
+    if set == (1 << n) - 1 {
+        return 0;
+    }
+    if memo[set * n + v] >= 0 {
+        return memo[set * n + v];
+    }
+    let mut best = -1;
+    for w in 0..n {
+        if set & (1 << w) == 0 {
+            let walk = dist[v * n + w] + rest_memo(n, dist, mut memo, set | (1 << w), w);
+            if best < 0 or walk < best {
+                best = walk;
+            }
+        }
+    }
+    memo[set * n + v] = best;
+    best
+}
+
+// ---- levels arm -----------------------------------------------------
+
+fn shortest_path_length_levels(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let all = (1 << n) - 1;
+    let mut seen: Vec[bool] = Vec.filled(n << n, false);
+    let mut level: Vec[i64] = Vec.new();
+    for v in 0..n {
+        seen[(1 << v) * n + v] = true;
+        level.push((1 << v) * n + v);
+    }
+    let mut steps = 0;
+    loop {
+        let mut next: Vec[i64] = Vec.new();
+        for state in level.iter() {
+            let set = *state / n;
+            if set == all {
+                return steps;
+            }
+            for w in graph[*state % n].iter() {
+                let to = (set | (1 << *w)) * n + *w;
+                if not seen[to] {
+                    seen[to] = true;
+                    next.push(to);
+                }
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: a walk may start and stop anywhere,
+// revisit nodes and reuse edges, so try every walk of 0 steps, then of
+// 1, and so on, from every node, and return the first length at which
+// some walk has visited every node.
+fn statement(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let all = (1 << n) - 1;
+    let mut length = 0;
+    loop {
+        for v in 0..n {
+            if walks(graph, all, v, 1 << v, length) {
+                return length;
+            }
+        }
+        length += 1;
+    }
+}
+
+fn walks(graph: Vec[Vec[i64]], all: i64, v: i64, visited: i64, left: i64) -> bool {
+    if visited == all {
+        return true;
+    }
+    if left == 0 {
+        return false;
+    }
+    for w in graph[v].iter() {
+        if walks(graph, all, *w, visited | (1 << *w), left - 1) {
+            return true;
+        }
+    }
+    false
+}
+
+fn length(arm: i64, graph: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        shortest_path_length_star(graph)
+    } else if arm == 1 {
+        shortest_path_length_tsp(graph)
+    } else if arm == 2 {
+        shortest_path_length_memo(graph)
+    } else {
+        shortest_path_length_levels(graph)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn lists(n: i64, edge: Vec[bool]) -> Vec[Vec[i64]] {
+    let mut graph: Vec[Vec[i64]] = Vec.new();
+    for v in 0..n {
+        let mut out: Vec[i64] = Vec.new();
+        for w in 0..n {
+            if edge[v * n + w] {
+                out.push(w);
+            }
+        }
+        graph.push(out);
+    }
+    graph
+}
+
+fn main() {
+    let names = ["star", "tsp", "memo", "levels"];
+    let properties = ["answer", "relabelled", "edge added", "leaf added", "bounds"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 847;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 7;
+        // a random tree, each node joined to an earlier one, and then
+        // none, a few, many, or about half of all the other pairs
+        let mut edge: Vec[bool] = Vec.filled(n * n, false);
+        for v in 1..n {
+            let w = next_random(mut seed) % v;
+            edge[v * n + w] = true;
+            edge[w * n + v] = true;
+        }
+        let extra = if kind == 0 { 0 } else if kind == 1 { next_random(mut seed) % 3 } else if kind == 2 { n * n } else { 0 };
+        if n > 1 {
+            for _ in 0..extra {
+                let v = next_random(mut seed) % n;
+                let w = next_random(mut seed) % n;
+                if v != w {
+                    edge[v * n + w] = true;
+                    edge[w * n + v] = true;
+                }
+            }
+        }
+        if kind == 3 {
+            for v in 0..n {
+                for w in v + 1..n {
+                    if next_random(mut seed) % 2 == 0 {
+                        edge[v * n + w] = true;
+                        edge[w * n + v] = true;
+                    }
+                }
+            }
+        }
+        let graph = lists(n, edge);
+        let want = statement(graph);
+        total += want;
+        // the nodes renamed by a random permutation
+        let mut name: Vec[i64] = Vec.new();
+        for v in 0..n {
+            name.push(v);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            name.swap(i, j);
+        }
+        let mut renamed: Vec[bool] = Vec.filled(n * n, false);
+        for v in 0..n {
+            for w in 0..n {
+                if edge[v * n + w] {
+                    renamed[name[v] * n + name[w]] = true;
+                }
+            }
+        }
+        let relabelled = lists(n, renamed);
+        // one more edge, if the graph is not already complete
+        let mut more = edge.clone();
+        let mut tries = 0;
+        while tries < 20 and n > 1 {
+            let v = next_random(mut seed) % n;
+            let w = next_random(mut seed) % n;
+            if v != w and not more[v * n + w] {
+                more[v * n + w] = true;
+                more[w * n + v] = true;
+                tries = 20;
+            }
+            tries += 1;
+        }
+        let added = lists(n, more);
+        // a new node n joined to one node only
+        let m = n + 1;
+        let to = next_random(mut seed) % n;
+        let mut leafy: Vec[bool] = Vec.filled(m * m, false);
+        for v in 0..n {
+            for w in 0..n {
+                leafy[v * m + w] = edge[v * n + w];
+            }
+        }
+        leafy[n * m + to] = true;
+        leafy[to * m + n] = true;
+        let leaf = lists(m, leafy);
+        for arm in 0..4 {
+            let got = length(arm, graph);
+            let with_leaf = length(arm, leaf);
+            let oks = [
+                got == want,
+                length(arm, relabelled) == got,
+                length(arm, added) <= got,
+                with_leaf >= got + 1 and with_leaf <= got + 2,
+                got >= n - 1 and got <= 2 * (n - 1),
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {graph} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, lengths sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, tsp {by_arm[1]}, memo {by_arm[2]}, levels {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, relabelled {by_property[1]}, edge added {by_property[2]}, leaf added {by_property[3]}, bounds {by_property[4]}");
+}

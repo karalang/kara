@@ -1,0 +1,83 @@
+// Benchmark for #847: Shortest Path Visiting All Nodes -- the ★ arm
+// (breadth-first search over (visited set, node) states).
+//
+// A state is the node a walk stands on and the set of nodes it has
+// visited. Breadth-first search from every single node at once reaches
+// the states in order of distance; the first whose set holds every node
+// ends the shortest walk.
+
+fn shortest_path_length(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let all = (1 << n) - 1;
+    let mut seen: Vec[bool] = Vec.filled(n << n, false);
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    for v in 0..n {
+        seen[(1 << v) * n + v] = true;
+        queue.push_back((1 << v, v, 0));
+    }
+    while let Some((mask, v, steps)) = queue.pop_front() {
+        if mask == all {
+            return steps;
+        }
+        for w in graph[v].iter() {
+            let next = mask | (1 << *w);
+            if not seen[next * n + *w] {
+                seen[next * n + *w] = true;
+                queue.push_back((next, *w, steps + 1));
+            }
+        }
+    }
+    0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 graphs drawn once, each of LeetCode's most nodes, 12: a random
+    // tree, each node joined to an earlier one, and then `g % 16 * 3`
+    // random edges more, so from trees to graphs near complete. Each
+    // round asks the next graph.
+    let count = 64;
+    let rounds = 4000;
+    let n = 12;
+    let mut seed: i64 = 847;
+    let mut graphs: Vec[Vec[Vec[i64]]] = Vec.new();
+    for g in 0..count {
+        let mut edge: Vec[bool] = Vec.filled(n * n, false);
+        for v in 1..n {
+            let w = next_random(mut seed) % v;
+            edge[v * n + w] = true;
+            edge[w * n + v] = true;
+        }
+        for _ in 0..g % 16 * 3 {
+            let v = next_random(mut seed) % n;
+            let w = next_random(mut seed) % n;
+            if v != w {
+                edge[v * n + w] = true;
+                edge[w * n + v] = true;
+            }
+        }
+        let mut graph: Vec[Vec[i64]] = Vec.new();
+        for v in 0..n {
+            let mut out: Vec[i64] = Vec.new();
+            for w in 0..n {
+                if edge[v * n + w] {
+                    out.push(w);
+                }
+            }
+            graph.push(out);
+        }
+        graphs.push(graph);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let length = shortest_path_length(graphs[round % count]);
+        total += length;
+        checksum = (checksum * 31 + length) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} graphs: lengths sum to {total}, checksum {checksum}");
+}

@@ -1,0 +1,166 @@
+// LeetCode #847: Shortest Path Visiting All Nodes -- all-pairs distances,
+// then a travelling-salesman table.
+//
+// Floyd-Warshall gives the distance between every two nodes. A shortest
+// walk meets the nodes for the first time in some order, and between two
+// of them it may as well go the shortest way, so it is the cheapest
+// order: `best[set][v]` is the shortest walk that has met exactly the
+// nodes of `set` and stands on `v`, the last of them; it extends to any
+// node `w` not yet met for `dist[v][w]`. The sets are filled in order of
+// their bitmasks, each before every larger set it extends to.
+// O(n^3 + 2^n * n^2) time.
+
+fn shortest_path_length(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let far = 1000000;
+    let mut dist: Vec[i64] = Vec.filled(n * n, far);
+    for v in 0..n {
+        dist[v * n + v] = 0;
+        for w in graph[v].iter() {
+            dist[v * n + *w] = 1;
+        }
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                let through = dist[i * n + k] + dist[k * n + j];
+                if through < dist[i * n + j] {
+                    dist[i * n + j] = through;
+                }
+            }
+        }
+    }
+    let all = (1 << n) - 1;
+    let mut best: Vec[i64] = Vec.filled(n << n, far);
+    for v in 0..n {
+        best[(1 << v) * n + v] = 0;
+    }
+    for set in 1..all + 1 {
+        for v in 0..n {
+            let here = best[set * n + v];
+            if here == far {
+                continue;
+            }
+            for w in 0..n {
+                if set & (1 << w) == 0 {
+                    let next = (set | (1 << w)) * n + w;
+                    best[next] = best[next].min(here + dist[v * n + w]);
+                }
+            }
+        }
+    }
+    let mut answer = far;
+    for v in 0..n {
+        answer = answer.min(best[all * n + v]);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(graph: Vec[Vec[i64]]) {
+    println(f"{graph} -> {shortest_path_length(graph)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The adjacency lists of an undirected graph from its edge matrix, each
+// list in increasing order.
+fn lists(n: i64, edge: Vec[bool]) -> Vec[Vec[i64]] {
+    let mut graph: Vec[Vec[i64]] = Vec.new();
+    for v in 0..n {
+        let mut out: Vec[i64] = Vec.new();
+        for w in 0..n {
+            if edge[v * n + w] {
+                out.push(w);
+            }
+        }
+        graph.push(out);
+    }
+    graph
+}
+
+fn connect(n: i64, edge: mut ref Vec[bool], v: i64, w: i64) {
+    edge[v * n + w] = true;
+    edge[w * n + v] = true;
+}
+
+// A connected graph: a random tree, each node joined to an earlier one,
+// and then `extra` random edges more.
+fn random_graph(seed: mut ref i64, n: i64, extra: i64) -> Vec[Vec[i64]] {
+    let mut edge: Vec[bool] = Vec.filled(n * n, false);
+    for v in 1..n {
+        let w = next_random(mut seed) % v;
+        connect(n, mut edge, v, w);
+    }
+    if n > 1 {
+        for _ in 0..extra {
+            let v = next_random(mut seed) % n;
+            let w = next_random(mut seed) % n;
+            if v != w {
+                connect(n, mut edge, v, w);
+            }
+        }
+    }
+    lists(n, edge)
+}
+
+fn main() {
+    show([[1, 2, 3], [0], [0], [0]]);
+    show([[1], [0, 2, 4], [1, 3, 4], [2], [1, 2]]);
+    show([[]]);
+    show([[1], [0]]);
+    show([[1, 2], [0, 2], [0, 1]]);
+    show([[1], [0, 2], [1, 3], [2]]);
+    show([[1, 3], [0, 2], [1, 3], [0, 2]]);
+    show([[1, 2, 3, 4], [0], [0], [0, 5], [0], [3]]);
+    show([[1], [0, 2, 3], [1], [1, 4, 5], [3], [3]]);
+    // LeetCode's largest graphs, 12 nodes
+    let n = 12;
+    let mut path: Vec[bool] = Vec.filled(n * n, false);
+    let mut cycle: Vec[bool] = Vec.filled(n * n, false);
+    let mut hub: Vec[bool] = Vec.filled(n * n, false);
+    let mut complete: Vec[bool] = Vec.filled(n * n, false);
+    let mut broom: Vec[bool] = Vec.filled(n * n, false);
+    for v in 0..n {
+        if v + 1 < n {
+            connect(n, mut path, v, v + 1);
+        }
+        connect(n, mut cycle, v, (v + 1) % n);
+        if v > 0 {
+            connect(n, mut hub, 0, v);
+        }
+        for w in v + 1..n {
+            connect(n, mut complete, v, w);
+        }
+        if v > 0 and v < 6 {
+            connect(n, mut broom, v - 1, v);
+        } else if v >= 6 {
+            connect(n, mut broom, 5, v);
+        }
+    }
+    println(f"a path of 12: {shortest_path_length(lists(n, path))}");
+    println(f"a cycle of 12: {shortest_path_length(lists(n, cycle))}");
+    println(f"a hub and 11 spokes: {shortest_path_length(lists(n, hub))}");
+    println(f"12 nodes all joined: {shortest_path_length(lists(n, complete))}");
+    println(f"a handle of 6 and 6 bristles: {shortest_path_length(lists(n, broom))}");
+    let mut seed = 847;
+    for extra in [0, 4, 30] {
+        let graph = random_graph(mut seed, 12, extra);
+        println(f"12 nodes, a tree and {extra} random edges: {shortest_path_length(graph)}");
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 9;
+        let extra = next_random(mut seed) % (2 * n);
+        let graph = random_graph(mut seed, n, extra);
+        let length = shortest_path_length(graph);
+        total += length;
+        check = (check * 31 + length) % 1000000007;
+    }
+    println(f"300 random graphs: lengths sum to {total}, checksum {check}");
+}

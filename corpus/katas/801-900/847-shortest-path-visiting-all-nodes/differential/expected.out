@@ -1,0 +1,3 @@
+1600 cases, lengths sum to 5341, 32000 checks over 4 arms: 0 failures
+by arm: star 0, tsp 0, memo 0, levels 0
+by property: answer 0, relabelled 0, edge added 0, leaf added 0, bounds 0
