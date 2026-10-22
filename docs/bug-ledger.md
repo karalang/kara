@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 197 |
 | diagnostics | 187 |
 | perf | 183 |
-| soundness | 135 |
+| soundness | 136 |
 | crash | 129 |
 | use-after-free | 92 |
 
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 3033 |
 | interp | 1040 |
 | typecheck | 564 |
-| ownership | 131 |
+| ownership | 132 |
 | other | 126 |
 | cli | 90 |
 | runtime | 87 |
@@ -189,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-24 | 2026-10-22 | codegen | medium | M3 item 5, codegen half: the MIR backend still reaches into legacy codegen. `src/codegen/mir`, `mir_aot` and `mir_asan` hang off codegen.rs (lines 73-75) and use its driver (create_target_machine, create_unoptimized_target_machine, link_executable, link_executable_with_sanitizer), debug_info::read_debug_info_env, lljit.rs and test_jit_dispatch's runner lookup (locate_karac_jit_runner, SPAWNER_PID_ENV), so deleting codegen.rs and the non-mir codegen/** breaks `build --mir`, `__mir-llvm-run` and `__mir-llvm-asan` | — |
 | B-2026-10-22-25 | 2026-10-22 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend prints INIT then 42 three times on `__mir-run` and fails to build on `__mir-llvm-run`. It is the only corpus program that passes on mir-interp and fails on mir-llvm | — |
 | B-2026-10-22-27 | 2026-10-22 | codegen | medium | `env.args()` on mir-llvm is the constant `["main"]` (src/codegen/mir/call.rs, the `("Env", "args")` arm), so a `karac build --mir` binary never sees its argv and `karac run`'s JIT ignores what follows `--`; the MIR interpreter and both legacy backends return the real argv | — |
+| B-2026-10-22-28 | 2026-10-22 | ownership | medium | `karac check` accepts a `-> ref T` function that returns a non-`Copy` place without `ref`: `fn choose(s: ref Side, p: ref Pair) -> ref String { match s { Side.Left => p.first, Side.Right => p.second } }` and `fn first(ref self) -> ref String { self.items[0] }` pass, though design.md § returning a reference says the `ref` is written and a tail `user.name` moves out of a borrowed place (§3.7); 6025b74a66 (B-2026-10-19-37) made these lend rather than move | — |
 
 ### Relocated
 

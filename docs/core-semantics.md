@@ -209,6 +209,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 **4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. A `let` whose pattern is a single identifier, such as `let s = h.name;`, is not destructuring: its initializer is a move (§3.1), so on a `shared` or borrowed place it is the §3.7 error, fixed by `.clone()` or `let s = ref h.name;` (§5.1). (Clarified 2026-10-19, B-2026-10-19-62.) The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
 - **A `ref` or view scrutinee:** a binding of a non-`Copy` part is a `ref` into it, and moving it is an error (§3.7). A binding of a `Copy` part copies it, so `match shape { Circle { radius } => radius * radius, … }` on a borrowed `shape` needs no `*`.
+- **A `mut ref` scrutinee** (a `mut ref` parameter or local, or a place reached through one and through no `ref`): a binding of a non-`Copy` part is a `mut ref` into it, so the arm may write through it (`match v { V.Table(m) => { m.insert("z", 99); } … }` on `v: mut ref V`), and moving it is an error (§3.7). While such a binding is live, §5.6 applies to the scrutinee. A binding of a `Copy` part copies it; to write the part, bind it `mut ref n` (`V.Num(mut ref n) => n += 1`). A place reached through a `ref` anywhere on its path is a `ref` scrutinee (§5.9). (Clarified 2026-10-22.)
 - **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`. A `mut` field of `Copy` or handle-aggregate type is the exception: it is read as a value (§6.2), so the scrutinee is a temporary.
 - **An owned scrutinee** (a place rooted at a local or parameter the function owns, or a temporary):
   - A plain binding `name` of a non-`Copy` part **moves** that part out of the scrutinee on that path. That is a partial move (§3.6), or a whole move if the binding covers the whole value. The binding drops at the end of its arm or body unless moved on.
@@ -276,7 +277,7 @@ The body is checked against the rule. A function that needs a different relation
 No body-dependent precision is allowed. `design.md` Part 3's tracing of private function bodies is removed, so a function's borrow contract cannot change when its body changes.
 
 Pins:
-- `ok_ref_self_wins`: the temporary argument does not limit the result. Today this is "borrow-return form not yet supported".
+- `ok_ref_self_wins`: the temporary argument does not limit the result.
 - `err_ref_from_temp`.
 
 **5.5 Borrows root at named places.**

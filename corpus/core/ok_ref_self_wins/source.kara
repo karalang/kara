@@ -1,6 +1,6 @@
 struct Bag { items: Vec[String] }
 impl Bag {
-    fn first(ref self, hint: ref String) -> ref String { self.items[0] }
+    fn first(ref self, hint: ref String) -> ref String { ref self.items[0] }
 }
 fn main() {
     let b = Bag { items: ["x".to_string()] };
