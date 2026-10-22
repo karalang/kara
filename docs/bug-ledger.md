@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 338 |
+| missing-feature | 340 |
 | codegen-gap | 291 |
 | false-positive | 285 |
 | other | 198 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3038 |
+| codegen | 3039 |
 | interp | 1047 |
 | typecheck | 573 |
 | ownership | 132 |
 | other | 127 |
-| cli | 90 |
+| cli | 92 |
 | runtime | 88 |
 | parser | 77 |
 | autopar | 59 |
@@ -158,7 +158,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's parameter or local, `Copy` or not, by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 | B-2026-10-21-3 | 2026-10-21 | typecheck | low | An unannotated `Map.new()` or `Set.new()` whose first use is a lookup by a `Str` is fixed at a `Str` key, so the `String` insert after it is refused ("expected 'StringSlice', found 'String'"); under library/collections.md § Lookup by view a `Str` lookup fits a `String` key too, so it should not decide the key type | — |
-| B-2026-10-21-5 | 2026-10-21 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(), || body)`, so provider-rooted tests cannot run on the MIR backends | — |
 | B-2026-10-21-22 | 2026-10-21 | typecheck | medium | `AnyError`, which docs/library/README.md lists in the prelude and design.md §10 uses for `main` and `?`, is not defined: `fn main() -> Result[(), AnyError]` is "undefined type 'AnyError'" | — |
 | B-2026-10-21-29 | 2026-10-21 | ownership+typecheck | medium | `karac check` disagrees with collections.md on borrows in four places. It refuses: `a.union(b)` then `a.intersection(b)` ("value 'b' moved here"; Set and SortedSet `union`/`intersection`/`difference` take `other` bare, which borrows under D5), and `a[0] = 10` through a half of `v.split_at_mut(2)` ("declared without `mut`", while patterns cannot carry `mut`). It accepts what the page rejects: `v.len()` while both `split_at_mut` halves are live, and `s.iter_mut()` on a `Set`/`SortedSet` ("have no `iter_mut`"); the MIR backends then exit 3 on the latter. It also types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.truncate(n)` and `d.contains(x)` check though the page's VecDeque table has none of them. Later. | — |
 | B-2026-10-21-41 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool factory cannot fail: docs/library/pool.md specifies `Pool[T, E]` with `new(create_fn: own Fn() -> Result[T, E], max_connections, max_waiters)` and `PoolError[E]` whose `CreateFailed(E)` carries the factory's error, but runtime/stdlib/pool.kara ships `Pool[T]` with an infallible `Fn() -> T` and a payload-less `CreateFailed` that nothing produces | — |
@@ -176,7 +175,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-10 | 2026-10-22 | interp+codegen | medium | A call to an `unsafe extern "C"` function does not run on either MIR backend, so no FFI program runs on v2, and M3 needs one (recheck §2.2): examples/interop-zlib's `crc32` fails `karac build --mir` with "native `crc32` is not lowered yet" and `__mir-run` with "call of unknown function crc32" | — |
 | B-2026-10-22-11 | 2026-10-22 | interp+codegen | medium | An `errdefer` in a `par` branch that holds a `return` is refused by name on both MIR lanes (`an `errdefer` in a `par` branch that returns is not lowered yet`); the spec says it runs when the branch's value is an `Err` (core-semantics.md §11.7, §7.6-§7.7), and legacy `run --interp` runs it | — |
-| B-2026-10-22-13 | 2026-10-22 | cli | medium | `karac test` runs each case on the legacy JIT (src/test_jit_dispatch.rs) with the legacy interpreter as fallback; nothing in test_cmd.rs reaches MIR. M3 item 2: discovery and the JSONL output stay, each case runs on MIR (mir-llvm by default, `--interp` the MIR interpreter), `#[with_provider]` on a test works (B-2026-10-21-5), and the old path stays behind `--legacy` | — |
 | B-2026-10-22-14 | 2026-10-22 | cli | medium | `karac build` defaults to legacy; `--mir` builds one named file only (src/cli/args.rs refuses it in project mode: "--mir builds a single file; name one") and keeps only the file, output, `--release` and `-o`, dropping the other build flags. M3 item 4, CLI half: v2 by default, project mode and `install` on v2, every other build flag carried or refused by name, the old path behind `--legacy` (plain wasm32 targets are the drop schedule's half) | — |
 | B-2026-10-22-15 | 2026-10-22 | other | medium | The drop model refuses 61 programs that check accepts, all one shape: a cursor local initialised from a borrowed handle aggregate and reassigned (`let mut cur = head; ... cur = n.next`), which §6.1 makes a counted copy; the model's §5.9 "write through a ref: an assignment" is wrong | — |
 | B-2026-10-22-16 | 2026-10-22 | other | low | The drop model refuses 10 more programs that check accepts: 4 count a Copy value (`Str`, a `T: Copy` parameter) as moved, 1 is an unparsed construct reported as a rejection, 5 not yet traced | — |
@@ -200,6 +198,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-40 | 2026-10-22 | typecheck | medium | Likely v2 check gaps among the legacy test programs: arithmetic on a generic `T: Add`/`Sub`/`Div` parameter ("type 'ref T' does not implement trait Add"), `StringSlice + x`, `Iterator.cycle` / `windows` / `rev` on a mapped iterator, `collect` into a non-Vec target in return or tail position (E0238), and `collect::<String>()` from an iterator of `String` ("String implements FromIterator[char], not FromIterator[String]") | — |
 | B-2026-10-22-42 | 2026-10-22 | interp+codegen | low | `let _ = W;` with a bare unit-variant name lowers to nothing on both MIR backends, so a variant whose enum has a `Drop` body is never built and never dropped. core-semantics §4.6 drops the temporary at the `;`. `let _ = F.W;` is correct | — |
 | B-2026-10-22-43 | 2026-10-22 | typecheck | low | E0517 prints a MIR temporary instead of the source place: `let g = v[0];` over a `Vec[Fn(i64) -> i64]` reports "move of (*_7) through a shared reference"; a user-facing message must name the source place (`v[0]`) | — |
+| B-2026-10-22-44 | 2026-10-22 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and reports neither operand, so the `test_fail` event has only `message` and `location`, where the legacy runner gives `"left":"4","right":"5"` (design §14 runner output; deferred.md's `test_fail` row makes both fields part of the event) | — |
+| B-2026-10-22-45 | 2026-10-22 | cli | medium | `karac repl` runs on the legacy interpreter only. M3 item 3: the REPL on v2 (each entry checked as `karac check` checks a program and run on MIR), with the old path behind `--legacy` until legacy is deleted (M3 item 11) | — |
 
 ### Relocated
 
@@ -4337,6 +4337,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-1 | ownership | medium | `karac check` refuses a closure that matches on a non-Copy field of its OWN local: `let f = \|\| { let o = Opts { sub: Some(s) }; match o.sub { Some(s)… | bd9d84960b |
 | B-2026-10-21-2 | typecheck | low | for-loop borrow check (core-semantics.md 5.6) treats a USER method named `keys`/`values` that returns an owned Vec as a borrowing view of its receive… | 4dee76dc4f |
 | B-2026-10-21-4 | codegen | high | On the compiled MIR backend, `max_by_key` / `min_by_key` called on a `SortedMapIter[K, V]` or `MapIter[K, V]` is instantiated with the map's `K` repl… | 7ef38b7694 |
+| B-2026-10-21-5 | interp+codegen | medium | `#[with_provider(R, ctor)]` on a `test` (core semantics §14.8) has no v2 lowering: the MIR builder never wraps a test body in `with_provider[R](ctor(… | 1607d7d0cc |
 | B-2026-10-21-6 | other | low | kara-katas apps/service/ws_chat and apps/cli/mini_git each carry a hand-written SHA-1 that std.crypto.legacy.sha1 now provides (landed 1fffa163ef) | 06cddc56a9 |
 | B-2026-10-21-7 | resolver | medium | An unknown item in a gated stdlib import passes `karac check`: `import std.crypto.sha2.{sha1};` and `import std.encoding.{nonexistent};` print "All c… | 7bb6d4db03 |
 | B-2026-10-21-8 | interp+codegen | medium | `for line in stdin.lines()` is not lowered on v2: both MIR backends refuse it with "a `for` loop over a collection is not lowered yet", and check ref… | 3749d30728 |
@@ -4408,6 +4409,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-8 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No m… | b3368cf65c |
 | B-2026-10-22-9 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.r… | 63fa8a3df7 |
 | B-2026-10-22-12 | cli | medium | `karac run` still runs the legacy JIT (with the legacy tree-walk interpreter as fallback and as `--interp`); v2 runs only through the hidden `__mir-r… | 7fff3fa9b2 |
+| B-2026-10-22-13 | cli | medium | `karac test` runs each case on the legacy JIT (src/test_jit_dispatch.rs) with the legacy interpreter as fallback; nothing in test_cmd.rs reaches MIR | 1607d7d0cc |
 | B-2026-10-22-17 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gat… | a28246bb93 |
 | B-2026-10-22-18 | cli | low | examples/shortener still keeps its state in module-level `let mut` bindings, which `karac check` refuses since B-2026-10-22-8, and is pinned in tests… | cf8cd3b9e4 |
 | B-2026-10-22-19 | typecheck | medium | `karac check` accepts a `const` whose initializer is a function call (`const LIMIT: i64 = compute();`), which design.md § Constants forbids ("Functio… | 124c2b8af6 |
