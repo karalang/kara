@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 325 |
 | codegen-gap | 287 |
-| false-positive | 277 |
+| false-positive | 278 |
 | other | 194 |
 | diagnostics | 185 |
 | perf | 182 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3023 |
-| interp | 1034 |
+| codegen | 3024 |
+| interp | 1035 |
 | typecheck | 557 |
 | ownership | 130 |
 | other | 123 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 12 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-79 | 2026-10-21 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String]` reports "expected 'Slice[StringSlice]', found 'Vec[String]'" | — |
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
 | B-2026-10-21-82 | 2026-10-21 | typecheck+interp+codegen | medium | An empty list literal `[]` in an `if`/`match` branch whose element type comes only from a sibling branch passes `karac check` but stops both MIR lanes with `a type that failed to check is not lowered yet` | — |
+| B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
 
 ### Relocated
 
