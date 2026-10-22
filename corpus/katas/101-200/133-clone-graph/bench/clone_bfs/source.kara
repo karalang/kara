@@ -22,7 +22,7 @@ fn clone_graph(root: own Node) -> Node {
 
     loop {
         if let Some(curr) = queue.pop_front() {
-            let curr_clone = visited.get(curr.val).unwrap();
+            let curr_clone = visited.get(curr.val).unwrap().clone();
             for nb in curr.neighbors.iter() {
                 if let None = visited.get(nb.val) {
                     let fresh = Node { val: nb.val, neighbors: Vec.new() };

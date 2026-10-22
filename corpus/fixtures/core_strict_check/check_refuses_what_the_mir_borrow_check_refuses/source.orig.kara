@@ -1,0 +1,31 @@
+shared struct Node {
+    value: i64,
+}
+
+struct Cache {
+    index: Map[String, Node],
+    hits: i64,
+}
+
+impl Cache {
+    fn touch(mut ref self, node: Node) {
+        self.hits += node.value;
+    }
+
+    fn get(mut ref self, key: String) -> Option[i64] {
+        let found = self.index.get(key);
+        match found {
+            Some(node) => {
+                self.touch(node);
+                Some(node.value)
+            }
+            None => None,
+        }
+    }
+}
+
+fn main() {
+    let mut c = Cache { index: Map.new(), hits: 0 };
+    c.index.insert("a".to_string(), Node { value: 5 });
+    println(f"{c.get("a".to_string()).unwrap_or(0)} {c.hits}");
+}

@@ -67,7 +67,7 @@ fn clone_graph(root: frozen Node) -> Node {
     while head < queue.len() as u64 {
         let curr = queue[head];
         head = head + 1;
-        let curr_clone = visited.get(curr.val).unwrap();
+        let curr_clone = visited.get(curr.val).unwrap().clone();
         for nb in curr.neighbors.iter() {
             if let None = visited.get(nb.val) {
                 let fresh = Node { val: nb.val, neighbors: Vec.new() };

@@ -13,7 +13,7 @@ impl Cache {
     }
 
     fn get(mut ref self, key: String) -> Option[i64] {
-        let found = self.index.get(key);
+        let found = self.index.get(key).cloned();
         match found {
             Some(node) => {
                 self.touch(node);

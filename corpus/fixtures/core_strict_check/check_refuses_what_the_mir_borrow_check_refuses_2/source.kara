@@ -1,7 +1,7 @@
 fn main() {
     let mut m: Map[i64, i64] = Map.new();
     m.insert(1, 5);
-    let before = m.get(1).unwrap_or(0);
+    let before = *m.get(1).unwrap_or(0);
     m.insert(1, 6);
     println(f"{before}");
 }

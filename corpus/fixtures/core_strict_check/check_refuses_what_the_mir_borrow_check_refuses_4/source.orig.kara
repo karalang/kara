@@ -1,0 +1,13 @@
+struct S { v: Vec[i64], n: i64 }
+impl S {
+    fn bump(mut ref self) { self.n += 1; }
+    fn go(mut ref self) -> i64 {
+        let f = self.v.get(0);
+        self.v.push(3);
+        f.unwrap_or(0)
+    }
+}
+fn main() {
+    let mut s = S { v: vec![1], n: 0 };
+    println(f"{s.go()}");
+}
