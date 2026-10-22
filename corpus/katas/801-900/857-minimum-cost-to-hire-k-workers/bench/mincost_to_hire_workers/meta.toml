@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/857-minimum-cost-to-hire-k-workers/bench/mincost_to_hire_workers.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "d42264fd8"
+extracted_src = "6ceb5a0e"
+model_rev = "583cfb0d"
+model_src = "6ceb5a0e"

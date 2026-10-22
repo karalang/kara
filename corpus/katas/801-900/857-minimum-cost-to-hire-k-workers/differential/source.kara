@@ -1,0 +1,288 @@
+// LeetCode #857: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on random
+// groups of workers, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn mincost_to_hire_workers_star(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| (wage[a] * quality[b]).cmp(wage[b] * quality[a]));
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut sum = 0;
+    // the cheapest cost so far, as `best_num / best_den`; none yet
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for i in order.iter() {
+        let i = *i;
+        heap.push(quality[i]);
+        sum += quality[i];
+        if heap.len() > k {
+            sum -= heap.pop().unwrap();
+        }
+        if heap.len() == k {
+            // this group at worker i's rate costs wage[i] * sum / quality[i]
+            let num = wage[i] * sum;
+            let den = quality[i];
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+// ---- every-rate arm -------------------------------------------------
+
+fn mincost_to_hire_workers_brute(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for c in 0..n {
+        let mut others: Vec[i64] = Vec.new();
+        for j in 0..n {
+            if j != c and wage[j] * quality[c] <= wage[c] * quality[j] {
+                others.push(quality[j]);
+            }
+        }
+        if others.len() < k - 1 {
+            continue;
+        }
+        others.sort();
+        let sum = quality[c] + others.iter().take(k - 1).sum();
+        let num = wage[c] * sum;
+        let den = quality[c];
+        if best_num < 0 or num * best_den < best_num * den {
+            best_num = num;
+            best_den = den;
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+// ---- sorted-vector arm ----------------------------------------------
+
+fn mincost_to_hire_workers_sorted(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| (wage[a] * quality[b]).cmp(wage[b] * quality[a]));
+    let mut kept: Vec[i64] = Vec.new();
+    let mut sum = 0;
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for i in order.iter() {
+        let i = *i;
+        let q = quality[i];
+        if kept.len() == k and q >= kept[k - 1] {
+            // worker i's own quality would not be among the k kept, but
+            // the group must include worker i, who sets the rate
+            let num = wage[i] * (sum - kept[k - 1] + q);
+            let den = q;
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+            continue;
+        }
+        let mut lo = 0;
+        let mut hi = kept.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if kept[mid] <= q {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        kept.insert(lo, q);
+        sum += q;
+        if kept.len() > k {
+            sum -= kept.pop().unwrap();
+        }
+        if kept.len() == k {
+            let num = wage[i] * sum;
+            let den = q;
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+// ---- counts arm -----------------------------------------------------
+
+fn mincost_to_hire_workers_counts(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| (wage[a] * quality[b]).cmp(wage[b] * quality[a]));
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    let mut held = 0;
+    let mut sum = 0;
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for i in order.iter() {
+        let i = *i;
+        let q = quality[i];
+        let c = match counts.get(q) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(q, c + 1);
+        held += 1;
+        sum += q;
+        if held > k {
+            let (top, c) = match counts.floor(1 << 40) {
+                Some((t, c)) => (*t, *c),
+                None => (0, 0),
+            };
+            if c == 1 {
+                counts.remove(top);
+            } else {
+                counts.insert(top, c - 1);
+            }
+            held -= 1;
+            sum -= top;
+        }
+        if held == k {
+            let num = wage[i] * sum;
+            let den = q;
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: every group of exactly k workers, each
+// paid the group's highest wage per unit of quality times their own
+// quality, which pays every worker in proportion to quality and at least
+// their wage; the cheapest group's cost, as a fraction divided out last.
+fn statement(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for mask in 0..(1 << n) {
+        let mut size = 0;
+        let mut sum = 0;
+        // the highest rate in the group, as `rate_w / rate_q`
+        let mut rate_w = 0;
+        let mut rate_q = 1;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                size += 1;
+                sum += quality[i];
+                if wage[i] * rate_q > rate_w * quality[i] {
+                    rate_w = wage[i];
+                    rate_q = quality[i];
+                }
+            }
+        }
+        if size != k {
+            continue;
+        }
+        let num = rate_w * sum;
+        if best_num < 0 or num * best_den < best_num * rate_q {
+            best_num = num;
+            best_den = rate_q;
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+fn cost_of(arm: i64, quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    if arm == 0 {
+        mincost_to_hire_workers_star(quality, wage, k)
+    } else if arm == 1 {
+        mincost_to_hire_workers_brute(quality, wage, k)
+    } else if arm == 2 {
+        mincost_to_hire_workers_sorted(quality, wage, k)
+    } else {
+        mincost_to_hire_workers_counts(quality, wage, k)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "brute", "sorted", "counts"];
+    let properties = ["answer", "reordered", "wages scaled", "qualities scaled", "one more hired", "one more worker"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(6, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0.0;
+    let mut seed = 857;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 10;
+        let k = 1 + next_random(mut seed) % n;
+        // small numbers with many equal rates, numbers to 100 and to
+        // 10^4, and workers at one of two rates
+        let top = if kind == 0 { 5 } else if kind == 1 { 100 } else { 10000 };
+        let mut quality: Vec[i64] = Vec.new();
+        let mut wage: Vec[i64] = Vec.new();
+        for _ in 0..n + 1 {
+            let q = 1 + next_random(mut seed) % top;
+            quality.push(q);
+            wage.push(if kind == 3 { q * (1 + next_random(mut seed) % 2) } else { 1 + next_random(mut seed) % top });
+        }
+        // the last worker drawn is the one more worker; the case is the
+        // first n
+        let extra_q = quality.pop().unwrap();
+        let extra_w = wage.pop().unwrap();
+        let want = statement(quality, wage, k);
+        total += want;
+        let m = 1 + next_random(mut seed) % 5;
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            order.swap(i, next_random(mut seed) % (i + 1));
+        }
+        let shuffled_q: Vec[i64] = order.iter().map(|i| quality[i]).collect();
+        let shuffled_w: Vec[i64] = order.iter().map(|i| wage[i]).collect();
+        let scaled_w: Vec[i64] = wage.iter().map(|w| w * m).collect();
+        let scaled_q: Vec[i64] = quality.iter().map(|q| q * m).collect();
+        let mut more_q = quality.clone();
+        let mut more_w = wage.clone();
+        more_q.push(extra_q);
+        more_w.push(extra_w);
+        for arm in 0..4 {
+            let got = cost_of(arm, quality, wage, k);
+            let scaled = cost_of(arm, quality, scaled_w, k);
+            let oks = [
+                got == want,
+                cost_of(arm, shuffled_q, shuffled_w, k) == got,
+                (scaled - got * m as f64).abs() <= 0.000000001 * scaled,
+                cost_of(arm, scaled_q, wage, k) == got,
+                k == n or cost_of(arm, quality, wage, k + 1) >= got,
+                cost_of(arm, more_q, more_w, k) <= got,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {quality}, {wage}, k = {k} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, costs sum to {total:.5}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, brute {by_arm[1]}, sorted {by_arm[2]}, counts {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reordered {by_property[1]}, wages scaled {by_property[2]}, qualities scaled {by_property[3]}, one more hired {by_property[4]}, one more worker {by_property[5]}");
+}

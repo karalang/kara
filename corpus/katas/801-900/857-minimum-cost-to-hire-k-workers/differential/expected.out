@@ -1,0 +1,3 @@
+1600 cases, costs sum to 45399029.82948, 38400 checks over 4 arms: 0 failures
+by arm: star 0, brute 0, sorted 0, counts 0
+by property: answer 0, reordered 0, wages scaled 0, qualities scaled 0, one more hired 0, one more worker 0

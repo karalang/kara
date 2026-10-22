@@ -1,0 +1,65 @@
+// Benchmark for #857: Minimum Cost to Hire K Workers -- the ★ arm
+// (workers by wage per unit of quality, the k smallest qualities in a
+// max-heap).
+
+fn mincost_to_hire_workers(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| (wage[a] * quality[b]).cmp(wage[b] * quality[a]));
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut sum = 0;
+    // the cheapest cost so far, as `best_num / best_den`; none yet
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for i in order.iter() {
+        let i = *i;
+        heap.push(quality[i]);
+        sum += quality[i];
+        if heap.len() > k {
+            sum -= heap.pop().unwrap();
+        }
+        if heap.len() == k {
+            // this group at worker i's rate costs wage[i] * sum / quality[i]
+            let num = wage[i] * sum;
+            let den = quality[i];
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 16 sets drawn once, each of LeetCode's most workers, 10^4, with
+    // quality and wage from 1 to 10^4; set `g` hires `k = 1 + g * 600`.
+    // Each round costs the next set.
+    let count = 16;
+    let rounds = 600;
+    let n = 10000;
+    let mut seed: i64 = 857;
+    let mut qualities: Vec[Vec[i64]] = Vec.new();
+    let mut wages: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut quality: Vec[i64] = Vec.new();
+        let mut wage: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            quality.push(1 + next_random(mut seed) % 10000);
+            wage.push(1 + next_random(mut seed) % 10000);
+        }
+        qualities.push(quality);
+        wages.push(wage);
+    }
+    let mut total = 0.0;
+    for round in 0..rounds {
+        let g = round % count;
+        total += mincost_to_hire_workers(qualities[g], wages[g], 1 + g * 600);
+    }
+    println(f"{rounds} rounds of 16 sets: costs sum to {total:.5}");
+}

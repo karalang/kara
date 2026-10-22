@@ -1,0 +1,89 @@
+// LeetCode #857: Minimum Cost to Hire K Workers -- the ★ arm (workers by
+// wage per unit of quality, the k smallest qualities in a max-heap).
+//
+// In a group paid fairly, every worker is paid the same rate per unit of
+// quality, and the rate must reach the highest `wage / quality` among
+// them, so the group costs that rate times its total quality. Taking the
+// workers in order of `wage / quality`, the worker just taken sets the
+// rate for any group of the workers so far, and the cheapest such group
+// is the one with the k smallest qualities: a max-heap keeps them, with
+// their sum, by dropping the largest whenever it holds more than k.
+// Rates are compared and costs kept as exact fractions; only the answer
+// is divided out.
+
+fn mincost_to_hire_workers(quality: Vec[i64], wage: Vec[i64], k: i64) -> f64 {
+    let n = quality.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by(|a, b| (wage[a] * quality[b]).cmp(wage[b] * quality[a]));
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut sum = 0;
+    // the cheapest cost so far, as `best_num / best_den`; none yet
+    let mut best_num = -1;
+    let mut best_den = 1;
+    for i in order.iter() {
+        let i = *i;
+        heap.push(quality[i]);
+        sum += quality[i];
+        if heap.len() > k {
+            sum -= heap.pop().unwrap();
+        }
+        if heap.len() == k {
+            // this group at worker i's rate costs wage[i] * sum / quality[i]
+            let num = wage[i] * sum;
+            let den = quality[i];
+            if best_num < 0 or num * best_den < best_num * den {
+                best_num = num;
+                best_den = den;
+            }
+        }
+    }
+    best_num as f64 / best_den as f64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(quality: Vec[i64], wage: Vec[i64], k: i64) {
+    let cost = mincost_to_hire_workers(quality, wage, k);
+    println(f"quality = {quality}, wage = {wage}, k = {k} -> {cost:.5}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` random workers, quality from 1 to `top_q` and wage from 1 to `top_w`.
+fn random_workers(seed: mut ref i64, n: i64, top_q: i64, top_w: i64) -> (Vec[i64], Vec[i64]) {
+    let mut quality: Vec[i64] = Vec.new();
+    let mut wage: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        quality.push(1 + next_random(mut seed) % top_q);
+        wage.push(1 + next_random(mut seed) % top_w);
+    }
+    (quality, wage)
+}
+
+fn main() {
+    show([10, 20, 5], [70, 50, 30], 2);
+    show([3, 1, 10, 10, 1], [4, 8, 2, 2, 7], 3);
+    show([7], [13], 1);
+    show([5, 5, 5], [10, 10, 10], 3);
+    show([4, 2, 8], [8, 4, 16], 2);
+    show([1, 10000], [10000, 1], 1);
+    show([1, 10000], [10000, 1], 2);
+    show([3, 1, 4, 1, 5, 9, 2, 6], [2, 7, 1, 8, 2, 8, 1, 8], 4);
+    show([10000, 10000, 10000], [10000, 10000, 10000], 2);
+    let mut seed = 857;
+    let (quality, wage) = random_workers(mut seed, 1000, 10000, 10000);
+    let k = 300;
+    println(f"1000 random workers, k = 300 -> {mincost_to_hire_workers(quality, wage, k):.5}");
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % n;
+        let top = 1 + next_random(mut seed) % 100;
+        let (quality, wage) = random_workers(mut seed, n, top, top);
+        total += mincost_to_hire_workers(quality, wage, k);
+    }
+    println(f"300 random groups of up to 30 workers: costs sum to {total:.5}");
+}
