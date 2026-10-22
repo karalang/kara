@@ -1,0 +1,467 @@
+// mini_pyfiglet — a port of the FIGlet renderer at the heart of pyfiglet 1.0.4
+// (MIT): the library banner/ASCII-art generators, CLI tools and chat bots reach
+// for to turn a short string into FIGlet art. This kata ports the horizontal
+// smushing engine for the standard font, the one pyfiglet renders with by
+// default.
+//
+// Each job is `render\t<text>`, and the output is
+//
+//     == render <text>
+//     <the six-row FIGlet rendering of <text> in the standard font>
+//
+// The rendering keeps its trailing spaces and ends in a newline, so the next
+// header follows directly, matching pyfiglet's renderText byte-for-byte.
+//
+// How it works. The standard font is six rows tall; every glyph is a fixed
+// grid of rows (dumped into figfont.tsv, embedded by gen_kara.py as
+// font_text(), one line per code: the code, a tab, then the six rows separated
+// by \x1f). '$' is the font's hardblank — a placeholder space that resists
+// being smushed, replaced by a real space only at the very end.
+//
+// Characters are laid down left to right into a six-row buffer. Before each
+// glyph, smush_amount measures how many columns the new glyph may overlap the
+// buffer's right edge without a collision; then each overlapping column pair is
+// run through smush_chars, pyfiglet's controlled-overlap rule set. The standard
+// font's layout mode is 143 (the low byte of its 24463): SMUSH plus the EQUAL,
+// LOWLINE, HIERARCHY and PAIR rules (no hardblank-smush, no big-X, no kerning),
+// so smush_chars implements exactly those. The non-overlapping tail of the
+// glyph is then appended.
+//
+// Scope: single-line rendering in the standard font, left-to-right,
+// left-justified, at the default width 80 (never exceeded by these inputs), so
+// the width-wrap / newline / blank-marker / justify machinery of the full
+// engine is out of scope (see README). font_text() carries the standard font;
+// jobs_text() carries data/jobs.tsv verbatim.
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+// The standard font, flattened: codes[g] is the character code of glyph g, and
+// its six rows are rows[g * 6 + 0 .. g * 6 + 6].
+struct Font {
+    codes: Vec[i64],
+    rows: Vec[String],
+}
+
+fn build_font() -> Font {
+    let mut f = Font {
+        codes: Vec.new(),
+        rows: Vec.new(),
+    };
+    let data = font_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let head = split_fields(line, 9); // code \t rowsblob
+                f.codes.push(parse_uint(head[0].clone()));
+                let glyph = split_fields(head[1].clone(), 31); // rows on \x1f
+                let mut r = 0;
+                while r < 6 {
+                    f.rows.push(glyph[r].clone());
+                    r = r + 1;
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    f
+}
+
+fn glyph_index(f: Font, code: i64) -> i64 {
+    let mut i = 0;
+    while i < f.codes.len() {
+        if f.codes[i] == code {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn contains(s: Str, c: i64) -> bool {
+    for b in s.bytes() {
+        if b as i64 == c {
+            return true;
+        }
+    }
+    false
+}
+
+// One hierarchy / lowline tier: chars of `a` smush over chars of `b`. Returns
+// the smushed byte, or -1 if the tier does not apply to this pair.
+fn tier(left: i64, right: i64, a: Str, b: Str) -> i64 {
+    if contains(a, left) and contains(b, right) {
+        return right;
+    }
+    if contains(a, right) and contains(b, left) {
+        return left;
+    }
+    0 - 1
+}
+
+fn is_bracket_pair(x: i64, y: i64) -> bool {
+    (x == 91 and y == 93) or (x == 123 and y == 125) or (x == 40 and y == 41)
+}
+
+// pyfiglet's smushChars for the standard font's layout (mode 143): returns the
+// byte the two edge chars smush to, or 256 (NONE) if they cannot smush. A
+// space yields to the other side; a hardblank ('$', 36) blocks the smush.
+fn smush_chars(left: i64, right: i64, prevw: i64, curw: i64) -> i64 {
+    if left == 32 {
+        return right;
+    }
+    if right == 32 {
+        return left;
+    }
+    // overlap is disallowed if either glyph has width < 2
+    if prevw < 2 or curw < 2 {
+        return 256;
+    }
+    // mode 143 has no hardblank-smush bit, so two hardblanks do not merge
+    if left == 36 or right == 36 {
+        return 256;
+    }
+    // SM_EQUAL
+    if left == right {
+        return left;
+    }
+    // SM_LOWLINE then SM_HIERARCHY tiers, in order
+    let t0 = tier(left, right, "_", "|/\\[]{}()<>");
+    if t0 >= 0 {
+        return t0;
+    }
+    let t1 = tier(left, right, "|", "/\\[]{}()<>");
+    if t1 >= 0 {
+        return t1;
+    }
+    let t2 = tier(left, right, "\\/", "[]{}()<>");
+    if t2 >= 0 {
+        return t2;
+    }
+    let t3 = tier(left, right, "[]", "{}()<>");
+    if t3 >= 0 {
+        return t3;
+    }
+    let t4 = tier(left, right, "{}", "()<>");
+    if t4 >= 0 {
+        return t4;
+    }
+    let t5 = tier(left, right, "()", "<>");
+    if t5 >= 0 {
+        return t5;
+    }
+    // SM_PAIR: [ ] / { } / ( ) in either order smush to '|'
+    if is_bracket_pair(left, right) or is_bracket_pair(right, left) {
+        return 124;
+    }
+    256
+}
+
+fn rstrip_len(row: Vec[i64]) -> i64 {
+    let mut n = row.len();
+    while n > 0 and row[n - 1] == 32 {
+        n = n - 1;
+    }
+    n
+}
+
+fn lead_sp(row: Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < row.len() and row[i] == 32 {
+        i = i + 1;
+    }
+    i
+}
+
+// How many columns the glyph `g` may overlap the current buffer (pyfiglet's
+// smushAmount): the minimum, over the six rows, of the touchable gap.
+fn smush_amount(buf: Vec[Vec[i64]], f: Font, g: i64, curw: i64, prevw: i64) -> i64 {
+    let mut maxs = curw;
+    let mut row = 0;
+    while row < 6 {
+        let l = buf[row].clone();
+        let r = str_bytes(f.rows[g * 6 + row].clone());
+        let mut linebd = rstrip_len(l.clone()) - 1;
+        if linebd < 0 {
+            linebd = 0;
+        }
+        let mut ch1 = 0 - 1;
+        if linebd < l.len() {
+            ch1 = l[linebd];
+        } else {
+            linebd = 0;
+        }
+        let mut charbd = lead_sp(r.clone());
+        let mut ch2 = 0 - 1;
+        if charbd < r.len() {
+            ch2 = r[charbd];
+        } else {
+            charbd = r.len();
+        }
+        let mut amt = charbd + l.len() - 1 - linebd;
+        if ch1 == (0 - 1) or ch1 == 32 {
+            amt = amt + 1;
+        } else if ch2 != (0 - 1) and smush_chars(ch1, ch2, prevw, curw) != 256 {
+            amt = amt + 1;
+        }
+        if amt < maxs {
+            maxs = amt;
+        }
+        row = row + 1;
+    }
+    maxs
+}
+
+fn render(f: Font, text: Str) -> String {
+    let mut buf: Vec[Vec[i64]] = Vec.new();
+    let mut ri = 0;
+    while ri < 6 {
+        let empty: Vec[i64] = Vec.new();
+        buf.push(empty);
+        ri = ri + 1;
+    }
+    let codes = str_bytes(text);
+    let mut prevw = 0;
+    let mut ci = 0;
+    while ci < codes.len() {
+        let g = glyph_index(f, codes[ci]);
+        if g >= 0 {
+            let curw = str_bytes(f.rows[g * 6 + 0].clone()).len();
+            let maxs = smush_amount(buf.clone(), f, g, curw, prevw);
+            let mut row = 0;
+            while row < 6 {
+                let add_right = str_bytes(f.rows[g * 6 + row].clone());
+                let mut i = 0;
+                while i < maxs {
+                    let idx = buf[row].len() - maxs + i;
+                    let mut left = 0 - 1;
+                    if idx >= 0 and idx < buf[row].len() {
+                        left = buf[row][idx];
+                    }
+                    let sm = smush_chars(left, add_right[i], prevw, curw);
+                    if sm >= 0 and sm < 256 and idx >= 0 and idx < buf[row].len() {
+                        buf[row][idx] = sm;
+                    }
+                    i = i + 1;
+                }
+                let mut j = maxs;
+                while j < add_right.len() {
+                    buf[row].push(add_right[j]);
+                    j = j + 1;
+                }
+                row = row + 1;
+            }
+            prevw = curw;
+        }
+        ci = ci + 1;
+    }
+    // join the six rows with newlines, hardblank '$' -> space, trailing newline
+    let mut out = String.new();
+    let mut row = 0;
+    while row < 6 {
+        let mut bytes: Vec[u8] = Vec.new();
+        let mut k = 0;
+        while k < buf[row].len() {
+            let mut c = buf[row][k];
+            if c == 36 {
+                c = 32;
+            }
+            bytes.push(c as u8);
+            k = k + 1;
+        }
+        out.push_str(String.from_utf8(bytes).unwrap_or("".to_string()));
+        out.push_str("\n");
+        row = row + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let f = build_font();
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let fields = split_fields(line, 9);
+                let op = fields[0].clone();
+                let payload = fields[1].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                out.push_str(" ");
+                out.push_str(payload.clone());
+                out.push_str("\n");
+                out.push_str(render(f, payload.clone()));
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// figfont.tsv (standard FIGlet font dumped from pyfiglet): per line a
+// code, a tab, then the six glyph rows separated by \x1f.
+fn font_text() -> String {
+    let mut s = String.new();
+    s.push_str("32\t $\x1f $\x1f $\x1f $\x1f $\x1f $\n");
+    s.push_str("33\t  _ \x1f | |\x1f | |\x1f |_|\x1f (_)\x1f    \n");
+    s.push_str("34\t  _ _ \x1f ( | )\x1f  V V \x1f   $  \x1f   $  \x1f      \n");
+    s.push_str("35\t    _  _   \x1f  _| || |_ \x1f |_  ..  _|\x1f |_      _|\x1f   |_||_|  \x1f           \n");
+    s.push_str("36\t   _  \x1f  | | \x1f / __)\x1f \\__ \\\x1f (   /\x1f  |_| \n");
+    s.push_str("37\t  _  __\x1f (_)/ /\x1f   / / \x1f  / /_ \x1f /_/(_)\x1f       \n");
+    s.push_str("38\t   ___   \x1f  ( _ )  \x1f  / _ \\/\\\x1f | (_>  <\x1f  \\___/\\/\x1f         \n");
+    s.push_str("39\t  _ \x1f ( )\x1f |/ \x1f  $ \x1f  $ \x1f    \n");
+    s.push_str("40\t   __\x1f  / /\x1f | | \x1f | | \x1f | | \x1f  \\_\\\n");
+    s.push_str("41\t __  \x1f \\ \\ \x1f  | |\x1f  | |\x1f  | |\x1f /_/ \n");
+    s.push_str("42\t       \x1f __/\\__\x1f \\    /\x1f /_  _\\\x1f   \\/  \x1f       \n");
+    s.push_str("43\t        \x1f    _   \x1f  _| |_ \x1f |_   _|\x1f   |_|  \x1f        \n");
+    s.push_str("44\t    \x1f    \x1f    \x1f  _ \x1f ( )\x1f |/ \n");
+    s.push_str("45\t        \x1f        \x1f  _____ \x1f |_____|\x1f    $   \x1f        \n");
+    s.push_str("46\t    \x1f    \x1f    \x1f  _ \x1f (_)\x1f    \n");
+    s.push_str("47\t     __\x1f    / /\x1f   / / \x1f  / /  \x1f /_/   \x1f       \n");
+    s.push_str("48\t   ___  \x1f  / _ \\ \x1f | | | |\x1f | |_| |\x1f  \\___/ \x1f        \n");
+    s.push_str("49\t  _ \x1f / |\x1f | |\x1f | |\x1f |_|\x1f    \n");
+    s.push_str("50\t  ____  \x1f |___ \\ \x1f   __) |\x1f  / __/ \x1f |_____|\x1f        \n");
+    s.push_str("51\t  _____ \x1f |___ / \x1f   |_ \\ \x1f  ___) |\x1f |____/ \x1f        \n");
+    s.push_str("52\t  _  _   \x1f | || |  \x1f | || |_ \x1f |__   _|\x1f    |_|  \x1f         \n");
+    s.push_str("53\t  ____  \x1f | ___| \x1f |___ \\ \x1f  ___) |\x1f |____/ \x1f        \n");
+    s.push_str("54\t   __   \x1f  / /_  \x1f | '_ \\ \x1f | (_) |\x1f  \\___/ \x1f        \n");
+    s.push_str("55\t  _____ \x1f |___  |\x1f    / / \x1f   / /  \x1f  /_/   \x1f        \n");
+    s.push_str("56\t   ___  \x1f  ( _ ) \x1f  / _ \\ \x1f | (_) |\x1f  \\___/ \x1f        \n");
+    s.push_str("57\t   ___  \x1f  / _ \\ \x1f | (_) |\x1f  \\__, |\x1f    /_/ \x1f        \n");
+    s.push_str("58\t    \x1f  _ \x1f (_)\x1f  _ \x1f (_)\x1f    \n");
+    s.push_str("59\t    \x1f  _ \x1f (_)\x1f  _ \x1f ( )\x1f |/ \n");
+    s.push_str("60\t   __\x1f  / /\x1f / / \x1f \\ \\ \x1f  \\_\\\x1f     \n");
+    s.push_str("61\t        \x1f  _____ \x1f |_____|\x1f |_____|\x1f    $   \x1f        \n");
+    s.push_str("62\t __  \x1f \\ \\ \x1f  \\ \\\x1f  / /\x1f /_/ \x1f     \n");
+    s.push_str("63\t  ___ \x1f |__ \\\x1f   / /\x1f  |_| \x1f  (_) \x1f      \n");
+    s.push_str("64\t    ____  \x1f   / __ \\ \x1f  / / _` |\x1f | | (_| |\x1f  \\ \\__,_|\x1f   \\____/ \n");
+    s.push_str("65\t     _    \x1f    / \\   \x1f   / _ \\  \x1f  / ___ \\ \x1f /_/   \\_\\\x1f          \n");
+    s.push_str("66\t  ____  \x1f | __ ) \x1f |  _ \\ \x1f | |_) |\x1f |____/ \x1f        \n");
+    s.push_str("67\t   ____ \x1f  / ___|\x1f | |    \x1f | |___ \x1f  \\____|\x1f        \n");
+    s.push_str("68\t  ____  \x1f |  _ \\ \x1f | | | |\x1f | |_| |\x1f |____/ \x1f        \n");
+    s.push_str("69\t  _____ \x1f | ____|\x1f |  _|  \x1f | |___ \x1f |_____|\x1f        \n");
+    s.push_str("70\t  _____ \x1f |  ___|\x1f | |_   \x1f |  _|  \x1f |_|    \x1f        \n");
+    s.push_str("71\t   ____ \x1f  / ___|\x1f | |  _ \x1f | |_| |\x1f  \\____|\x1f        \n");
+    s.push_str("72\t  _   _ \x1f | | | |\x1f | |_| |\x1f |  _  |\x1f |_| |_|\x1f        \n");
+    s.push_str("73\t  ___ \x1f |_ _|\x1f  | | \x1f  | | \x1f |___|\x1f      \n");
+    s.push_str("74\t      _ \x1f     | |\x1f  _  | |\x1f | |_| |\x1f  \\___/ \x1f        \n");
+    s.push_str("75\t  _  __\x1f | |/ /\x1f | ' / \x1f | . \\ \x1f |_|\\_\\\x1f       \n");
+    s.push_str("76\t  _     \x1f | |    \x1f | |    \x1f | |___ \x1f |_____|\x1f        \n");
+    s.push_str("77\t  __  __ \x1f |  \\/  |\x1f | |\\/| |\x1f | |  | |\x1f |_|  |_|\x1f         \n");
+    s.push_str("78\t  _   _ \x1f | \\ | |\x1f |  \\| |\x1f | |\\  |\x1f |_| \\_|\x1f        \n");
+    s.push_str("79\t   ___  \x1f  / _ \\ \x1f | | | |\x1f | |_| |\x1f  \\___/ \x1f        \n");
+    s.push_str("80\t  ____  \x1f |  _ \\ \x1f | |_) |\x1f |  __/ \x1f |_|    \x1f        \n");
+    s.push_str("81\t   ___  \x1f  / _ \\ \x1f | | | |\x1f | |_| |\x1f  \\__\\_\\\x1f        \n");
+    s.push_str("82\t  ____  \x1f |  _ \\ \x1f | |_) |\x1f |  _ < \x1f |_| \\_\\\x1f        \n");
+    s.push_str("83\t  ____  \x1f / ___| \x1f \\___ \\ \x1f  ___) |\x1f |____/ \x1f        \n");
+    s.push_str("84\t  _____ \x1f |_   _|\x1f   | |  \x1f   | |  \x1f   |_|  \x1f        \n");
+    s.push_str("85\t  _   _ \x1f | | | |\x1f | | | |\x1f | |_| |\x1f  \\___/ \x1f        \n");
+    s.push_str("86\t __     __\x1f \\ \\   / /\x1f  \\ \\ / / \x1f   \\ V /  \x1f    \\_/   \x1f          \n");
+    s.push_str("87\t __        __\x1f \\ \\      / /\x1f  \\ \\ /\\ / / \x1f   \\ V  V /  \x1f    \\_/\\_/   \x1f             \n");
+    s.push_str("88\t __  __\x1f \\ \\/ /\x1f  \\  / \x1f  /  \\ \x1f /_/\\_\\\x1f       \n");
+    s.push_str("89\t __   __\x1f \\ \\ / /\x1f  \\ V / \x1f   | |  \x1f   |_|  \x1f        \n");
+    s.push_str("90\t  _____\x1f |__  /\x1f   / / \x1f  / /_ \x1f /____|\x1f       \n");
+    s.push_str("91\t  __ \x1f | _|\x1f | | \x1f | | \x1f | | \x1f |__|\n");
+    s.push_str("92\t __    \x1f \\ \\   \x1f  \\ \\  \x1f   \\ \\ \x1f    \\_\\\x1f       \n");
+    s.push_str("93\t  __ \x1f |_ |\x1f  | |\x1f  | |\x1f  | |\x1f |__|\n");
+    s.push_str("94\t  /\\ \x1f |/\\|\x1f   $ \x1f   $ \x1f   $ \x1f     \n");
+    s.push_str("95\t        \x1f        \x1f        \x1f        \x1f  _____ \x1f |_____|\n");
+    s.push_str("96\t  _ \x1f ( )\x1f  \\|\x1f  $ \x1f  $ \x1f    \n");
+    s.push_str("97\t        \x1f   __ _ \x1f  / _` |\x1f | (_| |\x1f  \\__,_|\x1f        \n");
+    s.push_str("98\t  _     \x1f | |__  \x1f | '_ \\ \x1f | |_) |\x1f |_.__/ \x1f        \n");
+    s.push_str("99\t       \x1f   ___ \x1f  / __|\x1f | (__ \x1f  \\___|\x1f       \n");
+    s.push_str("100\t      _ \x1f   __| |\x1f  / _` |\x1f | (_| |\x1f  \\__,_|\x1f        \n");
+    s.push_str("101\t       \x1f   ___ \x1f  / _ \\\x1f |  __/\x1f  \\___|\x1f       \n");
+    s.push_str("102\t   __ \x1f  / _|\x1f | |_ \x1f |  _|\x1f |_|  \x1f      \n");
+    s.push_str("103\t        \x1f   __ _ \x1f  / _` |\x1f | (_| |\x1f  \\__, |\x1f  |___/ \n");
+    s.push_str("104\t  _     \x1f | |__  \x1f | '_ \\ \x1f | | | |\x1f |_| |_|\x1f        \n");
+    s.push_str("105\t  _ \x1f (_)\x1f | |\x1f | |\x1f |_|\x1f    \n");
+    s.push_str("106\t    _ \x1f   (_)\x1f   | |\x1f   | |\x1f  _/ |\x1f |__/ \n");
+    s.push_str("107\t  _    \x1f | | __\x1f | |/ /\x1f |   < \x1f |_|\\_\\\x1f       \n");
+    s.push_str("108\t  _ \x1f | |\x1f | |\x1f | |\x1f |_|\x1f    \n");
+    s.push_str("109\t            \x1f  _ __ ___  \x1f | '_ ` _ \\ \x1f | | | | | |\x1f |_| |_| |_|\x1f            \n");
+    s.push_str("110\t        \x1f  _ __  \x1f | '_ \\ \x1f | | | |\x1f |_| |_|\x1f        \n");
+    s.push_str("111\t        \x1f   ___  \x1f  / _ \\ \x1f | (_) |\x1f  \\___/ \x1f        \n");
+    s.push_str("112\t        \x1f  _ __  \x1f | '_ \\ \x1f | |_) |\x1f | .__/ \x1f |_|    \n");
+    s.push_str("113\t        \x1f   __ _ \x1f  / _` |\x1f | (_| |\x1f  \\__, |\x1f     |_|\n");
+    s.push_str("114\t       \x1f  _ __ \x1f | '__|\x1f | |   \x1f |_|   \x1f       \n");
+    s.push_str("115\t      \x1f  ___ \x1f / __|\x1f \\__ \\\x1f |___/\x1f      \n");
+    s.push_str("116\t  _   \x1f | |_ \x1f | __|\x1f | |_ \x1f  \\__|\x1f      \n");
+    s.push_str("117\t        \x1f  _   _ \x1f | | | |\x1f | |_| |\x1f  \\__,_|\x1f        \n");
+    s.push_str("118\t        \x1f __   __\x1f \\ \\ / /\x1f  \\ V / \x1f   \\_/  \x1f        \n");
+    s.push_str("119\t           \x1f __      __\x1f \\ \\ /\\ / /\x1f  \\ V  V / \x1f   \\_/\\_/  \x1f           \n");
+    s.push_str("120\t       \x1f __  __\x1f \\ \\/ /\x1f  >  < \x1f /_/\\_\\\x1f       \n");
+    s.push_str("121\t        \x1f  _   _ \x1f | | | |\x1f | |_| |\x1f  \\__, |\x1f  |___/ \n");
+    s.push_str("122\t      \x1f  ____\x1f |_  /\x1f  / / \x1f /___|\x1f      \n");
+    s.push_str("123\t    __\x1f   / /\x1f  | | \x1f < <  \x1f  | | \x1f   \\_\\\n");
+    s.push_str("124\t  _ \x1f | |\x1f | |\x1f | |\x1f | |\x1f |_|\n");
+    s.push_str("125\t __   \x1f \\ \\  \x1f  | | \x1f   > >\x1f  | | \x1f /_/  \n");
+    s.push_str("126\t  /\\/|\x1f |/\\/ \x1f   $  \x1f   $  \x1f   $  \x1f      \n");
+    s
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("render\tHi\n");
+    s.push_str("render\tKara\n");
+    s.push_str("render\tfoo bar\n");
+    s.push_str("render\tAVA\n");
+    s.push_str("render\ta_b_c\n");
+    s.push_str("render\tO(1)\n");
+    s.push_str("render\tx|y\n");
+    s.push_str("render\t12/34\n");
+    s.push_str("render\tC++\n");
+    s.push_str("render\t[a]{b}\n");
+    s.push_str("render\tYes!\n");
+    s.push_str("render\tmix 9\n");
+    s
+}
