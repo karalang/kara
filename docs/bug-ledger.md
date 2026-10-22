@@ -179,7 +179,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-77 | 2026-10-21 | typecheck | low | `karac __mir-run` and `__mir-llvm-run` run a program whose forwarded `mut ref` argument has no call-site `mut` marker, which `karac check` and `karac build --mir` refuse | — |
 | B-2026-10-21-79 | 2026-10-21 | typecheck | low | A type mismatch prints the string view as `StringSlice` where the source and the pages write `Str`: `Command.new("echo").args(a)` with `a: Vec[String]` reports "expected 'Slice[StringSlice]', found 'Vec[String]'" | — |
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
-| B-2026-10-21-82 | 2026-10-21 | typecheck+interp+codegen | medium | An empty list literal `[]` in an `if`/`match` branch whose element type comes only from a sibling branch passes `karac check` but stops both MIR lanes with `a type that failed to check is not lowered yet` | — |
 | B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
 | B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
 
@@ -4374,6 +4373,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-75 | typecheck | low | `c.swap(v)` on a borrowed `Atomic[i64]` parameter is refused "`c` is a `ref` parameter, so `c.swap` (a method that writes its receiver) cannot ...",… | edc74414c9 |
 | B-2026-10-21-78 | codegen | medium | `karac __mir-llvm-run` takes worse-than-quadratic time in the length of one function: 2000 `push_str` statements take 8.8 s and 4000 take 43 s, while… | f7a18a1f11 |
 | B-2026-10-21-81 | effect | low | `karac check` gives a user type's own `send` / `recv` methods the channel's effects: `pub fn f(s: S) -> i64 { s.send(1) + s.recv() }` over a user `st… | 33817ba125 |
+| B-2026-10-21-82 | typecheck+interp+codegen | medium | An empty list literal `[]` in an `if`/`match` branch whose element type comes only from a sibling branch passes `karac check` but stops both MIR lane… | 14180cd414 |
 
 </details>
 
