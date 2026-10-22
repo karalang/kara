@@ -1,0 +1,46 @@
+== norm | http://example.com
+  http://example.com/
+== norm | http://Example.COM/
+  http://example.com/
+== norm | HTTP://example.com/A?Z=1&z=2
+  http://example.com/A?Z=1&z=2
+== norm | http://example.com.
+  http://example.com/
+== norm | http://example.com:80/path
+  http://example.com/path
+== norm | https://example.com:443/
+  https://example.com/
+== norm | http://example.com:8080/a
+  http://example.com:8080/a
+== norm | ftp://example.com:21/f
+  ftp://example.com/f
+== norm | http://example.com/a/./b/../c
+  http://example.com/a/c
+== norm | http://example.com/a/../../b
+  http://example.com/b
+== norm | http://example.com/%7euser/
+  http://example.com/~user/
+== norm | http://example.com/a b
+  http://example.com/a%20b
+== norm | http://example.com/a%2fb
+  http://example.com/a/b
+== norm | http://example.com/%e2%9c%93
+  http://example.com/%E2%9C%93
+== norm | http://example.com/?b=2&a=1
+  http://example.com/?a=1&b=2
+== norm | http://example.com/?utm_source=news&x=1
+  http://example.com/?x=1
+== norm | http://example.com?x=1&
+  http://example.com/?x=1
+== norm | http://example.com/page#!key=val
+  http://example.com/page?_escaped_fragment_=key=val
+== norm | http://user:pass@example.com/
+  http://user:pass@example.com/
+== norm | http://@example.com/
+  http://example.com/
+== norm | http://example.com/p?q=a+b#frag ment
+  http://example.com/p?q=a+b#frag%20ment
+== norm | example.com/path
+  https://example.com/path
+== norm | //example.com/x
+  https://example.com/x

@@ -1,0 +1,586 @@
+// mini_urlnormalize — a port of url-normalize 1.4.3 (PSF/"Python" licence,
+// Nikolay Panov), the RFC 3986 URL normalizer used by crawlers and caches to
+// canonicalize URLs so equivalent ones compare equal.
+//
+// Faithful to the library's pipeline: provide_url_scheme, generic_url_cleanup
+// (#! -> ?_escaped_fragment_=, utm_source stripping, trailing &? cleanup),
+// urlsplit into scheme/userinfo/host/port/path/query/fragment, then lowercase
+// scheme and host, strip a trailing dot, drop a default port, collapse
+// dot-segments, essential-only percent-encoding with uppercase hex and
+// unreserved decoding, empty-path -> "/", and sorted query params.
+//
+// Scope: ASCII inputs with an http/https/ftp authority — the shape the
+// library's defaults target. NFC normalization and IDNA host encoding are
+// no-ops on ASCII and so are omitted. Percent-encoding is done at the byte
+// level, so a percent-escaped UTF-8 sequence (e.g. %e2%9c%93) still
+// re-encodes to uppercase correctly.
+
+#[derive(Clone)]
+struct URLParts {
+    scheme: String,
+    userinfo: String,
+    host: String,
+    port: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s);
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn index_of(s: String, c: i64) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == c { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn starts(s: String, p: String) -> bool {
+    let sb = bytes_of(s);
+    let pb = bytes_of(p);
+    if sb.len() < pb.len() { return false; }
+    let mut i = 0;
+    while i < pb.len() {
+        if sb[i] != pb[i] { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn matches_sub(sb: Vec[i64], fb: Vec[i64], at: i64) -> bool {
+    let mut k = 0;
+    while k < fb.len() {
+        if sb[at + k] != fb[k] { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+fn is_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+}
+
+fn hexval(c: i64) -> i64 {
+    if c >= 48 and c <= 57 { return c - 48; }
+    if c >= 97 and c <= 102 { return c - 97 + 10; }
+    c - 65 + 10
+}
+
+fn is_unreserved(b: i64) -> bool {
+    if is_letter(b) { return true; }
+    if b >= 48 and b <= 57 { return true; }
+    b == 45 or b == 46 or b == 95 or b == 126
+}
+
+fn contains_byte(safe: String, b: i64) -> bool {
+    let sb = bytes_of(safe);
+    let mut i = 0;
+    while i < sb.len() {
+        if sb[i] == b { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn byte_to_char(b: i64) -> String {
+    let print = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    print.substring(b - 32, b - 32 + 1)
+}
+
+fn is_digit_str(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] < 48 or b[i] > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn str_to_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut v = 0;
+    let mut i = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    v
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut digs: Vec[i64] = Vec.new();
+    while m > 0 { digs.push(m % 10); m = m / 10; }
+    let ds = "0123456789";
+    let mut out = String.new();
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        out.push_str(ds.substring(digs[i], digs[i] + 1));
+    }
+    out
+}
+
+fn to_lower(s: String) -> String {
+    let b = bytes_of(s);
+    let abc = "abcdefghijklmnopqrstuvwxyz";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c >= 65 and c <= 90 { out.push_str(abc.substring(c - 65, c - 65 + 1)); }
+        else { out.push_str(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    out
+}
+
+fn strip_dots(s: String) -> String {
+    let b = bytes_of(s);
+    let mut lo = 0;
+    let mut hi = b.len();
+    while lo < hi and b[lo] == 46 { lo = lo + 1; }
+    while hi > lo and b[hi - 1] == 46 { hi = hi - 1; }
+    s.substring(lo, hi)
+}
+
+fn unquote_bytes(s: String) -> Vec[i64] {
+    let b = bytes_of(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == 37 and i + 2 < b.len() and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hexval(b[i + 1]) * 16 + hexval(b[i + 2]));
+            i = i + 3;
+        } else {
+            out.push(b[i]);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn quote_bytes(bytes: Vec[i64], safe: String) -> String {
+    let hx = "0123456789ABCDEF";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if is_unreserved(b) or contains_byte(safe, b) {
+            out.push_str(byte_to_char(b));
+        } else {
+            out.push_str("%");
+            out.push_str(hx.substring(b / 16, b / 16 + 1));
+            out.push_str(hx.substring(b % 16, b % 16 + 1));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn quote_str(s: String, safe: String) -> String {
+    quote_bytes(unquote_bytes(s), safe)
+}
+
+fn str_less(a: String, b: String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] < bb[i] { return true; }
+        if ab[i] > bb[i] { return false; }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+fn sort_strs(arr: Vec[String]) -> Vec[String] {
+    let n = arr.len();
+    let mut used: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n { used.push(0); k = k + 1; }
+    let mut out: Vec[String] = Vec.new();
+    let mut c = 0;
+    while c < n {
+        let mut best = 0 - 1;
+        let mut bi = 0;
+        while bi < n {
+            if used[bi] == 0 {
+                if best < 0 or str_less(arr[bi].clone(), arr[best].clone()) { best = bi; }
+            }
+            bi = bi + 1;
+        }
+        used[best] = 1;
+        out.push(arr[best].clone());
+        c = c + 1;
+    }
+    out
+}
+
+fn join_strs(v: Vec[String], sep: String) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { out.push_str(sep); }
+        out.push_str(v[i].clone());
+        i = i + 1;
+    }
+    out
+}
+
+fn replace_all(s: String, from: String, to: String) -> String {
+    let sb = bytes_of(s);
+    let fb = bytes_of(from);
+    let fl = fb.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < sb.len() {
+        if i + fl <= sb.len() and matches_sub(sb, fb, i) {
+            out.push_str(to);
+            i = i + fl;
+        } else {
+            out.push_str(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn remove_utm(s: String) -> String {
+    let b = bytes_of(s);
+    let key = bytes_of("utm_source=");
+    let kl = key.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        if i + kl <= b.len() and matches_sub(b, key, i) {
+            let mut j = i + kl;
+            let mut cnt = 0;
+            while j < b.len() and b[j] != 38 { j = j + 1; cnt = cnt + 1; }
+            if cnt >= 1 {
+                if j < b.len() and b[j] == 38 { j = j + 1; }
+                i = j;
+            } else {
+                out.push_str(s.substring(i, i + 1));
+                i = i + 1;
+            }
+        } else {
+            out.push_str(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn rstrip_set(s: String) -> String {
+    let b = bytes_of(s);
+    let mut hi = b.len();
+    while hi > 0 and (b[hi - 1] == 38 or b[hi - 1] == 63 or b[hi - 1] == 32) { hi = hi - 1; }
+    s.substring(0, hi)
+}
+
+fn generic_cleanup(url: String) -> String {
+    let a = replace_all(url, "#!", "?_escaped_fragment_=");
+    let b = remove_utm(a);
+    rstrip_set(b)
+}
+
+fn provide_scheme(url: String) -> String {
+    let b = bytes_of(url);
+    let mut lim = b.len();
+    if lim > 7 { lim = 7; }
+    let mut has = false;
+    let mut i = 0;
+    while i < lim { if b[i] == 58 { has = true; } i = i + 1; }
+    let uni = starts(url, "//");
+    let isfile = url == "-" or (starts(url, "/") and not uni);
+    if has or isfile { return url.clone(); }
+    if uni { return "https:" + url.clone(); }
+    "https://" + url.clone()
+}
+
+fn scheme_colon(sp: String) -> i64 {
+    let b = bytes_of(sp);
+    let c = index_of(sp, 58);
+    if c <= 0 { return 0 - 1; }
+    if not is_letter(b[0]) { return 0 - 1; }
+    let mut i = 1;
+    while i < c {
+        let ch = b[i];
+        let ok = is_letter(ch) or (ch >= 48 and ch <= 57) or ch == 43 or ch == 45 or ch == 46;
+        if not ok { return 0 - 1; }
+        i = i + 1;
+    }
+    c
+}
+
+fn split_url(url: String) -> URLParts {
+    let hashi = index_of(url, 35);
+    let mut frag = String.new();
+    let mut rest = url.clone();
+    if hashi >= 0 {
+        frag = url.substring(hashi + 1, blen(url));
+        rest = url.substring(0, hashi);
+    }
+    let qi = index_of(rest, 63);
+    let mut query = String.new();
+    let mut sp = rest.clone();
+    if qi >= 0 {
+        query = rest.substring(qi + 1, blen(rest));
+        sp = rest.substring(0, qi);
+    }
+    let mut scheme = String.new();
+    let mut afters = sp.clone();
+    let ci = scheme_colon(sp.clone());
+    if ci >= 0 {
+        scheme = sp.substring(0, ci);
+        afters = sp.substring(ci + 1, blen(sp));
+    }
+    let mut netloc = String.new();
+    let mut path = afters.clone();
+    if starts(afters, "//") {
+        let after2 = afters.substring(2, blen(afters));
+        let slash = index_of(after2, 47);
+        let endn = if slash >= 0 { slash } else { blen(after2) };
+        netloc = after2.substring(0, endn);
+        path = after2.substring(endn, blen(after2));
+    }
+    let ati = index_of(netloc, 64);
+    let mut userinfo = String.new();
+    let mut hostport = netloc.clone();
+    if ati >= 0 {
+        userinfo = netloc.substring(0, ati + 1);
+        hostport = netloc.substring(ati + 1, blen(netloc));
+    }
+    let coli = index_of(hostport, 58);
+    let mut host = hostport.clone();
+    let mut port = String.new();
+    if coli >= 0 {
+        host = hostport.substring(0, coli);
+        port = hostport.substring(coli + 1, blen(hostport));
+    }
+    URLParts {
+        scheme: scheme,
+        userinfo: userinfo,
+        host: host,
+        port: port,
+        path: path,
+        query: query,
+        fragment: frag,
+    }
+}
+
+fn dot_segments(path: String) -> String {
+    let parts = split_on(path, 47);
+    let mut output: Vec[String] = Vec.new();
+    let mut last = String.new();
+    let mut i = 0;
+    while i < parts.len() {
+        let part = parts[i].clone();
+        last = part.clone();
+        if blen(part) == 0 {
+            if output.len() == 0 { output.push(part.clone()); }
+        } else if part == "." {
+            // drop
+        } else if part == ".." {
+            if output.len() > 1 { output.pop(); }
+        } else {
+            output.push(part.clone());
+        }
+        i = i + 1;
+    }
+    if last == "" or last == "." or last == ".." { output.push(""); }
+    join_strs(output, "/")
+}
+
+fn norm_userinfo(u: String) -> String {
+    if u == "@" or u == ":@" { return ""; }
+    u.clone()
+}
+
+fn norm_host(h: String) -> String {
+    strip_dots(to_lower(h))
+}
+
+fn default_port(scheme: String) -> String {
+    if scheme == "ftp" { return "21"; }
+    if scheme == "gopher" { return "70"; }
+    if scheme == "http" { return "80"; }
+    if scheme == "https" { return "443"; }
+    if scheme == "news" { return "119"; }
+    if scheme == "nntp" { return "119"; }
+    if scheme == "snews" { return "563"; }
+    if scheme == "snntp" { return "563"; }
+    if scheme == "telnet" { return "23"; }
+    if scheme == "ws" { return "80"; }
+    if scheme == "wss" { return "443"; }
+    "x"
+}
+
+fn norm_port(port: String, scheme: String) -> String {
+    if not is_digit_str(port) { return port.clone(); }
+    let ps = int_to_str(str_to_int(port));
+    if default_port(scheme) == ps { return ""; }
+    ps
+}
+
+fn norm_query(query: String) -> String {
+    let qsafe = "~:/?#[]@!$'()*+,;=";
+    let parts = split_on(query, 38);
+    let mut toks: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < parts.len() {
+        let q = parts[i].clone();
+        let eqi = index_of(q, 61);
+        if eqi >= 0 {
+            let k = q.substring(0, eqi);
+            let v = q.substring(eqi + 1, blen(q));
+            toks.push(quote_str(k, qsafe) + "=" + quote_str(v, qsafe));
+        } else {
+            toks.push(quote_str(q, qsafe));
+        }
+        i = i + 1;
+    }
+    let sorted = sort_strs(toks);
+    join_strs(sorted, "&")
+}
+
+fn norm_path(path: String, scheme: String) -> String {
+    let psafe = "~:/?#[]@!$&'()*+,;=";
+    let mut pq = quote_str(path, psafe);
+    if scheme == "" or scheme == "http" or scheme == "https" or scheme == "ftp" or scheme == "file" {
+        pq = dot_segments(pq.clone());
+    }
+    if blen(pq) == 0 and (scheme == "http" or scheme == "https" or scheme == "ftp" or scheme == "file") {
+        pq = "/";
+    }
+    pq
+}
+
+fn rebuild(p: URLParts) -> String {
+    let mut auth = p.userinfo.clone() + p.host.clone();
+    if blen(p.port) > 0 { auth = auth + ":" + p.port.clone(); }
+    let mut url = p.path.clone();
+    if blen(auth) > 0 {
+        if blen(url) > 0 and not starts(url, "/") { url = "/" + url; }
+        url = "//" + auth + url;
+    }
+    if blen(p.scheme) > 0 { url = p.scheme.clone() + ":" + url; }
+    if blen(p.query) > 0 { url = url + "?" + p.query.clone(); }
+    if blen(p.fragment) > 0 { url = url + "#" + p.fragment.clone(); }
+    url
+}
+
+fn normalize(url_in: String) -> String {
+    if blen(url_in) == 0 { return url_in.clone(); }
+    let u1 = provide_scheme(url_in);
+    let u2 = generic_cleanup(u1);
+    let p = split_url(u2);
+    let scheme = to_lower(p.scheme.clone());
+    let userinfo = norm_userinfo(p.userinfo.clone());
+    let host = norm_host(p.host.clone());
+    let query = norm_query(p.query.clone());
+    let fragment = quote_str(p.fragment.clone(), "~");
+    let port = norm_port(p.port.clone(), scheme.clone());
+    let path = norm_path(p.path.clone(), scheme.clone());
+    let np = URLParts {
+        scheme: scheme,
+        userinfo: userinfo,
+        host: host,
+        port: port,
+        path: path,
+        query: query,
+        fragment: fragment,
+    };
+    rebuild(np)
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "norm" { return normalize(arg); }
+    "error: unknown op"
+}
+
+fn main() {
+    let text = jobs_text();
+    let lines = split_on(text, 10);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].clone();
+        if blen(line) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let arg = if fields.len() > 1 { fields[1].clone() } else { String.new() };
+            out.push_str("== ");
+            let mut j = 0;
+            while j < fields.len() {
+                if j > 0 { out.push_str(" | "); }
+                out.push_str(fields[j].clone());
+                j = j + 1;
+            }
+            out.push_str("\n");
+            out.push_str("  ");
+            out.push_str(run(op, arg));
+            out.push_str("\n");
+        }
+        i = i + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("norm\thttp://example.com\n");
+    s.push_str("norm\thttp://Example.COM/\n");
+    s.push_str("norm\tHTTP://example.com/A?Z=1&z=2\n");
+    s.push_str("norm\thttp://example.com.\n");
+    s.push_str("norm\thttp://example.com:80/path\n");
+    s.push_str("norm\thttps://example.com:443/\n");
+    s.push_str("norm\thttp://example.com:8080/a\n");
+    s.push_str("norm\tftp://example.com:21/f\n");
+    s.push_str("norm\thttp://example.com/a/./b/../c\n");
+    s.push_str("norm\thttp://example.com/a/../../b\n");
+    s.push_str("norm\thttp://example.com/%7euser/\n");
+    s.push_str("norm\thttp://example.com/a b\n");
+    s.push_str("norm\thttp://example.com/a%2fb\n");
+    s.push_str("norm\thttp://example.com/%e2%9c%93\n");
+    s.push_str("norm\thttp://example.com/?b=2&a=1\n");
+    s.push_str("norm\thttp://example.com/?utm_source=news&x=1\n");
+    s.push_str("norm\thttp://example.com?x=1&\n");
+    s.push_str("norm\thttp://example.com/page#!key=val\n");
+    s.push_str("norm\thttp://user:pass@example.com/\n");
+    s.push_str("norm\thttp://@example.com/\n");
+    s.push_str("norm\thttp://example.com/p?q=a+b#frag ment\n");
+    s.push_str("norm\texample.com/path\n");
+    s.push_str("norm\t//example.com/x\n");
+    s
+}
