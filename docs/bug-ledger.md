@@ -92,17 +92,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 755 |
+| miscompile | 758 |
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 334 |
+| missing-feature | 338 |
 | codegen-gap | 291 |
-| false-positive | 283 |
-| other | 197 |
-| diagnostics | 187 |
+| false-positive | 285 |
+| other | 198 |
+| diagnostics | 189 |
 | perf | 183 |
-| soundness | 136 |
+| soundness | 137 |
 | crash | 129 |
 | use-after-free | 92 |
 
@@ -110,16 +110,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3033 |
-| interp | 1040 |
-| typecheck | 564 |
+| codegen | 3037 |
+| interp | 1046 |
+| typecheck | 572 |
 | ownership | 132 |
-| other | 126 |
+| other | 127 |
 | cli | 90 |
-| runtime | 87 |
+| runtime | 88 |
 | parser | 77 |
 | autopar | 59 |
-| resolver | 51 |
+| resolver | 53 |
 | effect | 45 |
 | lexer | 12 |
 ## Current state
@@ -190,6 +190,19 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-25 | 2026-10-22 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend prints INIT then 42 three times on `__mir-run` and fails to build on `__mir-llvm-run`. It is the only corpus program that passes on mir-interp and fails on mir-llvm | — |
 | B-2026-10-22-27 | 2026-10-22 | codegen | medium | `env.args()` on mir-llvm is the constant `["main"]` (src/codegen/mir/call.rs, the `("Env", "args")` arm), so a `karac build --mir` binary never sees its argv and `karac run`'s JIT ignores what follows `--`; the MIR interpreter and both legacy backends return the real argv | — |
 | B-2026-10-22-28 | 2026-10-22 | ownership | medium | `karac check` accepts a `-> ref T` function that returns a non-`Copy` place without `ref`: `fn choose(s: ref Side, p: ref Pair) -> ref String { match s { Side.Left => p.first, Side.Right => p.second } }` and `fn first(ref self) -> ref String { self.items[0] }` pass, though design.md § returning a reference says the `ref` is written and a tail `user.name` moves out of a borrowed place (§3.7); 6025b74a66 (B-2026-10-19-37) made these lend rather than move | — |
+| B-2026-10-22-29 | 2026-10-22 | typecheck | high | `karac check` accepts a `-> ref T` function that returns a reference to a temporary: `fn bad() -> ref String { make() }` and `fn bad(s: ref String) -> ref String { String.from("temp") }` both pass, and `karac __mir-run` then faults with "deref of non-reference Box(AllocId(N))" | — |
+| B-2026-10-22-30 | 2026-10-22 | resolver+typecheck | medium | `karac check` passes a file that imports from a module that does not exist: `import nosuch.{run}; fn main() { run(); }` prints "All checks passed", and `karac __mir-run` then fails with "a type that failed to check is not lowered yet" | — |
+| B-2026-10-22-31 | 2026-10-22 | resolver+typecheck | high | A bare enum variant in a pattern silently becomes a catch-all binding in two cases: a variant named like a prelude name (`enum Tok { Fn, Let, Plus }`, `match t { Fn => 1, _ => 3 }` gives 1 for `Tok.Plus`), and any variant of a library enum (`match IoError.PermissionDenied { NotFound => …, _ => … }` takes the `NotFound` arm) | — |
+| B-2026-10-22-32 | 2026-10-22 | typecheck+interp+codegen | low | `println(F16.from(2.5))` prints `F16 { value: 2.5 }` (and `Bf16` likewise): the stdlib `F16`/`Bf16` types have no `Display`, and check accepts printing them | — |
+| B-2026-10-22-33 | 2026-10-22 | typecheck | medium | `karac check` accepts several programs that v2 refuses later or has no meaning for: a move out of a borrowed (D5 bare) parameter or a use after a tuple-literal move (MIR borrowck rejects them), `dbg` of a function value, `impl Index for P` without `index`, a runtime `fn f(t: Type)`, `21 |> double` (design.md:2667: no pipe operator), and legacy's `Base64.encode` / `Hex.encode` spellings (docs/library/encoding.md: `base64_encode`, `hex_decode`, …) | — |
+| B-2026-10-22-34 | 2026-10-22 | typecheck+interp+codegen | low | v2 stdlib lacks calls legacy had and the tests use: `Vec.max` / `min` / `sum` / `product` called on a `Vec` (not its iterator), the free `clamp(x, lo, hi)` beside `min`/`max`, and `f64.from(x)` for an `f32`; check accepts them and `__mir-run` stops at "call of unknown function" | — |
+| B-2026-10-22-35 | 2026-10-22 | interp+codegen | high | An integer overflow between two literals wraps silently instead of trapping: `let x = 9223372036854775807 + 1; println(x)` prints -9223372036854775808 and exits 0 on `__mir-run` and `__mir-llvm-run`, while `let a: i64 = 9223372036854775807; let x = a + 1;` traps | — |
+| B-2026-10-22-36 | 2026-10-22 | interp+codegen | medium | MIR builder gaps from the legacy test programs: raw pointer methods and `ptr.null`/`dangling`/`is_null` (M3, needed for FFI), associated functions and comparison methods on primitives (`i64.zero()`, `impl i64 { fn two }`, `a.lt(b)` on u8/bool), collection literals typed `VecDeque` or nested, indexing by a let-bound range, an uppercase local binding (`let F = Foo {..}; F.value`), literal patterns (negative, float, string inside `Option`), and a tail of single constructs | — |
+| B-2026-10-22-37 | 2026-10-22 | interp | high | On `karac __mir-run`, a u64 literal pattern in the upper half never matches: `let b: u64 = 18446744073709551615u64; match b { 18446744073709551615u64 => "max", _ => "no" }` prints "no", and `9223372036854775808u64` fails the same way; `__mir-llvm-run` prints the right arm | — |
+| B-2026-10-22-38 | 2026-10-22 | interp+runtime | medium | MIR interpreter/runtime gaps from the legacy test programs: `std.runtime` `list_tasks` / `list_par_blocks` / `has_debug_metadata`, a char radix out of range is an interpreter error rather than a panic, `extend_from_slice` with an `Array`, an `extern "C"` call, a deep recursion that should panic as a stack overflow, and `"日本語".substring(1, 1)` returning "" where an end inside a code point panics | — |
+| B-2026-10-22-39 | 2026-10-22 | typecheck | low | Legacy spellings v2's check refuses, for Thread A to confirm as rule or gap: `.len()` on an iterator (`SortedMapIter`, `StrChars`, `StrLines`, `StrWords`, `StrSplit`), `.iter()` on `MapValues`/`MapKeys`, `flatten` over `ref Vec`, `partition` yielding `Vec[ref T]`, a `Str` where `String` is expected, `String + StringSlice`, `split(',')` with a char, `f64.parse` as an `Option`, `Vec.try_append` | — |
+| B-2026-10-22-40 | 2026-10-22 | typecheck | medium | Likely v2 check gaps among the legacy test programs: arithmetic on a generic `T: Add`/`Sub`/`Div` parameter ("type 'ref T' does not implement trait Add"), `StringSlice + x`, `Iterator.cycle` / `windows` / `rev` on a mapped iterator, `collect` into a non-Vec target in return or tail position (E0238), and `collect::<String>()` from an iterator of `String` ("String implements FromIterator[char], not FromIterator[String]") | — |
+| B-2026-10-22-41 | 2026-10-22 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m) => { m.insert("z", 99); } } }` as a write through a ref; core-semantics §4.6 (6252bd4551) binds them as `mut ref` | — |
 
 ### Relocated
 
