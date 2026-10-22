@@ -1,0 +1,1000 @@
+// mini_morton — a port of pymorton 0.1.0 (MIT, Trevor Prater). Morton order
+// (Z-order) maps multi-dimensional coordinates to a single integer by
+// interleaving the bits of the coordinates, so that points close in space stay
+// close on the line. It is the ordering behind quadtree/octree traversal and
+// the spatial keys used by B-trees, geohashes and texture memory: sort the
+// codes and you get a depth-first walk of the tree for free.
+//
+// Each job is one of:
+//   il2 <x> <y>          → interleave2: the 2-D Morton code (16-bit coords);
+//   dl2 <n>              → deinterleave2: `<x> <y>`, the coordinates of code n;
+//   il3 <x> <y> <z>      → interleave3: the 3-D Morton code (10-bit coords);
+//   dl3 <n>              → deinterleave3: `<x> <y> <z>`.
+//
+// The four bit-spreading helpers (part1by1 / part1by2 and their inverses) are
+// ported verbatim from the library — the same magic masks and shift ladder,
+// which is why coordinates above the range (16 bits for 2-D, 10 for 3-D) are
+// silently masked to the low bits exactly as upstream. All arithmetic stays
+// within 32 bits, well inside i64.
+//
+// Scope: the integer interleave / de-interleave API. The library's
+// float lat/lng geohash helpers (interleave_latlng / deinterleave_latlng), which
+// depend on floating-point formatting, are out of scope (see README).
+// jobs_text() carries data/jobs.tsv verbatim.
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+// Spread the low 16 bits of n so that bit k lands at position 2k.
+fn part1by1(n0: i64) -> i64 {
+    let mut n = n0 & 0x0000ffff;
+    n = (n | (n << 8)) & 0x00ff00ff;
+    n = (n | (n << 4)) & 0x0f0f0f0f;
+    n = (n | (n << 2)) & 0x33333333;
+    n = (n | (n << 1)) & 0x55555555;
+    n
+}
+
+// Spread the low 10 bits of n so that bit k lands at position 3k.
+fn part1by2(n0: i64) -> i64 {
+    let mut n = n0 & 0x000003ff;
+    n = (n ^ (n << 16)) & 0xff0000ff;
+    n = (n ^ (n << 8)) & 0x0300f00f;
+    n = (n ^ (n << 4)) & 0x030c30c3;
+    n = (n ^ (n << 2)) & 0x09249249;
+    n
+}
+
+// Inverse of part1by1: gather every second bit back into the low 16.
+fn unpart1by1(n0: i64) -> i64 {
+    let mut n = n0 & 0x55555555;
+    n = (n ^ (n >> 1)) & 0x33333333;
+    n = (n ^ (n >> 2)) & 0x0f0f0f0f;
+    n = (n ^ (n >> 4)) & 0x00ff00ff;
+    n = (n ^ (n >> 8)) & 0x0000ffff;
+    n
+}
+
+// Inverse of part1by2: gather every third bit back into the low 10.
+fn unpart1by2(n0: i64) -> i64 {
+    let mut n = n0 & 0x09249249;
+    n = (n ^ (n >> 2)) & 0x030c30c3;
+    n = (n ^ (n >> 4)) & 0x0300f00f;
+    n = (n ^ (n >> 8)) & 0xff0000ff;
+    n = (n ^ (n >> 16)) & 0x000003ff;
+    n
+}
+
+fn interleave2(x: i64, y: i64) -> i64 {
+    part1by1(x) | (part1by1(y) << 1)
+}
+
+fn interleave3(x: i64, y: i64, z: i64) -> i64 {
+    part1by2(x) | (part1by2(y) << 1) | (part1by2(z) << 2)
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                if op == "il2" {
+                    let x = parse_uint(f[1].clone());
+                    let y = parse_uint(f[2].clone());
+                    out.push_str(" ");
+                    out.push_str(f[1].clone());
+                    out.push_str(" ");
+                    out.push_str(f[2].clone());
+                    out.push_str("\n");
+                    out.push_str(itoa(interleave2(x, y)));
+                } else {
+                    if op == "il3" {
+                        let x = parse_uint(f[1].clone());
+                        let y = parse_uint(f[2].clone());
+                        let z = parse_uint(f[3].clone());
+                        out.push_str(" ");
+                        out.push_str(f[1].clone());
+                        out.push_str(" ");
+                        out.push_str(f[2].clone());
+                        out.push_str(" ");
+                        out.push_str(f[3].clone());
+                        out.push_str("\n");
+                        out.push_str(itoa(interleave3(x, y, z)));
+                    } else {
+                        if op == "dl2" {
+                            let code = parse_uint(f[1].clone());
+                            out.push_str(" ");
+                            out.push_str(f[1].clone());
+                            out.push_str("\n");
+                            out.push_str(itoa(unpart1by1(code)));
+                            out.push_str(" ");
+                            out.push_str(itoa(unpart1by1(code >> 1)));
+                        } else {
+                            let code = parse_uint(f[1].clone());
+                            out.push_str(" ");
+                            out.push_str(f[1].clone());
+                            out.push_str("\n");
+                            out.push_str(itoa(unpart1by2(code)));
+                            out.push_str(" ");
+                            out.push_str(itoa(unpart1by2(code >> 1)));
+                            out.push_str(" ");
+                            out.push_str(itoa(unpart1by2(code >> 2)));
+                        }
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("il2\t0\t0\n");
+    s.push_str("il2\t0\t1\n");
+    s.push_str("il2\t0\t2\n");
+    s.push_str("il2\t0\t3\n");
+    s.push_str("il2\t0\t4\n");
+    s.push_str("il2\t0\t5\n");
+    s.push_str("il2\t0\t6\n");
+    s.push_str("il2\t0\t7\n");
+    s.push_str("il2\t0\t8\n");
+    s.push_str("il2\t1\t0\n");
+    s.push_str("il2\t1\t1\n");
+    s.push_str("il2\t1\t2\n");
+    s.push_str("il2\t1\t3\n");
+    s.push_str("il2\t1\t4\n");
+    s.push_str("il2\t1\t5\n");
+    s.push_str("il2\t1\t6\n");
+    s.push_str("il2\t1\t7\n");
+    s.push_str("il2\t1\t8\n");
+    s.push_str("il2\t2\t0\n");
+    s.push_str("il2\t2\t1\n");
+    s.push_str("il2\t2\t2\n");
+    s.push_str("il2\t2\t3\n");
+    s.push_str("il2\t2\t4\n");
+    s.push_str("il2\t2\t5\n");
+    s.push_str("il2\t2\t6\n");
+    s.push_str("il2\t2\t7\n");
+    s.push_str("il2\t2\t8\n");
+    s.push_str("il2\t3\t0\n");
+    s.push_str("il2\t3\t1\n");
+    s.push_str("il2\t3\t2\n");
+    s.push_str("il2\t3\t3\n");
+    s.push_str("il2\t3\t4\n");
+    s.push_str("il2\t3\t5\n");
+    s.push_str("il2\t3\t6\n");
+    s.push_str("il2\t3\t7\n");
+    s.push_str("il2\t3\t8\n");
+    s.push_str("il2\t4\t0\n");
+    s.push_str("il2\t4\t1\n");
+    s.push_str("il2\t4\t2\n");
+    s.push_str("il2\t4\t3\n");
+    s.push_str("il2\t4\t4\n");
+    s.push_str("il2\t4\t5\n");
+    s.push_str("il2\t4\t6\n");
+    s.push_str("il2\t4\t7\n");
+    s.push_str("il2\t4\t8\n");
+    s.push_str("il2\t5\t0\n");
+    s.push_str("il2\t5\t1\n");
+    s.push_str("il2\t5\t2\n");
+    s.push_str("il2\t5\t3\n");
+    s.push_str("il2\t5\t4\n");
+    s.push_str("il2\t5\t5\n");
+    s.push_str("il2\t5\t6\n");
+    s.push_str("il2\t5\t7\n");
+    s.push_str("il2\t5\t8\n");
+    s.push_str("il2\t6\t0\n");
+    s.push_str("il2\t6\t1\n");
+    s.push_str("il2\t6\t2\n");
+    s.push_str("il2\t6\t3\n");
+    s.push_str("il2\t6\t4\n");
+    s.push_str("il2\t6\t5\n");
+    s.push_str("il2\t6\t6\n");
+    s.push_str("il2\t6\t7\n");
+    s.push_str("il2\t6\t8\n");
+    s.push_str("il2\t7\t0\n");
+    s.push_str("il2\t7\t1\n");
+    s.push_str("il2\t7\t2\n");
+    s.push_str("il2\t7\t3\n");
+    s.push_str("il2\t7\t4\n");
+    s.push_str("il2\t7\t5\n");
+    s.push_str("il2\t7\t6\n");
+    s.push_str("il2\t7\t7\n");
+    s.push_str("il2\t7\t8\n");
+    s.push_str("il2\t8\t0\n");
+    s.push_str("il2\t8\t1\n");
+    s.push_str("il2\t8\t2\n");
+    s.push_str("il2\t8\t3\n");
+    s.push_str("il2\t8\t4\n");
+    s.push_str("il2\t8\t5\n");
+    s.push_str("il2\t8\t6\n");
+    s.push_str("il2\t8\t7\n");
+    s.push_str("il2\t8\t8\n");
+    s.push_str("il2\t0\t0\n");
+    s.push_str("il2\t0\t1\n");
+    s.push_str("il2\t0\t255\n");
+    s.push_str("il2\t0\t65535\n");
+    s.push_str("il2\t1\t0\n");
+    s.push_str("il2\t1\t1\n");
+    s.push_str("il2\t1\t255\n");
+    s.push_str("il2\t1\t65535\n");
+    s.push_str("il2\t2\t0\n");
+    s.push_str("il2\t2\t1\n");
+    s.push_str("il2\t2\t255\n");
+    s.push_str("il2\t2\t65535\n");
+    s.push_str("il2\t3\t0\n");
+    s.push_str("il2\t3\t1\n");
+    s.push_str("il2\t3\t255\n");
+    s.push_str("il2\t3\t65535\n");
+    s.push_str("il2\t4\t0\n");
+    s.push_str("il2\t4\t1\n");
+    s.push_str("il2\t4\t255\n");
+    s.push_str("il2\t4\t65535\n");
+    s.push_str("il2\t7\t0\n");
+    s.push_str("il2\t7\t1\n");
+    s.push_str("il2\t7\t255\n");
+    s.push_str("il2\t7\t65535\n");
+    s.push_str("il2\t8\t0\n");
+    s.push_str("il2\t8\t1\n");
+    s.push_str("il2\t8\t255\n");
+    s.push_str("il2\t8\t65535\n");
+    s.push_str("il2\t15\t0\n");
+    s.push_str("il2\t15\t1\n");
+    s.push_str("il2\t15\t255\n");
+    s.push_str("il2\t15\t65535\n");
+    s.push_str("il2\t16\t0\n");
+    s.push_str("il2\t16\t1\n");
+    s.push_str("il2\t16\t255\n");
+    s.push_str("il2\t16\t65535\n");
+    s.push_str("il2\t31\t0\n");
+    s.push_str("il2\t31\t1\n");
+    s.push_str("il2\t31\t255\n");
+    s.push_str("il2\t31\t65535\n");
+    s.push_str("il2\t255\t0\n");
+    s.push_str("il2\t255\t1\n");
+    s.push_str("il2\t255\t255\n");
+    s.push_str("il2\t255\t65535\n");
+    s.push_str("il2\t256\t0\n");
+    s.push_str("il2\t256\t1\n");
+    s.push_str("il2\t256\t255\n");
+    s.push_str("il2\t256\t65535\n");
+    s.push_str("il2\t257\t0\n");
+    s.push_str("il2\t257\t1\n");
+    s.push_str("il2\t257\t255\n");
+    s.push_str("il2\t257\t65535\n");
+    s.push_str("il2\t1023\t0\n");
+    s.push_str("il2\t1023\t1\n");
+    s.push_str("il2\t1023\t255\n");
+    s.push_str("il2\t1023\t65535\n");
+    s.push_str("il2\t1024\t0\n");
+    s.push_str("il2\t1024\t1\n");
+    s.push_str("il2\t1024\t255\n");
+    s.push_str("il2\t1024\t65535\n");
+    s.push_str("il2\t4095\t0\n");
+    s.push_str("il2\t4095\t1\n");
+    s.push_str("il2\t4095\t255\n");
+    s.push_str("il2\t4095\t65535\n");
+    s.push_str("il2\t32767\t0\n");
+    s.push_str("il2\t32767\t1\n");
+    s.push_str("il2\t32767\t255\n");
+    s.push_str("il2\t32767\t65535\n");
+    s.push_str("il2\t32768\t0\n");
+    s.push_str("il2\t32768\t1\n");
+    s.push_str("il2\t32768\t255\n");
+    s.push_str("il2\t32768\t65535\n");
+    s.push_str("il2\t65535\t0\n");
+    s.push_str("il2\t65535\t1\n");
+    s.push_str("il2\t65535\t255\n");
+    s.push_str("il2\t65535\t65535\n");
+    s.push_str("il2\t65536\t43981\n");
+    s.push_str("il2\t131071\t43981\n");
+    s.push_str("il2\t74565\t43981\n");
+    s.push_str("il3\t0\t0\t0\n");
+    s.push_str("il3\t0\t0\t1\n");
+    s.push_str("il3\t0\t0\t2\n");
+    s.push_str("il3\t0\t0\t3\n");
+    s.push_str("il3\t0\t0\t4\n");
+    s.push_str("il3\t0\t0\t5\n");
+    s.push_str("il3\t0\t1\t0\n");
+    s.push_str("il3\t0\t1\t1\n");
+    s.push_str("il3\t0\t1\t2\n");
+    s.push_str("il3\t0\t1\t3\n");
+    s.push_str("il3\t0\t1\t4\n");
+    s.push_str("il3\t0\t1\t5\n");
+    s.push_str("il3\t0\t2\t0\n");
+    s.push_str("il3\t0\t2\t1\n");
+    s.push_str("il3\t0\t2\t2\n");
+    s.push_str("il3\t0\t2\t3\n");
+    s.push_str("il3\t0\t2\t4\n");
+    s.push_str("il3\t0\t2\t5\n");
+    s.push_str("il3\t0\t3\t0\n");
+    s.push_str("il3\t0\t3\t1\n");
+    s.push_str("il3\t0\t3\t2\n");
+    s.push_str("il3\t0\t3\t3\n");
+    s.push_str("il3\t0\t3\t4\n");
+    s.push_str("il3\t0\t3\t5\n");
+    s.push_str("il3\t0\t4\t0\n");
+    s.push_str("il3\t0\t4\t1\n");
+    s.push_str("il3\t0\t4\t2\n");
+    s.push_str("il3\t0\t4\t3\n");
+    s.push_str("il3\t0\t4\t4\n");
+    s.push_str("il3\t0\t4\t5\n");
+    s.push_str("il3\t0\t5\t0\n");
+    s.push_str("il3\t0\t5\t1\n");
+    s.push_str("il3\t0\t5\t2\n");
+    s.push_str("il3\t0\t5\t3\n");
+    s.push_str("il3\t0\t5\t4\n");
+    s.push_str("il3\t0\t5\t5\n");
+    s.push_str("il3\t1\t0\t0\n");
+    s.push_str("il3\t1\t0\t1\n");
+    s.push_str("il3\t1\t0\t2\n");
+    s.push_str("il3\t1\t0\t3\n");
+    s.push_str("il3\t1\t0\t4\n");
+    s.push_str("il3\t1\t0\t5\n");
+    s.push_str("il3\t1\t1\t0\n");
+    s.push_str("il3\t1\t1\t1\n");
+    s.push_str("il3\t1\t1\t2\n");
+    s.push_str("il3\t1\t1\t3\n");
+    s.push_str("il3\t1\t1\t4\n");
+    s.push_str("il3\t1\t1\t5\n");
+    s.push_str("il3\t1\t2\t0\n");
+    s.push_str("il3\t1\t2\t1\n");
+    s.push_str("il3\t1\t2\t2\n");
+    s.push_str("il3\t1\t2\t3\n");
+    s.push_str("il3\t1\t2\t4\n");
+    s.push_str("il3\t1\t2\t5\n");
+    s.push_str("il3\t1\t3\t0\n");
+    s.push_str("il3\t1\t3\t1\n");
+    s.push_str("il3\t1\t3\t2\n");
+    s.push_str("il3\t1\t3\t3\n");
+    s.push_str("il3\t1\t3\t4\n");
+    s.push_str("il3\t1\t3\t5\n");
+    s.push_str("il3\t1\t4\t0\n");
+    s.push_str("il3\t1\t4\t1\n");
+    s.push_str("il3\t1\t4\t2\n");
+    s.push_str("il3\t1\t4\t3\n");
+    s.push_str("il3\t1\t4\t4\n");
+    s.push_str("il3\t1\t4\t5\n");
+    s.push_str("il3\t1\t5\t0\n");
+    s.push_str("il3\t1\t5\t1\n");
+    s.push_str("il3\t1\t5\t2\n");
+    s.push_str("il3\t1\t5\t3\n");
+    s.push_str("il3\t1\t5\t4\n");
+    s.push_str("il3\t1\t5\t5\n");
+    s.push_str("il3\t2\t0\t0\n");
+    s.push_str("il3\t2\t0\t1\n");
+    s.push_str("il3\t2\t0\t2\n");
+    s.push_str("il3\t2\t0\t3\n");
+    s.push_str("il3\t2\t0\t4\n");
+    s.push_str("il3\t2\t0\t5\n");
+    s.push_str("il3\t2\t1\t0\n");
+    s.push_str("il3\t2\t1\t1\n");
+    s.push_str("il3\t2\t1\t2\n");
+    s.push_str("il3\t2\t1\t3\n");
+    s.push_str("il3\t2\t1\t4\n");
+    s.push_str("il3\t2\t1\t5\n");
+    s.push_str("il3\t2\t2\t0\n");
+    s.push_str("il3\t2\t2\t1\n");
+    s.push_str("il3\t2\t2\t2\n");
+    s.push_str("il3\t2\t2\t3\n");
+    s.push_str("il3\t2\t2\t4\n");
+    s.push_str("il3\t2\t2\t5\n");
+    s.push_str("il3\t2\t3\t0\n");
+    s.push_str("il3\t2\t3\t1\n");
+    s.push_str("il3\t2\t3\t2\n");
+    s.push_str("il3\t2\t3\t3\n");
+    s.push_str("il3\t2\t3\t4\n");
+    s.push_str("il3\t2\t3\t5\n");
+    s.push_str("il3\t2\t4\t0\n");
+    s.push_str("il3\t2\t4\t1\n");
+    s.push_str("il3\t2\t4\t2\n");
+    s.push_str("il3\t2\t4\t3\n");
+    s.push_str("il3\t2\t4\t4\n");
+    s.push_str("il3\t2\t4\t5\n");
+    s.push_str("il3\t2\t5\t0\n");
+    s.push_str("il3\t2\t5\t1\n");
+    s.push_str("il3\t2\t5\t2\n");
+    s.push_str("il3\t2\t5\t3\n");
+    s.push_str("il3\t2\t5\t4\n");
+    s.push_str("il3\t2\t5\t5\n");
+    s.push_str("il3\t3\t0\t0\n");
+    s.push_str("il3\t3\t0\t1\n");
+    s.push_str("il3\t3\t0\t2\n");
+    s.push_str("il3\t3\t0\t3\n");
+    s.push_str("il3\t3\t0\t4\n");
+    s.push_str("il3\t3\t0\t5\n");
+    s.push_str("il3\t3\t1\t0\n");
+    s.push_str("il3\t3\t1\t1\n");
+    s.push_str("il3\t3\t1\t2\n");
+    s.push_str("il3\t3\t1\t3\n");
+    s.push_str("il3\t3\t1\t4\n");
+    s.push_str("il3\t3\t1\t5\n");
+    s.push_str("il3\t3\t2\t0\n");
+    s.push_str("il3\t3\t2\t1\n");
+    s.push_str("il3\t3\t2\t2\n");
+    s.push_str("il3\t3\t2\t3\n");
+    s.push_str("il3\t3\t2\t4\n");
+    s.push_str("il3\t3\t2\t5\n");
+    s.push_str("il3\t3\t3\t0\n");
+    s.push_str("il3\t3\t3\t1\n");
+    s.push_str("il3\t3\t3\t2\n");
+    s.push_str("il3\t3\t3\t3\n");
+    s.push_str("il3\t3\t3\t4\n");
+    s.push_str("il3\t3\t3\t5\n");
+    s.push_str("il3\t3\t4\t0\n");
+    s.push_str("il3\t3\t4\t1\n");
+    s.push_str("il3\t3\t4\t2\n");
+    s.push_str("il3\t3\t4\t3\n");
+    s.push_str("il3\t3\t4\t4\n");
+    s.push_str("il3\t3\t4\t5\n");
+    s.push_str("il3\t3\t5\t0\n");
+    s.push_str("il3\t3\t5\t1\n");
+    s.push_str("il3\t3\t5\t2\n");
+    s.push_str("il3\t3\t5\t3\n");
+    s.push_str("il3\t3\t5\t4\n");
+    s.push_str("il3\t3\t5\t5\n");
+    s.push_str("il3\t4\t0\t0\n");
+    s.push_str("il3\t4\t0\t1\n");
+    s.push_str("il3\t4\t0\t2\n");
+    s.push_str("il3\t4\t0\t3\n");
+    s.push_str("il3\t4\t0\t4\n");
+    s.push_str("il3\t4\t0\t5\n");
+    s.push_str("il3\t4\t1\t0\n");
+    s.push_str("il3\t4\t1\t1\n");
+    s.push_str("il3\t4\t1\t2\n");
+    s.push_str("il3\t4\t1\t3\n");
+    s.push_str("il3\t4\t1\t4\n");
+    s.push_str("il3\t4\t1\t5\n");
+    s.push_str("il3\t4\t2\t0\n");
+    s.push_str("il3\t4\t2\t1\n");
+    s.push_str("il3\t4\t2\t2\n");
+    s.push_str("il3\t4\t2\t3\n");
+    s.push_str("il3\t4\t2\t4\n");
+    s.push_str("il3\t4\t2\t5\n");
+    s.push_str("il3\t4\t3\t0\n");
+    s.push_str("il3\t4\t3\t1\n");
+    s.push_str("il3\t4\t3\t2\n");
+    s.push_str("il3\t4\t3\t3\n");
+    s.push_str("il3\t4\t3\t4\n");
+    s.push_str("il3\t4\t3\t5\n");
+    s.push_str("il3\t4\t4\t0\n");
+    s.push_str("il3\t4\t4\t1\n");
+    s.push_str("il3\t4\t4\t2\n");
+    s.push_str("il3\t4\t4\t3\n");
+    s.push_str("il3\t4\t4\t4\n");
+    s.push_str("il3\t4\t4\t5\n");
+    s.push_str("il3\t4\t5\t0\n");
+    s.push_str("il3\t4\t5\t1\n");
+    s.push_str("il3\t4\t5\t2\n");
+    s.push_str("il3\t4\t5\t3\n");
+    s.push_str("il3\t4\t5\t4\n");
+    s.push_str("il3\t4\t5\t5\n");
+    s.push_str("il3\t5\t0\t0\n");
+    s.push_str("il3\t5\t0\t1\n");
+    s.push_str("il3\t5\t0\t2\n");
+    s.push_str("il3\t5\t0\t3\n");
+    s.push_str("il3\t5\t0\t4\n");
+    s.push_str("il3\t5\t0\t5\n");
+    s.push_str("il3\t5\t1\t0\n");
+    s.push_str("il3\t5\t1\t1\n");
+    s.push_str("il3\t5\t1\t2\n");
+    s.push_str("il3\t5\t1\t3\n");
+    s.push_str("il3\t5\t1\t4\n");
+    s.push_str("il3\t5\t1\t5\n");
+    s.push_str("il3\t5\t2\t0\n");
+    s.push_str("il3\t5\t2\t1\n");
+    s.push_str("il3\t5\t2\t2\n");
+    s.push_str("il3\t5\t2\t3\n");
+    s.push_str("il3\t5\t2\t4\n");
+    s.push_str("il3\t5\t2\t5\n");
+    s.push_str("il3\t5\t3\t0\n");
+    s.push_str("il3\t5\t3\t1\n");
+    s.push_str("il3\t5\t3\t2\n");
+    s.push_str("il3\t5\t3\t3\n");
+    s.push_str("il3\t5\t3\t4\n");
+    s.push_str("il3\t5\t3\t5\n");
+    s.push_str("il3\t5\t4\t0\n");
+    s.push_str("il3\t5\t4\t1\n");
+    s.push_str("il3\t5\t4\t2\n");
+    s.push_str("il3\t5\t4\t3\n");
+    s.push_str("il3\t5\t4\t4\n");
+    s.push_str("il3\t5\t4\t5\n");
+    s.push_str("il3\t5\t5\t0\n");
+    s.push_str("il3\t5\t5\t1\n");
+    s.push_str("il3\t5\t5\t2\n");
+    s.push_str("il3\t5\t5\t3\n");
+    s.push_str("il3\t5\t5\t4\n");
+    s.push_str("il3\t5\t5\t5\n");
+    s.push_str("il3\t0\t500\t1000\n");
+    s.push_str("il3\t1\t500\t1000\n");
+    s.push_str("il3\t2\t500\t1000\n");
+    s.push_str("il3\t7\t500\t1000\n");
+    s.push_str("il3\t8\t500\t1000\n");
+    s.push_str("il3\t255\t500\t1000\n");
+    s.push_str("il3\t256\t500\t1000\n");
+    s.push_str("il3\t511\t500\t1000\n");
+    s.push_str("il3\t512\t500\t1000\n");
+    s.push_str("il3\t1023\t500\t1000\n");
+    s.push_str("il3\t1024\t1023\t1\n");
+    s.push_str("il3\t4095\t0\t1023\n");
+    s.push_str("il3\t2047\t2049\t2\n");
+    s.push_str("dl2\t0\n");
+    s.push_str("dl2\t2\n");
+    s.push_str("dl2\t8\n");
+    s.push_str("dl2\t10\n");
+    s.push_str("dl2\t32\n");
+    s.push_str("dl2\t34\n");
+    s.push_str("dl2\t40\n");
+    s.push_str("dl2\t42\n");
+    s.push_str("dl2\t128\n");
+    s.push_str("dl2\t1\n");
+    s.push_str("dl2\t3\n");
+    s.push_str("dl2\t9\n");
+    s.push_str("dl2\t11\n");
+    s.push_str("dl2\t33\n");
+    s.push_str("dl2\t35\n");
+    s.push_str("dl2\t41\n");
+    s.push_str("dl2\t43\n");
+    s.push_str("dl2\t129\n");
+    s.push_str("dl2\t4\n");
+    s.push_str("dl2\t6\n");
+    s.push_str("dl2\t12\n");
+    s.push_str("dl2\t14\n");
+    s.push_str("dl2\t36\n");
+    s.push_str("dl2\t38\n");
+    s.push_str("dl2\t44\n");
+    s.push_str("dl2\t46\n");
+    s.push_str("dl2\t132\n");
+    s.push_str("dl2\t5\n");
+    s.push_str("dl2\t7\n");
+    s.push_str("dl2\t13\n");
+    s.push_str("dl2\t15\n");
+    s.push_str("dl2\t37\n");
+    s.push_str("dl2\t39\n");
+    s.push_str("dl2\t45\n");
+    s.push_str("dl2\t47\n");
+    s.push_str("dl2\t133\n");
+    s.push_str("dl2\t16\n");
+    s.push_str("dl2\t18\n");
+    s.push_str("dl2\t24\n");
+    s.push_str("dl2\t26\n");
+    s.push_str("dl2\t48\n");
+    s.push_str("dl2\t50\n");
+    s.push_str("dl2\t56\n");
+    s.push_str("dl2\t58\n");
+    s.push_str("dl2\t144\n");
+    s.push_str("dl2\t17\n");
+    s.push_str("dl2\t19\n");
+    s.push_str("dl2\t25\n");
+    s.push_str("dl2\t27\n");
+    s.push_str("dl2\t49\n");
+    s.push_str("dl2\t51\n");
+    s.push_str("dl2\t57\n");
+    s.push_str("dl2\t59\n");
+    s.push_str("dl2\t145\n");
+    s.push_str("dl2\t20\n");
+    s.push_str("dl2\t22\n");
+    s.push_str("dl2\t28\n");
+    s.push_str("dl2\t30\n");
+    s.push_str("dl2\t52\n");
+    s.push_str("dl2\t54\n");
+    s.push_str("dl2\t60\n");
+    s.push_str("dl2\t62\n");
+    s.push_str("dl2\t148\n");
+    s.push_str("dl2\t21\n");
+    s.push_str("dl2\t23\n");
+    s.push_str("dl2\t29\n");
+    s.push_str("dl2\t31\n");
+    s.push_str("dl2\t53\n");
+    s.push_str("dl2\t55\n");
+    s.push_str("dl2\t61\n");
+    s.push_str("dl2\t63\n");
+    s.push_str("dl2\t149\n");
+    s.push_str("dl2\t64\n");
+    s.push_str("dl2\t66\n");
+    s.push_str("dl2\t72\n");
+    s.push_str("dl2\t74\n");
+    s.push_str("dl2\t96\n");
+    s.push_str("dl2\t98\n");
+    s.push_str("dl2\t104\n");
+    s.push_str("dl2\t106\n");
+    s.push_str("dl2\t192\n");
+    s.push_str("dl2\t0\n");
+    s.push_str("dl2\t2\n");
+    s.push_str("dl2\t43690\n");
+    s.push_str("dl2\t2863311530\n");
+    s.push_str("dl2\t1\n");
+    s.push_str("dl2\t3\n");
+    s.push_str("dl2\t43691\n");
+    s.push_str("dl2\t2863311531\n");
+    s.push_str("dl2\t4\n");
+    s.push_str("dl2\t6\n");
+    s.push_str("dl2\t43694\n");
+    s.push_str("dl2\t2863311534\n");
+    s.push_str("dl2\t5\n");
+    s.push_str("dl2\t7\n");
+    s.push_str("dl2\t43695\n");
+    s.push_str("dl2\t2863311535\n");
+    s.push_str("dl2\t16\n");
+    s.push_str("dl2\t18\n");
+    s.push_str("dl2\t43706\n");
+    s.push_str("dl2\t2863311546\n");
+    s.push_str("dl2\t21\n");
+    s.push_str("dl2\t23\n");
+    s.push_str("dl2\t43711\n");
+    s.push_str("dl2\t2863311551\n");
+    s.push_str("dl2\t64\n");
+    s.push_str("dl2\t66\n");
+    s.push_str("dl2\t43754\n");
+    s.push_str("dl2\t2863311594\n");
+    s.push_str("dl2\t85\n");
+    s.push_str("dl2\t87\n");
+    s.push_str("dl2\t43775\n");
+    s.push_str("dl2\t2863311615\n");
+    s.push_str("dl2\t256\n");
+    s.push_str("dl2\t258\n");
+    s.push_str("dl2\t43946\n");
+    s.push_str("dl2\t2863311786\n");
+    s.push_str("dl2\t341\n");
+    s.push_str("dl2\t343\n");
+    s.push_str("dl2\t44031\n");
+    s.push_str("dl2\t2863311871\n");
+    s.push_str("dl2\t21845\n");
+    s.push_str("dl2\t21847\n");
+    s.push_str("dl2\t65535\n");
+    s.push_str("dl2\t2863333375\n");
+    s.push_str("dl2\t65536\n");
+    s.push_str("dl2\t65538\n");
+    s.push_str("dl2\t109226\n");
+    s.push_str("dl2\t2863377066\n");
+    s.push_str("dl2\t65537\n");
+    s.push_str("dl2\t65539\n");
+    s.push_str("dl2\t109227\n");
+    s.push_str("dl2\t2863377067\n");
+    s.push_str("dl2\t349525\n");
+    s.push_str("dl2\t349527\n");
+    s.push_str("dl2\t393215\n");
+    s.push_str("dl2\t2863661055\n");
+    s.push_str("dl2\t1048576\n");
+    s.push_str("dl2\t1048578\n");
+    s.push_str("dl2\t1092266\n");
+    s.push_str("dl2\t2864360106\n");
+    s.push_str("dl2\t5592405\n");
+    s.push_str("dl2\t5592407\n");
+    s.push_str("dl2\t5636095\n");
+    s.push_str("dl2\t2868903935\n");
+    s.push_str("dl2\t357913941\n");
+    s.push_str("dl2\t357913943\n");
+    s.push_str("dl2\t357957631\n");
+    s.push_str("dl2\t3221225471\n");
+    s.push_str("dl2\t1073741824\n");
+    s.push_str("dl2\t1073741826\n");
+    s.push_str("dl2\t1073785514\n");
+    s.push_str("dl2\t3937053354\n");
+    s.push_str("dl2\t1431655765\n");
+    s.push_str("dl2\t1431655767\n");
+    s.push_str("dl2\t1431699455\n");
+    s.push_str("dl2\t4294967295\n");
+    s.push_str("dl2\t2290786466\n");
+    s.push_str("dl2\t3722442231\n");
+    s.push_str("dl2\t2358227123\n");
+    s.push_str("dl2\t0\n");
+    s.push_str("dl2\t1\n");
+    s.push_str("dl2\t2\n");
+    s.push_str("dl2\t3\n");
+    s.push_str("dl2\t42\n");
+    s.push_str("dl2\t147\n");
+    s.push_str("dl2\t1000000\n");
+    s.push_str("dl2\t4294967295\n");
+    s.push_str("dl2\t2863311530\n");
+    s.push_str("dl2\t1431655765\n");
+    s.push_str("dl3\t0\n");
+    s.push_str("dl3\t4\n");
+    s.push_str("dl3\t32\n");
+    s.push_str("dl3\t36\n");
+    s.push_str("dl3\t256\n");
+    s.push_str("dl3\t260\n");
+    s.push_str("dl3\t2\n");
+    s.push_str("dl3\t6\n");
+    s.push_str("dl3\t34\n");
+    s.push_str("dl3\t38\n");
+    s.push_str("dl3\t258\n");
+    s.push_str("dl3\t262\n");
+    s.push_str("dl3\t16\n");
+    s.push_str("dl3\t20\n");
+    s.push_str("dl3\t48\n");
+    s.push_str("dl3\t52\n");
+    s.push_str("dl3\t272\n");
+    s.push_str("dl3\t276\n");
+    s.push_str("dl3\t18\n");
+    s.push_str("dl3\t22\n");
+    s.push_str("dl3\t50\n");
+    s.push_str("dl3\t54\n");
+    s.push_str("dl3\t274\n");
+    s.push_str("dl3\t278\n");
+    s.push_str("dl3\t128\n");
+    s.push_str("dl3\t132\n");
+    s.push_str("dl3\t160\n");
+    s.push_str("dl3\t164\n");
+    s.push_str("dl3\t384\n");
+    s.push_str("dl3\t388\n");
+    s.push_str("dl3\t130\n");
+    s.push_str("dl3\t134\n");
+    s.push_str("dl3\t162\n");
+    s.push_str("dl3\t166\n");
+    s.push_str("dl3\t386\n");
+    s.push_str("dl3\t390\n");
+    s.push_str("dl3\t1\n");
+    s.push_str("dl3\t5\n");
+    s.push_str("dl3\t33\n");
+    s.push_str("dl3\t37\n");
+    s.push_str("dl3\t257\n");
+    s.push_str("dl3\t261\n");
+    s.push_str("dl3\t3\n");
+    s.push_str("dl3\t7\n");
+    s.push_str("dl3\t35\n");
+    s.push_str("dl3\t39\n");
+    s.push_str("dl3\t259\n");
+    s.push_str("dl3\t263\n");
+    s.push_str("dl3\t17\n");
+    s.push_str("dl3\t21\n");
+    s.push_str("dl3\t49\n");
+    s.push_str("dl3\t53\n");
+    s.push_str("dl3\t273\n");
+    s.push_str("dl3\t277\n");
+    s.push_str("dl3\t19\n");
+    s.push_str("dl3\t23\n");
+    s.push_str("dl3\t51\n");
+    s.push_str("dl3\t55\n");
+    s.push_str("dl3\t275\n");
+    s.push_str("dl3\t279\n");
+    s.push_str("dl3\t129\n");
+    s.push_str("dl3\t133\n");
+    s.push_str("dl3\t161\n");
+    s.push_str("dl3\t165\n");
+    s.push_str("dl3\t385\n");
+    s.push_str("dl3\t389\n");
+    s.push_str("dl3\t131\n");
+    s.push_str("dl3\t135\n");
+    s.push_str("dl3\t163\n");
+    s.push_str("dl3\t167\n");
+    s.push_str("dl3\t387\n");
+    s.push_str("dl3\t391\n");
+    s.push_str("dl3\t8\n");
+    s.push_str("dl3\t12\n");
+    s.push_str("dl3\t40\n");
+    s.push_str("dl3\t44\n");
+    s.push_str("dl3\t264\n");
+    s.push_str("dl3\t268\n");
+    s.push_str("dl3\t10\n");
+    s.push_str("dl3\t14\n");
+    s.push_str("dl3\t42\n");
+    s.push_str("dl3\t46\n");
+    s.push_str("dl3\t266\n");
+    s.push_str("dl3\t270\n");
+    s.push_str("dl3\t24\n");
+    s.push_str("dl3\t28\n");
+    s.push_str("dl3\t56\n");
+    s.push_str("dl3\t60\n");
+    s.push_str("dl3\t280\n");
+    s.push_str("dl3\t284\n");
+    s.push_str("dl3\t26\n");
+    s.push_str("dl3\t30\n");
+    s.push_str("dl3\t58\n");
+    s.push_str("dl3\t62\n");
+    s.push_str("dl3\t282\n");
+    s.push_str("dl3\t286\n");
+    s.push_str("dl3\t136\n");
+    s.push_str("dl3\t140\n");
+    s.push_str("dl3\t168\n");
+    s.push_str("dl3\t172\n");
+    s.push_str("dl3\t392\n");
+    s.push_str("dl3\t396\n");
+    s.push_str("dl3\t138\n");
+    s.push_str("dl3\t142\n");
+    s.push_str("dl3\t170\n");
+    s.push_str("dl3\t174\n");
+    s.push_str("dl3\t394\n");
+    s.push_str("dl3\t398\n");
+    s.push_str("dl3\t9\n");
+    s.push_str("dl3\t13\n");
+    s.push_str("dl3\t41\n");
+    s.push_str("dl3\t45\n");
+    s.push_str("dl3\t265\n");
+    s.push_str("dl3\t269\n");
+    s.push_str("dl3\t11\n");
+    s.push_str("dl3\t15\n");
+    s.push_str("dl3\t43\n");
+    s.push_str("dl3\t47\n");
+    s.push_str("dl3\t267\n");
+    s.push_str("dl3\t271\n");
+    s.push_str("dl3\t25\n");
+    s.push_str("dl3\t29\n");
+    s.push_str("dl3\t57\n");
+    s.push_str("dl3\t61\n");
+    s.push_str("dl3\t281\n");
+    s.push_str("dl3\t285\n");
+    s.push_str("dl3\t27\n");
+    s.push_str("dl3\t31\n");
+    s.push_str("dl3\t59\n");
+    s.push_str("dl3\t63\n");
+    s.push_str("dl3\t283\n");
+    s.push_str("dl3\t287\n");
+    s.push_str("dl3\t137\n");
+    s.push_str("dl3\t141\n");
+    s.push_str("dl3\t169\n");
+    s.push_str("dl3\t173\n");
+    s.push_str("dl3\t393\n");
+    s.push_str("dl3\t397\n");
+    s.push_str("dl3\t139\n");
+    s.push_str("dl3\t143\n");
+    s.push_str("dl3\t171\n");
+    s.push_str("dl3\t175\n");
+    s.push_str("dl3\t395\n");
+    s.push_str("dl3\t399\n");
+    s.push_str("dl3\t64\n");
+    s.push_str("dl3\t68\n");
+    s.push_str("dl3\t96\n");
+    s.push_str("dl3\t100\n");
+    s.push_str("dl3\t320\n");
+    s.push_str("dl3\t324\n");
+    s.push_str("dl3\t66\n");
+    s.push_str("dl3\t70\n");
+    s.push_str("dl3\t98\n");
+    s.push_str("dl3\t102\n");
+    s.push_str("dl3\t322\n");
+    s.push_str("dl3\t326\n");
+    s.push_str("dl3\t80\n");
+    s.push_str("dl3\t84\n");
+    s.push_str("dl3\t112\n");
+    s.push_str("dl3\t116\n");
+    s.push_str("dl3\t336\n");
+    s.push_str("dl3\t340\n");
+    s.push_str("dl3\t82\n");
+    s.push_str("dl3\t86\n");
+    s.push_str("dl3\t114\n");
+    s.push_str("dl3\t118\n");
+    s.push_str("dl3\t338\n");
+    s.push_str("dl3\t342\n");
+    s.push_str("dl3\t192\n");
+    s.push_str("dl3\t196\n");
+    s.push_str("dl3\t224\n");
+    s.push_str("dl3\t228\n");
+    s.push_str("dl3\t448\n");
+    s.push_str("dl3\t452\n");
+    s.push_str("dl3\t194\n");
+    s.push_str("dl3\t198\n");
+    s.push_str("dl3\t226\n");
+    s.push_str("dl3\t230\n");
+    s.push_str("dl3\t450\n");
+    s.push_str("dl3\t454\n");
+    s.push_str("dl3\t65\n");
+    s.push_str("dl3\t69\n");
+    s.push_str("dl3\t97\n");
+    s.push_str("dl3\t101\n");
+    s.push_str("dl3\t321\n");
+    s.push_str("dl3\t325\n");
+    s.push_str("dl3\t67\n");
+    s.push_str("dl3\t71\n");
+    s.push_str("dl3\t99\n");
+    s.push_str("dl3\t103\n");
+    s.push_str("dl3\t323\n");
+    s.push_str("dl3\t327\n");
+    s.push_str("dl3\t81\n");
+    s.push_str("dl3\t85\n");
+    s.push_str("dl3\t113\n");
+    s.push_str("dl3\t117\n");
+    s.push_str("dl3\t337\n");
+    s.push_str("dl3\t341\n");
+    s.push_str("dl3\t83\n");
+    s.push_str("dl3\t87\n");
+    s.push_str("dl3\t115\n");
+    s.push_str("dl3\t119\n");
+    s.push_str("dl3\t339\n");
+    s.push_str("dl3\t343\n");
+    s.push_str("dl3\t193\n");
+    s.push_str("dl3\t197\n");
+    s.push_str("dl3\t225\n");
+    s.push_str("dl3\t229\n");
+    s.push_str("dl3\t449\n");
+    s.push_str("dl3\t453\n");
+    s.push_str("dl3\t195\n");
+    s.push_str("dl3\t199\n");
+    s.push_str("dl3\t227\n");
+    s.push_str("dl3\t231\n");
+    s.push_str("dl3\t451\n");
+    s.push_str("dl3\t455\n");
+    s.push_str("dl3\t651896960\n");
+    s.push_str("dl3\t651896961\n");
+    s.push_str("dl3\t651896968\n");
+    s.push_str("dl3\t651897033\n");
+    s.push_str("dl3\t651897472\n");
+    s.push_str("dl3\t654293705\n");
+    s.push_str("dl3\t668674176\n");
+    s.push_str("dl3\t671070921\n");
+    s.push_str("dl3\t786114688\n");
+    s.push_str("dl3\t805288649\n");
+    s.push_str("dl3\t306783382\n");
+    s.push_str("dl3\t766958445\n");
+    s.push_str("dl3\t153391723\n");
+    s.push_str("dl3\t0\n");
+    s.push_str("dl3\t1\n");
+    s.push_str("dl3\t7\n");
+    s.push_str("dl3\t53\n");
+    s.push_str("dl3\t1000000\n");
+    s.push_str("dl3\t153391689\n");
+    s.push_str("dl3\t1073741823\n");
+    s
+}
