@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 197 |
 | diagnostics | 187 |
 | perf | 183 |
-| soundness | 134 |
+| soundness | 135 |
 | crash | 129 |
 | use-after-free | 92 |
 
@@ -111,12 +111,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 3032 |
-| interp | 1039 |
+| interp | 1040 |
 | typecheck | 564 |
 | ownership | 131 |
 | other | 126 |
 | cli | 90 |
-| runtime | 86 |
+| runtime | 87 |
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
@@ -4397,6 +4397,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-8 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No m… | b3368cf65c |
 | B-2026-10-22-9 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.r… | 63fa8a3df7 |
 | B-2026-10-22-17 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gat… | a28246bb93 |
+| B-2026-10-22-26 | runtime+interp | medium | The compiled HTTP client re-sent the caller's Authorization and Cookie headers to wherever a redirect pointed (any host or port), while the MIR inter… | 6c66c83dda |
 
 </details>
 
