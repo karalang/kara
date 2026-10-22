@@ -1,0 +1,80 @@
+f
+├── b
+│   ├── a
+│   ├── d
+│   │   ├── c
+│   │   └── e
+│   └── a2
+├── g
+│   └── i
+│       └── h
+└── g2
+    └── k
+f
+|-- b
+|   |-- a
+|   |-- d
+|   |   |-- c
+|   |   +-- e
+|   +-- a2
+|-- g
+|   +-- i
+|       +-- h
++-- g2
+    +-- k
+[f, b, a, d, c, e, a2, g, i, h, g2, k]
+[a, c, e, d, a2, b, h, i, g, k, g2, f]
+[f, b, g, g2, a, d, a2, i, k, c, e, h]
+[f, g, i, h]
+[f, g, i]
+3
+0
+[f, b, d]
+[f, b]
+2
+1
+[f]
+[]
+0
+3
+[f, b, d, e]
+[f, b, d]
+3
+0
+[f, g2, k]
+[f, g2]
+2
+0
+[b, a, d, c, e, a2, g, i, h, g2, k]
+[a, d, c, e, a2]
+[c, e]
+[]
+[]
+[k]
+no
+yes
+[]
+[a, c, e, a2, h, k]
+yes
+no
+[d, a2]
+[a]
+no
+no
+[a, a2]
+[c, e]
+yes
+no
+[]
+[h]
+up:[] top:f down:[]
+up:[] top:f down:[b]
+up:[b] top:f down:[]
+up:[h, i, g] top:f down:[b, d, e]
+up:[] top:d down:[e]
+up:[a, b] top:f down:[g2, k]
+up:[c, d, b] top:f down:[g, i, h]
+[a, a2]
+[g, g2]
+[]
+[f]

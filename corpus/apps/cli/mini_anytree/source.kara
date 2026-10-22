@@ -1,0 +1,528 @@
+// mini_anytree — a port of anytree 2.13.0 (Apache-2.0, c0fec0de). anytree is the
+// pure-Python tree library: a Node with a parent and ordered children, the
+// RenderTree pretty-printer, the pre/post/level-order iterators, the structural
+// properties (path, ancestors, descendants, depth, height, siblings, leaves),
+// and the Walker that finds the route between two nodes. It is what hierarchical
+// data — file systems, org charts, scene graphs, parse trees — is modelled with.
+//
+// The port keeps the tree as an integer-id arena (names / parent / kids vectors)
+// rather than a pointer graph, which sidesteps recursive ownership while being
+// observationally identical: children keep insertion order, so every iterator,
+// the render and the walk come out exactly as anytree's. RenderTree's row
+// algorithm (the `continues` stack of "has a later sibling" flags that chooses
+// the vertical bar vs the blank, and the branch vs end glyph) is ported line for
+// line, for both ContStyle (box-drawing) and AsciiStyle. Walker.walk is the
+// common-prefix-of-paths split into (upwards, top, downwards).
+//
+// Each job builds or queries one tree and prints a line (see README / mk.py):
+//   n <name> <parent>  attach a node (no output)
+//   rt / rta           RenderTree ContStyle / AsciiStyle  -> tree lines
+//   pre / post / lvl   iterator names of the whole tree
+//   path/anc/desc/sib/lvs <n> -> [name, ...]      dep/hgt <n> -> int
+//   leaf/root <n>      -> yes | no
+//   walk <a> <b>       -> up:[...] top:x down:[...]
+//   find <prefix>      -> findall(name startswith prefix), pre-order
+//
+// Node names are unique ASCII tokens. Scope: the single-tree core above; detach/
+// move, AnyNode/attributes, the dict/JSON import-export, Resolver globs and the
+// cached search are out of scope (see README). jobs_text() carries data/jobs.tsv.
+
+struct Tree {
+    names: Vec[String],
+    parent: Vec[i64],
+    kids: Vec[Vec[i64]],
+    root: i64,
+}
+
+struct WalkRes {
+    up: Vec[i64],
+    top: i64,
+    down: Vec[i64],
+}
+
+fn arena_new() -> Tree {
+    let a: Vec[String] = Vec.new();
+    let b: Vec[i64] = Vec.new();
+    let c: Vec[Vec[i64]] = Vec.new();
+    Tree { names: a, parent: b, kids: c, root: -1 }
+}
+
+fn nid(a: ref Tree, name: Str) -> i64 {
+    let mut i = 0;
+    while i < a.names.len() {
+        if a.names[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn path_ids(a: ref Tree, i: i64) -> Vec[i64] {
+    let mut chain: Vec[i64] = Vec.new();
+    let mut cur = i;
+    while cur != -1 {
+        chain.push(cur);
+        cur = a.parent[cur];
+    }
+    // reverse
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = chain.len();
+    while k > 0 {
+        k = k - 1;
+        out.push(chain[k]);
+    }
+    out
+}
+
+fn depth_of(a: ref Tree, i: i64) -> i64 {
+    path_ids(a, i).len() - 1
+}
+
+fn height_of(a: ref Tree, i: i64) -> i64 {
+    if a.kids[i].len() == 0 {
+        return 0;
+    }
+    let mut m = 0;
+    let mut j = 0;
+    while j < a.kids[i].len() {
+        let h = height_of(a, a.kids[i][j]);
+        if h + 1 > m {
+            m = h + 1;
+        }
+        j = j + 1;
+    }
+    m
+}
+
+fn preorder(a: ref Tree, i: i64) -> Vec[i64] {
+    let mut acc: Vec[i64] = Vec.new();
+    acc.push(i);
+    let mut j = 0;
+    while j < a.kids[i].len() {
+        let sub = preorder(a, a.kids[i][j]);
+        let mut m = 0;
+        while m < sub.len() {
+            acc.push(sub[m]);
+            m = m + 1;
+        }
+        j = j + 1;
+    }
+    acc
+}
+
+fn postorder(a: ref Tree, i: i64) -> Vec[i64] {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < a.kids[i].len() {
+        let sub = postorder(a, a.kids[i][j]);
+        let mut m = 0;
+        while m < sub.len() {
+            acc.push(sub[m]);
+            m = m + 1;
+        }
+        j = j + 1;
+    }
+    acc.push(i);
+    acc
+}
+
+fn levelorder(a: ref Tree, i: i64) -> Vec[i64] {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut q: Vec[i64] = Vec.new();
+    q.push(i);
+    while q.len() > 0 {
+        let mut nxt: Vec[i64] = Vec.new();
+        let mut p = 0;
+        while p < q.len() {
+            let x = q[p];
+            acc.push(x);
+            let mut j = 0;
+            while j < a.kids[x].len() {
+                nxt.push(a.kids[x][j]);
+                j = j + 1;
+            }
+            p = p + 1;
+        }
+        q = nxt;
+    }
+    acc
+}
+
+fn descendants(a: ref Tree, i: i64) -> Vec[i64] {
+    let full = preorder(a, i);
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 1;
+    while k < full.len() {
+        out.push(full[k]);
+        k = k + 1;
+    }
+    out
+}
+
+fn siblings(a: ref Tree, i: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let p = a.parent[i];
+    if p == -1 {
+        return out;
+    }
+    let mut j = 0;
+    while j < a.kids[p].len() {
+        if a.kids[p][j] != i {
+            out.push(a.kids[p][j]);
+        }
+        j = j + 1;
+    }
+    out
+}
+
+fn leaves_of(a: ref Tree, i: i64) -> Vec[i64] {
+    let full = preorder(a, i);
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < full.len() {
+        if a.kids[full[k]].len() == 0 {
+            out.push(full[k]);
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn walk(a: ref Tree, ai: i64, bi: i64) -> WalkRes {
+    let pa = path_ids(a, ai);
+    let pb = path_ids(a, bi);
+    let mut lc = 0;
+    while lc < pa.len() and lc < pb.len() and pa[lc] == pb[lc] {
+        lc = lc + 1;
+    }
+    let top = pa[lc - 1];
+    let mut up: Vec[i64] = Vec.new();
+    if ai != top {
+        let mut k = pa.len();
+        while k > lc {
+            k = k - 1;
+            up.push(pa[k]);
+        }
+    }
+    let mut down: Vec[i64] = Vec.new();
+    if bi != top {
+        let mut k = lc;
+        while k < pb.len() {
+            down.push(pb[k]);
+            k = k + 1;
+        }
+    }
+    WalkRes { up: up, top: top, down: down }
+}
+
+fn render_rec(a: ref Tree, i: i64, continues: ref Vec[bool], sv: Str, sc: Str, se: Str, sp: Str) -> String {
+    let mut s = String.new();
+    if continues.len() > 0 {
+        let mut k = 0;
+        while k < continues.len() - 1 {
+            if continues[k] {
+                s.push_str(sv);
+            } else {
+                s.push_str(sp);
+            }
+            k = k + 1;
+        }
+        if continues[continues.len() - 1] {
+            s.push_str(sc);
+        } else {
+            s.push_str(se);
+        }
+    }
+    s.push_str(a.names[i].clone());
+    let mut j = 0;
+    while j < a.kids[i].len() {
+        let is_last = j == a.kids[i].len() - 1;
+        let mut cont2: Vec[bool] = Vec.new();
+        let mut t = 0;
+        while t < continues.len() {
+            cont2.push(continues[t]);
+            t = t + 1;
+        }
+        cont2.push(not is_last);
+        s.push_str("\n");
+        s.push_str(render_rec(a, a.kids[i][j], cont2, sv, sc, se, sp));
+        j = j + 1;
+    }
+    s
+}
+
+fn render(a: ref Tree, sv: Str, sc: Str, se: Str, sp: Str) -> String {
+    let empty: Vec[bool] = Vec.new();
+    render_rec(a, a.root, empty, sv, sc, se, sp)
+}
+
+// ---- formatting ----
+
+fn names_of(a: ref Tree, ids: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < ids.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(a.names[ids[i]].clone());
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+fn starts_with(name: Str, pref: Str) -> bool {
+    let nb = str_bytes(name);
+    let pb = str_bytes(pref);
+    if pb.len() > nb.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < pb.len() {
+        if nb[i] != pb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut a = arena_new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "n" {
+                    let id = a.names.len();
+                    a.names.push(f[1].clone());
+                    let kk: Vec[i64] = Vec.new();
+                    a.kids.push(kk);
+                    if f[2] == "" {
+                        a.parent.push(-1);
+                        a.root = id;
+                    } else {
+                        let p = nid(a, f[2].clone());
+                        a.parent.push(p);
+                        a.kids[p].push(id);
+                    }
+                } else if op == "rt" {
+                    out.push_str(render(a, "\u{2502}   ", "\u{251c}\u{2500}\u{2500} ", "\u{2514}\u{2500}\u{2500} ", "    "));
+                } else if op == "rta" {
+                    out.push_str(render(a, "|   ", "|-- ", "+-- ", "    "));
+                } else if op == "pre" {
+                    let ids = preorder(a, a.root);
+                    out.push_str(names_of(a, ids));
+                } else if op == "post" {
+                    let ids = postorder(a, a.root);
+                    out.push_str(names_of(a, ids));
+                } else if op == "lvl" {
+                    let ids = levelorder(a, a.root);
+                    out.push_str(names_of(a, ids));
+                } else if op == "path" {
+                    let ids = path_ids(a, nid(a, f[1].clone()));
+                    out.push_str(names_of(a, ids));
+                } else if op == "anc" {
+                    let full = path_ids(a, nid(a, f[1].clone()));
+                    let mut anc: Vec[i64] = Vec.new();
+                    let mut k = 0;
+                    while k < full.len() - 1 {
+                        anc.push(full[k]);
+                        k = k + 1;
+                    }
+                    out.push_str(names_of(a, anc));
+                } else if op == "desc" {
+                    let ids = descendants(a, nid(a, f[1].clone()));
+                    out.push_str(names_of(a, ids));
+                } else if op == "dep" {
+                    out.push_str(itoa(depth_of(a, nid(a, f[1].clone()))));
+                } else if op == "hgt" {
+                    out.push_str(itoa(height_of(a, nid(a, f[1].clone()))));
+                } else if op == "leaf" {
+                    let id = nid(a, f[1].clone());
+                    if a.kids[id].len() == 0 {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "root" {
+                    let id = nid(a, f[1].clone());
+                    if a.parent[id] == -1 {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "sib" {
+                    let ids = siblings(a, nid(a, f[1].clone()));
+                    out.push_str(names_of(a, ids));
+                } else if op == "lvs" {
+                    let ids = leaves_of(a, nid(a, f[1].clone()));
+                    out.push_str(names_of(a, ids));
+                } else if op == "walk" {
+                    let r = walk(a, nid(a, f[1].clone()), nid(a, f[2].clone()));
+                    out.push_str("up:");
+                    out.push_str(names_of(a, r.up));
+                    out.push_str(" top:");
+                    out.push_str(a.names[r.top].clone());
+                    out.push_str(" down:");
+                    out.push_str(names_of(a, r.down));
+                } else if op == "find" {
+                    let full = preorder(a, a.root);
+                    let mut res: Vec[i64] = Vec.new();
+                    let mut k = 0;
+                    while k < full.len() {
+                        if starts_with(a.names[full[k]].clone(), f[1].clone()) {
+                            res.push(full[k]);
+                        }
+                        k = k + 1;
+                    }
+                    out.push_str(names_of(a, res));
+                }
+                if op != "n" {
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("n\tf\t\n");
+    s.push_str("n\tb\tf\n");
+    s.push_str("n\ta\tb\n");
+    s.push_str("n\td\tb\n");
+    s.push_str("n\tc\td\n");
+    s.push_str("n\te\td\n");
+    s.push_str("n\tg\tf\n");
+    s.push_str("n\ti\tg\n");
+    s.push_str("n\th\ti\n");
+    s.push_str("n\tg2\tf\n");
+    s.push_str("n\tk\tg2\n");
+    s.push_str("n\ta2\tb\n");
+    s.push_str("rt\n");
+    s.push_str("rta\n");
+    s.push_str("pre\n");
+    s.push_str("post\n");
+    s.push_str("lvl\n");
+    s.push_str("path\th\n");
+    s.push_str("anc\th\n");
+    s.push_str("dep\th\n");
+    s.push_str("hgt\th\n");
+    s.push_str("path\td\n");
+    s.push_str("anc\td\n");
+    s.push_str("dep\td\n");
+    s.push_str("hgt\td\n");
+    s.push_str("path\tf\n");
+    s.push_str("anc\tf\n");
+    s.push_str("dep\tf\n");
+    s.push_str("hgt\tf\n");
+    s.push_str("path\te\n");
+    s.push_str("anc\te\n");
+    s.push_str("dep\te\n");
+    s.push_str("hgt\te\n");
+    s.push_str("path\tk\n");
+    s.push_str("anc\tk\n");
+    s.push_str("dep\tk\n");
+    s.push_str("hgt\tk\n");
+    s.push_str("desc\tf\n");
+    s.push_str("desc\tb\n");
+    s.push_str("desc\td\n");
+    s.push_str("desc\ta\n");
+    s.push_str("desc\th\n");
+    s.push_str("desc\tg2\n");
+    s.push_str("leaf\tf\n");
+    s.push_str("root\tf\n");
+    s.push_str("sib\tf\n");
+    s.push_str("lvs\tf\n");
+    s.push_str("leaf\ta\n");
+    s.push_str("root\ta\n");
+    s.push_str("sib\ta\n");
+    s.push_str("lvs\ta\n");
+    s.push_str("leaf\td\n");
+    s.push_str("root\td\n");
+    s.push_str("sib\td\n");
+    s.push_str("lvs\td\n");
+    s.push_str("leaf\th\n");
+    s.push_str("root\th\n");
+    s.push_str("sib\th\n");
+    s.push_str("lvs\th\n");
+    s.push_str("walk\tf\tf\n");
+    s.push_str("walk\tf\tb\n");
+    s.push_str("walk\tb\tf\n");
+    s.push_str("walk\th\te\n");
+    s.push_str("walk\td\te\n");
+    s.push_str("walk\ta\tk\n");
+    s.push_str("walk\tc\th\n");
+    s.push_str("find\ta\n");
+    s.push_str("find\tg\n");
+    s.push_str("find\tx\n");
+    s.push_str("find\tf\n");
+    s
+}
