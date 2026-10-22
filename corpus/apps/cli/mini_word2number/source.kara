@@ -1,0 +1,333 @@
+// mini_word2number — a port of word2number 1.1 (MIT, Akshay Nagpal), the
+// library that turns an English number phrase ("two million twenty three
+// thousand and forty nine") into a number. It is reached for in NLP, voice
+// and form-parsing pipelines.
+//
+// This is a faithful port of w2n.word_to_num's integer path, quirks and
+// all — including the library's own double-counting on phrases like
+// "three billion two hundred million" (its `hundreds` fall-through re-reads
+// the tail), which the oracle confirms yields 3201000200. The grammar is
+// ported branch-for-branch rather than "corrected", so the port matches the
+// library rather than arithmetic.
+//
+// Scope: the integer feature — single words, the tens/hundreds forms with
+// "and"/"&" dropped, thousands/millions/billions, the bare-digit
+// passthrough, and the No-valid-word / Redundant / Malformed errors with
+// their exact texts. The `point` / decimal path needs Python float-repr
+// parity (the same boundary mini_humanfriendly's round() notes) and is out
+// of scope, so the word "point" is not recognised.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s);
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn trim(s: String) -> String {
+    let b = bytes_of(s);
+    let mut lo = 0;
+    let mut hi = b.len();
+    while lo < hi and (b[lo] == 32 or b[lo] == 9) { lo = lo + 1; }
+    while hi > lo and (b[hi - 1] == 32 or b[hi - 1] == 9) { hi = hi - 1; }
+    s.substring(lo, hi)
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut neg = false;
+    let mut m = n;
+    if m < 0 { neg = true; m = 0 - m; }
+    let mut digs: Vec[i64] = Vec.new();
+    while m > 0 { digs.push(m % 10); m = m / 10; }
+    let ds = "0123456789";
+    let mut out = String.new();
+    if neg { out.push_str("-"); }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        out.push_str(ds.substring(digs[i], digs[i] + 1));
+    }
+    out
+}
+
+fn to_lower(s: String) -> String {
+    let b = bytes_of(s);
+    let abc = "abcdefghijklmnopqrstuvwxyz";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c >= 65 and c <= 90 { out.push_str(abc.substring(c - 65, c - 65 + 1)); }
+        else { out.push_str(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    out
+}
+
+fn replace_dash(s: String) -> String {
+    let b = bytes_of(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == 45 { out.push_str(" "); }
+        else { out.push_str(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    out
+}
+
+fn is_digit_str(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] < 48 or b[i] > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn str_to_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut v = 0;
+    let mut i = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    v
+}
+
+fn word_val(w: String) -> i64 {
+    if w == "zero" { return 0; }
+    if w == "one" { return 1; }
+    if w == "two" { return 2; }
+    if w == "three" { return 3; }
+    if w == "four" { return 4; }
+    if w == "five" { return 5; }
+    if w == "six" { return 6; }
+    if w == "seven" { return 7; }
+    if w == "eight" { return 8; }
+    if w == "nine" { return 9; }
+    if w == "ten" { return 10; }
+    if w == "eleven" { return 11; }
+    if w == "twelve" { return 12; }
+    if w == "thirteen" { return 13; }
+    if w == "fourteen" { return 14; }
+    if w == "fifteen" { return 15; }
+    if w == "sixteen" { return 16; }
+    if w == "seventeen" { return 17; }
+    if w == "eighteen" { return 18; }
+    if w == "nineteen" { return 19; }
+    if w == "twenty" { return 20; }
+    if w == "thirty" { return 30; }
+    if w == "forty" { return 40; }
+    if w == "fifty" { return 50; }
+    if w == "sixty" { return 60; }
+    if w == "seventy" { return 70; }
+    if w == "eighty" { return 80; }
+    if w == "ninety" { return 90; }
+    if w == "hundred" { return 100; }
+    if w == "thousand" { return 1000; }
+    if w == "million" { return 1000000; }
+    if w == "billion" { return 1000000000; }
+    0 - 1
+}
+
+fn is_num_word(w: String) -> bool {
+    word_val(w) >= 0
+}
+
+fn count_word(clean: Vec[String], target: String) -> i64 {
+    let mut c = 0;
+    let mut i = 0;
+    while i < clean.len() {
+        if clean[i].clone() == target { c = c + 1; }
+        i = i + 1;
+    }
+    c
+}
+
+fn index_word(clean: Vec[String], target: String) -> i64 {
+    let mut i = 0;
+    while i < clean.len() {
+        if clean[i].clone() == target { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn number_formation(clean: Vec[String], start: i64, end: i64) -> i64 {
+    let n = end - start;
+    if n == 4 {
+        let a = word_val(clean[start].clone());
+        let b = word_val(clean[start + 1].clone());
+        let c = word_val(clean[start + 2].clone());
+        let d = word_val(clean[start + 3].clone());
+        return a * b + c + d;
+    }
+    if n == 3 {
+        let a = word_val(clean[start].clone());
+        let b = word_val(clean[start + 1].clone());
+        let c = word_val(clean[start + 2].clone());
+        return a * b + c;
+    }
+    if n == 2 {
+        let a = word_val(clean[start].clone());
+        let b = word_val(clean[start + 1].clone());
+        if a == 100 or b == 100 { return a * b; }
+        return a + b;
+    }
+    if n == 1 {
+        return word_val(clean[start].clone());
+    }
+    0
+}
+
+fn word_to_num(sentence: String) -> String {
+    let s0 = replace_dash(sentence);
+    let s = to_lower(s0);
+    if is_digit_str(s.clone()) { return int_to_str(str_to_int(s.clone())); }
+    let raw = split_on(s.clone(), 32);
+    let mut clean: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        let w = trim(raw[i].clone());
+        if bytes_of(w.clone()).len() > 0 and is_num_word(w.clone()) {
+            clean.push(w.clone());
+        }
+        i = i + 1;
+    }
+    if clean.len() == 0 {
+        return "error: No valid number words found! Please enter a valid number word (eg. two million twenty three thousand and forty nine)";
+    }
+    if count_word(clean, "thousand") > 1 or count_word(clean, "million") > 1 or count_word(clean, "billion") > 1 {
+        return "error: Redundant number word! Please enter a valid number word (eg. two million twenty three thousand and forty nine)";
+    }
+    let billion_index = index_word(clean, "billion");
+    let million_index = index_word(clean, "million");
+    let thousand_index = index_word(clean, "thousand");
+    let mal_a = thousand_index >= 0 and (thousand_index < million_index or thousand_index < billion_index);
+    let mal_b = million_index >= 0 and million_index < billion_index;
+    if mal_a or mal_b {
+        return "error: Malformed number! Please enter a valid number word (eg. two million twenty three thousand and forty nine)";
+    }
+    let cl = clean.len();
+    let mut total = 0;
+    if cl == 1 {
+        total = total + word_val(clean[0].clone());
+        return int_to_str(total);
+    }
+    if billion_index >= 0 {
+        let bm = number_formation(clean, 0, billion_index);
+        total = total + bm * 1000000000;
+    }
+    if million_index >= 0 {
+        let mm = if billion_index >= 0 {
+            number_formation(clean, billion_index + 1, million_index)
+        } else {
+            number_formation(clean, 0, million_index)
+        };
+        total = total + mm * 1000000;
+    }
+    if thousand_index >= 0 {
+        let tm = if million_index >= 0 {
+            number_formation(clean, million_index + 1, thousand_index)
+        } else if billion_index >= 0 and million_index < 0 {
+            number_formation(clean, billion_index + 1, thousand_index)
+        } else {
+            number_formation(clean, 0, thousand_index)
+        };
+        total = total + tm * 1000;
+    }
+    let mut hundreds = 0;
+    if thousand_index >= 0 and thousand_index != cl - 1 {
+        hundreds = number_formation(clean, thousand_index + 1, cl);
+    } else if million_index >= 0 and million_index != cl - 1 {
+        hundreds = number_formation(clean, million_index + 1, cl);
+    } else if billion_index >= 0 and billion_index != cl - 1 {
+        hundreds = number_formation(clean, billion_index + 1, cl);
+    } else if thousand_index < 0 and million_index < 0 and billion_index < 0 {
+        hundreds = number_formation(clean, 0, cl);
+    } else {
+        hundreds = 0;
+    }
+    total = total + hundreds;
+    int_to_str(total)
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "num" { return word_to_num(arg); }
+    "error: unknown op"
+}
+
+fn main() {
+    let text = jobs_text();
+    let lines = split_on(text, 10);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].clone();
+        if bytes_of(line.clone()).len() > 0 {
+            let fields = split_on(line.clone(), 9);
+            let op = fields[0].clone();
+            let arg = if fields.len() > 1 { fields[1].clone() } else { String.new() };
+            out.push_str("== ");
+            let mut j = 0;
+            while j < fields.len() {
+                if j > 0 { out.push_str(" | "); }
+                out.push_str(fields[j].clone());
+                j = j + 1;
+            }
+            out.push_str("\n");
+            out.push_str("  ");
+            out.push_str(run(op, arg));
+            out.push_str("\n");
+        }
+        i = i + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("num\tzero\n");
+    s.push_str("num\tone\n");
+    s.push_str("num\televen\n");
+    s.push_str("num\tfifty\n");
+    s.push_str("num\tseventy\n");
+    s.push_str("num\tforty-nine\n");
+    s.push_str("num\tone hundred\n");
+    s.push_str("num\tone hundred twenty three\n");
+    s.push_str("num\ttwo hundred and five\n");
+    s.push_str("num\tnine hundred ninety nine\n");
+    s.push_str("num\tone thousand\n");
+    s.push_str("num\ttwo thousand nineteen\n");
+    s.push_str("num\ttwenty three thousand forty nine\n");
+    s.push_str("num\tone hundred twenty three thousand four hundred fifty six\n");
+    s.push_str("num\tone million\n");
+    s.push_str("num\ttwo million twenty three thousand and forty nine\n");
+    s.push_str("num\tone billion\n");
+    s.push_str("num\tthree billion two hundred million\n");
+    s.push_str("num\t112\n");
+    s.push_str("num\thello world\n");
+    s.push_str("num\t\n");
+    s.push_str("num\ttwo thousand thousand\n");
+    s.push_str("num\tone million million\n");
+    s.push_str("num\tone thousand two million\n");
+    s.push_str("num\tfive million three billion\n");
+    s
+}

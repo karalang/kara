@@ -1,0 +1,50 @@
+== num | zero
+  0
+== num | one
+  1
+== num | eleven
+  11
+== num | fifty
+  50
+== num | seventy
+  70
+== num | forty-nine
+  49
+== num | one hundred
+  100
+== num | one hundred twenty three
+  123
+== num | two hundred and five
+  205
+== num | nine hundred ninety nine
+  999
+== num | one thousand
+  1000
+== num | two thousand nineteen
+  2019
+== num | twenty three thousand forty nine
+  23049
+== num | one hundred twenty three thousand four hundred fifty six
+  123456
+== num | one million
+  1000000
+== num | two million twenty three thousand and forty nine
+  2023049
+== num | one billion
+  1000000000
+== num | three billion two hundred million
+  3201000200
+== num | 112
+  112
+== num | hello world
+  error: No valid number words found! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
+== num | 
+  error: No valid number words found! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
+== num | two thousand thousand
+  error: Redundant number word! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
+== num | one million million
+  error: Redundant number word! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
+== num | one thousand two million
+  error: Malformed number! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
+== num | five million three billion
+  error: Malformed number! Please enter a valid number word (eg. two million twenty three thousand and forty nine)
