@@ -94,7 +94,7 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 - The primitives (integers, floats, `bool`, `char`).
 - `Array[T, N]`, tuples, `Option[T]` and `Result[T, E]` when their parts are `Copy`. (`Result` added by Gowtham, 2026-10-09.)
 - User types with `#[derive(Copy)]`, which the compiler checks field by field.
-- `ref T`, but not `mut ref T`. Copying a shared reference gives a second reference to the same place, with the same origins (§5.3). So `let u = x;` with `x` bound by `ref` makes `u` a reference too, and moves nothing.
+- `ref T`, but not `mut ref T`. Copying a shared reference gives a second reference to the same place, with the same origins (§5.3). So `let u = x;` with `x` bound by `ref` makes `u` a reference too, and moves nothing. The exception is a reference to a handle aggregate (§6.1), such as a bare `head: Option[ListNode]` parameter: `let mut cur = head;` uses it as a value, so `cur` is an owned, counted copy and `cur = n.next` is an ordinary assignment. (Clarified 2026-10-22.)
 - A closure of kind `Fn` (§9.6) whose captures are all `Copy`, `ref` captures included. A `MutFn` or `OnceFn` closure never is.
 - `distinct type` does not inherit `Copy`.
 - All of this is unchanged from `design.md` Part 6.
