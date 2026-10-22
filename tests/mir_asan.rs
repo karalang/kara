@@ -175,6 +175,50 @@ fn mir_asan_runs_a_kara_program() {
     );
 }
 
+/// The partition sort of `sort_by` (kata 1665) copies elements between
+/// the vector and its scratch and compares against a bitwise copy of the
+/// pivot; with heap-owning `String` keys none of that may free or leak.
+#[test]
+fn mir_asan_partition_sort_of_strings_runs_clean() {
+    if !asan_available() {
+        eprintln!("skipping: no ASan-capable cc");
+        return;
+    }
+    let dir = Scratch::new();
+    let src = dir.path().join("main.kara");
+    std::fs::write(
+        &src,
+        r#"fn main() {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    let mut i = 0;
+    while i < 6000 {
+        v.push((f"key-{(i * 7 + 2) % 5}-with-padding-to-live-on-the-heap", i));
+        i += 1;
+    }
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    let mut h = 0;
+    for (s, x) in v.iter() {
+        h = (h * 31 + x + s.len()) % 1000000007;
+    }
+    println(f"{v[0].0} {v[0].1} {v[5999].0} {v[5999].1} {h}");
+}
+"#,
+    )
+    .expect("write source");
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("__mir-llvm-asan")
+        .arg(&src)
+        .output()
+        .expect("run karac");
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() == Some(3) && err.contains("Linker failed") {
+        let _ = common::link_or_skip(Err(err.into_owned()));
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{err}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "key-0-with-padding-to-live-on-the-heap 4 key-4-with-padding-to-live-on-the-heap 5996 575934588\n");
+}
+
 /// The lane's canary: a Kāra program that leaks a two-node `shared` cycle
 /// must be REPORTED. `main` used to run on a hand-switched stack that
 /// LeakSanitizer does not scan, and every leak verdict was clean

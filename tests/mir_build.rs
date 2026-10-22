@@ -4803,6 +4803,138 @@ fn main() {
     }
 }
 
+/// A long `sort_by` / `sort_by_key` over few distinct keys is
+/// partitioned rather than merged (kata 1665's bench ran 2.8x legacy on
+/// the merge), by the interpreter's `sort_order` and the compiled
+/// `part_sort` alike: the same comparator calls in the same order, so
+/// they agree from one key to a million, on sorted, reversed and
+/// half-tied inputs, for a comparator that prints, and for one that
+/// panics on a pair only the partition compares (element 10 against the
+/// middle one).
+#[test]
+fn mir_build_sort_by_partitions_few_keys_like_the_interpreter() {
+    let pure = r#"
+fn make(n: i64, seed: i64, keys: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s = seed;
+    let mut i = 0;
+    while i < n {
+        s = (s * 1103515245 + 12345) & 2147483647;
+        v.push((s % keys, i));
+        i += 1;
+    }
+    v
+}
+fn sum(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut h = 0;
+    for (k, x) in v.iter() {
+        h = (h * 31 + k * 1000 + x) % 1000000007;
+    }
+    h
+}
+fn main() {
+    for n in [4097, 20000] {
+        for keys in [1, 2, 7, 50, 1000000] {
+            let mut a = make(n, n + keys, keys);
+            a.sort_by(|x, y| x.0.cmp(y.0));
+            let mut b = make(n, n + keys + 1, keys);
+            b.sort_by_key(|x| 0 - x.0);
+            let mut c = make(n, keys, keys);
+            c.sort_by(|x, y| y.0.cmp(x.0));
+            let mut d = c.clone();
+            d.sort_by(|x, y| x.0.cmp(y.0));
+            println(f"{n} {keys} {sum(a)} {sum(b)} {sum(c)} {sum(d)}");
+        }
+    }
+    let mut m = make(20000, 9, 1000000);
+    let mut i = 0;
+    while i < 20000 {
+        if i % 2 == 0 {
+            m[i] = (500000, i);
+        }
+        i += 1;
+    }
+    m.sort_by(|x, y| x.0.cmp(y.0));
+    println(f"mixed {sum(m)}");
+}
+"#;
+    let printing = r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < 6000 {
+        v.push(((i * 7) % 5, i));
+        i += 1;
+    }
+    let mut calls = 0;
+    v.sort_by(|x, y| {
+        calls += 1;
+        if calls % 5000 == 0 {
+            println(f"call {calls} {x.1} {y.1}");
+        }
+        x.0.cmp(y.0)
+    });
+    println(f"{calls} {v[0].1} {v[5999].1}");
+}
+"#;
+    let panicky = r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < 6000 {
+        v.push(((i * 7) % 5, i));
+        i += 1;
+    }
+    let mut calls = 0;
+    v.sort_by(|x, y| {
+        calls += 1;
+        if calls % 2000 == 0 {
+            println(f"call {calls}");
+        }
+        if x.1 == 10 and y.1 == 3000 {
+            panic(f"pair {x.1} {y.1}");
+        }
+        x.0.cmp(y.0)
+    });
+    println(f"{calls}");
+}
+"#;
+    let lowered = karac::mir::lower::build_source(pure).expect("MIR");
+    let ir = karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
+    assert!(ir.contains("part_sort."), "sort_by runs the partition sort");
+    for src in [pure, printing] {
+        let want = karac::mir::lower::run_source(src).expect("interp").output;
+        for opt in [0, 2] {
+            if let Some(out) = build_and_run(src, opt) {
+                assert_eq!(out, want, "at -O{opt}");
+            }
+        }
+    }
+    let dir = Scratch::new();
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, panicky).unwrap();
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let first = |b: &[u8]| {
+        String::from_utf8_lossy(b)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    let why = first(&interp.stderr);
+    assert!(why.contains("pair 10 3000"), "{why}");
+    let Some(exe) = cli_build(&dir, panicky, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(run.status.code(), Some(101));
+    assert_eq!(first(&run.stderr), why, "compiled");
+    assert_eq!(run.stdout, interp.stdout, "compiled");
+}
+
 /// `Display` for an `f32` shows its own shortest digits, not the widened
 /// `f64`'s (B-2026-10-18-47), in a bare hole, `to_string` and inside a
 /// `Vec`; a precision and the `f64`s are unchanged.

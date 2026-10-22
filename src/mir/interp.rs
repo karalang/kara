@@ -824,6 +824,21 @@ const SWEEP_FLOOR: usize = 1 << 20;
 /// shares (runtime/src/mir.rs `MERGE_BLOCK`).
 pub const MERGE_BLOCK: usize = 1024;
 
+/// `sort_by` / `sort_by_key` partition only past this many elements
+/// ([`Interp::sort_order`], and the compiled `build_part_sort`).
+pub const PART_MIN: usize = 4096;
+/// Elements compared with the middle one before partitioning.
+pub const PART_PROBE: usize = 256;
+/// Partition when at least `PART_PROBE / PART_PROBE_GATE` of them tie.
+pub const PART_PROBE_GATE: usize = 128;
+/// A partitioned range this short is merge sorted.
+pub const PART_SPAN: usize = 64;
+/// Partition levels before every range is merge sorted.
+pub const PART_DEPTH: usize = 64;
+/// A range is partitioned only when at least `len / PART_GATE` of it ties
+/// with its pivot: about `PART_GATE` distinct keys or fewer.
+pub const PART_GATE: usize = 64;
+
 /// The runs a merge sort's first width insertion-sorts before its first
 /// merge, in the same schedule on every backend (runtime/src/mir.rs
 /// `INSERTION_RUN`). A power of two dividing [`MERGE_BLOCK`].
@@ -2859,7 +2874,7 @@ impl<'a> Interp<'a> {
                 let n = self.vec_elems(id)?.len();
                 let mut f = self.hold_callee(f.clone(), fty, &name)?;
                 let ord_ty = f.body.return_ty();
-                let order = self.merge_order(n, &mut |me, a, b| {
+                let order = self.sort_order(n, &mut |me, a, b| {
                     let args = vec![Value::Ref(elem(a)), Value::Ref(elem(b))];
                     let o = me.call_callee(&mut f, args)?;
                     me.ordering(&o, ord_ty)
@@ -2885,9 +2900,10 @@ impl<'a> Interp<'a> {
                 self.release_callee(f, fty)?;
                 // A key type with a user `Ord` is ordered by its `cmp`.
                 let order = match self.user_cmp(key_ty) {
-                    Some(cmp) => self
-                        .merge_order(n, &mut |me, a, b| me.call_cmp(&cmp, &owned[a], &owned[b]))?,
-                    None => self.merge_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?,
+                    Some(cmp) => {
+                        self.sort_order(n, &mut |me, a, b| me.call_cmp(&cmp, &owned[a], &owned[b]))?
+                    }
+                    None => self.sort_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?,
                 };
                 self.permute(id, &order)?;
                 for k in owned {
@@ -3011,6 +3027,83 @@ impl<'a> Interp<'a> {
             }
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// `sort_by` / `sort_by_key`'s order of `0..n` under `cmp`: past
+    /// [`PART_MIN`] elements, when at least two of [`PART_PROBE`] evenly
+    /// spaced ones tie with the middle element, a stable partition
+    /// ([`Interp::partition`]); otherwise [`Interp::merge_order`]. The
+    /// compiled sort makes the same calls in the same order
+    /// (src/codegen/mir/callable.rs `build_part_sort`), so the two agree
+    /// for any comparator, one that prints or panics included.
+    fn sort_order(
+        &mut self,
+        n: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<Vec<usize>> {
+        if n <= PART_MIN {
+            return self.merge_order(n, cmp);
+        }
+        let (stride, mid) = (n / PART_PROBE, n / 2);
+        let mut ties = 0;
+        for k in 0..PART_PROBE {
+            ties += usize::from(cmp(self, k * stride, mid)?.is_eq());
+        }
+        if ties * PART_PROBE_GATE < PART_PROBE {
+            return self.merge_order(n, cmp);
+        }
+        let mut order: Vec<usize> = (0..n).collect();
+        self.partition(&mut order, 0, n, 0, cmp)?;
+        Ok(order)
+    }
+
+    /// Partitions `order[lo..hi]` around its middle element: each element
+    /// compared once with it, then the less, tied and greater ones in
+    /// their order, and the same on the less and then the greater part. A
+    /// short or deep range, or one whose ties are fewer than one in
+    /// [`PART_GATE`], is merge sorted.
+    fn partition(
+        &mut self,
+        order: &mut [usize],
+        lo: usize,
+        hi: usize,
+        depth: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<()> {
+        let len = hi - lo;
+        if len > PART_SPAN && depth < PART_DEPTH {
+            let pivot = order[lo + len / 2];
+            let mut sides = Vec::with_capacity(len);
+            for &x in &order[lo..hi] {
+                sides.push(cmp(self, x, pivot)?);
+            }
+            let lt = sides.iter().filter(|o| o.is_lt()).count();
+            let eq = sides.iter().filter(|o| o.is_eq()).count();
+            if eq * PART_GATE >= len {
+                if eq == len {
+                    return Ok(());
+                }
+                let mut runs: [Vec<usize>; 3] = Default::default();
+                for (k, o) in (lo..hi).zip(&sides) {
+                    runs[(*o as i8 + 1) as usize].push(order[k]);
+                }
+                let gt = len - lt - eq;
+                order[lo..hi].copy_from_slice(&runs.concat());
+                if lt > 1 {
+                    self.partition(order, lo, lo + lt, depth + 1, cmp)?;
+                }
+                if gt > 1 {
+                    self.partition(order, hi - gt, hi, depth + 1, cmp)?;
+                }
+                return Ok(());
+            }
+        }
+        let sub = order[lo..hi].to_vec();
+        let sorted = self.merge_order(len, &mut |me, a, b| cmp(me, sub[a], sub[b]))?;
+        for (k, i) in sorted.into_iter().enumerate() {
+            order[lo + k] = sub[i];
+        }
+        Ok(())
     }
 
     /// A stable merge sort of `0..n` under `cmp`, which may call into the

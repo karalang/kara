@@ -54,6 +54,24 @@ pub(super) enum Shim {
         el: Ty,
         size: u64,
     },
+    /// `void (ptr buf, i64 n, ptr ctx)`: a [`Shim::MergeSort`] that first
+    /// splits a long input of few distinct keys by partitioning
+    /// ([`Shim::Partition`]), as the interpreter's `sort_order` does.
+    PartSort {
+        f: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+    },
+    /// `void (ptr buf, ptr tmp, ptr tags, i64 lo, i64 hi, ptr ctx, i64
+    /// depth)`: one stable three-way partition of `buf[lo..hi]` around its
+    /// middle element, then the same on the less and greater parts.
+    Partition {
+        f: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+    },
     /// `i8 (ptr a, ptr b)`: the poll function of a task whose root is the
     /// resume body `resume` (`task.rs`).
     TaskPoll { resume: String, spawned: bool },
@@ -147,6 +165,42 @@ impl<'ctx> Cx<'ctx, '_> {
                     ),
                 )
             }
+            Shim::PartSort {
+                f, by_key, size, ..
+            } => (
+                format!(
+                    "part_sort.{}.{}.{size}",
+                    if *by_key { "by_key" } else { "by" },
+                    self.tys.display(*f)
+                ),
+                self.llcx
+                    .void_type()
+                    .fn_type(&[p.into(), self.llcx.i64_type().into(), p.into()], false),
+            ),
+            Shim::Partition {
+                f, by_key, size, ..
+            } => {
+                let i = self.llcx.i64_type();
+                (
+                    format!(
+                        "partition.{}.{}.{size}",
+                        if *by_key { "by_key" } else { "by" },
+                        self.tys.display(*f)
+                    ),
+                    self.llcx.void_type().fn_type(
+                        &[
+                            p.into(),
+                            p.into(),
+                            p.into(),
+                            i.into(),
+                            i.into(),
+                            p.into(),
+                            i.into(),
+                        ],
+                        false,
+                    ),
+                )
+            }
             Shim::TaskPoll { resume, spawned } => (
                 format!("poll.{}{resume}", if *spawned { "" } else { "root." }),
                 self.llcx.i8_type().fn_type(&[p.into(), p.into()], false),
@@ -232,6 +286,28 @@ impl<'ctx> Cx<'ctx, '_> {
                         limit,
                         size,
                     )?;
+                    self.builder.build_return(None).map_err(e)?;
+                }
+                Shim::PartSort {
+                    f: fty,
+                    by_key,
+                    el,
+                    size,
+                } => {
+                    let n = f
+                        .get_nth_param(1)
+                        .ok_or("a sort has no length")?
+                        .into_int_value();
+                    self.build_part_sort(fty, by_key, el, size, param(0)?, n, param(2)?)?;
+                    self.builder.build_return(None).map_err(e)?;
+                }
+                Shim::Partition {
+                    f: fty,
+                    by_key,
+                    el,
+                    size,
+                } => {
+                    self.build_partition(f, fty, by_key, el, size)?;
                     self.builder.build_return(None).map_err(e)?;
                 }
                 Shim::TaskPoll { resume, spawned } => {
@@ -654,7 +730,7 @@ impl<'ctx> Cx<'ctx, '_> {
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
             ty = i;
         }
-        let sort = self.shim_fn(Shim::MergeSort {
+        let sort = self.shim_fn(Shim::PartSort {
             f: ty,
             by_key,
             el,
@@ -1048,6 +1124,438 @@ impl<'ctx> Cx<'ctx, '_> {
         self.free(tmp)?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// The body of a [`Shim::PartSort`]. A short input, or one whose
+    /// sampled elements rarely tie with the middle one, takes the merge
+    /// sort; the rest is partitioned, which puts each element in place in
+    /// about log2(distinct keys) passes of one comparison each, where the
+    /// merge sort takes log2(n) (legacy's `emit_sort_partition_body`).
+    #[allow(clippy::too_many_arguments)]
+    fn build_part_sort(
+        &mut self,
+        fty: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        ctx: PointerValue<'ctx>,
+    ) -> R<()> {
+        // The interpreter's `sort_order` thresholds: the same calls.
+        use crate::mir::interp::{PART_MIN, PART_PROBE, PART_PROBE_GATE};
+        let (part_min, probe_n, probe_gate) =
+            (PART_MIN as u64, PART_PROBE as u64, PART_PROBE_GATE as u64);
+        let merge = self.shim_fn(Shim::MergeSort {
+            f: fty,
+            by_key,
+            el,
+            size,
+        });
+        let part = self.shim_fn(Shim::Partition {
+            f: fty,
+            by_key,
+            el,
+            size,
+        });
+        let cmp = self.shim_fn(Shim::SortBy { f: fty, by_key, el });
+        let malloc = self.libc_fn("malloc");
+        let f = self.cur_fn()?;
+        let bb = |name: &str| self.llcx.append_basic_block(f, name);
+        let (probe, p_head, p_body, judge, go, by_merge, done) = (
+            bb("probe"),
+            bb("probe.k"),
+            bb("probe.body"),
+            bb("probe.judge"),
+            bb("part"),
+            bb("merge"),
+            bb("done"),
+        );
+        let b = &self.builder;
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let sz = i64t.const_int(size, false);
+        let one = i64t.const_int(1, false);
+        let zero = i64t.const_zero();
+        let (v_k, v_ties) = (
+            b.build_alloca(i64t, "k").map_err(e)?,
+            b.build_alloca(i64t, "ties").map_err(e)?,
+        );
+        let ld = |v: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
+            Ok(b.build_load(i64t, v, "").map_err(e)?.into_int_value())
+        };
+        let at = |k: IntValue<'ctx>| -> R<PointerValue<'ctx>> {
+            let off = b.build_int_mul(k, sz, "").map_err(e)?;
+            // SAFETY of the address: `k < n`, in a buffer of `n` elements.
+            unsafe { b.build_in_bounds_gep(i8t, buf, &[off], "") }.map_err(e)
+        };
+        let short = b
+            .build_int_compare(IntPredicate::ULE, n, i64t.const_int(part_min, false), "")
+            .map_err(e)?;
+        b.build_conditional_branch(short, by_merge, probe)
+            .map_err(e)?;
+        b.position_at_end(probe);
+        let stride = b
+            .build_int_unsigned_div(n, i64t.const_int(probe_n, false), "")
+            .map_err(e)?;
+        let mid = b
+            .build_int_unsigned_div(n, i64t.const_int(2, false), "")
+            .map_err(e)?;
+        let pivot = at(mid)?;
+        b.build_store(v_k, zero).map_err(e)?;
+        b.build_store(v_ties, zero).map_err(e)?;
+        b.build_unconditional_branch(p_head).map_err(e)?;
+        b.position_at_end(p_head);
+        let k = ld(v_k)?;
+        let more = b
+            .build_int_compare(IntPredicate::ULT, k, i64t.const_int(probe_n, false), "")
+            .map_err(e)?;
+        b.build_conditional_branch(more, p_body, judge).map_err(e)?;
+        b.position_at_end(p_body);
+        let k = ld(v_k)?;
+        let x = at(b.build_int_mul(k, stride, "").map_err(e)?)?;
+        let o = b
+            .build_call(cmp, &[ctx.into(), x.into(), pivot.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let tie = b
+            .build_int_compare(IntPredicate::EQ, o, o.get_type().const_zero(), "")
+            .map_err(e)?;
+        let tie = b.build_int_z_extend(tie, i64t, "").map_err(e)?;
+        b.build_store(v_ties, b.build_int_add(ld(v_ties)?, tie, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(p_head).map_err(e)?;
+        b.position_at_end(judge);
+        let scaled = b
+            .build_int_mul(ld(v_ties)?, i64t.const_int(probe_gate, false), "")
+            .map_err(e)?;
+        let few = b
+            .build_int_compare(
+                IntPredicate::UGE,
+                scaled,
+                i64t.const_int(probe_n, false),
+                "",
+            )
+            .map_err(e)?;
+        b.build_conditional_branch(few, go, by_merge).map_err(e)?;
+        b.position_at_end(go);
+        let room = b.build_int_mul(n, sz, "").map_err(e)?;
+        let tmp = b
+            .build_call(malloc, &[room.into()], "scratch")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let tags = b
+            .build_call(malloc, &[n.into()], "tags")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        b.build_call(
+            part,
+            &[
+                buf.into(),
+                tmp.into(),
+                tags.into(),
+                zero.into(),
+                n.into(),
+                ctx.into(),
+                zero.into(),
+            ],
+            "",
+        )
+        .map_err(e)?;
+        self.free(tmp)?;
+        self.free(tags)?;
+        let b = &self.builder;
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(by_merge);
+        b.build_call(merge, &[buf.into(), n.into(), ctx.into()], "")
+            .map_err(e)?;
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(done);
+        Ok(())
+    }
+
+    /// The body of a [`Shim::Partition`] (`f`). Each element of the range
+    /// is compared once with a copy of the middle one, its side kept in
+    /// `tags`; then the range is written to `tmp` in three runs (less,
+    /// tied, greater), each in the order it had, and copied back. A tied
+    /// run is in place: it is stable, so for a comparator that is an order
+    /// the result is the merge sort's. A range that is short, or too deep,
+    /// or ties too rarely to pay for the pass, is merge sorted.
+    fn build_partition(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        fty: Ty,
+        by_key: bool,
+        el: Ty,
+        size: u64,
+    ) -> R<()> {
+        // The interpreter's `partition` thresholds: the same calls.
+        use crate::mir::interp::{PART_DEPTH, PART_GATE, PART_SPAN};
+        let (span, depth_max, gate) = (PART_SPAN as u64, PART_DEPTH as u64, PART_GATE as u64);
+        let cmp = self.shim_fn(Shim::SortBy { f: fty, by_key, el });
+        let widths = self.shim_fn(Shim::MergeWidths {
+            f: fty,
+            by_key,
+            el,
+            size,
+        });
+        let merge = self.shim_fn(Shim::MergeSort {
+            f: fty,
+            by_key,
+            el,
+            size,
+        });
+        let pp = |i: u32| -> R<PointerValue<'ctx>> {
+            Ok(f.get_nth_param(i)
+                .ok_or("a partition is missing a parameter")?
+                .into_pointer_value())
+        };
+        let pi = |i: u32| -> R<IntValue<'ctx>> {
+            Ok(f.get_nth_param(i)
+                .ok_or("a partition is missing a parameter")?
+                .into_int_value())
+        };
+        let (buf, tmp, tags, lo, hi, ctx, depth) =
+            (pp(0)?, pp(1)?, pp(2)?, pi(3)?, pi(4)?, pp(5)?, pi(6)?);
+        let bb = |name: &str| self.llcx.append_basic_block(f, name);
+        let (count, c_head, c_body, judge, split, s_head, s_body, s_done) = (
+            bb("count"),
+            bb("count.k"),
+            bb("count.body"),
+            bb("judge"),
+            bb("split"),
+            bb("scatter.k"),
+            bb("scatter.body"),
+            bb("scatter.done"),
+        );
+        let (left, after_left, right, leaf, leaf_small, leaf_big, done) = (
+            bb("left"),
+            bb("left.done"),
+            bb("right"),
+            bb("leaf"),
+            bb("leaf.small"),
+            bb("leaf.big"),
+            bb("done"),
+        );
+        let b = &self.builder;
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let sz = i64t.const_int(size, false);
+        let one = i64t.const_int(1, false);
+        let zero = i64t.const_zero();
+        let var = |name: &str| b.build_alloca(i64t, name).map_err(e);
+        let (v_k, v_lt, v_eq) = (var("k")?, var("lt")?, var("eq")?);
+        let cur = b.build_alloca(i64t.array_type(3), "cursors").map_err(e)?;
+        let piv = b
+            .build_alloca(i8t.array_type(size as u32), "pivot")
+            .map_err(e)?;
+        let ld = |v: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
+            Ok(b.build_load(i64t, v, "").map_err(e)?.into_int_value())
+        };
+        let at = |q: PointerValue<'ctx>, k: IntValue<'ctx>| -> R<PointerValue<'ctx>> {
+            let off = b.build_int_mul(k, sz, "").map_err(e)?;
+            // SAFETY of the address: `k` is in `lo..=hi`, inside buffers of
+            // the whole sort's length.
+            unsafe { b.build_in_bounds_gep(i8t, q, &[off], "") }.map_err(e)
+        };
+        let ult = |x: IntValue<'ctx>, y: IntValue<'ctx>| {
+            b.build_int_compare(IntPredicate::ULT, x, y, "").map_err(e)
+        };
+        let len = b.build_int_sub(hi, lo, "len").map_err(e)?;
+        let short = b
+            .build_int_compare(IntPredicate::ULE, len, i64t.const_int(span, false), "")
+            .map_err(e)?;
+        let deep = b
+            .build_int_compare(
+                IntPredicate::UGE,
+                depth,
+                i64t.const_int(depth_max, false),
+                "",
+            )
+            .map_err(e)?;
+        let stop = b.build_or(short, deep, "").map_err(e)?;
+        b.build_conditional_branch(stop, leaf, count).map_err(e)?;
+        // Each element against the pivot: tag 0 less, 1 tied, 2 greater.
+        b.position_at_end(count);
+        let half = b.build_right_shift(len, one, false, "").map_err(e)?;
+        let mid = b.build_int_add(lo, half, "").map_err(e)?;
+        b.build_memcpy(piv, 1, at(buf, mid)?, 1, sz).map_err(e)?;
+        b.build_store(v_k, lo).map_err(e)?;
+        b.build_store(v_lt, zero).map_err(e)?;
+        b.build_store(v_eq, zero).map_err(e)?;
+        b.build_unconditional_branch(c_head).map_err(e)?;
+        b.position_at_end(c_head);
+        b.build_conditional_branch(ult(ld(v_k)?, hi)?, c_body, judge)
+            .map_err(e)?;
+        b.position_at_end(c_body);
+        let k = ld(v_k)?;
+        let o = b
+            .build_call(cmp, &[ctx.into(), at(buf, k)?.into(), piv.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let oz = o.get_type().const_zero();
+        let is_lt = b
+            .build_int_compare(IntPredicate::SLT, o, oz, "")
+            .map_err(e)?;
+        let is_gt = b
+            .build_int_compare(IntPredicate::SGT, o, oz, "")
+            .map_err(e)?;
+        let is_eq = b
+            .build_int_compare(IntPredicate::EQ, o, oz, "")
+            .map_err(e)?;
+        let (lt8, gt8) = (
+            b.build_int_z_extend(is_lt, i8t, "").map_err(e)?,
+            b.build_int_z_extend(is_gt, i8t, "").map_err(e)?,
+        );
+        let tag = b
+            .build_int_sub(
+                b.build_int_add(i8t.const_int(1, false), gt8, "")
+                    .map_err(e)?,
+                lt8,
+                "tag",
+            )
+            .map_err(e)?;
+        // SAFETY of the address: `k < hi`, in a buffer of the sort's length.
+        let tp = unsafe { b.build_in_bounds_gep(i8t, tags, &[k], "") }.map_err(e)?;
+        b.build_store(tp, tag).map_err(e)?;
+        let add = |v: PointerValue<'ctx>, c: IntValue<'ctx>| -> R<()> {
+            let c = b.build_int_z_extend(c, i64t, "").map_err(e)?;
+            b.build_store(v, b.build_int_add(ld(v)?, c, "").map_err(e)?)
+                .map_err(e)?;
+            Ok(())
+        };
+        add(v_lt, is_lt)?;
+        add(v_eq, is_eq)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(c_head).map_err(e)?;
+        // Too few ties to pay: merge. All tied: already in order.
+        b.position_at_end(judge);
+        let (lt, eq) = (ld(v_lt)?, ld(v_eq)?);
+        let scaled = b
+            .build_int_mul(eq, i64t.const_int(gate, false), "")
+            .map_err(e)?;
+        let rare = ult(scaled, len)?;
+        let all = b
+            .build_int_compare(IntPredicate::EQ, eq, len, "")
+            .map_err(e)?;
+        let to_split = bb("judge.split");
+        b.build_conditional_branch(rare, leaf, to_split)
+            .map_err(e)?;
+        b.position_at_end(to_split);
+        b.build_conditional_branch(all, done, split).map_err(e)?;
+        // Each element to the next free slot of its run in `tmp`.
+        b.position_at_end(split);
+        let c1 = b.build_int_add(lo, lt, "").map_err(e)?;
+        let c2 = b.build_int_add(c1, eq, "").map_err(e)?;
+        let slot = |t: IntValue<'ctx>| -> R<PointerValue<'ctx>> {
+            // SAFETY of the address: `t` is a tag, below 3.
+            unsafe { b.build_in_bounds_gep(i64t, cur, &[t], "") }.map_err(e)
+        };
+        for (t, c) in [(0, lo), (1, c1), (2, c2)] {
+            b.build_store(slot(i64t.const_int(t, false))?, c)
+                .map_err(e)?;
+        }
+        b.build_store(v_k, lo).map_err(e)?;
+        b.build_unconditional_branch(s_head).map_err(e)?;
+        b.position_at_end(s_head);
+        b.build_conditional_branch(ult(ld(v_k)?, hi)?, s_body, s_done)
+            .map_err(e)?;
+        b.position_at_end(s_body);
+        let k = ld(v_k)?;
+        // SAFETY of the address: `k < hi`, as in the count.
+        let tp = unsafe { b.build_in_bounds_gep(i8t, tags, &[k], "") }.map_err(e)?;
+        let t = b.build_load(i8t, tp, "").map_err(e)?.into_int_value();
+        let t = b.build_int_z_extend(t, i64t, "").map_err(e)?;
+        let sp = slot(t)?;
+        let c = ld(sp)?;
+        b.build_memcpy(at(tmp, c)?, 1, at(buf, k)?, 1, sz)
+            .map_err(e)?;
+        b.build_store(sp, b.build_int_add(c, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(s_head).map_err(e)?;
+        b.position_at_end(s_done);
+        let bytes = b.build_int_mul(len, sz, "").map_err(e)?;
+        b.build_memcpy(at(buf, lo)?, 1, at(tmp, lo)?, 1, bytes)
+            .map_err(e)?;
+        let deeper = b.build_int_add(depth, one, "").map_err(e)?;
+        let recurse = |from: IntValue<'ctx>, to: IntValue<'ctx>| -> R<()> {
+            b.build_call(
+                f,
+                &[
+                    buf.into(),
+                    tmp.into(),
+                    tags.into(),
+                    from.into(),
+                    to.into(),
+                    ctx.into(),
+                    deeper.into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+            Ok(())
+        };
+        b.build_conditional_branch(ult(one, lt)?, left, after_left)
+            .map_err(e)?;
+        b.position_at_end(left);
+        recurse(lo, c1)?;
+        b.build_unconditional_branch(after_left).map_err(e)?;
+        b.position_at_end(after_left);
+        let gt = b.build_int_sub(hi, c2, "").map_err(e)?;
+        b.build_conditional_branch(ult(one, gt)?, right, done)
+            .map_err(e)?;
+        b.position_at_end(right);
+        recurse(c2, hi)?;
+        b.build_unconditional_branch(done).map_err(e)?;
+        // The merge sort of the range: its narrow passes here with the
+        // scratch already held, or the whole schedule for a long range.
+        b.position_at_end(leaf);
+        let small = b
+            .build_int_compare(
+                IntPredicate::ULE,
+                len,
+                i64t.const_int(crate::mir::interp::MERGE_BLOCK as u64, false),
+                "",
+            )
+            .map_err(e)?;
+        b.build_conditional_branch(small, leaf_small, leaf_big)
+            .map_err(e)?;
+        b.position_at_end(leaf_small);
+        let (bp, tp) = (at(buf, lo)?, at(tmp, lo)?);
+        b.build_call(
+            widths,
+            &[
+                bp.into(),
+                tp.into(),
+                len.into(),
+                ctx.into(),
+                one.into(),
+                len.into(),
+            ],
+            "",
+        )
+        .map_err(e)?;
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(leaf_big);
+        let bp = at(buf, lo)?;
+        b.build_call(merge, &[bp.into(), len.into(), ctx.into()], "")
+            .map_err(e)?;
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(done);
         Ok(())
     }
 }
