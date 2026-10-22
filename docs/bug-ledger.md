@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 325 |
 | codegen-gap | 287 |
-| false-positive | 279 |
+| false-positive | 280 |
 | other | 194 |
 | diagnostics | 185 |
 | perf | 182 |
@@ -113,14 +113,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 3024 |
 | interp | 1035 |
 | typecheck | 558 |
-| ownership | 130 |
+| ownership | 131 |
 | other | 123 |
 | runtime | 86 |
 | cli | 82 |
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
-| effect | 44 |
+| effect | 45 |
 | lexer | 12 |
 ## Current state
 
@@ -151,9 +151,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
 | B-2026-10-19-32 | 2026-10-19 | typecheck | low | A list literal passed to a method of a generic receiver does not take the parameter's type as its expected type: `best.push([0, 1])` on a `Vec[Array[i64, 2]]` is refused with "expected 'Array[i64, 2]', found 'Vec[i64]'", while the same literal passed to a free function taking `Array[i64, 2]` is accepted | — |
-| B-2026-10-19-43 | 2026-10-19 | ownership+typecheck | medium | §5.7's 'where a view may not go' is not enforced: a view stored in a shared field, sent through a channel, or captured by a closure stored in a struct or a shared field is accepted by `karac check` and both MIR backends (when the origin outlives it); §5.8's instance check is also absent from check | — |
+| B-2026-10-19-43 | 2026-10-19 | ownership+typecheck | medium | §5.8's instance check is absent: a generic instance whose body stores a view-typed value where a view may not go (pin 5.8-generic-view-instance, `put[ref String]` into a `shared` field) is accepted by `karac check`, `karac build --mir` and both MIR runs. (Narrowed 2026-10-22: §5.7's four placement rules are now refused by check too, through its MIR borrow check, as well as both MIR backends.) | — |
 | B-2026-10-19-46 | 2026-10-19 | ownership+effect+interp+codegen | medium | SOUNDNESS: a plain `shared` handle enters `par` branches with no E_NOT_CROSS_TASK on `karac check` or either MIR backend, including a branch that counts it into an `own` parameter while a sibling writes its `mut` field | — |
-| B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-20-8 | 2026-10-20 | typecheck+ownership | medium | Providers (§14.1, §14.2, §14.4, §14.5, §14.9) in `karac check`: resource declarations and bounds, `R.m()` resolved against the bounds only, receiver-to-verb rule, `with_provider` / `providers {} in {}` / `#[with_provider]` typing, escape through the view rules naming `R`, `CrossTask` on shared providers; migrate the 8 trait-less corpus provider programs | — |
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
@@ -179,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
 | B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
 | B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
+| B-2026-10-22-3 | 2026-10-22 | effect+ownership | medium | `karac check` refuses ANY write to a local `let mut` from a `par {}` branch, one branch alone included, with a legacy effect error that recommends `Arc`, `RwLock` and `#[thread_local]` (none of them v1 Kāra); core-semantics.md §11.2 forbids only a CONFLICT between two branches, the MIR effects check accepts a lone writer and names both branches for a real conflict, and check should do the same | — |
 
 ### Relocated
 
@@ -4256,6 +4256,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-44 | interp+codegen | high | SOUNDNESS: `karac build --mir` and `__mir-llvm-run` accept a function that returns a struct holding a closure over a view of its own local (`let r =… | 5d88defb6b |
 | B-2026-10-19-45 | ownership+interp+codegen | medium | `for x in v { x += 1; }` over a `Vec[i64]` is accepted by `karac check` and both MIR backends and silently changes nothing (also with `let mut v`), a… | 6b623ebd27 |
 | B-2026-10-19-47 | effect+interp+codegen | medium | Place conflicts between `par` branches are not detected on MIR: two comma-separated branches each pushing to one local `Vec` run on both MIR backends… | 818c6a56af |
+| B-2026-10-19-48 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borr… | 9ee80c0104 |
 | B-2026-10-19-49 | typecheck+ownership | low | A MutFn is callable through a bare (borrowed) parameter: `fn call(f: MutFn()) { f(); }` is accepted by `karac check` and both MIR backends, although… | 6b623ebd27 |
 | B-2026-10-19-50 | parser+typecheck | low | Removed spellings are still accepted: `par struct` (renamed `sync struct`) and the `with _` annotation compile and run on every surface, and diagnost… | ffb21df474 |
 | B-2026-10-19-51 | interp+codegen | medium | On both MIR backends an argument moved through a trait bound into an impl that borrows it drops at the end of the generic function, not at the end of… | 0a4c6cfe4b |
