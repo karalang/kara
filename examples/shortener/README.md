@@ -1,7 +1,8 @@
 # shortener — a URL shortener in Kāra
 
-A complete HTTP service in one file: routing, mutable module-level state,
-JSON responses, and a real `302` redirect.
+A complete HTTP service in one file: routing, service state built in
+`main` and passed to every request, JSON responses, and a real `302`
+redirect.
 
 ```bash
 karac run examples/shortener/shortener.kara
@@ -47,15 +48,15 @@ unless a pair overrides it. The two-field form keeps working unchanged.
 
 ## Oracle
 
-`tests/http_server.rs::test_shortener_example_end_to_end` compiles this
-file, spawns it, and pins every route above — including the `302`'s
+`tests/http_server.rs::test_shortener_example_end_to_end` builds this
+file with `karac build --mir`, spawns it, and pins every route above — including the `302`'s
 `location` header and the `/stats` hit counts. It substitutes
 `127.0.0.1:0` for the hardcoded `:8080` so it binds an ephemeral port
 like every other test in that file; the routing and responses are this
 example's own code.
 
 The `/stats` assertion is the one with teeth: it is the automated form
-of the manual read that surfaced `B-2026-07-31-30`. Neuter the `HITS`
+of the manual read that surfaced `B-2026-07-31-30`. Neuter the `links.hits`
 loop and the test fails with `"hits":{}` — the bug's exact symptom.
 
 `examples/mend/examples/link_registry/` is the Mend task+oracle pair for
@@ -71,7 +72,8 @@ than hand-fixed. What that turned up:
 - **`B-2026-07-31-30`** — `for (code, n) in HITS` over a **module-level**
   `Map` compiled to a **zero-iteration loop**, so `/stats` reported
   `"hits":{}` while `LINKS.len()` on the sibling map was correct and the
-  interpreter iterated it fine. Module-level containers are the ordinary
-  way to hold service state, so the miss was load-bearing. Fixed.
+  interpreter iterated it fine. Fixed. Kāra has since dropped mutable
+  globals (design.md § Constants), so the state is now a `Links` value
+  built in `main` (B-2026-10-22-18).
 - `karac fix` applied the `.clone()` repairs for the advisory
   use-after-move diagnostics (three iterations, one per use).

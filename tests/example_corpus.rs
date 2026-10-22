@@ -99,15 +99,6 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
     (
-        "shortener/shortener.kara",
-        "typecheck: E_MODULE_LET — module-level `let mut` state, which `karac \
-         check` refuses (B-2026-10-22-8). Its E2E oracle \
-         (tests/http_server.rs::test_shortener_example_end_to_end) builds it on \
-         the legacy backend, which refuses the context-struct form's `mut ref` \
-         capture in the handler closure, so it moves when that oracle does \
-         (B-2026-10-22-18).",
-    ),
-    (
         "word_count.kara",
         "resolve: undefined name 'read_file' — the spec spells this \
          `fs.read_to_string` (design.md § I/O surface); the example predates \

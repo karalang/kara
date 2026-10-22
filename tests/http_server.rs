@@ -131,8 +131,8 @@ mod http_server_tests {
     /// the parsed port), or until `timeout` elapses (returns `None`).
     /// The reader thread keeps the child's stdout drained so the OS
     /// pipe buffer doesn't fill up and block the binary.
-    fn await_bound_port(
-        stdout: std::process::ChildStdout,
+    fn await_bound_port<R: std::io::Read + Send + 'static>(
+        stdout: R,
         timeout: Duration,
     ) -> (Option<u16>, std::thread::JoinHandle<()>) {
         let (tx, rx) = std::sync::mpsc::channel::<u16>();
@@ -2544,6 +2544,66 @@ fn main() with sends(Network) receives(Network) {{
         }
     }
 
+    /// [`spawn_kara_server`] on v2: `karac check`, then `karac build --mir`,
+    /// then spawn. The v2 server prints `BOUND_PORT=` on stderr. A program
+    /// `check` refuses fails the test rather than soft-skipping as a link
+    /// problem would.
+    fn spawn_kara_server_v2(
+        src: &str,
+        prefix: &str,
+    ) -> Option<(std::process::Child, u16, PathBuf)> {
+        let karac = env!("CARGO_BIN_EXE_karac");
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let src_path = PathBuf::from(format!("/tmp/{prefix}_{pid}_{nanos}.kara"));
+        let exe_path = PathBuf::from(format!("/tmp/{prefix}_{pid}_{nanos}"));
+        std::fs::write(&src_path, src).expect("write the server source");
+        let checked = Command::new(karac)
+            .arg("check")
+            .arg(&src_path)
+            .output()
+            .expect("run karac check");
+        assert!(
+            checked.status.success(),
+            "karac check refused the server: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let built = Command::new(karac)
+            .arg("build")
+            .arg("--mir")
+            .arg(&src_path)
+            .arg("-o")
+            .arg(&exe_path)
+            .output()
+            .expect("run karac build --mir");
+        let _ = std::fs::remove_file(&src_path);
+        super::common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&built.stderr).to_string())
+        })?;
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
+        match port_opt {
+            Some(p) => Some((child, p, exe_path)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        }
+    }
+
     /// Retry `f` with 50 ms backoff for up to ~10 s — covers the
     /// listener-warm-up race (BOUND_PORT is printed immediately before
     /// the accept loop is entered, so the first connect can lose the
@@ -3335,6 +3395,11 @@ fn main() with sends(Network) receives(Network) {{
     /// read. The two-link setup is deliberate: one link cannot distinguish a
     /// working iteration from a lucky single-entry path.
     ///
+    /// BUILT ON V2. The example keeps its state in a value built in `main`
+    /// (design.md § Constants has no mutable globals), so this builds it the
+    /// way a user does, `karac check` then `karac build --mir`
+    /// (B-2026-10-22-18), rather than through the legacy pipeline.
+    ///
     /// LISTEN ADDRESS SUBSTITUTED. The example hardcodes `127.0.0.1:8080`
     /// because it is meant to be run by hand; every test in this file binds
     /// `127.0.0.1:0` and reads `BOUND_PORT`, which is what keeps them from
@@ -3346,7 +3411,8 @@ fn main() with sends(Network) receives(Network) {{
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = include_str!("../examples/shortener/shortener.kara")
             .replace("127.0.0.1:8080", "127.0.0.1:0");
-        let Some((mut child, port, exe_path)) = spawn_kara_server(&src, "karac_shortener") else {
+        let Some((mut child, port, exe_path)) = spawn_kara_server_v2(&src, "karac_shortener")
+        else {
             return;
         };
         let run = || -> Result<(), String> {
@@ -3357,9 +3423,9 @@ fn main() with sends(Network) receives(Network) {{
                 return Err(format!("GET / expected 200 + usage; got {status} {body:?}"));
             }
 
-            // Two shortens: codes are base-36 of a module-level counter, so
-            // they must come back "a" then "b" — which also pins that `SEQ`
-            // survives across requests as mutable module state.
+            // Two shortens: codes are base-36 of a counter in the service
+            // state, so they must come back "a" then "b" — which also pins
+            // that the state survives across requests.
             let (status, body) = http_post(port, "/shorten", "https://example.com/one")?;
             if status != 201 || body != "{\"code\":\"a\",\"short\":\"/a\"}" {
                 return Err(format!("first shorten: got {status} {body:?}"));
