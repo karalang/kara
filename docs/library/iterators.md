@@ -36,6 +36,8 @@ The lang-item traits `Iterator` and `Iterable`, and the way `for` uses them, are
 | `by_ref` | `fn by_ref(mut ref self) -> impl Iterator[Item = Self.Item]` | Borrows the iterator instead of consuming it; see below |
 | `cloned` | `fn cloned[T: Clone](own self) -> impl Iterator[Item = T] where Self.Item = ref T` | An owned copy of each viewed item. For a `Copy` `T` it copies, and is only needed where §5.10 does not already read the item |
 
+There is no `chunks` or `windows` adaptor: those are `Vec`, `Slice` and `Array` methods, so write `v.chunks(n)` rather than `v.iter().chunks(n)`, and collect any other iterator into a `Vec` first.
+
 `filter`, `take_while`, `skip_while`, `find`, `position` and `partition` lend each item to the predicate (a bare `Self.Item`), so the test does not consume it; only items that pass are yielded by value.
 
 **Looping over part of an iterator.** `for x in it` consumes `it`. To stop part-way and keep the rest, loop over `it.by_ref()`, which borrows `it` mutably for the loop; afterwards `it` holds the items not yet taken:

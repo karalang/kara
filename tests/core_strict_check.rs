@@ -11669,3 +11669,42 @@ fn a_const_of_a_cell_type_gets_the_module_cell_refusal() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// `chunks` / `windows` are slice methods, not iterator adaptors
+/// (B-2026-10-22-22): `v.iter().chunks(n)` is fixed by dropping the hop, and
+/// any other iterator is told to collect first.
+#[test]
+fn iterator_chunks_and_windows_point_at_the_slice_methods() {
+    let src = "fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4, 5];
+    for c in v.iter().chunks(2) {
+        println(c.len());
+    }
+    for w in v.iter().windows(2) {
+        println(w.len());
+    }
+}
+";
+    rejected_then_fixed_by(
+        "iter-chunks",
+        src,
+        "no method 'chunks' on type 'VecIter', an iterator: `chunks` is a `Vec` / `Slice` / `Array` method; drop `.iter()`",
+        "for c in v.chunks(2) {",
+    );
+    let src = "fn main() {
+    let s = \"abc\";
+    for w in s.chars().windows(2) {
+        println(w.len());
+    }
+}
+";
+    let (dir, path) = fixture("chars-windows", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("collect the items into a `Vec` first (`let items: Vec[char] = it.collect();`), then call `items.windows(n)`"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

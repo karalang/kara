@@ -1478,6 +1478,67 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
+                    // `chunks` / `windows` are slice methods, not iterator
+                    // adaptors (B-2026-10-22-22): `v.iter().chunks(n)` drops
+                    // the `.iter()` hop, any other iterator collects first.
+                    if let Some(item) = matches!(method, "chunks" | "windows")
+                        .then(|| self.library_iter_item_type(receiver_for_lookup))
+                        .flatten()
+                    {
+                        let item = match item {
+                            Type::Ref(t) | Type::MutRef(t) => *t,
+                            t => t,
+                        };
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        let base = format!(
+                            "no method '{method}' on type '{type_name}', an iterator: \
+                             `{method}` is a `Vec` / `Slice` / `Array` method"
+                        );
+                        if let ExprKind::MethodCall {
+                            object: source,
+                            method: hop,
+                            args: hop_args,
+                            ..
+                        } = &object.kind
+                        {
+                            let to = object.span.offset + object.span.length;
+                            let from = no_arg_call_start(source, hop, to);
+                            if hop == "iter"
+                                && hop_args.is_empty()
+                                && matches!(type_name.as_str(), "VecIter" | "SliceIter")
+                                && to > from
+                            {
+                                self.type_error_with_fix_it(
+                                    format!("{base}; drop `.iter()`"),
+                                    *span,
+                                    TypeErrorKind::NoMethodFound,
+                                    FixIt {
+                                        span: Span {
+                                            line: object.span.line,
+                                            column: object.span.column,
+                                            offset: from,
+                                            length: to - from,
+                                        },
+                                        replacement: String::new(),
+                                    },
+                                );
+                                return Type::Error;
+                            }
+                        }
+                        self.type_error(
+                            format!(
+                                "{base}; collect the items into a `Vec` first \
+                                 (`let items: Vec[{}] = it.collect();`), then call \
+                                 `items.{method}(n)`",
+                                type_display(&item)
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                        );
+                        return Type::Error;
+                    }
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
                     // Iterator adaptors/terminals (`map`/`filter`/`collect`/…)
                     // are not methods on a `Vec`/`VecDeque` directly — they live
