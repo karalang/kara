@@ -1,0 +1,208 @@
+== c2u BasicParseTest
+basic_parse_test
+== c2u complexTokenizer
+complex_tokenizer
+== c2u HTTPResponse
+http_response
+== c2u parse2HTML
+parse2_html
+== c2u A
+a
+== c2u aB
+a_b
+== c2u snake_case
+snake_case
+== c2u x
+x
+== c2u getHTTPResponseCode
+get_http_response_code
+== c2u IOError
+io_error
+== c2u simpleXML
+simple_xml
+== c2u HTML5Parser
+html5_parser
+== c2u already_under
+already_under
+== c2u 
+
+== u2c complex_tokenizer
+ComplexTokenizer
+== u2c basic_parse_test
+BasicParseTest
+== u2c __foo
+__Foo
+== u2c a_b_c
+ABC
+== u2c x
+X
+== u2c _
+__
+== u2c hello
+Hello
+== u2c foo__bar
+Foo_Bar
+== u2c 
+_
+== u2c UPPER_CASE
+UpperCase
+== u2c trailing_
+Trailing_
+== ord 0
+0th
+== ord 1
+1st
+== ord 2
+2nd
+== ord 3
+3rd
+== ord 4
+4th
+== ord 5
+5th
+== ord 11
+11th
+== ord 12
+12th
+== ord 13
+13th
+== ord 21
+21st
+== ord 22
+22nd
+== ord 23
+23rd
+== ord 100
+100th
+== ord 101
+101st
+== ord 111
+111th
+== ord 1515
+1515th
+== ord 3694839230
+3694839230th
+== ord hi
+hi
+== ord 
+
+== a10 abbreviation
+a10n
+== a10 internationalization
+i18n
+== a10 localization
+l10n
+== a10 
+
+== a10 a
+a
+== a10 ab
+ab
+== a10 abc
+a1c
+== a10 accessibility
+a11y
+== a10 kubernetes
+k8s
+== slug First post! Hi!!!!~1    
+first_post_hi_1
+== slug Hello, World
+hello_world
+== slug   ...  
+_
+== slug MixOf_Things-and.more
+mixof_things_and_more
+== slug 
+
+== slug already_clean
+already_clean
+== slug CAPS LOCK
+caps_lock
+== slug a::b//c  d
+a_b_c_d
+== slug punct!@#$only
+punct_only
+== pil 1,3,5-8,10-11,15
+[1, 3, 5, 6, 7, 8, 10, 11, 15]
+== pil 1
+[1]
+== pil 
+[]
+== pil 1,1,2,2
+[1, 1, 2, 2]
+== pil 8-5
+[5, 6, 7, 8]
+== pil 10,9,8
+[8, 9, 10]
+== pil 100-100
+[100]
+== pil 1,2,3,4,5
+[1, 2, 3, 4, 5]
+== pil 5
+[5]
+== pil 3-3
+[3]
+== fil 1 3 5 6 7 8 10 11 15
+1,3,5-8,10-11,15
+== fil 1
+1
+== fil 
+
+== fil 1 2 3
+1-3
+== fil 5 5 5 6
+5-6
+== fil 1 2 4 5 6 8
+1-2,4-6,8
+== fil 10 9 8 7
+7-10
+== fil 42
+42
+== fil 1 2 3 100 101 102
+1-3,100-102
+== cil 1,3,5-8,10-11,15 0 *
+0,2,4,9,12-14
+== cil 1,3,5-8,10-11,15 1 *
+2,4,9,12-14
+== cil 1,3,5-8,10-11,15 0 15
+0,2,4,9,12-14
+== cil 1,3,5-8,10-11,15 0 14
+0,2,4,9,12-13
+== cil 1,3,5-8,10-11,15 0 20
+0,2,4,9,12-14,16-19
+== cil 1,3,5-8,10-11,15 0 0
+
+== cil 1,3,5-8 2 3
+2
+== cil 1,3,5-8 1 1
+
+== cil  0 *
+
+== cil 1,3,5-8 20 10
+
+== irl 1,3,5-8,10-11,15
+((1, 1), (3, 3), (5, 8), (10, 11), (15, 15))
+== irl 1
+((1, 1),)
+== irl 
+()
+== irl 2-2
+((2, 2),)
+== irl 1,2,3
+((1, 3),)
+== irl 5-9
+((5, 9),)
+== hrl a
+a
+== hrl a|b
+a and b
+== hrl a|b|c
+a, b, and c
+== hrl one|two|three|four
+one, two, three, and four
+== hrl 
+
+== hrl apple|banana
+apple and banana
+== hrl red|green|blue|yellow|purple
+red, green, blue, yellow, and purple

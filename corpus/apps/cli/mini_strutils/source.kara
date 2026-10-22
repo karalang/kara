@@ -1,0 +1,715 @@
+// mini_strutils — a port of a subset of boltons.strutils 26.2.0 (BSD, Mahmoud
+// Hashemi). boltons is a widely-used pure-Python "batteries" grab-bag; strutils
+// is its string toolkit. This ports the deterministic, ASCII string transforms
+// and the integer-range-string family that printer dialogs and page selectors
+// use ("1,3,5-8,10-11,15").
+//
+// Each job is `<op>\t<args...>`:
+//   c2u  <s>                 camel2under:  BasicParseTest -> basic_parse_test
+//   u2c  <s>                 under2camel:  complex_tokenizer -> ComplexTokenizer
+//   ord  <numstr>            ordinalize:   1 -> 1st, 13 -> 13th, hi -> hi
+//   a10  <s>                 a10n:         internationalization -> i18n
+//   slug <s>                 slugify:      "First post! Hi" -> first_post_hi
+//   pil  <range_string>      parse_int_list -> the sorted list, as [1, 3, 5]
+//   fil  <space-sep ints>    format_int_list -> the collapsed range string
+//   cil  <rs> <start> <end>  complement_int_list ( end = * means None )
+//   irl  <range_string>      int_ranges_from_int_list -> ((1, 1), (5, 8))
+//   hrl  <item>|<item>|...   human_readable_list -> a, b, and c
+//
+// Every transform follows the library statement for statement. The library's
+// regexes (camel2under's boundary match, slugify's punctuation split) are
+// reimplemented as explicit byte scans over the same character classes, exact
+// for ASCII input — the pyhumps / titlecase precedent.
+//
+// Scope: the ASCII, integer, deterministic surface. strutils' Unicode-aware
+// helpers (pluralize/singularize via unicodedata, asciify), the float-formatting
+// bytes2human, and the zlib / html / uuid helpers are out of scope (see README).
+// jobs_text() carries data/jobs.tsv verbatim.
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn chr(b: i64) -> String {
+    let mut u: Vec[u8] = Vec.new();
+    u.push(b as u8);
+    String.from_utf8(u).unwrap_or("".to_string())
+}
+
+fn is_lower(b: i64) -> bool {
+    b >= 97 and b <= 122
+}
+
+fn is_upper(b: i64) -> bool {
+    b >= 65 and b <= 90
+}
+
+fn is_digit(b: i64) -> bool {
+    b >= 48 and b <= 57
+}
+
+fn lc_b(b: i64) -> i64 {
+    if is_upper(b) {
+        return b + 32;
+    }
+    b
+}
+
+fn uc_b(b: i64) -> i64 {
+    if is_lower(b) {
+        return b - 32;
+    }
+    b
+}
+
+// punctuation (string.punctuation) + whitespace (string.whitespace)
+fn is_sep(b: i64) -> bool {
+    (b >= 33 and b <= 47) or (b >= 58 and b <= 64) or (b >= 91 and b <= 96)
+        or (b >= 123 and b <= 126) or b == 32 or (b >= 9 and b <= 13)
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+fn camel2under(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut o = String.new();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if is_upper(c) {
+            let a = i > 0 and (is_lower(b[i - 1]) or is_digit(b[i - 1]));
+            let d = i > 0 and i + 1 < n and is_lower(b[i + 1]);
+            if a or d {
+                o.push_str(chr(95));
+            }
+        }
+        o.push_str(chr(lc_b(c)));
+        i = i + 1;
+    }
+    o
+}
+
+fn under2camel(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut o = String.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 95 {
+            if i == start {
+                o.push_str(chr(95)); // empty part capitalizes to '' -> '_'
+            } else {
+                o.push_str(chr(uc_b(b[start])));
+                let mut j = start + 1;
+                while j < i {
+                    o.push_str(chr(lc_b(b[j])));
+                    j = j + 1;
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    o
+}
+
+fn ordinalize(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut ext = "".to_string();
+    if n > 0 and is_digit(b[n - 1]) {
+        if n >= 2 and b[n - 2] == 49 {
+            ext = "th".to_string(); // teens
+        } else {
+            let last = b[n - 1];
+            if last == 49 {
+                ext = "st".to_string();
+            } else {
+                if last == 50 {
+                    ext = "nd".to_string();
+                } else {
+                    if last == 51 {
+                        ext = "rd".to_string();
+                    } else {
+                        ext = "th".to_string();
+                    }
+                }
+            }
+        }
+    }
+    let mut o = s.to_string();
+    o.push_str(ext);
+    o
+}
+
+fn a10n(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    if n < 3 {
+        return s.to_string();
+    }
+    let mut o = String.new();
+    o.push_str(chr(b[0]));
+    o.push_str(itoa(n - 2));
+    o.push_str(chr(b[n - 1]));
+    o
+}
+
+fn slugify(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    if n == 0 {
+        return "".to_string();
+    }
+    let mut o = String.new();
+    let mut in_tok = false;
+    let mut emitted = false;
+    let mut i = 0;
+    while i < n {
+        if is_sep(b[i]) {
+            in_tok = false;
+        } else {
+            if not in_tok {
+                if emitted {
+                    o.push_str(chr(95));
+                }
+                in_tok = true;
+                emitted = true;
+            }
+            o.push_str(chr(lc_b(b[i])));
+        }
+        i = i + 1;
+    }
+    if not emitted {
+        o.push_str(chr(95)); // non-empty text, all separators -> the delimiter
+    }
+    o
+}
+
+fn sort_ints(v: Vec[i64]) -> Vec[i64] {
+    let mut a = v.clone();
+    let n = a.len();
+    let mut i = 1;
+    while i < n {
+        let key = a[i];
+        let mut j = i;
+        while j > 0 and a[j - 1] > key {
+            a[j] = a[j - 1];
+            j = j - 1;
+        }
+        a[j] = key;
+        i = i + 1;
+    }
+    a
+}
+
+fn contains_byte(s: Str, target: i64) -> bool {
+    let b = str_bytes(s);
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == target {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// trim leading/trailing spaces (Python str.strip, restricted to the spaces our
+// data can carry — a tab would be the field separator and never appears here)
+fn trim_spaces(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut lo = 0;
+    while lo < n and b[lo] == 32 {
+        lo = lo + 1;
+    }
+    let mut hi = n;
+    while hi > lo and b[hi - 1] == 32 {
+        hi = hi - 1;
+    }
+    s.substring(lo, hi)
+}
+
+fn parse_int_list(s: Str) -> Vec[i64] {
+    let trimmed = trim_spaces(s);
+    let parts = split_fields(trimmed.clone(), 44); // ','
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < parts.len() {
+        let x = parts[i].clone();
+        if contains_byte(x.clone(), 45) {
+            // a '-' range: min..max over all dash-split parts
+            let nums = split_fields(x.clone(), 45);
+            let mut lo = parse_uint(nums[0].clone());
+            let mut hi = lo;
+            let mut k = 1;
+            while k < nums.len() {
+                let val = parse_uint(nums[k].clone());
+                if val < lo {
+                    lo = val;
+                }
+                if val > hi {
+                    hi = val;
+                }
+                k = k + 1;
+            }
+            let mut v = lo;
+            while v <= hi {
+                out.push(v);
+                v = v + 1;
+            }
+        } else {
+            if str_bytes(x.clone()).len() == 0 {
+                // empty string between delimiters: skip
+            } else {
+                out.push(parse_uint(x.clone()));
+            }
+        }
+        i = i + 1;
+    }
+    sort_ints(out)
+}
+
+fn format_int_list(int_list: Vec[i64]) -> String {
+    let xs = sort_ints(int_list);
+    let n = xs.len();
+    let mut out = String.new();
+    let mut first_seg = true;
+    let mut cr: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let x = xs[i];
+        if cr.len() < 1 {
+            cr.push(x);
+        } else {
+            if cr.len() > 1 {
+                let delta = x - cr[cr.len() - 1];
+                if delta == 1 {
+                    cr.push(x);
+                } else {
+                    if delta > 1 {
+                        if not first_seg {
+                            out.push_str(",".to_string());
+                        }
+                        out.push_str(itoa(cr[0]));
+                        out.push_str("-".to_string());
+                        out.push_str(itoa(cr[cr.len() - 1]));
+                        first_seg = false;
+                        cr = Vec.new();
+                        cr.push(x);
+                    }
+                    // delta <= 0: repeated value, skip
+                }
+            } else {
+                let delta = x - cr[0];
+                if delta == 1 {
+                    cr.push(x);
+                } else {
+                    if delta > 1 {
+                        if not first_seg {
+                            out.push_str(",".to_string());
+                        }
+                        out.push_str(itoa(cr[0]));
+                        first_seg = false;
+                        cr = Vec.new();
+                        cr.push(x);
+                    }
+                    // delta <= 0: repeated value, skip
+                }
+            }
+        }
+        i = i + 1;
+    }
+    // flush the final contiguous range
+    if cr.len() == 1 {
+        if not first_seg {
+            out.push_str(",".to_string());
+        }
+        out.push_str(itoa(cr[0]));
+    } else {
+        if cr.len() > 1 {
+            if not first_seg {
+                out.push_str(",".to_string());
+            }
+            out.push_str(itoa(cr[0]));
+            out.push_str("-".to_string());
+            out.push_str(itoa(cr[cr.len() - 1]));
+        }
+    }
+    out
+}
+
+fn member(sorted: Vec[i64], target: i64) -> bool {
+    let mut i = 0;
+    while i < sorted.len() {
+        if sorted[i] == target {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn complement_int_list(rs: Str, start: i64, has_end: bool, end_in: i64) -> String {
+    let il = parse_int_list(rs);
+    let mut end = end_in;
+    if not has_end {
+        if il.len() > 0 {
+            // il is sorted ascending; max is the last element
+            end = il[il.len() - 1] + 1;
+        } else {
+            end = start;
+        }
+    }
+    let mut comp: Vec[i64] = Vec.new();
+    let mut v = 0;
+    while v < end {
+        if v >= start and not member(il, v) {
+            comp.push(v);
+        }
+        v = v + 1;
+    }
+    format_int_list(comp)
+}
+
+fn int_ranges_from_int_list(s: Str) -> String {
+    let norm = format_int_list(parse_int_list(s));
+    if str_bytes(norm.clone()).len() == 0 {
+        return "()".to_string();
+    }
+    let bounds = split_fields(norm.clone(), 44); // ','
+    let mut o = String.new();
+    o.push_str("(".to_string());
+    let mut i = 0;
+    while i < bounds.len() {
+        let bnd = bounds[i].clone();
+        let mut lo = 0;
+        let mut hi = 0;
+        if contains_byte(bnd.clone(), 45) {
+            let pair = split_fields(bnd.clone(), 45);
+            lo = parse_uint(pair[0].clone());
+            hi = parse_uint(pair[1].clone());
+        } else {
+            lo = parse_uint(bnd.clone());
+            hi = lo;
+        }
+        if i > 0 {
+            o.push_str(", ".to_string());
+        }
+        o.push_str("(".to_string());
+        o.push_str(itoa(lo));
+        o.push_str(", ".to_string());
+        o.push_str(itoa(hi));
+        o.push_str(")".to_string());
+        i = i + 1;
+    }
+    if bounds.len() == 1 {
+        o.push_str(",".to_string()); // Python's one-tuple trailing comma
+    }
+    o.push_str(")".to_string());
+    o
+}
+
+fn human_readable_list(items: Vec[String]) -> String {
+    let n = items.len();
+    if n == 0 {
+        return "".to_string();
+    }
+    if n == 1 {
+        return items[0].clone();
+    }
+    if n == 2 {
+        let mut o = items[0].clone();
+        o.push_str(" and ".to_string());
+        o.push_str(items[1].clone());
+        return o;
+    }
+    let mut o = String.new();
+    let mut i = 0;
+    while i < n - 1 {
+        o.push_str(items[i].clone());
+        o.push_str(", ".to_string());
+        i = i + 1;
+    }
+    o.push_str("and ".to_string());
+    o.push_str(items[n - 1].clone());
+    o
+}
+
+fn pil_repr(s: Str) -> String {
+    let xs = parse_int_list(s);
+    let mut o = String.new();
+    o.push_str("[".to_string());
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            o.push_str(", ".to_string());
+        }
+        o.push_str(itoa(xs[i]));
+        i = i + 1;
+    }
+    o.push_str("]".to_string());
+    o
+}
+
+fn fil_run(arg: Str) -> String {
+    // space-separated ints
+    let parts = split_fields(arg.clone(), 32);
+    let mut xs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if str_bytes(parts[i].clone()).len() > 0 {
+            xs.push(parse_uint(parts[i].clone()));
+        }
+        i = i + 1;
+    }
+    format_int_list(xs)
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                let mut k = 1;
+                while k < f.len() {
+                    out.push_str(" ");
+                    out.push_str(f[k].clone());
+                    k = k + 1;
+                }
+                out.push_str("\n");
+                if op == "c2u" {
+                    out.push_str(camel2under(f[1].clone()));
+                } else {
+                    if op == "u2c" {
+                        out.push_str(under2camel(f[1].clone()));
+                    } else {
+                        if op == "ord" {
+                            out.push_str(ordinalize(f[1].clone()));
+                        } else {
+                            if op == "a10" {
+                                out.push_str(a10n(f[1].clone()));
+                            } else {
+                                if op == "slug" {
+                                    out.push_str(slugify(f[1].clone()));
+                                } else {
+                                    if op == "pil" {
+                                        out.push_str(pil_repr(f[1].clone()));
+                                    } else {
+                                        if op == "fil" {
+                                            out.push_str(fil_run(f[1].clone()));
+                                        } else {
+                                            if op == "cil" {
+                                                let st = parse_uint(f[2].clone());
+                                                let endf = f[3].clone();
+                                                let has_end = not (endf == "*");
+                                                let mut endv = 0;
+                                                if has_end {
+                                                    endv = parse_uint(endf.clone());
+                                                }
+                                                out.push_str(complement_int_list(f[1].clone(), st, has_end, endv));
+                                            } else {
+                                                if op == "irl" {
+                                                    out.push_str(int_ranges_from_int_list(f[1].clone()));
+                                                } else {
+                                                    // hrl
+                                                    let arg = f[1].clone();
+                                                    let mut items: Vec[String] = Vec.new();
+                                                    if str_bytes(arg.clone()).len() > 0 {
+                                                        items = split_fields(arg.clone(), 124); // '|'
+                                                    }
+                                                    out.push_str(human_readable_list(items));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("c2u\tBasicParseTest\n");
+    s.push_str("c2u\tcomplexTokenizer\n");
+    s.push_str("c2u\tHTTPResponse\n");
+    s.push_str("c2u\tparse2HTML\n");
+    s.push_str("c2u\tA\n");
+    s.push_str("c2u\taB\n");
+    s.push_str("c2u\tsnake_case\n");
+    s.push_str("c2u\tx\n");
+    s.push_str("c2u\tgetHTTPResponseCode\n");
+    s.push_str("c2u\tIOError\n");
+    s.push_str("c2u\tsimpleXML\n");
+    s.push_str("c2u\tHTML5Parser\n");
+    s.push_str("c2u\talready_under\n");
+    s.push_str("c2u\t\n");
+    s.push_str("u2c\tcomplex_tokenizer\n");
+    s.push_str("u2c\tbasic_parse_test\n");
+    s.push_str("u2c\t__foo\n");
+    s.push_str("u2c\ta_b_c\n");
+    s.push_str("u2c\tx\n");
+    s.push_str("u2c\t_\n");
+    s.push_str("u2c\thello\n");
+    s.push_str("u2c\tfoo__bar\n");
+    s.push_str("u2c\t\n");
+    s.push_str("u2c\tUPPER_CASE\n");
+    s.push_str("u2c\ttrailing_\n");
+    s.push_str("ord\t0\n");
+    s.push_str("ord\t1\n");
+    s.push_str("ord\t2\n");
+    s.push_str("ord\t3\n");
+    s.push_str("ord\t4\n");
+    s.push_str("ord\t5\n");
+    s.push_str("ord\t11\n");
+    s.push_str("ord\t12\n");
+    s.push_str("ord\t13\n");
+    s.push_str("ord\t21\n");
+    s.push_str("ord\t22\n");
+    s.push_str("ord\t23\n");
+    s.push_str("ord\t100\n");
+    s.push_str("ord\t101\n");
+    s.push_str("ord\t111\n");
+    s.push_str("ord\t1515\n");
+    s.push_str("ord\t3694839230\n");
+    s.push_str("ord\thi\n");
+    s.push_str("ord\t\n");
+    s.push_str("a10\tabbreviation\n");
+    s.push_str("a10\tinternationalization\n");
+    s.push_str("a10\tlocalization\n");
+    s.push_str("a10\t\n");
+    s.push_str("a10\ta\n");
+    s.push_str("a10\tab\n");
+    s.push_str("a10\tabc\n");
+    s.push_str("a10\taccessibility\n");
+    s.push_str("a10\tkubernetes\n");
+    s.push_str("slug\tFirst post! Hi!!!!~1    \n");
+    s.push_str("slug\tHello, World\n");
+    s.push_str("slug\t  ...  \n");
+    s.push_str("slug\tMixOf_Things-and.more\n");
+    s.push_str("slug\t\n");
+    s.push_str("slug\talready_clean\n");
+    s.push_str("slug\tCAPS LOCK\n");
+    s.push_str("slug\ta::b//c  d\n");
+    s.push_str("slug\tpunct!@#$only\n");
+    s.push_str("pil\t1,3,5-8,10-11,15\n");
+    s.push_str("pil\t1\n");
+    s.push_str("pil\t\n");
+    s.push_str("pil\t1,1,2,2\n");
+    s.push_str("pil\t8-5\n");
+    s.push_str("pil\t10,9,8\n");
+    s.push_str("pil\t100-100\n");
+    s.push_str("pil\t1,2,3,4,5\n");
+    s.push_str("pil\t5\n");
+    s.push_str("pil\t3-3\n");
+    s.push_str("fil\t1 3 5 6 7 8 10 11 15\n");
+    s.push_str("fil\t1\n");
+    s.push_str("fil\t\n");
+    s.push_str("fil\t1 2 3\n");
+    s.push_str("fil\t5 5 5 6\n");
+    s.push_str("fil\t1 2 4 5 6 8\n");
+    s.push_str("fil\t10 9 8 7\n");
+    s.push_str("fil\t42\n");
+    s.push_str("fil\t1 2 3 100 101 102\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t0\t*\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t1\t*\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t0\t15\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t0\t14\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t0\t20\n");
+    s.push_str("cil\t1,3,5-8,10-11,15\t0\t0\n");
+    s.push_str("cil\t1,3,5-8\t2\t3\n");
+    s.push_str("cil\t1,3,5-8\t1\t1\n");
+    s.push_str("cil\t\t0\t*\n");
+    s.push_str("cil\t1,3,5-8\t20\t10\n");
+    s.push_str("irl\t1,3,5-8,10-11,15\n");
+    s.push_str("irl\t1\n");
+    s.push_str("irl\t\n");
+    s.push_str("irl\t2-2\n");
+    s.push_str("irl\t1,2,3\n");
+    s.push_str("irl\t5-9\n");
+    s.push_str("hrl\ta\n");
+    s.push_str("hrl\ta|b\n");
+    s.push_str("hrl\ta|b|c\n");
+    s.push_str("hrl\tone|two|three|four\n");
+    s.push_str("hrl\t\n");
+    s.push_str("hrl\tapple|banana\n");
+    s.push_str("hrl\tred|green|blue|yellow|purple\n");
+    s
+}
