@@ -1,0 +1,626 @@
+// mini_netaddr — the IPv4 CIDR algebra of netaddr 1.3.0 (BSD), ported to Kara v2.
+//
+// Reads data/jobs.tsv (one job per line, `<op>\t<arg>`) and runs netaddr's
+// cidr_merge, spanning_cidr, iprange_to_cidrs, cidr_exclude and the glob<->CIDR
+// conversions, matching the vendored library byte for byte. Everything is
+// integer and string work over 32-bit address values; no float is formed.
+// Scope is IPv4 (netaddr's IPGlob is itself IPv4-only); IPv6, IPSet, the IANA /
+// nmap / rfc1924 helpers and the IEEE registry are out of scope.
+
+#[derive(Clone)]
+struct Net { value: i64, prefixlen: i64 }
+#[derive(Clone)]
+struct Range { last: i64, first: i64, net: Net, merged: bool }
+#[derive(Clone)]
+struct Part { left: Vec[Net], mid: Vec[Net], right: Vec[Net] }
+#[derive(Clone)]
+struct Pair { a: i64, b: i64 }
+
+fn max32() -> i64 { 4294967295 }
+
+fn hostmask(prefix: i64) -> i64 { (1 << (32 - prefix)) - 1 }
+fn netmask(prefix: i64) -> i64 { max32() ^ hostmask(prefix) }
+
+fn net_first(n: Net) -> i64 { n.value & netmask(n.prefixlen) }
+fn net_last(n: Net) -> i64 { n.value | hostmask(n.prefixlen) }
+fn net_cidr(n: Net) -> Net { Net { value: n.value & netmask(n.prefixlen), prefixlen: n.prefixlen } }
+
+fn dec_str(n: i64) -> String {
+    if n == 0 { return "0".to_string(); }
+    let d = "0123456789";
+    let mut digs = Vec[i64].new();
+    let mut m = n;
+    while m > 0 {
+        digs.push(m % 10);
+        m = m / 10;
+    }
+    let mut s = String.new();
+    let mut k = digs.len();
+    while k > 0 {
+        k = k - 1;
+        s.push_str(d.substring(digs[k], digs[k] + 1));
+    }
+    s
+}
+
+fn octets_of(v: i64) -> Vec[i64] {
+    let mut o = Vec[i64].new();
+    o.push((v >> 24) & 255);
+    o.push((v >> 16) & 255);
+    o.push((v >> 8) & 255);
+    o.push(v & 255);
+    o
+}
+
+fn dotted(v: i64) -> String {
+    let o = octets_of(v);
+    dec_str(o[0]) + "." + dec_str(o[1]) + "." + dec_str(o[2]) + "." + dec_str(o[3])
+}
+
+fn net_str(n: Net) -> String {
+    dotted(n.value) + "/" + dec_str(n.prefixlen)
+}
+
+fn codes_of(s: String) -> Vec[i64] {
+    let mut v = Vec[i64].new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn parse_uint(s: String) -> i64 {
+    let c = codes_of(s);
+    if c.len() == 0 { return -1; }
+    let mut v = 0;
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] < 48 or c[i] > 57 { return -1; }
+        v = v * 10 + (c[i] - 48);
+        i = i + 1;
+    }
+    v
+}
+
+fn split_vec(s: String, sep: String) -> Vec[String] {
+    let parts: Vec[String] = s.split(sep).map(|p| p.to_string()).collect();
+    parts
+}
+
+fn join_vec(v: Vec[String], sep: String) -> String {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s.push_str(sep.clone()); }
+        s.push_str(v[i].clone());
+        i = i + 1;
+    }
+    s
+}
+
+fn join_nets(v: Vec[Net]) -> String {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(net_str(v[i].clone()));
+        i = i + 1;
+    }
+    s
+}
+
+fn parse_ipv4(s: String) -> Result[i64, String] {
+    let octs = split_vec(s, ".");
+    if octs.len() != 4 { return Err("bad".to_string()); }
+    let mut v = 0;
+    let mut i = 0;
+    while i < 4 {
+        let o = parse_uint(octs[i].clone());
+        if o < 0 or o > 255 { return Err("bad".to_string()); }
+        v = (v << 8) | o;
+        i = i + 1;
+    }
+    Ok(v)
+}
+
+fn parse_network(arg: String) -> Result[Net, String] {
+    let parts = split_vec(arg, "/");
+    let mut prefix = 32;
+    if parts.len() == 2 {
+        let p = parse_uint(parts[1].clone());
+        if p < 0 or p > 32 { return Err("invalid IPNetwork " + arg.clone()); }
+        prefix = p;
+    } else if parts.len() != 1 {
+        return Err("invalid IPNetwork " + arg.clone());
+    }
+    match parse_ipv4(parts[0].clone()) {
+        Ok(v) => { Ok(Net { value: v, prefixlen: prefix }) }
+        Err(_) => { Err("invalid IPNetwork " + arg.clone()) }
+    }
+}
+
+fn net_lt(a: Net, b: Net) -> bool {
+    let fa = net_first(a.clone());
+    let fb = net_first(b.clone());
+    if fa != fb { return fa < fb; }
+    let pa = a.prefixlen - 1;
+    let pb = b.prefixlen - 1;
+    if pa != pb { return pa < pb; }
+    (a.value - fa) < (b.value - fb)
+}
+
+// Smallest CIDR spanning every network in `nets` (expects at least 2).
+fn spanning(nets: Vec[Net]) -> Net {
+    let mut mn = nets[0].clone();
+    let mut mx = nets[0].clone();
+    let mut i = 1;
+    while i < nets.len() {
+        let cur = nets[i].clone();
+        if net_lt(cur.clone(), mn.clone()) { mn = cur.clone(); }
+        if net_lt(mx.clone(), cur.clone()) { mx = cur.clone(); }
+        i = i + 1;
+    }
+    let mut ipnum = net_last(mx.clone());
+    let mut prefixlen = mx.prefixlen;
+    let lowest = net_first(mn.clone());
+    while prefixlen > 0 and ipnum > lowest {
+        prefixlen = prefixlen - 1;
+        let k = 32 - prefixlen;
+        ipnum = ipnum & (max32() ^ ((1 << k) - 1));
+    }
+    Net { value: ipnum, prefixlen: prefixlen }
+}
+
+// Partition `target` around `exclude`: (before, [exclude], after), sorted.
+fn partition(target: Net, exclude: Net) -> Part {
+    let tfirst = net_first(target.clone());
+    let tlast = net_last(target.clone());
+    let efirst = net_first(exclude.clone());
+    let elast = net_last(exclude.clone());
+    if elast < tfirst {
+        let mut r = Vec[Net].new();
+        r.push(net_cidr(target.clone()));
+        return Part { left: Vec[Net].new(), mid: Vec[Net].new(), right: r };
+    }
+    if tlast < efirst {
+        let mut l = Vec[Net].new();
+        l.push(net_cidr(target.clone()));
+        return Part { left: l, mid: Vec[Net].new(), right: Vec[Net].new() };
+    }
+    if target.prefixlen >= exclude.prefixlen {
+        let mut m = Vec[Net].new();
+        m.push(target.clone());
+        return Part { left: Vec[Net].new(), mid: m, right: Vec[Net].new() };
+    }
+    let mut left = Vec[Net].new();
+    let mut right = Vec[Net].new();
+    let mut new_prefixlen = target.prefixlen + 1;
+    let mut i_lower = tfirst;
+    let mut i_upper = tfirst + (1 << (32 - new_prefixlen));
+    while exclude.prefixlen >= new_prefixlen {
+        let mut matched = 0;
+        if efirst >= i_upper {
+            left.push(Net { value: i_lower, prefixlen: new_prefixlen });
+            matched = i_upper;
+        } else {
+            right.push(Net { value: i_upper, prefixlen: new_prefixlen });
+            matched = i_lower;
+        }
+        new_prefixlen = new_prefixlen + 1;
+        if new_prefixlen > 32 { break; }
+        i_lower = matched;
+        i_upper = matched + (1 << (32 - new_prefixlen));
+    }
+    let mut rightrev = Vec[Net].new();
+    let mut k = right.len();
+    while k > 0 {
+        k = k - 1;
+        rightrev.push(right[k].clone());
+    }
+    let mut mid = Vec[Net].new();
+    mid.push(exclude.clone());
+    Part { left: left, mid: mid, right: rightrev }
+}
+
+// Minimal CIDR list that exactly covers [start.first, end.last].
+fn iprange_to_cidrs(start: Net, end: Net) -> Vec[Net] {
+    let iprange0 = net_first(start.clone());
+    let iprange1 = net_last(end.clone());
+    let mut pair = Vec[Net].new();
+    pair.push(start.clone());
+    pair.push(end.clone());
+    let mut cidr_span = spanning(pair);
+    let mut cidr_list = Vec[Net].new();
+    if net_first(cidr_span.clone()) < iprange0 {
+        let exclude = Net { value: iprange0 - 1, prefixlen: 32 };
+        let part = partition(cidr_span.clone(), exclude);
+        let last_idx = part.right.len() - 1;
+        cidr_span = part.right[last_idx].clone();
+        let mut nl = Vec[Net].new();
+        let mut i = 0;
+        while i < last_idx {
+            nl.push(part.right[i].clone());
+            i = i + 1;
+        }
+        cidr_list = nl;
+    }
+    if net_last(cidr_span.clone()) > iprange1 {
+        let exclude = Net { value: iprange1 + 1, prefixlen: 32 };
+        let part = partition(cidr_span.clone(), exclude);
+        let mut i = 0;
+        while i < part.left.len() {
+            cidr_list.push(part.left[i].clone());
+            i = i + 1;
+        }
+    } else {
+        cidr_list.push(cidr_span.clone());
+    }
+    cidr_list
+}
+
+// Merge a list of networks into the smallest possible set of CIDRs.
+fn cidr_merge(nets: Vec[Net]) -> Vec[Net] {
+    let mut ranges = Vec[Range].new();
+    let mut i = 0;
+    while i < nets.len() {
+        let n = nets[i].clone();
+        ranges.push(Range { last: net_last(n.clone()), first: net_first(n.clone()), net: n.clone(), merged: false });
+        i = i + 1;
+    }
+    // sort ascending by (last, first), stable
+    let mut a = 1;
+    while a < ranges.len() {
+        let mut b = a;
+        while b > 0 {
+            let l = ranges[b - 1].clone();
+            let r = ranges[b].clone();
+            let gt = (l.last > r.last) or (l.last == r.last and l.first > r.first);
+            if not gt { break; }
+            ranges[b - 1] = r;
+            ranges[b] = l;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    // merge adjacent/overlapping from the end
+    let mut idx = ranges.len();
+    if idx > 0 { idx = idx - 1; }
+    while idx > 0 {
+        let cur = ranges[idx].clone();
+        let prev = ranges[idx - 1].clone();
+        if cur.first - 1 <= prev.last {
+            let newfirst = if prev.first < cur.first { prev.first } else { cur.first };
+            ranges[idx - 1] = Range { last: cur.last, first: newfirst, net: prev.net.clone(), merged: true };
+            let mut nr = Vec[Range].new();
+            let mut j = 0;
+            while j < ranges.len() {
+                if j != idx { nr.push(ranges[j].clone()); }
+                j = j + 1;
+            }
+            ranges = nr;
+        }
+        idx = idx - 1;
+    }
+    let mut out = Vec[Net].new();
+    let mut r = 0;
+    while r < ranges.len() {
+        let rng = ranges[r].clone();
+        if not rng.merged {
+            out.push(rng.net.clone());
+        } else {
+            let cs = iprange_to_cidrs(Net { value: rng.first, prefixlen: 32 }, Net { value: rng.last, prefixlen: 32 });
+            let mut c = 0;
+            while c < cs.len() {
+                out.push(cs[c].clone());
+                c = c + 1;
+            }
+        }
+        r = r + 1;
+    }
+    out
+}
+
+fn valid_glob(ipglob: String) -> bool {
+    let octets = split_vec(ipglob, ".");
+    if octets.len() != 4 { return false; }
+    let mut seen_hyphen = false;
+    let mut seen_asterisk = false;
+    let mut i = 0;
+    while i < octets.len() {
+        let octet = octets[i].clone();
+        let parts = split_vec(octet.clone(), "-");
+        if parts.len() == 2 {
+            if seen_hyphen { return false; }
+            seen_hyphen = true;
+            if seen_asterisk { return false; }
+            let o1 = parse_uint(parts[0].clone());
+            let o2 = parse_uint(parts[1].clone());
+            if o1 < 0 or o2 < 0 { return false; }
+            if o1 >= o2 { return false; }
+            if not (o1 >= 0 and o1 <= 254) { return false; }
+            if not (o2 >= 1 and o2 <= 255) { return false; }
+        } else if octet == "*" {
+            seen_asterisk = true;
+        } else {
+            if seen_hyphen { return false; }
+            if seen_asterisk { return false; }
+            let v = parse_uint(octet.clone());
+            if v < 0 or v > 255 { return false; }
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn globerr(g: String) -> String {
+    "not a recognised IP glob range: '" + g.clone() + "'!"
+}
+
+fn glob_to_iptuple(ipglob: String) -> Result[Pair, String] {
+    if not valid_glob(ipglob.clone()) { return Err(globerr(ipglob.clone())); }
+    let octets = split_vec(ipglob, ".");
+    let mut sv = 0;
+    let mut ev = 0;
+    let mut i = 0;
+    while i < 4 {
+        let octet = octets[i].clone();
+        let parts = split_vec(octet.clone(), "-");
+        let mut so = 0;
+        let mut eo = 0;
+        if parts.len() == 2 {
+            so = parse_uint(parts[0].clone());
+            eo = parse_uint(parts[1].clone());
+        } else if octet == "*" {
+            so = 0;
+            eo = 255;
+        } else {
+            so = parse_uint(octet.clone());
+            eo = so;
+        }
+        sv = (sv << 8) | so;
+        ev = (ev << 8) | eo;
+        i = i + 1;
+    }
+    Ok(Pair { a: sv, b: ev })
+}
+
+// One IP glob for [lb, ub], or Err to signal "needs CIDR splitting".
+fn iprange_to_glob_one(lb: i64, ub: i64) -> Result[String, String] {
+    let t1 = octets_of(lb);
+    let t2 = octets_of(ub);
+    let mut tokens = Vec[String].new();
+    let mut seen_hyphen = false;
+    let mut seen_asterisk = false;
+    let mut i = 0;
+    while i < 4 {
+        if t1[i] == t2[i] {
+            tokens.push(dec_str(t1[i]));
+        } else if t1[i] == 0 and t2[i] == 255 {
+            tokens.push("*".to_string());
+            seen_asterisk = true;
+        } else {
+            if seen_asterisk { return Err("conv".to_string()); }
+            if seen_hyphen { return Err("conv".to_string()); }
+            tokens.push(dec_str(t1[i]) + "-" + dec_str(t2[i]));
+            seen_hyphen = true;
+        }
+        i = i + 1;
+    }
+    Ok(join_vec(tokens, "."))
+}
+
+fn iprange_to_globs(startv: i64, endv: i64) -> Vec[String] {
+    let one = iprange_to_glob_one(startv, endv);
+    let mut use_single = false;
+    let mut single_glob = String.new();
+    match one {
+        Ok(g) => {
+            if valid_glob(g.clone()) {
+                use_single = true;
+                single_glob = g;
+            }
+        }
+        Err(_) => {}
+    }
+    if use_single {
+        let mut globs = Vec[String].new();
+        globs.push(single_glob);
+        return globs;
+    }
+    let mut globs = Vec[String].new();
+    let cs = iprange_to_cidrs(Net { value: startv, prefixlen: 32 }, Net { value: endv, prefixlen: 32 });
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i].clone();
+        match iprange_to_glob_one(net_first(c.clone()), net_last(c.clone())) {
+            Ok(g) => { globs.push(g); }
+            Err(_) => {}
+        }
+        i = i + 1;
+    }
+    globs
+}
+
+fn glob_to_cidrs(ipglob: String) -> Result[Vec[Net], String] {
+    match glob_to_iptuple(ipglob) {
+        Ok(p) => { Ok(iprange_to_cidrs(Net { value: p.a, prefixlen: 32 }, Net { value: p.b, prefixlen: 32 })) }
+        Err(e) => { Err(e) }
+    }
+}
+
+fn cidr_to_glob(n: Net) -> Result[String, String] {
+    let globs = iprange_to_globs(net_first(n.clone()), net_last(n.clone()));
+    if globs.len() != 1 { return Err("bad CIDR to IP glob conversion!".to_string()); }
+    Ok(globs[0].clone())
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "net" {
+        match parse_network(arg.clone()) {
+            Ok(n) => { return "net=" + net_str(n.clone()) + " cidr=" + net_str(net_cidr(n.clone())); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "merge" {
+        let toks = split_vec(arg.clone(), ",");
+        let mut nets = Vec[Net].new();
+        let mut i = 0;
+        while i < toks.len() {
+            match parse_network(toks[i].clone()) {
+                Ok(n) => { nets.push(n); }
+                Err(e) => { return "error=" + e; }
+            }
+            i = i + 1;
+        }
+        return "cidrs=" + join_nets(cidr_merge(nets));
+    }
+    if op == "span" {
+        let toks = split_vec(arg.clone(), ",");
+        if toks.len() < 2 { return "error=IP sequence must contain at least 2 elements!".to_string(); }
+        let mut nets = Vec[Net].new();
+        let mut i = 0;
+        while i < toks.len() {
+            match parse_network(toks[i].clone()) {
+                Ok(n) => { nets.push(n); }
+                Err(e) => { return "error=" + e; }
+            }
+            i = i + 1;
+        }
+        return "cidr=" + net_str(spanning(nets));
+    }
+    if op == "range2cidr" {
+        let toks = split_vec(arg.clone(), ",");
+        match parse_ipv4(toks[0].clone()) {
+            Ok(av) => {
+                match parse_ipv4(toks[1].clone()) {
+                    Ok(bv) => { return "cidrs=" + join_nets(iprange_to_cidrs(Net { value: av, prefixlen: 32 }, Net { value: bv, prefixlen: 32 })); }
+                    Err(_) => { return "error=bad".to_string(); }
+                }
+            }
+            Err(_) => { return "error=bad".to_string(); }
+        }
+    }
+    if op == "exclude" {
+        let toks = split_vec(arg.clone(), "|");
+        let mut tn = Net { value: 0, prefixlen: 32 };
+        let mut en = Net { value: 0, prefixlen: 32 };
+        match parse_network(toks[0].clone()) {
+            Ok(n) => { tn = n; }
+            Err(e) => { return "error=" + e; }
+        }
+        match parse_network(toks[1].clone()) {
+            Ok(n) => { en = n; }
+            Err(e) => { return "error=" + e; }
+        }
+        let part = partition(tn, en);
+        let mut res = Vec[Net].new();
+        let mut i = 0;
+        while i < part.left.len() {
+            res.push(part.left[i].clone());
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < part.right.len() {
+            res.push(part.right[j].clone());
+            j = j + 1;
+        }
+        return "cidrs=" + join_nets(res);
+    }
+    if op == "glob2cidr" {
+        match glob_to_cidrs(arg.clone()) {
+            Ok(cs) => { return "cidrs=" + join_nets(cs); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "cidr2glob" {
+        match parse_network(arg.clone()) {
+            Ok(n) => {
+                match cidr_to_glob(n) {
+                    Ok(g) => { return "glob=" + g; }
+                    Err(e) => { return "error=" + e; }
+                }
+            }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "glob2range" {
+        match glob_to_iptuple(arg.clone()) {
+            Ok(p) => { return "range=" + dotted(p.a) + "-" + dotted(p.b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "range2glob" {
+        let toks = split_vec(arg.clone(), ",");
+        match parse_ipv4(toks[0].clone()) {
+            Ok(av) => {
+                match parse_ipv4(toks[1].clone()) {
+                    Ok(bv) => { return "globs=" + join_vec(iprange_to_globs(av, bv), ","); }
+                    Err(_) => { return "error=bad".to_string(); }
+                }
+            }
+            Err(_) => { return "error=bad".to_string(); }
+        }
+    }
+    if op == "validglob" {
+        if valid_glob(arg.clone()) { return "valid=true".to_string(); }
+        return "valid=false".to_string();
+    }
+    "error=unknown op".to_string()
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 { continue; }
+        let fields: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        if fields.len() < 2 { continue; }
+        out.push_str("== " + fields[0].clone() + " | " + fields[1].clone() + "\n");
+        out.push_str("  " + run(fields[0].clone(), fields[1].clone()) + "\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("net\t192.0.2.5/24\n");
+    s.push_str("net\t10.0.0.0/8\n");
+    s.push_str("net\t203.0.113.200/26\n");
+    s.push_str("merge\t192.0.2.0/24,192.0.3.0/24,10.0.0.1,10.0.0.2\n");
+    s.push_str("merge\t10.0.0.0/8,10.1.0.0/16,192.168.0.0/16\n");
+    s.push_str("merge\t192.0.2.0/25,192.0.2.128/25\n");
+    s.push_str("merge\t1.2.3.4,1.2.3.4,1.2.3.5\n");
+    s.push_str("span\t192.0.2.0/24,192.0.3.128/25\n");
+    s.push_str("span\t10.0.0.1,10.0.0.255,10.0.1.5\n");
+    s.push_str("span\t172.16.0.0/16,172.17.0.0/16,172.18.0.0/16\n");
+    s.push_str("range2cidr\t192.0.2.1,192.0.2.100\n");
+    s.push_str("range2cidr\t10.0.0.0,10.0.0.255\n");
+    s.push_str("range2cidr\t0.0.0.0,255.255.255.255\n");
+    s.push_str("range2cidr\t192.0.2.128,192.0.2.129\n");
+    s.push_str("exclude\t192.0.2.0/24|192.0.2.64/26\n");
+    s.push_str("exclude\t10.0.0.0/8|10.1.2.0/24\n");
+    s.push_str("exclude\t192.0.2.0/24|198.51.100.0/24\n");
+    s.push_str("glob2cidr\t192.0.2.0-31\n");
+    s.push_str("glob2cidr\t192.0.2.*\n");
+    s.push_str("glob2cidr\t10.0-1.*.*\n");
+    s.push_str("glob2cidr\t192.0.2.17-70\n");
+    s.push_str("cidr2glob\t192.0.2.0/24\n");
+    s.push_str("cidr2glob\t10.0.0.0/23\n");
+    s.push_str("cidr2glob\t192.0.2.128/26\n");
+    s.push_str("cidr2glob\t0.0.0.0/0\n");
+    s.push_str("glob2range\t10.0.*.*\n");
+    s.push_str("glob2range\t192.0.2.10-20\n");
+    s.push_str("range2glob\t192.0.2.1,192.0.3.254\n");
+    s.push_str("range2glob\t10.0.0.0,10.0.3.255\n");
+    s.push_str("validglob\t192.0.2.*\n");
+    s.push_str("validglob\t192.0.2.5-3\n");
+    s.push_str("validglob\t1.2.3.4-5\n");
+    s.push_str("validglob\tfoo\n");
+    s.push_str("validglob\t1.2.3.4.5\n");
+    s.push_str("net\tnot.an.ip/24\n");
+    s.push_str("glob2cidr\t1.2.3\n");
+    s.push_str("span\t10.0.0.1\n");
+    s
+}
