@@ -1,0 +1,15 @@
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+struct W { id: i64, s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+fn idOpt[T](g: Option[T]) -> Option[T] { return g }
+fn idRes[T](g: Result[T, i64]) -> Result[T, i64] { return g }
+fn main() {
+    let a: Option[String] = Option.Some("dddddddd-4");
+    let x = idOpt(a);
+    let c: Option[String] = Option.Some("eeeeeeee-5");
+    let y = idOpt(c);
+    match x { Option.Some(v) => { println(f"n{v.len()}") } Option.None => { println("none") } }
+    match y { Option.Some(v) => { println(f"n{v.len()}") } Option.None => { println("none") } }
+    println("end");
+}

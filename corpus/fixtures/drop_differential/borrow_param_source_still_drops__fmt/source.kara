@@ -1,0 +1,2 @@
+fn peek(s: ref String) -> i64 { return s.len(); }
+fn main() { let s: String = "payload_bytes_kept_comfortably_long_enough_x".to_string(); let a: i64 = peek(s); println(a + s.len()); }

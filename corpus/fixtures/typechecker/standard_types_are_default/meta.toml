@@ -14,5 +14,5 @@ note = "a v2 record: legacy codegen refused the program; expected.out follows de
 bucket = "e-spec"
 classified_with = "c3f84545b"
 extracted_src = "99bb22f3"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "99bb22f3"

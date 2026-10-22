@@ -1,0 +1,6 @@
+struct P4 { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+enum Kp { A(P4), B }
+fn mkp(i: i64) -> P4 { return P4 { a: i, b: 0, c: 0, d: 0, e: 0, f: 0 }; }
+enum Jp { C(P4), D }
+fn show(x: Result[Kp, Jp]) { match x { Result.Ok(Kp.A(p)) => { println(f"a:{p.a}"); }, Result.Ok(Kp.B) => {}, Result.Err(Jp.C(p)) => { println(f"c:{p.a}"); }, Result.Err(Jp.D) => {} } }
+fn main() { let mut i = 0; while i < 3 { show(Result.Ok(Kp.A(mkp(i)))); show(Result.Err(Jp.C(mkp(i)))); i = i + 1; } println("end") }

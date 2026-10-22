@@ -1,0 +1,9 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"heap-{n}" }; }
+struct H2 { v: Vec[D] }
+fn main() {
+    let mut h: H2 = H2 { v: [mkd(1), mkd(2)] };
+    h.v = [mkd(3), mkd(4)];
+    println("mid");
+}

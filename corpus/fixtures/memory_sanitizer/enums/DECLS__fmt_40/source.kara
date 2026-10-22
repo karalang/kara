@@ -1,0 +1,15 @@
+enum G1[T] { Y(T), N }
+struct H[T] { g: G1[T] }
+struct H2[T] { h: H[T] }
+struct In1[T] { g: G1[T] }
+struct Out1[T] { g: In1[T] }
+fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn wrapSame[T](g: G1[T], c: bool) -> Out1[T] { if c { return Out1 { g: In1 { g: g } } } return Out1 { g: In1 { g: G1.N } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"mx {v.len()}") } G1.N => { println("mx 0") } } }
+fn fnTail() { let g: G1[String] = G1.Y("ffffffff-6"); let h = wrap(g, true); shw(h.g) }
+fn main() {
+    { let g: G1[String] = G1.Y("cccccccc-3"); let h = wrapNest(g, true); shw(h.h.g) }
+    { let g: G1[String] = G1.Y("dddddddd-4"); let o = wrapSame(g, true); shw(o.g.g) }
+    println("end");
+}

@@ -1,0 +1,2 @@
+enum Box3 { Full(String), Empty }
+fn main() { let b: Box3 = Full("payload_bytes_kept_comfortably_long_enough_x".to_string()); match b { Full(_) => { println(1i64); }, Empty => {} } }

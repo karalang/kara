@@ -13,6 +13,6 @@ env = {}
 bucket = "e-differs:stdout"
 classified_with = "e4ff86f12"
 extracted_src = "5a1df91c"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "5a1df91c"
 row = "B-2026-10-22-32"

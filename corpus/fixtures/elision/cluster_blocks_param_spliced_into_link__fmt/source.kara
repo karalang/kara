@@ -1,0 +1,10 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn graft(seed: ListNode) -> i64 {
+let dummy = ListNode { val: 0, next: None };
+dummy.next = Some(seed);
+dummy.val
+}
+fn main() {
+let s = ListNode { val: 9, next: None };
+println(graft(s));
+}

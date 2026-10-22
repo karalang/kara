@@ -1,0 +1,5 @@
+fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"t{n}"); v }
+struct Inner { tags: Vec[String] }
+             struct Outer { id: i64, inner: Inner }
+             fn main() { let p = (Outer { id: 41, inner: Inner { tags: mkv(3) } }, 1);
+             println(f"{p.1}") }

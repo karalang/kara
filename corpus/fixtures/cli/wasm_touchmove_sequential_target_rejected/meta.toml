@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:runtime: in main#resume at bbN[term]: in touchmove at bbN[term]: call of unknow"
 classified_with = "e4ff86f12"
 extracted_src = "6f972701"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "6f972701"

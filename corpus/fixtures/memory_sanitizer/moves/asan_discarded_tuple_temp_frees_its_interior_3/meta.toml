@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "96091d5d"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "96091d5d"
 v2_reject = "core-semantics §4.1: a bare parameter borrows (D5). karac check: cannot give away parameter `r`: a bare parameter borrows (core-semantics §4.1), and an owned 'R' is wanted here. Take it by value with `r: own R`, or hand on a copy with `.clone()`"

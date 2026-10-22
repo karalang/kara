@@ -1,0 +1,5 @@
+struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"drop S{self.name}") } }
+fn main() { let a: Array[S, 2] = [S { id: 1, name: f"x{1}" },
+                                      S { id: 2, name: f"y{2}" }];
+             let b = a; println("moved"); }

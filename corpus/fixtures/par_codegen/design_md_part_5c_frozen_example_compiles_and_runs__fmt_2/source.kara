@@ -1,0 +1,17 @@
+
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node {
+    let leaf: Node = Node { val: 1, neighbors: Vec.new() };
+    let mut kids: Vec[Node] = Vec.new();
+    kids.push(leaf);
+    return Node { val: 10, neighbors: kids };
+}
+fn sum(n: Node, depth: i64) -> i64 {
+if depth <= 0 { return n.val; }
+return n.val;
+}
+fn main() {
+let root: Node = build();
+let (a, b) = par { let a = sum(root, 3); let b = sum(root, 3); (a, b) };
+println((a + b).to_string());
+}

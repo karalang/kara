@@ -1,0 +1,7 @@
+struct Ar { id: i64 }
+impl Drop for Ar { fn drop(mut ref self) { println(f"dAr{self.id}"); } }
+enum Bin { Packed(Array[Ar, 2]), Bare }
+fn main() {
+    let b: Bin = Bin.Packed([Ar { id: 1 }, Ar { id: 2 }]);
+    println("x");
+}

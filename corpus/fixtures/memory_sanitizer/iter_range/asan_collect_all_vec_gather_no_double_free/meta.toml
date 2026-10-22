@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "235353af"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "235353af"
 v2_reject = "core-semantics §11.7 (D4): `collect_all` / `collect_all_vec` are removed (kata thread, 2026-10-09)"

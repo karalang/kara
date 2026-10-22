@@ -1,0 +1,18 @@
+source = "tests/codegen/concurrency.rs::PRE__fmt"
+dedup_of = ["tests/memory_sanitizer/concurrency.rs::PRE__fmt"]
+expect = "stdout"
+exit = 0
+tags = ["format-filled", "par", "src:legacy-tests", "post-m1:par"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "b1ea23a5b"
+extracted_src = "d0a5a54b"
+model_rev = "205d5cda"
+model_src = "d0a5a54b"
+v2_reject = "core-semantics §11.1: a `par` block's branches are comma-separated expressions. karac check: a `par` block's branches are comma-separated expressions, not statements (core-semantics.md §11.1): write `let (a, b) = par { f(), g() };` and use `a` and `b` after it, or `par { f(), g() };` when the values are not needed"

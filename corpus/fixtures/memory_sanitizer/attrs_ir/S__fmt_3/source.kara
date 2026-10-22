@@ -1,0 +1,8 @@
+struct S { s: String }
+fn plainV(x: Option[Vec[S]]) {
+    match x { Some(t) => { println(f"s:{t[0].s}") } None => { println("n") } }
+}
+fn main() {
+    let v: Vec[S] = [S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }];
+    plainV(Some(v));
+}

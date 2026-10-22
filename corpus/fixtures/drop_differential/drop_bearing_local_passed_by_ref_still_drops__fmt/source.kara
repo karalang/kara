@@ -1,0 +1,4 @@
+struct T { tag: i64, name: String }
+impl Drop for T { fn drop(mut ref self) { println(f"D{self.tag}"); } }
+fn peek(t: ref T) -> i64 { return t.name.len(); }
+fn main() { let t: T = T { tag: 1i64, name: "payload_bytes_kept_comfortably_long_enough_x".to_string() }; println(peek(t)); }

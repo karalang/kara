@@ -14,5 +14,5 @@ note = "legacy differs from the kata's own oracle; expected.out is the different
 bucket = "e-spec"
 classified_with = "5399776c0"
 extracted_src = "0538da32"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "0538da32"

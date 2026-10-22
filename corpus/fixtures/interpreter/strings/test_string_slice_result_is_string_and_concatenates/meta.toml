@@ -13,6 +13,6 @@ env = {}
 bucket = "check-refuses:E0208"
 classified_with = "e4ff86f12"
 extracted_src = "7bb226ee"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "7bb226ee"
 row = "B-2026-10-22-40"

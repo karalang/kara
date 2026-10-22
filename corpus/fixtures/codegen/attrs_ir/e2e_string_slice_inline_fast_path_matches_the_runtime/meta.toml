@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "f79387ba"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "f79387ba"
 v2_reject = "v2 rule E0516; `karac fix` cannot rewrite it. karac check: cannot mutably borrow `src` while `keep` still holds a borrow of it, taken at 20:16 (core-semantics.md §5.6) [E0516]. Finish using the borrow first, or take a copy of the value (`.clone()`, `.cloned()`, `*r` for a `Copy` value) where it is borrowed"

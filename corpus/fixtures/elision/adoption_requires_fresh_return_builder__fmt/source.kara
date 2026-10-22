@@ -1,0 +1,8 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn just_none() -> Option[ListNode] {
+None
+}
+fn main() {
+let out = just_none();
+if out.is_some() { println(1); }
+}

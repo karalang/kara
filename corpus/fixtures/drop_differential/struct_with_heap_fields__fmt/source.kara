@@ -1,0 +1,2 @@
+struct Payload { tag: i64, name: String, items: Vec[String] }
+fn main() { let p: Payload = Payload { tag: 1i64, name: "payload_bytes_kept_comfortably_long_enough_x".to_string(), items: Vec["payload_bytes_kept_comfortably_long_enough_x".to_string()] }; println(p.tag + p.name.len() + p.items.len()); }

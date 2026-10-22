@@ -1,0 +1,4 @@
+struct W1 { v: i64 }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn take(o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { let q = x[0].v; return q } None => { return 0 } } }
+fn main() { let r = take(Some([W1 { v: 40 }])); println(f"r:{r}"); println("end") }

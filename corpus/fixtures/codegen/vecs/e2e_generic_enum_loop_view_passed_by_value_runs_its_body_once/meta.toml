@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 model_note = "move out of a ref place (C3): a reference passed where an owned value is expected"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "f586d440"
 model_verdict = "V2-REJECT"

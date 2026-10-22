@@ -1,0 +1,8 @@
+fn ok_disjoint(out: mut ref Vec[f64], n: i64) { for i in 0i64..n { let x = (i as f64) * 0.001; out[i] = x.sin() * x.cos() + x.sqrt() * x.ln() + x.exp() * x.tan(); } }
+fn incl_disjoint(out: mut ref Vec[f64], n: i64) { for i in 0i64..=n { let x = (i as f64) * 0.001; out[i] = x.sin() * x.cos() + x.sqrt() * x.ln() + x.exp() * x.tan(); } }
+fn const_trip(out: mut ref Vec[f64]) { for i in 0i64..8i64 { let x = (i as f64) * 0.001; out[i] = x.sin() * x.cos() + x.sqrt() * x.ln() + x.exp() * x.tan(); } }
+fn light(out: mut ref Vec[i64], n: i64) { for i in 0i64..n { out[i] = i; } }
+fn work(i: i64) -> f64 { let x = (i as f64) * 0.001; return x.sin() * x.cos(); }
+fn cheap_call(out: mut ref Vec[f64], n: i64) { for i in 0i64..n { out[i] = work(i); } }
+fn indirect(out: mut ref Vec[i64], idx: Vec[i64], n: i64) { for i in 0i64..n { out[idx[i]] = i * i * i + (i / 3i64) * (i % 7i64); } }
+fn main() { println(1); }

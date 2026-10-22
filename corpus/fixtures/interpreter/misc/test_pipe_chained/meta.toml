@@ -13,6 +13,6 @@ env = {}
 bucket = "e-not-refused:any"
 classified_with = "e4ff86f12"
 extracted_src = "65f14f3a"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "65f14f3a"
 v2_reject = "design.md § Function values: there is no pipe operator `|>` (check should refuse it, B-2026-10-22-33)"

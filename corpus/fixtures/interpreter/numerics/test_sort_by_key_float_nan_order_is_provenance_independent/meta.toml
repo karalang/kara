@@ -14,5 +14,5 @@ note = "library/core-types.md § Printing: a float prints the shortest digits of
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "6ec007af"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "6ec007af"

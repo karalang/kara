@@ -1,0 +1,9 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { R { id: n } }
+fn idr(r: R) -> R { r }
+fn eat(r: R) -> i64 { r.id }
+fn two(a: R, b: R) -> R { a }
+fn takeb(a: R, b: R) -> R { b }
+fn fresh(a: R) -> R { R { id: 99 } }
+fn main() { let q = mk(15); let b = mk(16); let q = two(q, b); println(f"q={q.id}") }

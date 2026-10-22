@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { R { id: n } }
+fn f(r: R) -> i64 { let r = mk(99); r.id }
+fn main() {
+    let d = f(mk(15));
+    println(f"d={d}");
+}

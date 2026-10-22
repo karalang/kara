@@ -1,0 +1,13 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+enum Box2 { Full(Res), Empty }
+struct Taker { tag: i64 }
+impl Taker { fn take(ref self, b: Box2) -> i64 { println(f"in"); 1 } }
+fn main() {
+    let t: Taker = Taker { tag: 1 };
+    let b: Box2 = Box2.Full(Res { id: 7, name: f"e7" });
+    let v: i64 = t.take(b);
+    println(f"end {v}");
+}

@@ -1,0 +1,10 @@
+struct Q { b: i64, c: i64 }
+fn seed() -> i64 { env.args().len() }
+fn mkq(n: i64) -> Q { return Q { b: n, c: seed() }; }
+impl Q { fn take(self) -> i64 { return self.b; } }
+fn go() -> i64 {
+  let (t, u) = par { let t = mkq(9); let u = mkq(10); (t, u) };
+  let mut i = 0i64;
+  while i < 3i64 { t.take(); u.take(); i = i + 1; }
+  return t.b + u.b; }
+fn main() { println(go()); }

@@ -1,0 +1,7 @@
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn main() {
+let s = Stats { count: 0, total: 0, active: true };
+s.count = s.count + 1;
+s.total = s.total + 10;
+println(s.total);
+}

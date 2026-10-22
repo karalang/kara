@@ -1,0 +1,5 @@
+struct S { s: String }
+fn plainV(x: Result[Vec[S], i64]) {
+    match x { Ok(t) => { println(f"s:{t.len()}") } Err(e) => { println("n") } }
+}
+fn main() { plainV(Ok([S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }])); }

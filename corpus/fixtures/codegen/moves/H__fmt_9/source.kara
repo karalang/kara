@@ -1,0 +1,7 @@
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn main() { println(f"v{eat(mkw(7).r)}"); println("end") }

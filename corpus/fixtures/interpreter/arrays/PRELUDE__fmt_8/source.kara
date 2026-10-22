@@ -1,0 +1,7 @@
+struct Ar { id: i64 }
+impl Drop for Ar { fn drop(mut ref self) { println(f"dAr{self.id}"); } }
+enum Vbin { V(Vec[Ar]), Z }
+fn main() {
+    let v: Vbin = Vbin.V(Vec[Ar { id: 1 }, Ar { id: 2 }]);
+    println("x");
+}

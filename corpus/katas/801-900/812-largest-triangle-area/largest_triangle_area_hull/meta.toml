@@ -14,5 +14,5 @@ note = "legacy differs from the kata's own oracle; expected.out is the kata's Py
 bucket = "e-spec"
 classified_with = "3bd56f659"
 extracted_src = "190b73d9"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "190b73d9"

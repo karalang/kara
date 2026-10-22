@@ -1,0 +1,5 @@
+struct P { name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP[{self.name}]") } }
+fn fp(o: Result[(P, P), i64]) -> P { match o { Ok(t) => { return t.0; } Err(e) => { return P { name: "z" }; } } }
+fn sink(r: P) { println(f"sank[{r.name}]") }
+fn main() { sink(fp(Result.Ok((P { name: "a" }, P { name: "b" })))); }

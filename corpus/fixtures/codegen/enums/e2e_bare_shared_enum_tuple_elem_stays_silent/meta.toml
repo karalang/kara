@@ -14,5 +14,5 @@ note = "§6.1/§7: the tuple parameter drops at the callee's end, which releases
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "dfce3eb4"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "dfce3eb4"

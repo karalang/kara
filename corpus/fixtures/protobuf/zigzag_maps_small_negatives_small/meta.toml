@@ -14,5 +14,5 @@ note = "first literal of the holding test: '0' oracle written by hand: zigzag ma
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "a4d10a4a"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a4d10a4a"

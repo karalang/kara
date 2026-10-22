@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "69088f0c"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "69088f0c"
 v2_reject = "design.md §5 widening: u64 -> f64 is not implicit, write `as f64` (Thread B, 2026-10-08)"

@@ -1,0 +1,17 @@
+source = "tests/codegen/drop_order.rs::PRELUDE__fmt"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["drop", "format-filled", "shared", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "b1ea23a5b"
+extracted_src = "675a8058"
+model_rev = "205d5cda"
+model_src = "675a8058"

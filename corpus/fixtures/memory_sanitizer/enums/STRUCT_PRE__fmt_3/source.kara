@@ -1,0 +1,10 @@
+enum Val { Nothing, Ident(String) }
+fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Nothing => 0 } }
+fn val_none() -> Option[Val] { Option.None }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-moved-in-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mk_val() -> Option[Val] { Option.Some(Val.Ident(payload())) }
+fn val_err() -> Result[Val, i64] { Result.Err(7) }
+fn f(value: Result[Val, i64]) -> i64 { let mut vv = value; let mut acc = 0;
+   while let Ok(v) = vv { acc = acc + ident_len(v); vv = val_err(); } acc }
+fn main() { println(f(Result.Ok(Val.Ident(payload())))); }

@@ -1,0 +1,4 @@
+struct W1 { v: i64 }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn take(o: Result[Array[W1, 1], i64]) -> i64 { match o { Ok(x) => { return x[0].v } Err(e) => { return e } } }
+fn main() { let r = take(Ok([W1 { v: 40 }])); println(f"r:{r}"); println("end") }

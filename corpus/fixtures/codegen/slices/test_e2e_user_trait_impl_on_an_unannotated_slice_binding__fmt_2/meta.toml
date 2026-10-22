@@ -1,0 +1,17 @@
+source = "tests/codegen/slices.rs::test_e2e_user_trait_impl_on_an_unannotated_slice_binding__fmt"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["format-filled", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b1ea23a5b"
+extracted_src = "e4c9b690"
+model_rev = "205d5cda"
+model_src = "e4c9b690"

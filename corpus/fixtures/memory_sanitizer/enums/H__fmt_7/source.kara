@@ -1,0 +1,6 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+fn main() { let (gv, gn) = (E.A(R { id: 5, name: f"n{5}" }), 6);
+             println(f"{gn}") }

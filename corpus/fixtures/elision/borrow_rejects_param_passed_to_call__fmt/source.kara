@@ -1,0 +1,11 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn len(head: Option[ListNode]) -> i64 {
+if head.is_some() { 1 } else { 0 }
+}
+fn relay(head: Option[ListNode]) -> i64 {
+len(head)
+}
+fn main() {
+let s = ListNode { val: 9, next: None };
+println(relay(Some(s)));
+}

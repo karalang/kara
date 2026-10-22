@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn eat(p: Array[String, 2]) { let q = p; println(f"in:{q[0]}"); }
+fn main() {
+    let a: Array[String, 2] = [pay(1), pay(2)];
+    eat(a);
+}

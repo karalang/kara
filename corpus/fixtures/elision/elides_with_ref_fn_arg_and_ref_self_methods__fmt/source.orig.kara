@@ -1,0 +1,11 @@
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn reader(s: ref Stats) -> i64 { s.total }
+impl Stats {
+fn bump(mut ref self, n: i64) { self.total = self.total + n; }
+fn snapshot(ref self) -> i64 { self.total }
+}
+fn main() {
+let s = Stats { count: 0, total: 0, active: true };
+s.bump(3);
+println(s.snapshot() + reader(s));
+}

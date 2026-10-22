@@ -1,0 +1,6 @@
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn make() -> Stats { Stats { count: 0, total: 0, active: true } }
+fn main() {
+let s = make();
+println(s.total);
+}

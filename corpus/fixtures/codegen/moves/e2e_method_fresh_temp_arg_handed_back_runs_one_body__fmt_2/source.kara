@@ -1,0 +1,16 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+enum Box2 { Full(R), Empty }
+struct T { n: i64 }
+impl T { fn keep(ref self, b: Box2) -> i64 {
+    match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } } }
+struct K { n: i64 }
+impl K { fn f(ref self, r: R, keep: bool) -> Option[R] {
+    if keep { return Option.Some(r); }
+    return Option.None; } }
+fn main() {
+let t = T { n: 1 };
+let n = t.keep(Box2.Full(mk(7)));
+println(f"n{n}");
+}

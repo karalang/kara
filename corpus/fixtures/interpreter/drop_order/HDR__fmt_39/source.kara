@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { R { id: n } }
+fn one(r: R) -> i64 { println("in-one"); r.id }
+fn main() {
+    let a1 = mk(1);
+    let a2 = mk(2);
+    let v = one(if true { a1 } else { a2 });
+    println(f"v={v}");
+}

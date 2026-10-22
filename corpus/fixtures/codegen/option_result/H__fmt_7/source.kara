@@ -1,0 +1,6 @@
+struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct A {}
+impl A { fn amk(k: i64) -> S { return S { id: k } } }
+fn sink(r: S) { println(f"sank{r.id}") }
+fn main() { sink(A.amk(5)); }

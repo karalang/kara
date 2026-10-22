@@ -14,5 +14,5 @@ note = "a template its test fills in with `DIR`, filled in by template.toml with
 bucket = "e-spec"
 classified_with = "f6f2efb14"
 extracted_src = "560f4f30"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "560f4f30"

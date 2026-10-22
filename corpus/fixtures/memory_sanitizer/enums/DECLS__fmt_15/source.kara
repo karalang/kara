@@ -1,0 +1,11 @@
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct Q { id: i64 }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
+fn eat() {
+    let a: Option[(P, Q, i64, i64)] = Option.Some((P { id: 4 }, Q { id: 5 }, 2, 3));
+    match a { Option.Some(t) => { let x = t.0; let y = t.1; println("mid1"); } Option.None => { println("n"); } }
+    let b: Option[(P, Q, i64, i64)] = Option.Some((P { id: 6 }, Q { id: 7 }, 2, 3));
+    match b { Option.Some(t) => { let y = t.1; println("mid2"); } Option.None => { println("n"); } }
+}
+fn main() { eat(); println("end"); }

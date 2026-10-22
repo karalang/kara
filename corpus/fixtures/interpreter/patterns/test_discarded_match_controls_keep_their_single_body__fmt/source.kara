@@ -1,0 +1,4 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk() -> R { return R { id: 1 }; }
+fn main() { mk(); println("dropped"); }

@@ -1,0 +1,6 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> String { f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+struct H { n: i64 }
+impl H { fn pick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } a } }
+fn main() { let x = H.pick(R { id: 1, s: mk(1) }, true); println(f"x={x.id}"); }

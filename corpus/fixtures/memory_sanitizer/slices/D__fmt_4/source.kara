@@ -1,0 +1,10 @@
+struct D { s: String, id: i64 }
+fn main() {
+    let mut a: Array[Array[D, 1], 2] = [[D { s: f"aaaaaaaaaaaa0", id: 0 }], [D { s: f"bbbbbbbbbbbb0", id: 0 }]];
+    let mut i = 1;
+    while i < 4 {
+        a[0] = [D { s: f"MUTATEDMUTATED{i}", id: i }];
+        i = i + 1;
+    }
+    println("end");
+}

@@ -1,0 +1,2 @@
+enum G[T] { X(T), Y }
+fn main() { let g: G[String] = X("payload_bytes_kept_comfortably_long_enough_x".to_string()); println(1i64); }

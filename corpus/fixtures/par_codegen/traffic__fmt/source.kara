@@ -1,0 +1,28 @@
+shared struct Node { val: i64, mut kids: Vec[Node] }
+fn build() -> Node {
+let r = Node { val: 1, kids: [] };
+let b = Node { val: 2, kids: [] };
+let c = Node { val: 4, kids: [] };
+b.kids.push(c);
+r.kids.push(b);
+r
+}
+fn bfs(root: frozen Node) -> i64 {
+let mut work: Vec[Node] = Vec.new();
+work.push(root);
+let mut i: i64 = 0;
+let mut total: i64 = 0;
+while i < work.len() {
+let n = work[i as u64];
+total = total + n.val;
+for k in n.kids { work.push(k); }
+i = i + 1;
+}
+total
+}
+fn main() {
+let r = build();
+let g = freeze r;
+let (a, b) = par { let a = bfs(g); let b = bfs(g); (a, b) };
+println(f"{a},{b}");
+}

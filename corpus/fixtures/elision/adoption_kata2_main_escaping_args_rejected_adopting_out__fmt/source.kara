@@ -1,0 +1,55 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+let head = ListNode { val: 1, next: None };
+let mut tail = head;
+let mut i = 2;
+while i <= n {
+let node = ListNode { val: i, next: None };
+tail.next = Some(node);
+tail = node;
+i = i + 1;
+}
+Some(head)
+}
+fn consume(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+let dummy = ListNode { val: 0, next: None };
+let mut tail = dummy;
+let mut a = l1;
+let mut b = l2;
+loop {
+let mut s: i64 = 0;
+let mut done = true;
+if let Some(n) = a {
+s = s + n.val;
+a = n.next;
+done = false;
+}
+if let Some(n) = b {
+s = s + n.val;
+b = n.next;
+done = false;
+}
+if done {
+break;
+}
+let node = ListNode { val: s, next: None };
+tail.next = Some(node);
+tail = node;
+}
+dummy.next
+}
+fn main() {
+let l1 = build(4);
+let l2 = build(4);
+let mut total = 0;
+let mut iter = 0;
+while iter < 3 {
+let out = consume(l1, l2);
+match out {
+Some(node) => { total = total + node.val; }
+None => {}
+}
+iter = iter + 1;
+}
+println(total);
+}

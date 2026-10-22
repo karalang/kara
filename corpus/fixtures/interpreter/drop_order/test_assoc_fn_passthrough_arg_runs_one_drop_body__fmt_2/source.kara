@@ -1,0 +1,5 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> String { return f"pay-{i}" }
+fn idf(a: R) -> R { return a }
+fn main() { let x = idf(R { id: 1, s: mk(1) }); println(f"x={x.id}") }

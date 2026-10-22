@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "7ec265aa"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "7ec265aa"
 v2_reject = "core-semantics §4.1: a bare parameter borrows (D5). karac check: cannot give away parameter `alt`: a bare parameter borrows (core-semantics §4.1), and an owned 'T' is wanted here. Take it by value with `alt: own T`, or hand on a copy with `.clone()`"

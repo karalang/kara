@@ -1,0 +1,4 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G[T] { X(T), Y }
+fn main() { { let v: Vec[R] = [R { id: 31, s: f"aaa" }, R { id: 32, s: f"bbb" }]; let w: G[Vec[R]] = G.X(v); println("mid") } println("done") }

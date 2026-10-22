@@ -1,0 +1,6 @@
+fn whole_body() -> i64 { let mut s = 0; for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; } return s; }
+fn in_if(go: bool) -> i64 { let mut s = 0; if go { for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; } } return s; }
+fn in_block() -> i64 { let mut s = 0; { for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; } } return s; }
+fn in_else_if(k: i64) -> i64 { let mut s = 0; if k == 0 { } else if k == 1 { for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; } } return s; }
+fn in_match(k: i64) -> i64 { let mut s = 0; match k { 0 => { for i in 0..200000 { s = s + (i * 7919) % 104729 + (i * 31) % 97; } } _ => { } } return s; }
+fn main() { println(1); }

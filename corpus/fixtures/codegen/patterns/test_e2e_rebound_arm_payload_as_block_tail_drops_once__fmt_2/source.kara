@@ -1,0 +1,16 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+enum Box2 { Full(R), Empty }
+fn take(o: Box2) -> R {
+    match o {
+        Box2.Full(r) => { let m = r; return m; }
+        Box2.Empty => { return R { id: 0 }; }
+    }
+}
+fn main() {
+    let o: Box2 = Box2.Full(R { id: 1 });
+    let k = take(o);
+    println(f"C k={k.id}");
+}

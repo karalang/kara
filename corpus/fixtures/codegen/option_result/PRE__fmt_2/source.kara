@@ -1,0 +1,17 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"D{self.id}[{self.name}]"); }
+}
+struct W { r: Res }
+fn mko(i: i64) -> Option[Res] {
+    return Option.Some(Res { id: i, name: f"pay{i}" });
+}
+fn eat(r: Res) -> i64 { return r.name.len(); }
+fn main() {
+    let o: Option[Res] = Option.Some(Res { id: 5, name: f"pay{5}" });
+    match o {
+        Option.Some(r) => { println(eat(r)); }
+        Option.None => { println("none"); }
+    }
+    println("e-end");
+}

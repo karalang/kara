@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct P { name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP[{self.name}]") } }
+fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => { return t.0.clone(); } None => { return P { name: "z" }; } } }
+fn sink(r: P) { println(f"sank[{r.name}]") }
+fn main() { sink(fp(Some((P { name: "a" }, P { name: "b" })))); }

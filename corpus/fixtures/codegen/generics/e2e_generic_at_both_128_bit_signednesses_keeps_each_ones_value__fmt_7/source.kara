@@ -1,0 +1,2 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn main() { let c: i64 = -5; let d: u64 = 18446744073709551615u64; println(show(c)); println(show(d)); }

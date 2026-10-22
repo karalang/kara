@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'a Map keyed by a hand-written Hash +
 bucket = "a"
 classified_with = "db0aa9a19"
 extracted_src = "c9af4d96"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "c9af4d96"

@@ -1,0 +1,4 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G[T] { X(T), Y }
+fn main() { { let a: Array[R, 2] = [R { id: 21, s: f"aaa" }, R { id: 22, s: f"bbb" }]; let w: G[Array[R, 2]] = G.X(a); println("mid") } println("done") }

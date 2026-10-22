@@ -1,0 +1,8 @@
+struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct H { n: i64 }
+impl H { fn mk(ref self, k: i64) -> S { return S { id: k } }
+fn viaself(ref self, k: i64) -> S { return self.mk(k) }
+fn eat(ref self, o: Option[(S, S)]) -> S { match o { Some(t) => { return t.0; } None => { return S { id: 0 }; } } } }
+fn sink(r: S) { println(f"sank{r.id}") }
+fn main() { let h = H { n: 1 }; sink(h.mk(2)); }

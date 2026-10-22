@@ -1,0 +1,8 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+let o: Option[R] = Some(mk(1));
+let _ = match o { Some(r) => r, None => mk(9) };
+println("end");
+}

@@ -1,0 +1,1 @@
+fn main() { let v: Vec[String] = Vec["payload_bytes_kept_comfortably_long_enough_x".to_string()]; let ov: Option[Vec[String]] = Some(v); match ov { Some(_) => { println(1i64); }, None => {} } }

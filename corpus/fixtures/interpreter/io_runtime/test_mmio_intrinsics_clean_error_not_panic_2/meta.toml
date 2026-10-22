@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'ptr.const' legacy refused or crashed
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "90aa744d"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "90aa744d"

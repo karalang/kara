@@ -1,0 +1,4 @@
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+fn main() { let o: Option[E] = Some(E.A(f"n{7}"));
+             println("mid"); }

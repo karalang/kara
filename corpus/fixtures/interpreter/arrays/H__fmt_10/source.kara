@@ -1,0 +1,9 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"ss{n}" }; }
+struct G[T] { a: T }
+fn main() {
+    let v: Vec[D] = [mkd(1), mkd(2)];
+    let g: G[Vec[D]] = G { a: v };
+    println("end");
+}

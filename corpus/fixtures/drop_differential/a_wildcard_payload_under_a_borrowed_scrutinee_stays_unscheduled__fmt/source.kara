@@ -1,0 +1,2 @@
+fn peek(o: ref Option[Vec[String]]) -> i64 { match o { Some(_) => { 1i64 }, None => { 0i64 } } }
+fn main() { let v: Vec[String] = Vec["payload_bytes_kept_comfortably_long_enough_x".to_string()]; let ov: Option[Vec[String]] = Some(v); println(peek(ov)); }

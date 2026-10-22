@@ -1,0 +1,8 @@
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn pick() -> Stats {
+let escapes = Stats { count: 1, total: 1, active: true };
+let local = Stats { count: 2, total: 2, active: true };
+println(local.total);
+escapes
+}
+fn main() { let p = pick(); println(p.total); }

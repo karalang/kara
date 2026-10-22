@@ -1,0 +1,3 @@
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+fn main() { let p = (B, 1); let (_, n) = p; println(f"{n}") }

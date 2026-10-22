@@ -1,0 +1,1 @@
+fn main() { let mut m: Map[String, i64] = Map.new(); m.insert("payload_bytes_kept_comfortably_long_enough_x".to_string(), 1i64); let mut st: Set[String] = Set.new(); st.insert("payload_bytes_kept_comfortably_long_enough_x".to_string()); println(m.len() + st.len()); }

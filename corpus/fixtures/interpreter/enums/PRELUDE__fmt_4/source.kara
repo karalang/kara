@@ -1,0 +1,10 @@
+enum OwnOnly { A(i64), B(i64) }
+impl Drop for OwnOnly { fn drop(mut ref self) { println("dO"); } }
+fn mk3(n: i64) -> OwnOnly {
+if n < 1 { return OwnOnly.A(n); }
+return OwnOnly.B(7);
+}
+fn main() {
+    mk3(1);
+    println("mid");
+}

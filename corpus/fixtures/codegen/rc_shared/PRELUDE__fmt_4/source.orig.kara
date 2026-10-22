@@ -1,0 +1,20 @@
+struct Rs { id: i64, name: String }
+impl Drop for Rs {
+    fn drop(mut ref self) {
+        println(f"dS{self.id}")
+    }
+}
+fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
+struct Bs { mut one: Rs, mut two: Rs }
+struct Ps { mut a: String, mut b: i64 }
+fn main() {
+    println("c2");
+    let mut h = Bs { one: mks(3), two: mks(4) };
+    let straight = h.one;
+    println(f"t{straight.id}");
+    println("c3");
+    let mut p = Ps { a: "payload", b: 1 };
+    let mut j = 0;
+    while j < 2 { let s = p.a; println(f"L{s.len()}"); j = j + 1; }
+    println("end");
+}

@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:the builtin `UserDB.healthy` is not lowered yet; 5:62 in `use_db`: the builtin `"
 classified_with = "db0aa9a19"
 extracted_src = "cf890bf5"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "cf890bf5"

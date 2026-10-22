@@ -1,0 +1,11 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"ss{n}" }; }
+struct G[T] { a: T }
+fn main() {
+    let mut d: VecDeque[D] = VecDeque.new();
+    d.push_back(mkd(1));
+    d.push_back(mkd(2));
+    let g: G[VecDeque[D]] = G { a: d };
+    println("end");
+}

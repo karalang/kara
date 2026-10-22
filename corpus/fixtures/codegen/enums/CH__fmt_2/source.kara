@@ -1,0 +1,9 @@
+#[derive(Hash, Eq, PartialEq)]
+enum Tg { Named { s: String }, Num { n: i64 } }
+impl Drop for Tg { fn drop(mut ref self) { println("dD") } }
+fn mkd(n: i64) -> Tg { return Tg.Named { s: f"aaaaaaaaaaaaaaaa-{n}" }; }
+fn main() {
+    let mut v: Vec[Tg] = Vec.new();
+    v.push(mkd(0i64));
+    println(f"len:{v.len()}");
+}

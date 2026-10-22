@@ -1,0 +1,2 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn main() { let b: u128 = 340282366920938463463374607431768211455u128; let a: i128 = -7i128; println(show(b)); println(show(a)); }

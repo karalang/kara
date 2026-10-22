@@ -1,0 +1,5 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Sk { n: i64 }
+impl Sk { fn pick(ref self, r: R, flag: bool) -> R { if flag { return r } return R { id: 90 + r.id } } }
+fn main() { let s = Sk { n: 1 }; let k = s.pick(R { id: 1 }, true); println(f"k:{k.id}"); println("end") }

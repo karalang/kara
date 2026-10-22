@@ -6,10 +6,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9095 / 9293 = 97.9%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7491 / 7655 = 97.9%.
-- Every classified non-deferred program (context): 14513 / 15759 = 92.1%.
+- Every classified non-deferred program (context): 15387 / 16628 = 92.5%.
 - Bench variants (outside the gate): 206 / 837 = 24.6%; timeouts 572.
-- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 4422 / 4566 = 96.8%; failing mir-gap 63, check-refuses 42, e-not-refused 27, e-differs 10, b-fix-incomplete 2.
-- Deferred (class d): 721; outside the slice (`post-m1:*`): 1063.
+- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5279 / 5417 = 97.5%; failing mir-gap 57, check-refuses 42, e-not-refused 28, e-differs 9, b-fix-incomplete 2.
+- Deferred (class d): 721; outside the slice (`post-m1:*`): 1081.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
 ## Denominator by bucket (slice)
@@ -63,10 +63,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | tag | programs |
 |---|---|
-| post-m1:par | 251 |
+| post-m1:par | 267 |
 | post-m1:escaping | 201 |
 | post-m1:simd | 198 |
-| post-m1:net | 118 |
+| post-m1:net | 120 |
 | post-m1:provider | 89 |
 | post-m1:contract | 67 |
 | post-m1:wasm | 51 |
@@ -76,7 +76,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3299): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3567): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -511,6 +511,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/cli/wasm_bf16_aggregate_params_build_and_match_native`
 - `fixtures/cli/wasm_f16_conversion_build_and_run_e2e`
 - `fixtures/cli/wasm_f16_generic_arithmetic_build_and_run_e2e`
+- `fixtures/codegen/arrays/HDR__fmt`
 - `fixtures/codegen/arrays/e2e_array_param_handed_back_by_the_callee_is_freed_once`
 - `fixtures/codegen/arrays/e2e_array_param_handed_back_on_some_exits_is_dropped_once`
 - `fixtures/codegen/arrays/e2e_array_param_into_multi_field_enum_variant_stays_with_caller`
@@ -537,6 +538,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/closures/test_ir_closure_float`
 - `fixtures/codegen/closures/test_server_serve_rejects_closure_handler`
 - `fixtures/codegen/concurrency/e2e_arm_channel_owning_temp_vs_borrow_scrutinees`
+- `fixtures/codegen/control/H__fmt`
 - `fixtures/codegen/control/e2e_a_let_clears_a_stale_param_view_mark`
 - `fixtures/codegen/control/e2e_deeper_frame_reassign_rearms_the_new_value`
 - `fixtures/codegen/control/e2e_deeper_frame_reassign_rearms_the_new_value_2`
@@ -552,6 +554,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/control/test_e2e_unshadowed_total_order_wrapper_keeps_its_behaviour`
 - `fixtures/codegen/control/test_ir_let_rebind_tcp_listener_suppresses_double_close`
 - `fixtures/codegen/direct_libm_calls_are_declared_as_optimizable_as_the_intrinsics`
+- `fixtures/codegen/drop_order/F__fmt`
+- `fixtures/codegen/drop_order/F__fmt_2`
 - `fixtures/codegen/drop_order/codegen_boxed_array_enum_payload_bodies_are_caller_sequenced`
 - `fixtures/codegen/drop_order/codegen_generic_multi_field_enum_array_payload_runs_element_bodies`
 - `fixtures/codegen/drop_order/e2e_arm_bound_param_payload_rebind_runs_its_bodies_once`
@@ -568,10 +572,29 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/drop_order/e2e_named_receiver_part_handed_back_runs_its_body_once`
 - `fixtures/codegen/drop_order/e2e_nested_generic_field_with_own_drop_runs_its_body`
 - `fixtures/codegen/drop_order/e2e_owned_enum_receiver_handed_back_through_the_return_runs_each_body_once`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_11`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_12`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_13`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_14`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_15`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_17`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_18`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_19`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_21`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_30`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_31`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_8`
+- `fixtures/codegen/drop_order/e2e_owned_param_temps_drop_in_reverse_argument_order__fmt_9`
 - `fixtures/codegen/drop_order/e2e_owned_self_temp_receiver_runs_drop_bodies`
 - `fixtures/codegen/drop_order/e2e_param_receiver_part_handed_back_runs_its_body_once`
 - `fixtures/codegen/drop_order/e2e_param_tuple_elements_run_drop_bodies`
 - `fixtures/codegen/drop_order/e2e_scalar_read_through_drop_field_keeps_every_body`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt_2`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt_3`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt_4`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt_7`
+- `fixtures/codegen/drop_order/e2e_shadowed_binding_drops_its_own_value__fmt_8`
 - `fixtures/codegen/drop_order/e2e_shadowed_binding_moved_out_on_the_taken_path_runs_each_body_once`
 - `fixtures/codegen/drop_order/e2e_struct_field_leaf_moved_out_of_an_arm_runs_its_body_once`
 - `fixtures/codegen/drop_order/e2e_struct_reassign_displaced_drop_semantics`
@@ -598,8 +621,37 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/effects/test_assert_false_emits_failure_and_short_circuits`
 - `fixtures/codegen/effects/test_assert_record_failure_carries_call_site_line_col`
 - `fixtures/codegen/effects/test_e2e_errdefer_phase1_before_defer_lifo`
+- `fixtures/codegen/enums/ARG__fmt`
+- `fixtures/codegen/enums/ARG__fmt_10`
+- `fixtures/codegen/enums/ARG__fmt_11`
+- `fixtures/codegen/enums/ARG__fmt_12`
+- `fixtures/codegen/enums/ARG__fmt_13`
+- `fixtures/codegen/enums/ARG__fmt_14`
+- `fixtures/codegen/enums/ARG__fmt_2`
+- `fixtures/codegen/enums/ARG__fmt_3`
+- `fixtures/codegen/enums/ARG__fmt_4`
+- `fixtures/codegen/enums/ARG__fmt_5`
+- `fixtures/codegen/enums/ARG__fmt_7`
+- `fixtures/codegen/enums/ARG__fmt_9`
+- `fixtures/codegen/enums/DUP2__fmt`
+- `fixtures/codegen/enums/DUP2__fmt_10`
+- `fixtures/codegen/enums/DUP2__fmt_11`
+- `fixtures/codegen/enums/DUP2__fmt_12`
+- `fixtures/codegen/enums/DUP2__fmt_13`
+- `fixtures/codegen/enums/DUP2__fmt_14`
+- `fixtures/codegen/enums/DUP2__fmt_15`
+- `fixtures/codegen/enums/DUP2__fmt_17`
+- `fixtures/codegen/enums/DUP2__fmt_2`
+- `fixtures/codegen/enums/DUP2__fmt_3`
+- `fixtures/codegen/enums/DUP2__fmt_4`
+- `fixtures/codegen/enums/DUP2__fmt_5`
+- `fixtures/codegen/enums/DUP2__fmt_7`
+- `fixtures/codegen/enums/DUP2__fmt_8`
+- `fixtures/codegen/enums/DUP2__fmt_9`
 - `fixtures/codegen/enums/H_15`
 - `fixtures/codegen/enums/PRE_18`
+- `fixtures/codegen/enums/PRE__fmt_3`
+- `fixtures/codegen/enums/PRE__fmt_7`
 - `fixtures/codegen/enums/e2e_bare_shared_enum_tuple_elem_stays_silent`
 - `fixtures/codegen/enums/e2e_boxed_handback_call_scrutinee_over_param`
 - `fixtures/codegen/enums/e2e_boxed_tuple_payload_elem_move_runs_each_body_once`
@@ -636,7 +688,14 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/enums/e2e_struct_named_like_enum_generic_param_gets_no_phantom_drop_walker`
 - `fixtures/codegen/enums/e2e_variant_name_shared_by_two_enums_binds_at_its_own_offsets`
 - `fixtures/codegen/enums/test_e2e_f16_bf16_enum_payload_pack_unpack`
+- `fixtures/codegen/enums/test_e2e_nonescaping_enum_arg_payload_still_fires_once__fmt`
+- `fixtures/codegen/enums/test_e2e_nonescaping_enum_arg_payload_still_fires_once__fmt_2`
+- `fixtures/codegen/enums/test_e2e_rebound_non_param_payload_still_fires_once__fmt_3`
 - `fixtures/codegen/enums/test_e2e_rebound_owned_param_payload_drops_once_2`
+- `fixtures/codegen/enums/test_e2e_rebound_owned_param_payload_drops_once__fmt`
+- `fixtures/codegen/enums/test_e2e_rebound_owned_param_payload_drops_once__fmt_2`
+- `fixtures/codegen/enums/test_e2e_rebound_owned_param_payload_drops_once__fmt_3`
+- `fixtures/codegen/enums/test_e2e_returned_enum_arg_payload_method_spelling_fires_once__fmt_3`
 - `fixtures/codegen/enums/test_e2e_transfer_owned_enum_field_arg_runs_its_payload_body_once`
 - `fixtures/codegen/families/b_2026_09_17_11/e2e_shared_handle_in_optres_struct_payload_runs_its_body_once`
 - `fixtures/codegen/families/b_2026_09_17_12/e2e_boxed_generic_enum_readonly_arm_is_a_view`
@@ -944,6 +1003,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/generics/e2e_generic_parent_projection_destructure_hands_the_body_to_the_leaf`
 - `fixtures/codegen/generics/e2e_generic_receiver_literal_with_arithmetic_field_initializer`
 - `fixtures/codegen/generics/e2e_param_through_returning_callee_bound_locally_runs_one_body`
+- `fixtures/codegen/generics/e2e_static_assoc_fn_arg_temps_own_their_values__fmt_3`
+- `fixtures/codegen/generics/e2e_static_assoc_fn_arg_temps_own_their_values__fmt_4`
+- `fixtures/codegen/generics/e2e_static_assoc_fn_arg_temps_own_their_values__fmt_5`
 - `fixtures/codegen/gpu_tensor/test_e2e_autograd_activations`
 - `fixtures/codegen/gpu_tensor/test_e2e_autograd_grad_value_and_grad`
 - `fixtures/codegen/gpu_tensor/test_e2e_autograd_scalar_arithmetic`
@@ -954,6 +1016,15 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/io_runtime/test_e2e_file_sync_all_and_sync_data_persist_contents`
 - `fixtures/codegen/io_runtime/test_e2e_fs_read_lines_splits_file_into_vec`
 - `fixtures/codegen/io_runtime/the_two_hashers_order_the_same_keys_differently_in_one_process`
+- `fixtures/codegen/iter_range/R__fmt`
+- `fixtures/codegen/iter_range/R__fmt_2`
+- `fixtures/codegen/iter_range/R__fmt_3`
+- `fixtures/codegen/iter_range/R__fmt_4`
+- `fixtures/codegen/iter_range/R__fmt_5`
+- `fixtures/codegen/iter_range/R__fmt_6`
+- `fixtures/codegen/iter_range/R__fmt_7`
+- `fixtures/codegen/iter_range/R__fmt_8`
+- `fixtures/codegen/iter_range/R__fmt_9`
 - `fixtures/codegen/iter_range/e2e_iter_adaptor_collect_stateful_passthrough_codegen`
 - `fixtures/codegen/iter_range/e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end`
 - `fixtures/codegen/iter_range/test_e2e_for_iter_mut_scalar`
@@ -996,6 +1067,12 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/mod/SCRUTINEE_CLONE_DROP_BODY_SRC`
 - `fixtures/codegen/mod/SORTED_DISPLAY_SRC`
 - `fixtures/codegen/mod/SORTED_MARKER_LEAK_SRC`
+- `fixtures/codegen/moves/H__fmt`
+- `fixtures/codegen/moves/H__fmt_2`
+- `fixtures/codegen/moves/H__fmt_4`
+- `fixtures/codegen/moves/H__fmt_5`
+- `fixtures/codegen/moves/H__fmt_6`
+- `fixtures/codegen/moves/H__fmt_9`
 - `fixtures/codegen/moves/e2e_bare_owned_struct_self_scrutinee_binds_views`
 - `fixtures/codegen/moves/e2e_cond_field_move_walk_stays_in_the_owning_frame`
 - `fixtures/codegen/moves/e2e_cond_field_move_walk_stays_in_the_owning_frame_2`
@@ -1066,9 +1143,59 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/numerics/test_ir_vector_exp_uses_polynomial_not_intrinsic`
 - `fixtures/codegen/numerics/test_ir_vector_ln_uses_polynomial_not_intrinsic`
 - `fixtures/codegen/numerics/test_numeric_generic_arithmetic`
+- `fixtures/codegen/option_result/H__fmt`
+- `fixtures/codegen/option_result/H__fmt_5`
 - `fixtures/codegen/option_result/PRE_54`
 - `fixtures/codegen/option_result/PRE_55`
 - `fixtures/codegen/option_result/PRE_57`
+- `fixtures/codegen/option_result/PRE__fmt`
+- `fixtures/codegen/option_result/RS__fmt`
+- `fixtures/codegen/option_result/RS__fmt_10`
+- `fixtures/codegen/option_result/RS__fmt_2`
+- `fixtures/codegen/option_result/RS__fmt_3`
+- `fixtures/codegen/option_result/RS__fmt_4`
+- `fixtures/codegen/option_result/RS__fmt_5`
+- `fixtures/codegen/option_result/RS__fmt_6`
+- `fixtures/codegen/option_result/RS__fmt_7`
+- `fixtures/codegen/option_result/RS__fmt_8`
+- `fixtures/codegen/option_result/RS__fmt_9`
+- `fixtures/codegen/option_result/R__fmt`
+- `fixtures/codegen/option_result/R__fmt_10`
+- `fixtures/codegen/option_result/R__fmt_11`
+- `fixtures/codegen/option_result/R__fmt_12`
+- `fixtures/codegen/option_result/R__fmt_17`
+- `fixtures/codegen/option_result/R__fmt_18`
+- `fixtures/codegen/option_result/R__fmt_19`
+- `fixtures/codegen/option_result/R__fmt_2`
+- `fixtures/codegen/option_result/R__fmt_20`
+- `fixtures/codegen/option_result/R__fmt_21`
+- `fixtures/codegen/option_result/R__fmt_22`
+- `fixtures/codegen/option_result/R__fmt_23`
+- `fixtures/codegen/option_result/R__fmt_24`
+- `fixtures/codegen/option_result/R__fmt_25`
+- `fixtures/codegen/option_result/R__fmt_26`
+- `fixtures/codegen/option_result/R__fmt_27`
+- `fixtures/codegen/option_result/R__fmt_28`
+- `fixtures/codegen/option_result/R__fmt_3`
+- `fixtures/codegen/option_result/R__fmt_30`
+- `fixtures/codegen/option_result/R__fmt_31`
+- `fixtures/codegen/option_result/R__fmt_32`
+- `fixtures/codegen/option_result/R__fmt_33`
+- `fixtures/codegen/option_result/R__fmt_34`
+- `fixtures/codegen/option_result/R__fmt_35`
+- `fixtures/codegen/option_result/R__fmt_36`
+- `fixtures/codegen/option_result/R__fmt_37`
+- `fixtures/codegen/option_result/R__fmt_38`
+- `fixtures/codegen/option_result/R__fmt_39`
+- `fixtures/codegen/option_result/R__fmt_4`
+- `fixtures/codegen/option_result/R__fmt_40`
+- `fixtures/codegen/option_result/R__fmt_41`
+- `fixtures/codegen/option_result/R__fmt_42`
+- `fixtures/codegen/option_result/R__fmt_5`
+- `fixtures/codegen/option_result/R__fmt_6`
+- `fixtures/codegen/option_result/R__fmt_7`
+- `fixtures/codegen/option_result/R__fmt_8`
+- `fixtures/codegen/option_result/R__fmt_9`
 - `fixtures/codegen/option_result/e2e_boxed_optres_param_stored_in_container_has_one_owner`
 - `fixtures/codegen/option_result/e2e_chained_or_result_rebind_of_boxed_param_runs_each_body_once`
 - `fixtures/codegen/option_result/e2e_fresh_tuple_option_binding_leaf_owns_its_payload_body`
@@ -1097,16 +1224,25 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/option_result/test_e2e_lowercase_fs_read_lines_question_unwrap`
 - `fixtures/codegen/option_result/test_e2e_method_and_assoc_arg_registrars_admit_only_when_the_result_owns_it`
 - `fixtures/codegen/option_result/test_e2e_mixed_halves_result_struct_field_freed`
+- `fixtures/codegen/option_result/test_e2e_nonescaping_option_arg_payload_still_fires_once__fmt`
+- `fixtures/codegen/option_result/test_e2e_nonescaping_option_arg_payload_still_fires_once__fmt_2`
 - `fixtures/codegen/option_result/test_e2e_optres_field_unwrap_runs_payload_drop_once`
 - `fixtures/codegen/option_result/test_e2e_process_try_wait_kill_reap`
 - `fixtures/codegen/option_result/test_e2e_result_struct_payload_field_freed_and_single_body`
 - `fixtures/codegen/option_result/test_e2e_tuple_held_optres_payload_freed_and_dropped`
 - `fixtures/codegen/option_result/test_e2e_unwrap_or_unused_fresh_default_runs_its_drop_once`
+- `fixtures/codegen/patterns/D__fmt`
+- `fixtures/codegen/patterns/D__fmt_2`
 - `fixtures/codegen/patterns/H_29`
 - `fixtures/codegen/patterns/H_53`
+- `fixtures/codegen/patterns/PRE__fmt`
 - `fixtures/codegen/patterns/SINK_2`
 - `fixtures/codegen/patterns/SINK_3`
 - `fixtures/codegen/patterns/SINK_5`
+- `fixtures/codegen/patterns/SINK__fmt`
+- `fixtures/codegen/patterns/SINK__fmt_2`
+- `fixtures/codegen/patterns/SINK__fmt_3`
+- `fixtures/codegen/patterns/SINK__fmt_4`
 - `fixtures/codegen/patterns/e2e_arm_bound_nested_tuple_payload_field_read_resolves`
 - `fixtures/codegen/patterns/e2e_arm_bound_tuple_payload_field_read_resolves`
 - `fixtures/codegen/patterns/e2e_bare_self_arm_passing_payload_to_scalar_fn_orders_payload_after_shell`
@@ -1153,6 +1289,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/patterns/e2e_wildcard_tuple_leaf_over_optres_owns_its_payload_body`
 - `fixtures/codegen/patterns/test_e2e_callee_move_does_not_disarm_a_caller_binding_of_the_same_name_2`
 - `fixtures/codegen/patterns/test_e2e_match_arm_returns_owned_param_element_runs_one_body`
+- `fixtures/codegen/patterns/test_e2e_rebound_arm_payload_as_block_tail_drops_once__fmt_4`
+- `fixtures/codegen/rc_shared/PRELUDE__fmt_2`
+- `fixtures/codegen/rc_shared/PRELUDE__fmt_4`
 - `fixtures/codegen/rc_shared/e2e_concrete_enum_handback_of_forwarded_struct_frees_its_field`
 - `fixtures/codegen/rc_shared/e2e_field_held_shared_struct_release_placement`
 - `fixtures/codegen/rc_shared/e2e_generic_enum_handback_of_shared_field_drop_struct_runs_body_once`
@@ -1179,6 +1318,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/strings/test_e2e_display_set_string_singleton`
 - `fixtures/codegen/strings/test_e2e_total_order_wrapper_from_and_display`
 - `fixtures/codegen/strings/test_e2e_user_impl_display_reaches_set_elements`
+- `fixtures/codegen/structs/H__fmt`
+- `fixtures/codegen/structs/H__fmt_2`
 - `fixtures/codegen/structs/e2e_deep_chain_field_assign_displaced_bodies`
 - `fixtures/codegen/structs/e2e_destructure_owner_mask_reaches_the_remaining_arms`
 - `fixtures/codegen/structs/e2e_destructured_part_or_bare_param_handed_to_a_taking_callee_has_one_owner`
@@ -1206,6 +1347,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/structs/e2e_two_step_nested_tuple_field_destructure_runs_one_body`
 - `fixtures/codegen/structs/e2e_whole_rebind_of_a_tuple_param_view_runs_one_body`
 - `fixtures/codegen/structs/e2e_whole_tuple_argument_to_a_method`
+- `fixtures/codegen/structs/forget_suppresses_destructor__fmt_2`
 - `fixtures/codegen/structs/test_e2e_call_result_struct_handed_back_by_callee_frees_original`
 - `fixtures/codegen/structs/test_e2e_contradicting_suffix_repairs_agree_across_backends`
 - `fixtures/codegen/structs/test_e2e_field_param_view_leaves_sibling_field_bodies_armed`
@@ -1297,7 +1439,29 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/http_server/test_server_serve_handler_reads_query_param`
 - `fixtures/http_server/test_server_serve_handler_sets_response_headers`
 - `fixtures/http_server/test_server_serve_handler_smoke`
+- `fixtures/interpreter/arrays/H__fmt`
+- `fixtures/interpreter/arrays/H__fmt_10`
+- `fixtures/interpreter/arrays/H__fmt_11`
+- `fixtures/interpreter/arrays/H__fmt_12`
+- `fixtures/interpreter/arrays/H__fmt_13`
+- `fixtures/interpreter/arrays/H__fmt_2`
+- `fixtures/interpreter/arrays/H__fmt_3`
+- `fixtures/interpreter/arrays/H__fmt_4`
+- `fixtures/interpreter/arrays/H__fmt_5`
+- `fixtures/interpreter/arrays/H__fmt_6`
+- `fixtures/interpreter/arrays/H__fmt_7`
+- `fixtures/interpreter/arrays/H__fmt_8`
+- `fixtures/interpreter/arrays/H__fmt_9`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_2`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_3`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_4`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_5`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_6`
+- `fixtures/interpreter/arrays/PRELUDE__fmt_8`
 - `fixtures/interpreter/arrays/test_generic_enum_array_payload_runs_element_drop_bodies_4`
+- `fixtures/interpreter/arrays/test_generic_enum_array_payload_runs_element_drop_bodies__fmt`
+- `fixtures/interpreter/arrays/test_generic_enum_array_payload_runs_element_drop_bodies__fmt_2`
+- `fixtures/interpreter/arrays/test_generic_enum_array_payload_runs_element_drop_bodies__fmt_3`
 - `fixtures/interpreter/closures/test_http_response_captures_all_headers_not_just_content_type`
 - `fixtures/interpreter/closures/test_pool_create_fn_can_be_a_closure_with_captures`
 - `fixtures/interpreter/concurrency/test_arm_channel_owning_temp_vs_borrow_scrutinees`
@@ -1308,6 +1472,25 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/control/test_deeper_frame_reassign_rearms_the_new_value`
 - `fixtures/interpreter/control/test_deeper_frame_reassign_rearms_the_new_value_2`
 - `fixtures/interpreter/control/test_deeper_frame_reassign_rearms_the_new_value_3`
+- `fixtures/interpreter/drop_order/HDR__fmt`
+- `fixtures/interpreter/drop_order/HDR__fmt_2`
+- `fixtures/interpreter/drop_order/HDR__fmt_3`
+- `fixtures/interpreter/drop_order/HDR__fmt_30`
+- `fixtures/interpreter/drop_order/HDR__fmt_31`
+- `fixtures/interpreter/drop_order/HDR__fmt_33`
+- `fixtures/interpreter/drop_order/HDR__fmt_34`
+- `fixtures/interpreter/drop_order/HDR__fmt_35`
+- `fixtures/interpreter/drop_order/HDR__fmt_36`
+- `fixtures/interpreter/drop_order/HDR__fmt_37`
+- `fixtures/interpreter/drop_order/HDR__fmt_39`
+- `fixtures/interpreter/drop_order/HDR__fmt_4`
+- `fixtures/interpreter/drop_order/HDR__fmt_40`
+- `fixtures/interpreter/drop_order/HDR__fmt_41`
+- `fixtures/interpreter/drop_order/HDR__fmt_43`
+- `fixtures/interpreter/drop_order/HDR__fmt_52`
+- `fixtures/interpreter/drop_order/HDR__fmt_53`
+- `fixtures/interpreter/drop_order/HDR__fmt_7`
+- `fixtures/interpreter/drop_order/HDR__fmt_8`
 - `fixtures/interpreter/drop_order/interp_array_param_handed_back_by_the_callee_is_freed_once`
 - `fixtures/interpreter/drop_order/interp_array_param_handed_back_on_some_exits_is_dropped_once`
 - `fixtures/interpreter/drop_order/interp_array_param_rebound_in_the_callee_is_a_view_of_the_callers_array`
@@ -1329,6 +1512,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/effects/test_errdefer_runs_before_defer_on_error_path`
 - `fixtures/interpreter/effects/test_tail_err_runs_errdefers_lifo_then_defers`
 - `fixtures/interpreter/effects/test_tracing_with_span_nesting_restores_outer`
+- `fixtures/interpreter/enums/PRELUDE__fmt`
 - `fixtures/interpreter/enums/test_a_lowercase_sub_binding_is_still_a_binding_not_a_variant_test`
 - `fixtures/interpreter/enums/test_boxed_tuple_payload_elem_move_runs_each_body_once`
 - `fixtures/interpreter/enums/test_deep_projection_scrutinee_runs_one_payload_body`
@@ -1354,6 +1538,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/families/b_2026_10_04_57/interp_tuple_elem_overwrite_runs_displaced_body`
 - `fixtures/interpreter/families/b_2026_10_04_64/interp_for_loop_over_fresh_vec_runs_element_bodies_per_iteration`
 - `fixtures/interpreter/families/b_2026_10_04_69/interp_payload_to_method_on_local_receiver_runs_its_body_once`
+- `fixtures/interpreter/families/b_2026_10_04_71/interp_compound_store_runs_each_subscript_once_per_half__fmt`
+- `fixtures/interpreter/families/b_2026_10_04_71/interp_nested_store_runs_each_subscript_once__fmt`
 - `fixtures/interpreter/families/b_2026_10_04_71/interp_store_subscript_that_propagates_skips_the_store`
 - `fixtures/interpreter/families/b_2026_10_04_73/interp_reassigned_moved_out_tuple_elem_runs_new_body`
 - `fixtures/interpreter/families/b_2026_10_04_74/interp_named_local_moved_into_place_on_one_path_owned_once`
@@ -1363,6 +1549,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/families/b_2026_10_05_86/interp_option_local_reassigned_after_a_move_runs_the_new_body`
 - `fixtures/interpreter/families/b_2026_10_06_100/interp_match_arm_payload_views_decided_per_arm`
 - `fixtures/interpreter/frames/test_narrow_float_assoc_call_namespace_runs`
+- `fixtures/interpreter/generics/interp_generic_impl_method_resolves_its_own_type_param__fmt`
+- `fixtures/interpreter/generics/interp_generic_impl_method_resolves_its_own_type_param__fmt_2`
 - `fixtures/interpreter/gpu_tensor/test_autograd_grad_value_and_grad`
 - `fixtures/interpreter/gpu_tensor/test_autograd_reverse_mode_scalar`
 - `fixtures/interpreter/io_runtime/test_http_request_builder_chain_applies_method_headers_and_body`
@@ -1457,11 +1645,22 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/numerics/test_sort_by_key_float_nan_order_is_provenance_independent`
 - `fixtures/interpreter/numerics/test_sort_by_key_float_nan_sorts_largest_interp_parity`
 - `fixtures/interpreter/numerics/test_sqrt_float`
+- `fixtures/interpreter/option_result/PRELUDE__fmt`
+- `fixtures/interpreter/option_result/PRELUDE__fmt_10`
+- `fixtures/interpreter/option_result/PRELUDE__fmt_2`
+- `fixtures/interpreter/option_result/PRELUDE__fmt_3`
+- `fixtures/interpreter/option_result/PRELUDE__fmt_6`
+- `fixtures/interpreter/option_result/PRELUDE__fmt_8`
 - `fixtures/interpreter/option_result/test_optres_payload_runs_user_drop_bodies`
 - `fixtures/interpreter/option_result/test_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed`
 - `fixtures/interpreter/option_result/test_result_agg_leaf_boxed_payload_by_value_call_keeps_body`
 - `fixtures/interpreter/option_result/test_result_ctor_tuple_temp_arg_keeps_its_payload_drop_body`
 - `fixtures/interpreter/option_result/test_result_struct_payload_field_freed_and_single_body`
+- `fixtures/interpreter/patterns/PRELUDE__fmt`
+- `fixtures/interpreter/patterns/PRELUDE__fmt_2`
+- `fixtures/interpreter/patterns/PRELUDE__fmt_3`
+- `fixtures/interpreter/patterns/PRELUDE__fmt_5`
+- `fixtures/interpreter/patterns/PRELUDE__fmt_6`
 - `fixtures/interpreter/patterns/test_agg_leaf_boxed_payload_moving_arm_frees_envelope`
 - `fixtures/interpreter/patterns/test_borrow_projection_view_materialized_by_arm_value_or_call_arg_copies`
 - `fixtures/interpreter/patterns/test_enum_payload_drops_reverse_and_readonly_arm_bindings_are_borrows`
@@ -1478,6 +1677,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/patterns/test_tuple_destructure_optres_leaf_owns_its_payload_body`
 - `fixtures/interpreter/patterns/test_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies`
 - `fixtures/interpreter/patterns/test_wildcard_let_discard_place_shapes_single_fire`
+- `fixtures/interpreter/rc_shared/PRE__fmt`
 - `fixtures/interpreter/rc_shared/removing_a_shared_key_releases_it_through_the_refcount`
 - `fixtures/interpreter/rc_shared/removing_a_shared_key_releases_it_through_the_refcount_2`
 - `fixtures/interpreter/rc_shared/test_struct_assign_move_heap_body_once`
@@ -1487,6 +1687,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/strings/test_cstr_as_ptr_rejects_with_runtime_error_not_panic`
 - `fixtures/interpreter/strings/test_option_result_display_multiword_payloads`
 - `fixtures/interpreter/strings/user_impl_display_reaches_set_and_sorted_collection_elements`
+- `fixtures/interpreter/structs/SRC__fmt`
+- `fixtures/interpreter/structs/SRC__fmt_2`
 - `fixtures/interpreter/structs/place_struct_arg_escaping_field_runs_one_body`
 - `fixtures/interpreter/structs/test_deep_chain_field_assign_displaced_bodies`
 - `fixtures/interpreter/structs/test_derive_default_struct_primitives`
@@ -1505,17 +1707,29 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/karac_jit_runner_repl/repl_runner_salvages_output_when_cell_calls_exit`
 - `fixtures/memory_sanitizer/arrays/H_3`
 - `fixtures/memory_sanitizer/arrays/H_9`
+- `fixtures/memory_sanitizer/arrays/H__fmt`
+- `fixtures/memory_sanitizer/arrays/H__fmt_2`
+- `fixtures/memory_sanitizer/arrays/H__fmt_3`
+- `fixtures/memory_sanitizer/arrays/H__fmt_4`
+- `fixtures/memory_sanitizer/arrays/H__fmt_5`
+- `fixtures/memory_sanitizer/arrays/H__fmt_6`
+- `fixtures/memory_sanitizer/arrays/H__fmt_7`
 - `fixtures/memory_sanitizer/arrays/asan_consuming_arm_over_a_boxed_array_payload_frees_the_interior_once`
 - `fixtures/memory_sanitizer/arrays/asan_drop_bearing_array_element_is_freed_once_through_a_consuming_arm`
 - `fixtures/memory_sanitizer/arrays/asan_named_array_local_into_seeded_ctor_has_one_owner`
 - `fixtures/memory_sanitizer/borrows/asan_borrow_projection_view_materialized_is_a_real_copy`
+- `fixtures/memory_sanitizer/closures/H__fmt_4`
 - `fixtures/memory_sanitizer/closures/asan_heap_env_local_string_capture_no_leak`
+- `fixtures/memory_sanitizer/concurrency/D__fmt`
+- `fixtures/memory_sanitizer/concurrency/D__fmt_2`
 - `fixtures/memory_sanitizer/concurrency/asan_par_field_bodies_walk_does_not_read_freed_buffer`
 - `fixtures/memory_sanitizer/control/asan_scalar_leaf_return_is_balanced`
 - `fixtures/memory_sanitizer/control/asan_self_assign_branch_arms_free_the_overwritten_value`
 - `fixtures/memory_sanitizer/drop_order/N_3`
 - `fixtures/memory_sanitizer/drop_order/OWN_3`
 - `fixtures/memory_sanitizer/drop_order/OWN_4`
+- `fixtures/memory_sanitizer/drop_order/TWINS__fmt`
+- `fixtures/memory_sanitizer/drop_order/TWINS__fmt_2`
 - `fixtures/memory_sanitizer/drop_order/asan_conditionally_rebound_enum_receiver_is_freed_once`
 - `fixtures/memory_sanitizer/drop_order/asan_dropless_struct_with_drop_fields_moved_into_a_keeping_callee_is_freed_once`
 - `fixtures/memory_sanitizer/drop_order/asan_enum_param_handed_back_on_some_paths_is_freed_once`
@@ -1537,7 +1751,32 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/drop_order/asan_priority_queue_peek_drop_count_is_one_per_returned_copy`
 - `fixtures/memory_sanitizer/drop_order/asan_scalar_read_through_drop_field_is_balanced`
 - `fixtures/memory_sanitizer/enums/DECLS_9`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_10`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_11`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_12`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_13`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_14`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_15`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_16`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_2`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_3`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_4`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_5`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_7`
+- `fixtures/memory_sanitizer/enums/DECLS__fmt_8`
+- `fixtures/memory_sanitizer/enums/H__fmt_11`
+- `fixtures/memory_sanitizer/enums/H__fmt_12`
+- `fixtures/memory_sanitizer/enums/H__fmt_3`
+- `fixtures/memory_sanitizer/enums/H__fmt_6`
+- `fixtures/memory_sanitizer/enums/H__fmt_7`
+- `fixtures/memory_sanitizer/enums/H__fmt_8`
 - `fixtures/memory_sanitizer/enums/PAYLOAD_2`
+- `fixtures/memory_sanitizer/enums/PRE__fmt_10`
+- `fixtures/memory_sanitizer/enums/PRE__fmt_11`
+- `fixtures/memory_sanitizer/enums/PRE__fmt_12`
+- `fixtures/memory_sanitizer/enums/PRE__fmt_13`
+- `fixtures/memory_sanitizer/enums/PRE__fmt_9`
 - `fixtures/memory_sanitizer/enums/ROUNDS_4`
 - `fixtures/memory_sanitizer/enums/asan_bare_variant_ctor_tuple_elem_keeps_one_owner`
 - `fixtures/memory_sanitizer/enums/asan_boxed_tuple_enum_payload_is_freed_in_every_position`
@@ -1636,6 +1875,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/map_set/asan_generic_method_whole_param_frees_the_entry_copy`
 - `fixtures/memory_sanitizer/map_set/asan_generic_whole_param_named_local_frees_the_entry_copy`
 - `fixtures/memory_sanitizer/map_set/asan_set_element_struct_field_buffers_freed`
+- `fixtures/memory_sanitizer/misc/PRE__fmt`
 - `fixtures/memory_sanitizer/misc/asan_declined_copy_param_rebind_keeps_the_callers_ownership`
 - `fixtures/memory_sanitizer/misc/asan_param_handed_back_through_a_rebind_leaves_one_owner`
 - `fixtures/memory_sanitizer/misc/asan_self_referential_by_value_param_touching_nothing_frees_its_box`
@@ -1651,11 +1891,17 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/moves/asan_projection_at_a_discarded_or_argument_tail_is_freed_once`
 - `fixtures/memory_sanitizer/moves/asan_projection_moved_through_a_value_position_is_freed_once`
 - `fixtures/memory_sanitizer/numerics/DECLS_4`
+- `fixtures/memory_sanitizer/numerics/DECLS__fmt`
+- `fixtures/memory_sanitizer/numerics/DECLS__fmt_2`
+- `fixtures/memory_sanitizer/numerics/DECLS__fmt_3`
 - `fixtures/memory_sanitizer/numerics/asan_print_a_map_or_set_place_expression_does_not_free_it`
 - `fixtures/memory_sanitizer/numerics/asan_roundtrip_reassign_frees_displaced_original`
 - `fixtures/memory_sanitizer/option_result/H_4`
 - `fixtures/memory_sanitizer/option_result/H_5`
 - `fixtures/memory_sanitizer/option_result/H_6`
+- `fixtures/memory_sanitizer/option_result/H__fmt`
+- `fixtures/memory_sanitizer/option_result/H__fmt_2`
+- `fixtures/memory_sanitizer/option_result/H__fmt_3`
 - `fixtures/memory_sanitizer/option_result/asan_boxed_optres_param_stored_in_container_is_freed_once`
 - `fixtures/memory_sanitizer/option_result/asan_chained_or_result_rebind_of_boxed_param_is_freed_once`
 - `fixtures/memory_sanitizer/option_result/asan_fresh_tuple_source_optres_leaf_owns_its_payload_body`
@@ -1669,8 +1915,22 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/option_result/asan_tuple_held_optres_payload_freed`
 - `fixtures/memory_sanitizer/option_result/asan_tuple_rebind_with_an_optres_element_frees_once`
 - `fixtures/memory_sanitizer/option_result/asan_unmutated_let_mut_rebind_of_optres_param_is_freed_once`
+- `fixtures/memory_sanitizer/patterns/H__fmt_10`
+- `fixtures/memory_sanitizer/patterns/H__fmt_11`
+- `fixtures/memory_sanitizer/patterns/H__fmt_12`
+- `fixtures/memory_sanitizer/patterns/H__fmt_13`
+- `fixtures/memory_sanitizer/patterns/H__fmt_15`
+- `fixtures/memory_sanitizer/patterns/H__fmt_2`
+- `fixtures/memory_sanitizer/patterns/H__fmt_6`
+- `fixtures/memory_sanitizer/patterns/H__fmt_7`
+- `fixtures/memory_sanitizer/patterns/H__fmt_8`
+- `fixtures/memory_sanitizer/patterns/H__fmt_9`
 - `fixtures/memory_sanitizer/patterns/W_2`
 - `fixtures/memory_sanitizer/patterns/W_3`
+- `fixtures/memory_sanitizer/patterns/W__fmt`
+- `fixtures/memory_sanitizer/patterns/W__fmt_2`
+- `fixtures/memory_sanitizer/patterns/W__fmt_3`
+- `fixtures/memory_sanitizer/patterns/W__fmt_6`
 - `fixtures/memory_sanitizer/patterns/asan_agg_leaf_boxed_payload_moving_arm_frees_envelope`
 - `fixtures/memory_sanitizer/patterns/asan_arm_bound_payload_assigned_over_a_mut_local_has_an_owner`
 - `fixtures/memory_sanitizer/patterns/asan_if_let_family_over_an_indexed_element_is_memory_clean`
@@ -1697,6 +1957,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/strings/asan_printed_map_or_set_temporary_frees_its_handle`
 - `fixtures/memory_sanitizer/strings/asan_sorted_map_and_set_display_frees_its_key_buffer`
 - `fixtures/memory_sanitizer/strings/asan_untyped_option_tuple_elem_frees_its_fstring_payload`
+- `fixtures/memory_sanitizer/structs/H__fmt`
+- `fixtures/memory_sanitizer/structs/H__fmt_3`
+- `fixtures/memory_sanitizer/structs/H__fmt_5`
+- `fixtures/memory_sanitizer/structs/H__fmt_6`
 - `fixtures/memory_sanitizer/structs/asan_destructure_discard_dies_in_the_statement_clean`
 - `fixtures/memory_sanitizer/structs/asan_field_param_view_sibling_bodies_free_exactly_once`
 - `fixtures/memory_sanitizer/structs/asan_field_rooted_indexed_container_store_freed`
@@ -1707,6 +1971,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/structs/asan_two_tuple_shapes_with_alike_element_sigs_free_their_own_offsets`
 - `fixtures/memory_sanitizer/vecs/H_3`
 - `fixtures/memory_sanitizer/vecs/H_5`
+- `fixtures/memory_sanitizer/vecs/H__fmt`
+- `fixtures/memory_sanitizer/vecs/H__fmt_2`
+- `fixtures/memory_sanitizer/vecs/H__fmt_3`
 - `fixtures/memory_sanitizer/vecs/asan_declared_vec_enum_payload_elements_keep_one_owner`
 - `fixtures/memory_sanitizer/vecs/asan_file_inside_a_nested_vec_is_closed_at_every_level`
 - `fixtures/memory_sanitizer/vecs/asan_file_moved_into_a_vec_is_closed_by_the_vec`
@@ -1868,6 +2135,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/par_codegen/test_e2e_par_block_result_single_err_overrides_join`
 - `fixtures/par_codegen/test_e2e_par_block_result_source_order_earliest_branch_wins`
 - `fixtures/parser/well_formed_interp_holes_report_nothing_2`
+- `fixtures/protobuf/len_delim_bytes_round_trip`
 - `fixtures/protobuf/varint_encodes_canonically`
 - `fixtures/protobuf/zigzag_maps_small_negatives_small`
 - `fixtures/safety_design/adversarial_move_source_while_borrow_live`

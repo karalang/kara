@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Q { r: R, s: R }
+struct A {}
+struct B {}
+impl A { fn dup(o: Option[Q]) -> Option[Q] { return o; } }
+impl B { fn dup(o: Option[Q]) -> Option[Q] { return o; } }
+fn main() { let g = A.dup(Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("kept"); println("end") }

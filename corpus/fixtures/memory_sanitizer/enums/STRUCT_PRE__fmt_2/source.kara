@@ -1,0 +1,7 @@
+struct R2 { s: String, t: String, u: String, a: i64, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}{seed()}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}", a: 1, b: 2 }; }
+fn r2_none() -> Option[R2] { Option.None }
+fn f(value: Option[R2]) -> i64 { let mut vv = value; let mut acc = 0;
+   while let Some(r) = vv { acc = acc + r.s.len(); vv = r2_none(); } acc }
+fn main() { println(f(Option.Some(mkr(1)))); }

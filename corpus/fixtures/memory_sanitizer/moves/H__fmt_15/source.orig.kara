@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn mk() -> String {
+    let v: Vec[String] = [pay(1), pay(2)];
+    return v[0];
+}
+fn main() { println(f"a0:{mk()}"); }

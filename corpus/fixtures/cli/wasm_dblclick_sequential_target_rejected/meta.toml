@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:runtime: in main#resume at bbN[term]: in dblclick at bbN[term]: call of unknown"
 classified_with = "e4ff86f12"
 extracted_src = "9e5127d8"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "9e5127d8"

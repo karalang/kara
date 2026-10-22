@@ -1,0 +1,4 @@
+trait Tag { fn tag(self) -> i64; }
+impl Tag for Array[String, 2] { fn tag(self) -> i64 { return 42i64; } }
+fn mk() -> Array[String, 2] { return ["a", "b"]; }
+fn main() { println(mk().tag()); }

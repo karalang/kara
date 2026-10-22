@@ -14,5 +14,5 @@ note = "v2 record: expected.out is the output tests/mir_io.rs asserts on both MI
 bucket = "e-spec"
 classified_with = "f6f2efb14"
 extracted_src = "4278b1dd"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "4278b1dd"

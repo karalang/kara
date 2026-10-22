@@ -14,5 +14,5 @@ note = "B-2026-10-18-47: an `f32` prints its own shortest digits (docs/library/c
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "3e7d77bb"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "3e7d77bb"

@@ -1,0 +1,4 @@
+struct Held { tag: i64, buf: String }
+impl Drop for Held { fn drop(mut ref self) { println(99i64); } }
+fn eat(o: Option[Held]) -> i64 { match o { Some(t) => { t.tag }, None => { 0i64 } } }
+fn main() { let ot: Option[Held] = Some(Held { tag: 7i64, buf: "payload_bytes_kept_comfortably_long_enough_x".to_string() }); println(eat(ot)); }

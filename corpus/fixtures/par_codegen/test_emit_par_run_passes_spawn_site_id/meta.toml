@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'declare void @karac_par_run(ptr, i64
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "f5480a6b"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "3071590e"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"

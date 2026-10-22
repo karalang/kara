@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+enum Box2 { Full(R), Empty }
+enum W { One(R), None2 }
+fn take(k: i64) -> i64 { let w = W.One(R { id: k }); 7 }
+fn main() { let v = take(1); println(f"v={v}"); }

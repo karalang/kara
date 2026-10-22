@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H { n: i64 }
+impl H { fn eat(ref self, o: Option[(R, R)]) { match o { Some(t) => { let x = t.0.clone(); println("mid"); } None => { println("n"); } } } }
+fn main() { let h = H { n: 1 }; h.eat(Some((R { id: 5 }, R { id: 6 }))); println("end") }

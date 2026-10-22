@@ -1,0 +1,8 @@
+enum G1[T] { Y(T), N }
+fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
+fn shc(g: G1[String]) { match g { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } } }
+fn two[T](a: G1[T], b: G1[T]) { match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } } match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } } }
+fn main() {
+    { let x: G1[String] = G1.Y("aaaaaaaaaaaaaaaaaaaaaaaa"); let y: G1[String] = G1.Y("bbbbbbbbbbbbbbbbbbbbbbbb"); two(x, y); shg(x); shg(y) }
+    println("end");
+}

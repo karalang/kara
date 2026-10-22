@@ -1,0 +1,10 @@
+enum M { P((i32, String)), Q }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let g: M = P((3i32, f"row-aaaaaaaaaaaaaaaa-{i}"));
+        println(f"t");
+        i = i + 1i64;
+    }
+    println(f"end");
+}

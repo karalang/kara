@@ -1,0 +1,16 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+enum Box2 { Full(Res), Empty }
+fn take(b: Box2) -> Res {
+    match b {
+        Box2.Full(r) => { return r; }
+        Box2.Empty => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn main() {
+    let b: Box2 = Box2.Full(Res { id: 7, name: f"e7" });
+    let r: Res = take(b);
+    println(f"got {r.id}");
+}

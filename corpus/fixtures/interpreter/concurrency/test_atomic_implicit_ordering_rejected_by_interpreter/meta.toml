@@ -14,5 +14,5 @@ note = "legacy refused or crashed; v2 output read and checked by hand (review-th
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "5124d3bb"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "5124d3bb"

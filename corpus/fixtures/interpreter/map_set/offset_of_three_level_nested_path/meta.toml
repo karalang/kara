@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:the expression kind `OffsetOf`"
 classified_with = "e4ff86f12"
 extracted_src = "a10a73b1"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a10a73b1"

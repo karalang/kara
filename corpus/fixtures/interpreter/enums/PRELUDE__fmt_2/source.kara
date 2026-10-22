@@ -1,0 +1,14 @@
+struct Leaf { id: i64 }
+impl Drop for Leaf { fn drop(mut ref self) { println(f"dL{self.id}"); } }
+struct Mid { leaf: Leaf }
+impl Drop for Mid { fn drop(mut ref self) { println("dM"); } }
+enum Bn { Full(Mid), Empty(Mid) }
+impl Drop for Bn { fn drop(mut ref self) { println("dBn"); } }
+fn mkn(n: i64) -> Bn {
+if n < 1 { return Bn.Full(Mid { leaf: Leaf { id: n } }); }
+return Bn.Empty(Mid { leaf: Leaf { id: 7 } });
+}
+fn main() {
+    mkn(1);
+    println("mid");
+}

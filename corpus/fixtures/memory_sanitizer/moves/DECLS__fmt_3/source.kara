@@ -1,0 +1,12 @@
+fn mkVec() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"aaaaaaaaaaaaaaaaaaaaaaaa-0");
+    v.push(f"bbbbbbbbbbbbbbbbbbbbbbbb-1");
+    return v;
+}
+fn ident[T](t: own T) -> T { return t; }
+fn main() {
+    { let vc = mkVec(); let c = ident(true); if c { vc[0].clone() } else { vc[1].clone() }; println(f"d{vc[0].len()}"); }
+    { let vk = mkVec(); let k = ident(true); let s = if k { vk[0].clone() } else { vk[1].clone() }; println(f"k{s.len()}"); println(f"r{vk[0].len()}"); }
+    println("end");
+}

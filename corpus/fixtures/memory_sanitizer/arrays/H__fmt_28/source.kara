@@ -1,0 +1,9 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+enum E { A((String, String, String)), B }
+fn main() {
+    let e = E.A((pay(1), pay(2), pay(3)));
+    match e {
+        E.A(u) => { println(f"a0:{u.0} a2:{u.2}") }
+        E.B => { println("b") }
+    }
+}

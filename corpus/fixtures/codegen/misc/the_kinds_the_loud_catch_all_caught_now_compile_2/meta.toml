@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "4c514708"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "4c514708"
 v2_reject = "design.md § 10 Results and propagation: `?` needs a function returning Result or Option. karac check: '?' requires the enclosing function to return `Result` or `Option`, found '()'"

@@ -1,0 +1,4 @@
+struct W { id: i64, name: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.name}") } }
+fn main() { let o: Option[(W, i64)] = Some((W { id: 3, name: f"n3" }, 9));
+            match o { Some(t) => { println(f"g{t.1}") } None => { println(f"n") } } }

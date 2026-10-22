@@ -1,0 +1,1 @@
+fn main() { let o: Option[String] = Some("payload_bytes_kept_comfortably_long_enough_x".to_string()); match o { Some(x) => { println(x.len()); }, None => {} } }

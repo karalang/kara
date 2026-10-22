@@ -1,0 +1,6 @@
+struct Ar { id: i64 }
+impl Drop for Ar { fn drop(mut ref self) { println(f"dAr{self.id}"); } }
+fn main() {
+    let a: Array[Ar, 2] = [Ar { id: 1 }, Ar { id: 2 }];
+    println("x");
+}

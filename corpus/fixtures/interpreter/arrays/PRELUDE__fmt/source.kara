@@ -1,0 +1,9 @@
+struct Ar { id: i64 }
+impl Drop for Ar { fn drop(mut ref self) { println(f"dAr{self.id}"); } }
+fn plainD(x: Option[Array[Ar, 2]]) {
+    match x { Some(t) => { println(f"s:{t[0].id}") } None => { println("n") } }
+}
+fn main() {
+    plainD(Some([Ar { id: 1 }, Ar { id: 2 }]));
+    println("end");
+}

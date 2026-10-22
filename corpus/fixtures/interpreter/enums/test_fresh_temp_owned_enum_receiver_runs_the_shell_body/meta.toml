@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 model_note = "move out of the payload of a type with a Drop body (C3)"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "91fb3a3d"
 model_verdict = "V2-REJECT"

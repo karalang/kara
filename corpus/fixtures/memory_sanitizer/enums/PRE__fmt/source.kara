@@ -1,0 +1,5 @@
+struct X1 { a: Option[i64], s: String }
+enum W { T(X1), U(i64) }
+fn mkx(i: i64) -> X1 { return X1 { a: Option.Some(i), s: f"s{i}" }; }
+fn rebind(w: W) -> i64 { let v = w; return match v { W.T(x) => x.a.unwrap_or(0), W.U(n) => n }; }
+fn main() { println(f"c={rebind(W.T(mkx(5)))}"); println("end") }

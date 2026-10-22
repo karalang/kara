@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "cda611a3"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "cda611a3"
 v2_reject = "core-semantics §14.1, §14.2: providers need a declared provider trait. karac check: `effect resource Ambient;` declares no provider trait, so `Ambient.now` has no method to call (core-semantics.md §14.1, §14.2): declare the trait its providers implement, `effect resource Ambient: SomeTrait;`, with `now` in it"

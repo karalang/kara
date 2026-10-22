@@ -1,0 +1,14 @@
+struct Pair[T] { x: T, y: T }
+impl[T: Add + Mul] Pair[T] {
+fn combine(ref self) -> T { self.x * self.y + self.x }
+fn twice(ref self) -> T { self.combine() + self.combine() }
+}
+struct Box[T] { v: T }
+impl[T] Box[T] {
+fn get(ref self) -> String { f"{self.v}" }
+fn chained(ref self) -> String { self.get() }
+}
+struct Two[A, B] { a: A, b: B }
+impl[A, B] Two[A, B] { fn show(ref self) -> String { f"{self.a}/{self.b}" } }
+fn outer[T](b: Box[T]) -> String { b.get() }
+fn main() { let bi = Box[i64] { v: -7 }; println(bi.get()); }

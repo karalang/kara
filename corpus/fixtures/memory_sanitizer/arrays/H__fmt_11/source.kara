@@ -1,0 +1,7 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn thru(p: (Array[String, 2], i64)) -> (Array[String, 2], i64) { return p; }
+fn main() {
+    let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);
+    let u = thru(t);
+    println(f"a0:{u.0[0]}");
+}

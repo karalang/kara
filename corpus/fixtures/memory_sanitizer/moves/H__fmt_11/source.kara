@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn f(p: (Vec[String], i64)) -> String { return p.0[0].clone(); }
+fn main() {
+    let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);
+    println(f"a0:{f(t)}");
+}

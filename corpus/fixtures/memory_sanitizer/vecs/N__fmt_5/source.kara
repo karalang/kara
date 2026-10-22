@@ -1,0 +1,4 @@
+fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"t{n}"); v }
+struct R { id: i64, tags: Vec[String] }
+             impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+             fn main() { let p = (R { id: 41, tags: mkv(3) }, 1); println(f"{p.1}") }

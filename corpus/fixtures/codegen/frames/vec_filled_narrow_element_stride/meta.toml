@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "75a7c859"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "75a7c859"
 v2_reject = "design.md § Collection literals: `[v; n]` builds an Array (decision 2026-10-19). karac check: a `[v; n]` literal builds an `Array`, not a `Vec`: write `Vec.filled(4, 9)` (design.md § Collection literals)"

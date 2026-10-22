@@ -1,0 +1,5 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+fn eat(x: R) -> i64 { return x.id; }
+fn pick(r: R, flag: bool) -> R { if flag { return r } return R { name: f"z", id: eat(r) } }
+fn main() { let k = pick(R { name: f"a", id: 1 }, false); println(f"k:{k.id}"); println("end") }

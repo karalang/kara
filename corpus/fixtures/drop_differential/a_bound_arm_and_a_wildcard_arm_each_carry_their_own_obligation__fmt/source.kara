@@ -1,0 +1,2 @@
+enum E2 { A(String), B(String), C }
+fn main() { let e: E2 = A("payload_bytes_kept_comfortably_long_enough_x".to_string()); match e { A(t) => { println(t.len()); }, B(_) => { println(2i64); }, C => {} } }

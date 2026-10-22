@@ -1,0 +1,14 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+enum W2 { Two(R, R), None3 }
+struct S { r: R }
+struct S2 { r: R, k: i64 }
+struct S3 { a: R, b: R }
+struct Sd { r: R }
+impl Drop for Sd {
+    fn drop(mut ref self) { println("dSd") }
+}
+fn take() -> i64 { let v2 = [R { id: 4 }]; 7 }
+fn main() { let v = take(); println(f"v={v}"); }

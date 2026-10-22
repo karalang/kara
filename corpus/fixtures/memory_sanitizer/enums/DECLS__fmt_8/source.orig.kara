@@ -1,0 +1,6 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+fn eat(o: Result[(R, i64, i64, i64, i64, i64), i64]) {
+    match o { Result.Ok(t) => { let x = t.0; println("mid"); } Result.Err(e) => { println("n"); } }
+}
+fn main() { eat(Result.Ok((R { name: f"a", id: 5 }, 1, 2, 3, 4, 5))); println("end"); }

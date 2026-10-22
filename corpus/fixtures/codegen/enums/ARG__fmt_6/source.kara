@@ -1,0 +1,5 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H { n: i64 }
+impl H { fn eat(ref self, o: Option[(R, R)]) -> R { match o { Some((a, b)) => { return a; } None => { return R { id: 0 }; } } } }
+fn main() { let h = H { n: 1 }; let g = h.eat(Some((R { id: 5 }, R { id: 6 }))); println(f"got:{g.id}"); println("end") }

@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "4308be83"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "4308be83"
 v2_reject = "design.md § Constants (B-2026-10-22-8). karac check: error[E_MODULE_LET]: module-level `let mut TODOS` is mutable global state, and Kāra has no mutable globals (design.md § Constants, \"No mutable globals\")"

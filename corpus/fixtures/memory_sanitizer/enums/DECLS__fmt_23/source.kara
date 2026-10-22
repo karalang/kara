@@ -1,0 +1,9 @@
+shared enum U { Ua, Ub, Uc }
+impl Drop for U { fn drop(mut ref self) { println(f"dU") } }
+sync enum W { Wa, Wb }
+impl Drop for W { fn drop(mut ref self) { println(f"dW") } }
+fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } U.Uc => { return 2 } } }
+fn main() {
+    { let s = Ub; }
+    println("end");
+}

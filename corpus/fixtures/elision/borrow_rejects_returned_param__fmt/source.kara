@@ -1,0 +1,9 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn pass(head: Option[ListNode]) -> Option[ListNode] {
+head
+}
+fn main() {
+let s = ListNode { val: 9, next: None };
+let r = pass(Some(s));
+if r.is_some() { println(1); }
+}

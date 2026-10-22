@@ -1,0 +1,8 @@
+struct S { tag: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"drop S{self.tag}") } }
+struct R { id: i64, s: S }
+impl Drop for R { fn drop(mut ref self) { println(f"drop R{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+fn main() { let e = E.A(R { id: 41, s: S { tag: 9 } });
+             println("mid"); }

@@ -13,6 +13,6 @@ env = {}
 bucket = "mir-gap:the method call `.read` with no resolved callee"
 classified_with = "e4ff86f12"
 extracted_src = "394aac9c"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "394aac9c"
 row = "B-2026-10-22-36"

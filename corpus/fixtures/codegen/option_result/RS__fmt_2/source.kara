@@ -1,0 +1,5 @@
+#[derive(Clone)]
+struct R { name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR[{self.name}]") } }
+fn eat(o: Option[(R, i64)]) -> R { match o { Some(t) => { return t.0.clone(); } None => { return R { name: "z" }; } } }
+fn main() { let a = Option.Some((R { name: "alpha" }, 9)); let got: R = eat(a); println(f"got:{got.name}"); println("end"); }

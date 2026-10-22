@@ -1,0 +1,7 @@
+shared enum Sh { A(Array[String, 2]), B(Array[i64, 3]), N }
+fn main() {
+    let x: Array[String, 2] = [f"aaaaaaaaaaaaaaaaaaaa", f"bbbbbbbbbbbbbbbbbbbb"];
+    { let s = Sh.A(x); println(f"a"); }
+    let y: Array[i64, 3] = [1, 2, 3];
+    { let s = Sh.B(y); println(f"b"); }
+}

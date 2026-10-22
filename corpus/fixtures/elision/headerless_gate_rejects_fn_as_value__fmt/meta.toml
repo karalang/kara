@@ -1,0 +1,17 @@
+source = "tests/elision.rs::headerless_gate_rejects_fn_as_value__fmt"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = ["format-filled", "shared", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b1ea23a5b"
+extracted_src = "bda66d8c"
+model_rev = "205d5cda"
+model_src = "bda66d8c"

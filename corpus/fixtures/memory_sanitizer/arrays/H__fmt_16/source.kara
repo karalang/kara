@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn main() {
+    let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);
+    let t2 = t;
+    println(f"a0:{t2.0[0]}");
+}

@@ -1,0 +1,7 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn main() {
+let n = 1;
+let _ = if n == 1 { R { id: 7 } };
+println("end");
+}

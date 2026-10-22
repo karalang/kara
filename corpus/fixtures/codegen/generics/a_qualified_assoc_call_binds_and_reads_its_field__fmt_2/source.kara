@@ -1,0 +1,6 @@
+struct Box[T] { value: T }
+impl[T] Box[T] {
+    fn make(v: T) -> Box[T] { return Box { value: v }; }
+    fn zero() -> i64 { return 0i64; }
+}
+fn main() { let b = Box.make(7i64); println(f"{b.value}"); }

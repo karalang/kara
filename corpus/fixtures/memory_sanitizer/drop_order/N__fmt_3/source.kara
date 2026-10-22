@@ -1,0 +1,5 @@
+struct R { id: i64, tags: Vec[String] }
+struct W { r: R, n: i64 }
+fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"t{n}"); v }
+fn main() { let W { r: _, n } = W { r: R { id: 41, tags: mkv(3) }, n: 1 };
+             println(f"{n}") }

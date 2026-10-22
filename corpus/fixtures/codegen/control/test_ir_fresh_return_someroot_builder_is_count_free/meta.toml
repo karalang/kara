@@ -15,6 +15,6 @@ bucket = "a"
 classified_with = "db0aa9a19"
 extracted_src = "7b8d3b7e"
 model_exit = 0
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "7b8d3b7e"
 model_verdict = "SAME"

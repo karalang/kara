@@ -1,0 +1,9 @@
+struct G { id: i64 }
+impl Drop for G { fn drop(mut ref self) { println("d"); } }
+fn main() {
+  let a = G { id: 1 };
+  let b = G { id: 2 };
+  println(a.id); println(b.id);
+  forget(b);
+  println("end");
+}

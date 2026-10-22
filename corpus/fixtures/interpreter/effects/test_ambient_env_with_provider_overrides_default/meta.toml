@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "ce9983c2"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "ce9983c2"
 v2_reject = "core-semantics §14.1, §14.2: providers need a declared provider trait. karac check: provider of type 'FakeEnv' does not implement `EnvProvider`, a provider trait declared by `effect resource Env: EnvProvider;` — add `impl EnvProvider for FakeEnv { ... }`"

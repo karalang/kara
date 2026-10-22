@@ -1,0 +1,12 @@
+struct S { s: String, t: String }
+fn pad(tag: i64) -> String {
+let mut s: String = String.new();
+s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+s.push_str(f"{tag}");
+return s;
+}
+                     fn main() {
+                         let a: Option[S] = Some(S { s: pad(1), t: pad(2) });
+                         match a { Some(S { s, t }) => { let owned: String = s; let extra: String = pad(3); println(owned.len() + t.len() + extra.len()); } None => {} }
+                         println("end");
+                     }

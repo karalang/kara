@@ -13,6 +13,6 @@ env = {}
 bucket = "mir-gap:runtime: invalid MIR:"
 classified_with = "e4ff86f12"
 extracted_src = "b3d25626"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "b3d25626"
 row = "B-2026-10-22-36"

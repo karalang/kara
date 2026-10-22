@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn mk() -> String {
+    let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);
+    return t.0[0].clone();
+}
+fn main() { println(f"a0:{mk()}"); }

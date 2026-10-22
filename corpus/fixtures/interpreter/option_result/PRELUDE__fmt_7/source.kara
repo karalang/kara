@@ -1,0 +1,9 @@
+struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}"); } }
+fn takeW(x: Option[Option[W]]) {
+    match x { Some(t) => { println("ok"); } None => { println("n"); } }
+}
+fn main() {
+    takeW(Some(Some(W { id: 1 })));
+    println("x");
+}

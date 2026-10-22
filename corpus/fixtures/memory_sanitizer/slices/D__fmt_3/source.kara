@@ -1,0 +1,6 @@
+struct D { s: String, id: i64 }
+fn main() {
+    let mut a: Array[Array[Array[D, 1], 1], 2] = [[[D { s: f"aaaaaaaaaaaa1", id: 1 }]], [[D { s: f"bbbbbbbbbbbb2", id: 2 }]]];
+    a[0] = [[D { s: f"MUTATEDMUTATED3", id: 3 }]];
+    println("mid");
+}

@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+enum Box2 { Full(R), Empty }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    let k = if a.id > 0 { a } else { b };
+    println(f"k={k.id}");
+    println("end");
+}

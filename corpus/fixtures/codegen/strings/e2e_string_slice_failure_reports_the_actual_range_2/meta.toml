@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'string slice bounds 0..10 out of ran
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "21afeef0"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "21afeef0"

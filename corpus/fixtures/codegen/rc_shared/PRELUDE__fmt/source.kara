@@ -1,0 +1,27 @@
+struct Rs { id: i64, name: String }
+impl Drop for Rs {
+    fn drop(mut ref self) {
+        println(f"dS{self.id}")
+    }
+}
+fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
+struct In { mut r: Rs, mut q: Rs }
+struct Ou { mut h: In, mut k: i64 }
+struct Bs { mut one: Rs, mut two: Rs }
+fn c_deep() {
+    let mut o = Ou { h: In { r: mks(1), q: mks(2) }, k: 5 };
+    let mut i = 0;
+    while i < 1 { let x = o.h.r; println(f"t{x.id}"); i = i + 1; }
+}
+fn c_deep3() {
+    let mut o = Ou { h: In { r: mks(3), q: mks(4) }, k: 5 };
+    let mut i = 0;
+    while i < 3 { let x = o.h.r; i = i + 1; }
+    println("u");
+}
+fn c_flat() {
+    let mut g = Bs { one: mks(5), two: mks(6) };
+    let mut i = 0;
+    while i < 1 { let y = g.one; println(f"v{y.id}"); i = i + 1; }
+}
+fn main() { c_deep(); c_deep3(); c_flat(); println("end"); }

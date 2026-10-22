@@ -1,0 +1,10 @@
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+#[derive(Clone)]
+struct Q { id: i64 }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
+struct W { a: P, b: Q, n: i64, p: i64 }
+fn eat(o: Option[W]) {
+    match o { Option.Some(t) => { let y = t.b.clone(); println("mid"); } Option.None => { println("n"); } }
+}
+fn main() { eat(Option.Some(W { a: P { id: 6 }, b: Q { id: 7 }, n: 2, p: 3 })); println("end"); }

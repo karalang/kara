@@ -13,6 +13,6 @@ env = {}
 bucket = "mir-gap:this literal pattern"
 classified_with = "e4ff86f12"
 extracted_src = "cc882c0a"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "cc882c0a"
 row = "B-2026-10-22-36"

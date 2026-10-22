@@ -1,0 +1,11 @@
+struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}"); } }
+enum NoOwn { Full(W), Empty(W) }
+fn mk2(n: i64) -> NoOwn {
+if n < 1 { return NoOwn.Full(W { id: n }); }
+return NoOwn.Empty(W { id: 7 });
+}
+fn main() {
+    mk2(1);
+    println("mid");
+}

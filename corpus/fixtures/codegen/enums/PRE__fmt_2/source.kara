@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i } }
+enum EArrG[T] { A(Array[T, 2]), N }
+fn main() {
+  let a: Array[R, 2] = [mkr(1), mkr(2)];
+  let e: EArrG[R] = EArrG.A(a);
+  match e { EArrG.A(v) => { println(f"x{v[0].id}") } EArrG.N => { println("no") } }
+  println("end")
+}

@@ -1,0 +1,1 @@
+fn main() { let a: Array[String, 2] = ["payload_bytes_kept_comfortably_long_enough_x".to_string(), "payload_bytes_kept_comfortably_long_enough_x".to_string()]; println(a[0].len() + a[1].len()); }

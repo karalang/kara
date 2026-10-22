@@ -1,0 +1,2 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn main() { let a: f16 = 1.5f16; let b: bf16 = 2.5bf16; println(show(a)); println(show(b)); }

@@ -1,0 +1,7 @@
+trait H { fn f(self) -> i64; }
+impl H for Slice[i64] { fn f(self) -> i64 { return self.len(); } }
+fn main() {
+let v: Vec[i64] = Vec[5, 6, 7];
+let s = v[0..2];
+println(s.f());
+}

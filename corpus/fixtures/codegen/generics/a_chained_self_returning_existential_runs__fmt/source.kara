@@ -1,0 +1,8 @@
+trait Counter { fn bumped(self) -> Self; fn value(ref self) -> i64; }
+struct Ctr { n: i64 }
+impl Counter for Ctr {
+    fn bumped(self) -> Ctr { Ctr { n: self.n + 1 } }
+    fn value(ref self) -> i64 { self.n }
+}
+fn make(n: i64) -> impl Counter { Ctr { n: n } }
+fn main() { println(f"{make(1).bumped().bumped().bumped().value()}"); }

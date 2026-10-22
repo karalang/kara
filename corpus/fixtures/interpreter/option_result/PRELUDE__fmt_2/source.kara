@@ -1,0 +1,6 @@
+struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}"); } }
+fn main() {
+    let r: Result[Result[W, i64], i64] = Result.Ok(Result.Ok(W { id: 1 }));
+    println("x");
+}

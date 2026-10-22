@@ -1,0 +1,6 @@
+struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}"); } }
+fn main() {
+    let o: Option[Option[W]] = None;
+    println("x");
+}

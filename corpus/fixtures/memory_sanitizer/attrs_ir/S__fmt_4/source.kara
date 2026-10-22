@@ -1,0 +1,3 @@
+struct S { s: String }
+fn plainV(x: Vec[S]) { println(f"s:{x.len()}"); }
+fn main() { plainV([S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }]); }

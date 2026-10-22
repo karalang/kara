@@ -1,0 +1,4 @@
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], zip: i64 }
+fn mk() -> Option[Address] { return Some(Address { city: Some(City { name: "Paris", zip: 7 }), zip: 3 }); }
+fn main() { match mk()?.city { Some(c) => { println(c.name); } None => { println("none"); } } }

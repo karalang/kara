@@ -51,7 +51,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rustscan import scan  # noqa: E402
+import formatfill  # noqa: E402
+from rustscan import scan, unescape  # noqa: E402
 from corpus_lib import ROOT, write_toml, read_toml, RECORDED  # noqa: E402
 
 HAS_MAIN = re.compile(r"(?m)^\s*(pub\s+)?fn\s+main\s*\(")
@@ -67,41 +68,6 @@ def slug(s: str) -> str:
     s = re.sub(r"[^A-Za-z0-9_.-]+", "_", s).strip("_")
     return s[:120] or "x"
 
-
-def unescape(s: str) -> str:
-    """Rust ordinary-string escapes, including `\\` + newline continuation."""
-    out, i = [], 0
-    while i < len(s):
-        c = s[i]
-        if c != "\\" or i + 1 >= len(s):
-            out.append(c)
-            i += 1
-            continue
-        d = s[i + 1]
-        i += 2
-        if d == "n":
-            out.append("\n")
-        elif d == "t":
-            out.append("\t")
-        elif d == "r":
-            out.append("\r")
-        elif d == "0":
-            out.append("\0")
-        elif d in "\\\"'":
-            out.append(d)
-        elif d == "x":
-            out.append(chr(int(s[i : i + 2], 16)))
-            i += 2
-        elif d == "u":
-            j = s.index("}", i)
-            out.append(chr(int(s[i + 1 : j], 16)))
-            i = j + 1
-        elif d == "\n":
-            while i < len(s) and s[i] in " \t\n\r":
-                i += 1
-        else:
-            out.append("\\" + d)
-    return "".join(out)
 
 
 # The test targets that go with legacy at M3 (review m3-plan item 9: they run
@@ -212,6 +178,12 @@ def fixture_programs(tests: Path, kind: str = "raw"):
                 # `format!(r#"..."#, ..)` fills holes, and `String::from(r#"..."#)`
                 # is the head of a string the test goes on to push_str onto.
                 template = bool(re.search(r"(format!|String::from)\(\s*$", before))
+                # A `format!` whose arguments are all literals (or `const`s and
+                # `let`s with literal values in scope) is a fixed program: fill it in.
+                filled = None
+                if template and re.search(r"format!\(\s*$", before):
+                    raw_tok = next(t for t in toks if t[1] == off)
+                    filled = formatfill.fill(text, off, raw_tok[2], raw_tok[0], start)
                 # `let body = r#"..KEY.."#; let x = body.replace("KEY", "..")`:
                 # one program per replacement, each named after its variable.
                 var = re.search(r"let\s+(\w+)\s*(?::\s*&str\s*)?=\s*$", before)
@@ -226,6 +198,10 @@ def fixture_programs(tests: Path, kind: str = "raw"):
                                    src=src.replace(m.group(2), unescape(m.group(3))), template=False)
                 else:
                     yield dict(base, src=src, template=template)
+                    # The filled program is a further entry, under a name of
+                    # its own, so the entries already in the corpus keep theirs.
+                    if filled is not None:
+                        yield dict(base, holder=f"{base['holder']}__fmt", src=filled, template=False, filled=True)
 
 
 # kara-katas apps/<kind>/<name>/ -> corpus/apps/<kind>/<name>/. The app is
@@ -394,7 +370,7 @@ def main() -> int:
 
     for kind in ("raw", "str"):
         for p in fixture_programs(Path(args.tests), kind):
-            tags = ["format-template"] if p["template"] else []
+            tags = ["format-template"] if p["template"] else ["format-filled"] if p.get("filled") else []
             if Path(p["file"]).parts[1].removesuffix(".rs") in LEGACY_TEST_TARGETS:
                 tags.append("src:legacy-tests")  # outside the M1 gate (classify.py)
             add(p["area"], p["holder"], f"{p['file']}::{p['holder']}", p["src"], "fixture",

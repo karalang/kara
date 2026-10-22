@@ -1,0 +1,11 @@
+struct Tracked { tag: i64, name: String }
+impl Drop for Tracked { fn drop(mut ref self) { println(f"D{self.tag}"); } }
+fn new_tracked(tag: i64, name: String) -> Tracked {
+    println(f"N{tag}");
+    return Tracked { tag: tag, name: name };
+}
+fn main() {
+    let mut o: Option[Tracked] = Some(new_tracked(1i64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()));
+    o = None;
+    println(999);
+}

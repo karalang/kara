@@ -14,5 +14,5 @@ note = "core-semantics §7.2, §7.7, §7.8: drops and defers at scope end, LIFO;
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "eb5679da"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "eb5679da"

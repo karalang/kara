@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn f(p: (Array[i64, 2], i64)) -> i64 { return p.0[1]; }
+fn main() {
+    let t: (Array[i64, 2], i64) = ([3, 4], 7);
+    println(f"a1:{f(t)}");
+}

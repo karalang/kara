@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'expected one runtime error, got {:?}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "1ceeb771"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "1ceeb771"
 v2_reject = "core-semantics §14.1, §14.2: providers need a declared provider trait. karac check: `effect resource UserDB;` declares no provider trait, so `UserDB.id` has no method to call (core-semantics.md §14.1, §14.2): declare the trait its providers implement, `effect resource UserDB: SomeTrait;`, with `id` in it"

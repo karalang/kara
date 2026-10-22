@@ -1,0 +1,7 @@
+struct City { name: String, zip: i64 }
+impl City { fn label(ref self) -> String { return self.name; } }
+fn mk(present: bool) -> Option[City] {
+if present { return Some(City { name: "Paris", zip: 7 }); }
+return None;
+}
+fn main() { match mk(false)?.label() { Some(s) => { println(s); } None => { println("none"); } } }

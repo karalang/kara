@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "5f88f8a5"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "5f88f8a5"
 v2_reject = "v2 rule E0516; `karac fix` cannot rewrite it. karac check: cannot assign `m[..][..]` while `ref ga` borrows `m[..][..]`: `ga` is used after this (core-semantics.md §5.6). Use `ga` before the write, or clone what you need from it first"

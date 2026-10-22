@@ -1,0 +1,9 @@
+
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn mk() -> Ed { return Ed { doc: Doc { lines: Vec.new() } }; }
+fn take(n: i64) -> i64 { return n; }
+fn takeu(n: usize) -> usize { return n; }
+
+fn tail(e: ref Ed) -> i64 { return e.doc.lines.len() as i64; }
+fn main() { let e = mk(); let _ = tail(e); }

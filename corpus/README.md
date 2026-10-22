@@ -65,7 +65,11 @@ a `String::from` head (recorded as `skip`), and `nondeterministic` for a
 program whose output changes between two legacy runs (a bound port, task
 scheduling, cancellation timing; also `skip`). A raw string bound by `let` and
 filled in with `.replace("KEY", "..")` is not a template: it becomes one
-program per replacement, named `<test>__<variable>`.
+program per replacement, named `<test>__<variable>`. A `format!` template whose
+arguments are all literals, or `const`s, `static`s and `let`s in scope with
+literal values, also becomes the filled program (`scripts/corpus/formatfill.py`,
+checked against rustc by `formatfill_check.py`), a further entry named
+`<test>__fmt` and tagged `format-filled`; the template entry stays as it was.
 Derived from the record without a run (`record.py --retag`): `needs-driver`
 for a program whose legacy run timed out (almost always a server the Rust
 test drives with a client), `literal-unmatched` for a fixture whose holding

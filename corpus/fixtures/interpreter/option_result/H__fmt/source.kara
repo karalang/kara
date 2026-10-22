@@ -1,0 +1,9 @@
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+enum H { A(R), B }
+enum J { A(i64), B }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop R{self.id}") } }
+fn main() { let o: Option[E] = Some(E.A(R { id: 8 }));
+             match o { Some(e) => { println("got") }
+                        None => { println("none") } } }

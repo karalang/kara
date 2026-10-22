@@ -1,0 +1,12 @@
+enum E { A(String), B }
+fn pad(tag: i64) -> String {
+let mut s: String = String.new();
+s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+s.push_str(f"{tag}");
+return s;
+}
+                     fn main() {
+                         let a: Option[E] = Some(E.A(pad(1)));
+                         match a { Some(p) => { match p { E.A(s) => { let owned: String = s; let extra: String = pad(2); println(owned.len() + extra.len()); } E.B => {} } } None => {} }
+                         println("end");
+                     }

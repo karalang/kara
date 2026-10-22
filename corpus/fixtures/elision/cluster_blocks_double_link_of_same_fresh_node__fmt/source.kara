@@ -1,0 +1,10 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn run() -> i64 {
+let a = ListNode { val: 0, next: None };
+let b = ListNode { val: 1, next: None };
+let node = ListNode { val: 2, next: None };
+a.next = Some(node);
+b.next = Some(node);
+a.val + b.val
+}
+fn main() { println(run()); }

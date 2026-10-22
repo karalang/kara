@@ -1,0 +1,2 @@
+shared enum Kn { A(i64), B }
+fn main() { let x: Option[Kn] = Option.Some(Kn.A(7)); match x { Option.Some(k) => { match k { Kn.A(n) => { println(f"a:{n}"); }, Kn.B => { println("b"); } } }, Option.None => { println("none"); } } }

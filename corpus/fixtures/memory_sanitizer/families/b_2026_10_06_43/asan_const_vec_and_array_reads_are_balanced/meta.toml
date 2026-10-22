@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "2dc9de58"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "f2baa6f6"
 v2_reject = "design.md § Constants: a constant cannot have a heap-allocated type (`Vec`) or a call in its initializer (Thread A, 2026-10-22, B-2026-10-22-19)"

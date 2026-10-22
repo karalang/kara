@@ -14,5 +14,5 @@ note = "§7.5: a compound assignment evaluates its place's subscripts once (lega
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "c98daa78"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "c98daa78"

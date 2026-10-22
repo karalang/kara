@@ -14,5 +14,5 @@ note = "a deadlock is a panic (core semantics §10.1): the record on stderr, the
 bucket = "e-spec"
 classified_with = "7633c3040"
 extracted_src = "cc0bb2d0"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "cc0bb2d0"

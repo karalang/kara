@@ -1,0 +1,5 @@
+fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }
+fn name(k: i64) -> Option[String] { if k == 1 { return Some("hit"); } return None; }
+fn res(k: i64) -> Result[i64, String] { if k == 1 { return Ok(12); } return Err("bad"); }
+fn sres(k: i64) -> Result[String, String] { if k == 1 { return Ok("fine"); } return Err("bad"); }
+fn main() { println((find(3) ?? 5) + 1); }

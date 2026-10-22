@@ -1,0 +1,5 @@
+fn seed() -> i64 { env.args().len() }
+fn takeD(x: Result[(String, String), i64]) {
+   match x { Ok((a, b)) => { println(f"s:{a}{b}") } Err(e) => { println(f"e{e}") } } }
+fn main() { let mut i = 0; while i < 2 {
+   takeD(Result.Ok((f"aaaaaaaa{i}{seed()}", f"bbbbbbbb{i}"))); i = i + 1; } }

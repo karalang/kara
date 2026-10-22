@@ -14,5 +14,5 @@ note = "library docs (150d83a4b0): `split_off(at)` with at > len panics e-spec: 
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "a6089418"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a6089418"

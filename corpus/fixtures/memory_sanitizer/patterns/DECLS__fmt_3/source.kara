@@ -1,0 +1,13 @@
+struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn oneOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn dropOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: "z" }; } } }
+fn bothOut(o: Option[(H, H)]) -> (H, H) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (H { id: 0, s: "z" }, H { id: 0, s: "z" }); } } }
+fn noneOut(o: Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn readOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f"in{a.id}"); return b; } Option.None => { return 0; } } }
+fn midOut(o: Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: "z" }; } } }
+fn main() {
+    { let g: i64 = readOut(Option.Some((H { id: 8, s: "hhhhhhhhhhhh" }, 9))); println(f"n{g}"); }
+    { let g = midOut(Option.Some((H { id: 9, s: "iiiiiiiiiiii" }, H { id: 10, s: "jjjjjjjjjjjj" }, H { id: 11, s: "kkkkkkkkkkkk" }))); println(f"n{g.id}"); }
+    println("end");
+}

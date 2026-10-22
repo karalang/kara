@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:no definition for type `BitsLR`"
 classified_with = "e4ff86f12"
 extracted_src = "f44c60a0"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "f44c60a0"

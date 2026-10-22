@@ -1,0 +1,4 @@
+struct R { id: i64, name: String }
+fn take(v: Vec[(R, i64)]) -> R { v[0].0 }
+fn main() { let q = [(R { id: 41, name: f"n{41}" }, 1)];
+             let x = take(q); println(f"{x.id} {x.name}"); }

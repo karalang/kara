@@ -1,0 +1,5 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+struct Sk { n: i64 }
+impl Sk { fn pick(r: R, flag: bool) -> R { if flag { return r } return R { name: f"z", id: 90 + r.id } } }
+fn main() { let k = Sk.pick(R { name: f"a", id: 1 }, false); println(f"k:{k.id}"); println("end") }

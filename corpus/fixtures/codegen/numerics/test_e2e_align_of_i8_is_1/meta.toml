@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "501a595d"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "501a595d"
 v2_reject = "design.md §8: no call-site type arguments. karac check: Kāra has no call-site type arguments (design.md §8): write `i8.align_of()`"

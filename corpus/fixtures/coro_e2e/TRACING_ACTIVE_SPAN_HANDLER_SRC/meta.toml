@@ -13,5 +13,5 @@ env = {}
 note = "served through driver.toml (one connection, as its test makes); expected.out is pinned from the line and value its test asserts. v2 refuses it today: the suspending closure passed to `with_span` is a coroutine called through a function value (B-2026-10-20-26)"
 bucket = "mir-gap:runtime: main.cN suspends and is used as a function value; calling a coroutine "
 classified_with = "80ced416a+local"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a44b5a25"

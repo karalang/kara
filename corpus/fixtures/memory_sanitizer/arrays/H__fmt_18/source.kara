@@ -1,0 +1,6 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn eat(p: (Vec[String], i64)) { let q = p; println(f"in:{q.0[0]}"); }
+fn main() {
+    let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);
+    eat(t);
+}

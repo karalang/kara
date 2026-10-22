@@ -1,0 +1,2 @@
+fn band(data: Vec[String]) -> i64 { let mut a: i64 = 0i64; for e in data.iter() { a = a + e.len(); } return a; }
+fn main() { let v: Vec[String] = Vec["payload_bytes_kept_comfortably_long_enough_x".to_string()]; let mut pool: TaskGroup = TaskGroup.new(); let mut hs: Vec[TaskHandle[i64]] = Vec.new(); hs.push(pool.spawn(|| band(v))); for h in hs { println(h.join()); } }

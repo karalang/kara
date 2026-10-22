@@ -1,0 +1,9 @@
+enum T { W(f64) }
+enum S { V { f: f64 } }
+enum G[X] { A(X), B }
+struct Plain { f: f64 }
+fn main() {
+    let m: i64 = 9007199254740993;
+    let o: Option[f64] = Some(m);
+    match o { Some(x) => println(f"{x}"), None => println("none") }
+}

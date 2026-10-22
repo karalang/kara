@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function karac_runtime_test_bind"
 classified_with = "db0aa9a19"
 extracted_src = "fd4501c7"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "fd4501c7"

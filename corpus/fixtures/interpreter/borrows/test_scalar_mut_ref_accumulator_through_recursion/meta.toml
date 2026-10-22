@@ -14,7 +14,7 @@ bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "c2dc63f3"
 model_exit = 0
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "c2dc63f3"
 model_verdict = "SAME"
 v2_reject = "core-semantics §4.1: assignment does not write through a `mut ref` binding. karac check: `t` is a `mut ref i64`, and plain `=` does not write through it: write `*t = ...` to store into the value it borrows (design.md § Auto-deref)"

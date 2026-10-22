@@ -1,0 +1,7 @@
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn mk() -> (Array[String, 2], i64) { return ([pay(1), pay(2)], 7); }
+fn main() {
+    let t = mk();
+    let (a, j) = t;
+    println(f"a0:{a[0]} j:{j}");
+}

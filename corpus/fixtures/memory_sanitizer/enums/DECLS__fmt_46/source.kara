@@ -1,0 +1,17 @@
+enum Eb { A(Array[String, 2]), B }
+             struct Hb { g: Eb }
+             enum Ei { A(String), B }
+             struct Hi { g: Ei }
+             struct Hv { v: Vec[String] }
+             struct Sink { n: i64 }
+             impl Sink { fn take(ref self, g: Eb) { println("mtake") } }
+             fn eatb(g: Eb) { println("ate") }
+             fn eati(g: Ei) { println("atei") }
+             fn eatv(v: Vec[String]) { println(f"atev{v.len()}") }
+             fn eath(h: Hb) { println("ateh") }
+             fn mk() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-2"]; }
+                 fn main() {
+                     { let h = Hb { g: Eb.A(mk()) }; eatb(h.g); }
+                     { let h = Hb { g: Eb.A(mk()) }; let s = Sink { n: 1 }; s.take(h.g); }
+                     println("end");
+                 }

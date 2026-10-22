@@ -1,0 +1,11 @@
+enum G[T] { Y(T), N }
+fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.N }
+fn allpaths[T](g: G[T]) -> G[T] { return g }
+fn diesinside[T](g: G[T]) -> G[T] { return G.N }
+fn show(g: G[String]) { match g { G.Y(v) => { println(f"n{v.len()}") } G.N => { println("none") } } }
+fn main() {
+    let a: G[String] = G.Y("aaaaaaaa-1");
+    let b = mid(a, true);
+    show(b);
+    println("end");
+}

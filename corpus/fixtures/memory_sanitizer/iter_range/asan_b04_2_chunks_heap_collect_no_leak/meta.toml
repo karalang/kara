@@ -14,5 +14,5 @@ note = "first literal of the holding test: '3 2 1 chunks-heap-collect-alpha-aaaa
 bucket = "check-refuses:E0236"
 classified_with = "db0aa9a19"
 extracted_src = "515c7c93"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "515c7c93"

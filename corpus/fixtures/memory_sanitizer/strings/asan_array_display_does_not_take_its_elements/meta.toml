@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'asan_array_display_does_not_take_its
 bucket = "a"
 classified_with = "db0aa9a19"
 extracted_src = "9fd5f027"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "9fd5f027"

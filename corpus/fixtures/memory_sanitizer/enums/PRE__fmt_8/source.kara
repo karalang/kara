@@ -1,0 +1,8 @@
+struct R2 { s: String, t: String, u: String }
+enum K { A(R2), B }
+fn seed() -> i64 { env.args().len() }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}{seed()}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn mko(i: i64) -> Option[K] { return Option.Some(K.A(mkr(i))); }
+fn show(i: i64) { let x = mko(i); let y = x;
+   match y { Option.Some(K.A(r)) => { println(f"a:{r.s}"); } _ => { println("other"); } } }
+fn main() { let mut i = 0; while i < 2 { show(i); i = i + 1; } }

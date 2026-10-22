@@ -1,0 +1,9 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn run() -> i64 {
+let dummy = ListNode { val: 0, next: None };
+let node = ListNode { val: 1, next: None };
+dummy.next = Some(node);
+let lone = ListNode { val: 5, next: None };
+dummy.val + lone.val
+}
+fn main() { println(run()); }

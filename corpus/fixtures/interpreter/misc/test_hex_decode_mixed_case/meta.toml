@@ -13,6 +13,6 @@ env = {}
 bucket = "e-not-refused:any"
 classified_with = "e4ff86f12"
 extracted_src = "4cf5e6a8"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "4cf5e6a8"
 v2_reject = "docs/library/encoding.md: the API is `base64_encode`, `base64_decode`, `hex_encode`, ... imported from `std.encoding`; legacy's `Base64.*` / `Hex.*` spellings do not exist (check should refuse them, B-2026-10-22-33)"

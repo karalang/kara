@@ -1,0 +1,7 @@
+struct R3 { s: String, t: String, u: String }
+enum Ke { A(R3), B }
+fn seed() -> i64 { env.args().len() }
+fn mk(i: i64) -> R3 { return R3 { s: f"ssssssss{i}{seed()}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn eat(v: R3) { println(f"rb:{v.s}"); }
+fn f(x: Option[Ke]) { match x { Option.Some(Ke.A(r)) => { eat(r); } _ => {} } }
+fn main() { let mut i = 0; while i < 2 { f(Option.Some(Ke.A(mk(i)))); i = i + 1; } }

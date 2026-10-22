@@ -1,0 +1,10 @@
+struct R { s: String, t: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s.len()}") } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"dZ{self.n}") } }
+shared enum SMono { P(R), Q }
+shared enum Sz { P(Z), Q }
+fn main() {
+    { let a: SMono = SMono.P(R { s: "ssssssss", t: "tttttttt" }); let b = a; }
+    println("end");
+}

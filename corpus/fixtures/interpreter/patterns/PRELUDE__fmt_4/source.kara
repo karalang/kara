@@ -1,0 +1,8 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}"); } }
+struct H { r: R, n: i64 }
+fn main() {
+let o: Option[H] = Some(H { r: R { s: "d" }, n: 7 });
+if let Some(H { r, .. }) = o { println(f"F{r.s}"); }
+println("end");
+}

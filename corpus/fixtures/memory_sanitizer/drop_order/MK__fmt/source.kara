@@ -1,0 +1,7 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop R{self.name}") } }
+struct W { r: R, tag: String }
+impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.tag}") } }
+#[allow(partial_move_of_drop_struct)]
+fn take(w: W) -> R { let W { r, tag } = w; r }
+fn main() { take(W { r: R { id: 47, name: f"n{47}" }, tag: f"t{5}" }); println("end"); }

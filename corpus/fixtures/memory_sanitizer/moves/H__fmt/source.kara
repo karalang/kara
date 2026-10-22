@@ -1,0 +1,5 @@
+struct R { id: i64, name: String }
+fn peek(r: ref R) -> i64 { r.id }
+fn take(v: Vec[(R, i64)]) -> i64 { peek(v[0].0) }
+fn main() { let q = [(R { id: 41, name: f"n{41}" }, 1)];
+             println(f"{take(q)}"); }

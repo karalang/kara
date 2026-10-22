@@ -1,0 +1,6 @@
+resource Db;
+fn load() -> i64 with reads(Db) { return 5; }
+let CACHE: LazyLock[i64] = LazyLock.new(|| load());
+fn helper() -> i64 { return CACHE.get(); }
+pub fn peek() -> i64 { return helper(); }
+fn main() { println(peek()); }

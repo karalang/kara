@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "a9693409"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a9693409"
 v2_reject = "v2 rule E0515; `karac fix` cannot rewrite it. karac check: cannot move a non-`Copy` value out of a collection element: the collection still owns it"

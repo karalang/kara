@@ -1,0 +1,2 @@
+enum G4[T] { X(T), Y }
+fn main() { let g: G4[String] = X("payload_bytes_kept_comfortably_long_enough_x".to_string()); match g { X(v) => { println(v.len()); }, Y => {} } }

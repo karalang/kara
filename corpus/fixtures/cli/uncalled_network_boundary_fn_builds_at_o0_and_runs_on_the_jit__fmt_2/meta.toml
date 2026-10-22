@@ -1,0 +1,17 @@
+source = "tests/cli.rs::uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit__fmt"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["format-filled", "src:legacy-tests", "post-m1:net"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E_DEFERRED_M4A"
+classified_with = "b1ea23a5b"
+extracted_src = "7c0c7f76"
+model_rev = "205d5cda"
+model_src = "7c0c7f76"

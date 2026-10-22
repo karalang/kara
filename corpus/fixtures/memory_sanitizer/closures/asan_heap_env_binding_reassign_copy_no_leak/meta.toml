@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "2395d76e"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "2395d76e"
 v2_reject = "design.md: a value of a function type is move-only, so the program uses the closure after it moved (drop schedule thread's triage) (kata thread, 2026-10-09)"

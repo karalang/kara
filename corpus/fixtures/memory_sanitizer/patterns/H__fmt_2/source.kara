@@ -1,0 +1,5 @@
+enum G { A(String), B }
+impl Drop for G { fn drop(mut ref self) { println("drop G") } }
+fn main() { let o: Option[G] = Some(G.A(f"z{9}"));
+             let k = match o { Some(g) => { g } None => { G.B } };
+             println("kept"); }

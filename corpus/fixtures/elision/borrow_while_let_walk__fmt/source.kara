@@ -1,0 +1,15 @@
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn sum(head: Option[ListNode]) -> i64 {
+let mut t = 0;
+let mut cur = head;
+while cur.is_some() {
+let n = cur.unwrap();
+t = t + n.val;
+cur = n.next;
+}
+t
+}
+fn main() {
+let s = ListNode { val: 9, next: None };
+println(sum(Some(s)));
+}

@@ -838,6 +838,13 @@ class Model:
             def do_let():
                 if pat[0] == "pbind" and not pat[2]:
                     v = self.as_declared(self.value(init), ty)
+                    if isinstance(v, Ref) and COUNT_HANDLE_AGGREGATES:
+                        # a handle or handle aggregate read from a borrowed place
+                        # is used as a value: `let mut cur = head;` on a bare
+                        # `head: Option[Node]` is an owned counted copy (§1.1, §6.1)
+                        t = self.deref_refs(v)
+                        if isinstance(t, Handle) or self.handle_like(t):
+                            v = self.read_through_ref(t)
                     if isinstance(v, Ref) and ty is not None and ty[0] not in ("ref", "mutref"):
                         # an owned annotation on a reference: Copy is read, anything else is C3
                         r = self.read_through_ref(self.deref_refs(v))
@@ -996,7 +1003,9 @@ class Model:
     def as_declared(self, v, ty):
         """An integer literal's value where the declared type is a float
         (`let x: f64 = 1`, `let v: Vec[f64] = [1, 2]`, a float parameter or
-        field) is that float: it prints `1.0`, as core-types.md § Printing has it."""
+        field) is that float: it prints `1.0`, as core-types.md § Printing has it.
+        The model widens any integer: `karac check` refuses the lossy ones
+        (design.md § 5), so only lossless widenings reach a run."""
         if ty is None or not isinstance(ty, tuple) or ty[0] != "app":
             return v
         if isinstance(v, Prim) and v.kind == "int" and ty[1] in self.FLOAT_TYPES and not ty[2]:
@@ -1922,6 +1931,20 @@ class Model:
 
     def e_assign(self, e):
         _, op, place, rhs = e
+        if op == "=" and place[0] == "var":
+            try:
+                rc = self.lookup(place[1])
+            except (ModelError, Unsupported, KeyError):
+                rc = None
+            if isinstance(rc, Cell) and rc.refbind and isinstance(rc.v, Ref) and not rc.v.mut:
+                # A local bound to a `ref` is rebound by `=`, never written
+                # through (§5.9); `let mut` is what allows it (core-semantics
+                # §5.1, "`let mut` would only let it be rebound").
+                v = self.value(rhs)
+                if not isinstance(v, Ref):
+                    raise ModelError("a binding bound to a borrow cannot hold an owned value (§4.6)")
+                rc.v = v
+                return UNIT
         self._insert_at = place if (op == "=" and place[0] == "index") else None
         try:
             pl, log = self.resolve_logged(place, temp=False)
@@ -1950,7 +1973,7 @@ class Model:
         if op == "=":
             old = self.raw(c, p)
             if isinstance(old, Prim) and old.kind == "float" and isinstance(v, Prim) and v.kind == "int":
-                v = Prim(float(v.v), "float")  # an int stored into a float place widens (design.md § 5)
+                v = Prim(float(v.v), "float")  # an int stored into a float place widens (design.md § 5; check refuses a lossy one)
             self.set_raw(c, p, MOVED)
             if old is not MOVED:
                 self.drop_value(old)

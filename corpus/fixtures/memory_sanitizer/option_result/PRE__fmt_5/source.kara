@@ -1,0 +1,7 @@
+fn seed() -> i64 { env.args().len() }
+fn plainB(x: Result[(String, String), (String, String, String)]) {
+   match x { Ok(t) => { println(f"o:{t.0}") } Err(e) => { println(f"e:{e.0}") } } }
+fn main() { let mut i = 0; while i < 3 {
+   if i == 1 { plainB(Result.Err((f"pppppppp{i}{seed()}", f"qqqqqqqq{i}", f"rrrrrrrr{i}"))); }
+   else { plainB(Result.Ok((f"aaaaaaaa{i}{seed()}", f"bbbbbbbb{i}"))); }
+   i = i + 1; } }

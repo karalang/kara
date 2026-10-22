@@ -1,0 +1,13 @@
+struct P { a: String, b: i64 }
+struct D { a: String, b: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.b}") } }
+struct W { r: D, b: i64 }
+fn pay() -> String { return "heap"; }
+fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }
+fn mkw(n: i64) -> W { return W { r: mkd(n), b: n }; }
+fn main() {
+let n = 0;
+let t = mkd(7);
+let _ = if n == 0 { W { r: t, b: 1 } } else { W { r: mkd(2), b: 2 } };
+println("end");
+}

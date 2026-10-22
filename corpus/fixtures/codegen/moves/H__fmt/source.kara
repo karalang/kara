@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum H { A(R), B }
+fn mk(n: i64) -> E { return E.A(R { id: n }) }
+fn mkH(n: i64) -> H { return H.A(R { id: n }) }
+fn sink(n: i64) -> i64 { return n }
+fn main() { match mk(10) { E.A(ref r) => { println(f"v{r.id}"); return } E.B => {} }
+  println("post") }

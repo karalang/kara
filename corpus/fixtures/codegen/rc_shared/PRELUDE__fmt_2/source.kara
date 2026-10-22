@@ -1,0 +1,16 @@
+struct Rs { id: i64, name: String }
+impl Drop for Rs {
+    fn drop(mut ref self) {
+        println(f"dS{self.id}")
+    }
+}
+fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
+struct In { mut r: Rs, mut q: Rs }
+struct Ou { mut h: In, mut k: i64 }
+struct Bs { mut one: Rs, mut two: Rs }
+fn c_straight() {
+    let mut o = Ou { h: In { r: mks(7), q: mks(8) }, k: 5 };
+    let x = o.h.r;
+    println(f"w{x.id}");
+}
+fn main() { c_straight(); println("end"); }

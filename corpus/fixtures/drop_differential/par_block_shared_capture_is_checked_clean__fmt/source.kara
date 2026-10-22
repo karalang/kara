@@ -1,0 +1,3 @@
+shared struct Holder { s: String }
+fn hold_len(h: Holder) -> i64 { return h.s.len(); }
+fn main() { let a: String = "payload_bytes_kept_comfortably_long_enough_x".to_string(); let b: String = "payload_bytes_kept_comfortably_long_enough_x".to_string(); let ha: Holder = Holder { s: a }; let hb: Holder = Holder { s: b }; par { hold_len(ha); hold_len(hb); } }

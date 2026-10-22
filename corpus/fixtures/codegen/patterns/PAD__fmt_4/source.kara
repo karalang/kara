@@ -1,0 +1,12 @@
+enum E { A { s: String, t: String, u: String }, B }
+fn pad(tag: i64) -> String {
+let mut s: String = String.new();
+s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+s.push_str(f"{tag}");
+return s;
+}
+                     fn main() {
+                         let a: Result[E, i64] = Ok(E.A { s: pad(1), t: pad(2), u: pad(3) });
+                         match a { Ok(E.A { s, .. }) => { let owned: String = s; let extra: String = pad(4); println(owned.len() + extra.len()); } Ok(E.B) => {} Err(_) => {} }
+                         println("end");
+                     }

@@ -1,0 +1,8 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+struct Hd { r: R, n: i64 }
+fn eat() {
+    let o: Option[Hd] = Option.Some(Hd { r: R { name: f"a", id: 5 }, n: 9 });
+    match o { Option.Some(t) => { let x = t.r; println("mid"); } Option.None => { println("n"); } }
+}
+fn main() { eat(); println("end"); }

@@ -1,0 +1,6 @@
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop R{self.id}") } }
+fn main() { let mut v: Vec[E] = Vec.new(); v.push(E.B);
+             println(f"{v.len()}"); }

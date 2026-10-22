@@ -13,6 +13,6 @@ env = {}
 bucket = "e-not-refused:any"
 classified_with = "e4ff86f12"
 extracted_src = "a234a6ba"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "a234a6ba"
 v2_reject = "a function value has no Display or Debug, so it cannot be printed (check should refuse it, B-2026-10-22-33)"

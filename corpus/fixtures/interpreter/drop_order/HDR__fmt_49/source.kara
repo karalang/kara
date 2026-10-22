@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+shared struct S { id: i64 }
+fn takes(s: S) -> i64 { println("in-takes"); s.id }
+fn main() {
+    let v = takes(if true { S { id: 40 } } else { S { id: 41 } });
+    println(f"v={v}");
+}

@@ -14,6 +14,6 @@ note = "first literal of the holding test: \"no provider bound for resource 'Use
 bucket = "a:refused"
 classified_with = "e4ff86f12"
 extracted_src = "86ef3505"
-model_rev = "5c9fbd42"
+model_rev = "205d5cda"
 model_src = "86ef3505"
 v2_reject = "core-semantics §14.1, §14.2: providers need a declared provider trait. karac check: `effect resource UserDB;` declares no provider trait, so it cannot be bound with `with_provider` (core-semantics.md §14.1): declare the trait its providers implement, `effect resource UserDB: SomeTrait;`, and implement it for the provider"
