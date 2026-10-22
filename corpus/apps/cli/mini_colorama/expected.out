@@ -1,0 +1,56 @@
+== fore | RED
+  [31m
+== fore | GREEN
+  [32m
+== fore | BLUE
+  [34m
+== fore | LIGHTBLUE_EX
+  [94m
+== fore | RESET
+  [39m
+== back | GREEN
+  [42m
+== back | WHITE
+  [47m
+== back | RESET
+  [49m
+== style | BRIGHT
+  [1m
+== style | DIM
+  [2m
+== style | NORMAL
+  [22m
+== style | RESET_ALL
+  [0m
+== title | build ok
+  ]2;build ok
+== clearscreen | 2
+  [2J
+== clearscreen | 0
+  [0J
+== clearline | 2
+  [2K
+== cursorup | 2
+  [2A
+== cursordown | 1
+  [1B
+== cursorfwd | 5
+  [5C
+== cursorback | 3
+  [3D
+== pos | 3;4
+  [4;3H
+== combo | 
+  [31m[1mERROR[0m ok
+== strip | [31m[1mERROR[0m ok
+  ERROR ok
+== strip | x[2Ky
+  xy
+== strip | a[mb
+  ab
+== strip | [38;5;9mX[0m
+  X
+== strip | ab[
+  ab[
+== strip | plain text, no ansi
+  plain text, no ansi

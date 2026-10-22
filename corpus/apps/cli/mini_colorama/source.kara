@@ -1,0 +1,222 @@
+// mini_colorama — a port of colorama 0.4.6 (BSD-3, Jonathan Hartley): the ANSI
+// escape-code builders (Fore / Back / Style / Cursor, set_title, clear_screen,
+// clear_line) and colorama's CSI-stripping path.
+//
+// Kara string literals accept \x1b, so the port emits real ESC / BEL bytes and
+// expected.out holds them verbatim. jobs_text() (appended by gen_kara.py)
+// reconstructs the jobs, control bytes and all.
+//
+// OSC stripping is out of scope: colorama's convert path for a title OSC calls
+// the Windows terminal and raises on a non-Windows host, so only CSI sequences
+// (the portable half, `\x1b[` params final-letter) are stripped.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut out = String.new();
+    let digits = "0123456789";
+    while m > 0 {
+        let d = m % 10;
+        out = digits.substring(d, d + 1) + out;
+        m = m / 10;
+    }
+    out
+}
+
+fn csi() -> String { "\x1b[" }
+fn osc() -> String { "\x1b]" }
+fn bel() -> String { "\x07" }
+
+fn code_to_chars(code: i64) -> String { csi() + int_to_str(code) + "m" }
+
+fn fore_code(name: String) -> i64 {
+    if name == "BLACK" { return 30; }
+    if name == "RED" { return 31; }
+    if name == "GREEN" { return 32; }
+    if name == "YELLOW" { return 33; }
+    if name == "BLUE" { return 34; }
+    if name == "MAGENTA" { return 35; }
+    if name == "CYAN" { return 36; }
+    if name == "WHITE" { return 37; }
+    if name == "RESET" { return 39; }
+    if name == "LIGHTBLACK_EX" { return 90; }
+    if name == "LIGHTRED_EX" { return 91; }
+    if name == "LIGHTGREEN_EX" { return 92; }
+    if name == "LIGHTYELLOW_EX" { return 93; }
+    if name == "LIGHTBLUE_EX" { return 94; }
+    if name == "LIGHTMAGENTA_EX" { return 95; }
+    if name == "LIGHTCYAN_EX" { return 96; }
+    if name == "LIGHTWHITE_EX" { return 97; }
+    0 - 1
+}
+
+fn back_code(name: String) -> i64 {
+    if name == "BLACK" { return 40; }
+    if name == "RED" { return 41; }
+    if name == "GREEN" { return 42; }
+    if name == "YELLOW" { return 43; }
+    if name == "BLUE" { return 44; }
+    if name == "MAGENTA" { return 45; }
+    if name == "CYAN" { return 46; }
+    if name == "WHITE" { return 47; }
+    if name == "RESET" { return 49; }
+    if name == "LIGHTBLACK_EX" { return 100; }
+    if name == "LIGHTRED_EX" { return 101; }
+    if name == "LIGHTGREEN_EX" { return 102; }
+    if name == "LIGHTYELLOW_EX" { return 103; }
+    if name == "LIGHTBLUE_EX" { return 104; }
+    if name == "LIGHTMAGENTA_EX" { return 105; }
+    if name == "LIGHTCYAN_EX" { return 106; }
+    if name == "LIGHTWHITE_EX" { return 107; }
+    0 - 1
+}
+
+fn style_code(name: String) -> i64 {
+    if name == "BRIGHT" { return 1; }
+    if name == "DIM" { return 2; }
+    if name == "NORMAL" { return 22; }
+    if name == "RESET_ALL" { return 0; }
+    0 - 1
+}
+
+fn is_digit(b: i64) -> bool { b >= 48 and b <= 57 }
+fn is_letter(b: i64) -> bool { (b >= 65 and b <= 90) or (b >= 97 and b <= 122) }
+
+// Remove colorama's ANSI_CSI_RE matches: ESC '[' , then [0-9;]* , then a
+// single ASCII letter. An incomplete run (no final letter) is left intact.
+fn strip_ansi(s: String) -> String {
+    let b = bytes_of(s.clone());
+    let n = b.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        if b[i] == 27 and i + 1 < n and b[i + 1] == 91 {
+            let mut j = i + 2;
+            while j < n and (is_digit(b[j]) or b[j] == 59) { j = j + 1; }
+            if j < n and is_letter(b[j]) {
+                i = j + 1;
+            } else {
+                out.push_str(s.substring(i, i + 1));
+                i = i + 1;
+            }
+        } else {
+            out.push_str(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "fore" { return code_to_chars(fore_code(arg)); }
+    if op == "back" { return code_to_chars(back_code(arg)); }
+    if op == "style" { return code_to_chars(style_code(arg)); }
+    if op == "title" { return osc() + "2;" + arg + bel(); }
+    if op == "clearscreen" { return csi() + int_to_str(parse_int(arg)) + "J"; }
+    if op == "clearline" { return csi() + int_to_str(parse_int(arg)) + "K"; }
+    if op == "cursorup" { return csi() + int_to_str(parse_int(arg)) + "A"; }
+    if op == "cursordown" { return csi() + int_to_str(parse_int(arg)) + "B"; }
+    if op == "cursorfwd" { return csi() + int_to_str(parse_int(arg)) + "C"; }
+    if op == "cursorback" { return csi() + int_to_str(parse_int(arg)) + "D"; }
+    if op == "pos" {
+        let xy = split_on(arg, 59);
+        let x = parse_int(xy[0].clone());
+        let y = parse_int(xy[1].clone());
+        return csi() + int_to_str(y) + ";" + int_to_str(x) + "H";
+    }
+    if op == "combo" {
+        return code_to_chars(31) + code_to_chars(1) + "ERROR" + code_to_chars(0) + " ok";
+    }
+    if op == "strip" { return strip_ansi(arg); }
+    "?"
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut v = 0;
+    let mut i = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    v
+}
+
+fn main() {
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        if blen(line.clone()) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let mut arg = String.new();
+            if fields.len() > 1 { arg = fields[1].clone(); }
+            out.push_str("== ");
+            out.push_str(op.clone());
+            out.push_str(" | ");
+            out.push_str(arg.clone());
+            out.push_str("\n  ");
+            out.push_str(run(op, arg));
+            out.push_str("\n");
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("fore\tRED\n");
+    s.push_str("fore\tGREEN\n");
+    s.push_str("fore\tBLUE\n");
+    s.push_str("fore\tLIGHTBLUE_EX\n");
+    s.push_str("fore\tRESET\n");
+    s.push_str("back\tGREEN\n");
+    s.push_str("back\tWHITE\n");
+    s.push_str("back\tRESET\n");
+    s.push_str("style\tBRIGHT\n");
+    s.push_str("style\tDIM\n");
+    s.push_str("style\tNORMAL\n");
+    s.push_str("style\tRESET_ALL\n");
+    s.push_str("title\tbuild ok\n");
+    s.push_str("clearscreen\t2\n");
+    s.push_str("clearscreen\t0\n");
+    s.push_str("clearline\t2\n");
+    s.push_str("cursorup\t2\n");
+    s.push_str("cursordown\t1\n");
+    s.push_str("cursorfwd\t5\n");
+    s.push_str("cursorback\t3\n");
+    s.push_str("pos\t3;4\n");
+    s.push_str("combo\t\n");
+    s.push_str("strip\t\x1b[31m\x1b[1mERROR\x1b[0m ok\n");
+    s.push_str("strip\tx\x1b[2Ky\n");
+    s.push_str("strip\ta\x1b[mb\n");
+    s.push_str("strip\t\x1b[38;5;9mX\x1b[0m\n");
+    s.push_str("strip\tab\x1b[\n");
+    s.push_str("strip\tplain text, no ansi\n");
+    s
+}
