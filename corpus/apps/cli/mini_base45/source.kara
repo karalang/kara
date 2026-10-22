@@ -1,0 +1,260 @@
+// mini_base45 — a port of base45 0.4.4 (BSD; Kirei AB), the Base45 data
+// encoding of RFC 9285. Base45 packs each pair of bytes (a 16-bit value) into
+// three characters of a 45-symbol alphabet, and a trailing odd byte into two,
+// giving a denser-than-Base64 text form well suited to the alphanumeric mode of
+// QR codes — which is why it is the transport encoding of the EU Digital COVID
+// Certificate. This port follows base45/__init__.py exactly: the same alphabet,
+// the same divmod chunking on encode, and the same validation on decode (a
+// length that is 1 mod 3 is rejected, a triple that exceeds 0xFFFF or a final
+// pair that exceeds 0xFF is rejected, and any character outside the alphabet is
+// rejected). Inputs are given as hex (encode) or as the literal Base45 string
+// (decode); decode failures print ERR. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// The RFC 9285 alphabet: index i maps to the character here, and decode scans
+// this for a character's value.
+fn charset_bytes() -> Vec[u8] {
+    str_bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:")
+}
+
+fn enc_char(cs: ref Vec[u8], i: i64) -> u8 {
+    cs[i]
+}
+
+// Value of an alphabet character, or -1 if it is not in the alphabet.
+fn dec_val(cs: ref Vec[u8], b: u8) -> i64 {
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn hex_digit(n: i64) -> u8 {
+    if n < 10 {
+        (48 + n) as u8
+    } else {
+        (87 + n) as u8
+    }
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v = bytes[i] as i64;
+        out.push(hex_digit(v >> 4));
+        out.push(hex_digit(v & 15));
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+// Parse an even-length hex string into its bytes.
+fn parse_hex(s: String) -> Vec[u8] {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < m {
+        let hi = hex_nibble(b[i]);
+        let lo = hex_nibble(b[i + 1]);
+        out.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+    out
+}
+
+// RFC 9285 encode: bytes -> Base45 string.
+fn b45encode(buf: ref Vec[u8], cs: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let buflen = buf.len();
+    let pairend = buflen - buflen % 2;
+    let mut i = 0;
+    while i < pairend {
+        let x = ((buf[i] as i64) << 8) + (buf[i + 1] as i64);
+        let e = x / 2025;
+        let r = x % 2025;
+        let d = r / 45;
+        let c = r % 45;
+        out.push(enc_char(cs, c));
+        out.push(enc_char(cs, d));
+        out.push(enc_char(cs, e));
+        i = i + 2;
+    }
+    if buflen % 2 == 1 {
+        let b = buf[buflen - 1] as i64;
+        let d = b / 45;
+        let c = b % 45;
+        out.push(enc_char(cs, c));
+        out.push(enc_char(cs, d));
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+#[derive(Clone)]
+struct Dec {
+    ok: bool,
+    bytes: Vec[u8],
+}
+
+// RFC 9285 decode: Base45 string bytes -> bytes, or ok=false on any invalid
+// input (bad character, length 1 mod 3, triple > 0xFFFF, final pair > 0xFF).
+fn b45decode(sb: ref Vec[u8], cs: ref Vec[u8]) -> Dec {
+    let mut buf: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < sb.len() {
+        let v = dec_val(cs, sb[i]);
+        if v < 0 {
+            return Dec { ok: false, bytes: Vec.new() };
+        }
+        buf.push(v);
+        i = i + 1;
+    }
+    let buflen = buf.len();
+    if buflen % 3 == 1 {
+        return Dec { ok: false, bytes: Vec.new() };
+    }
+    let mut res: Vec[u8] = Vec.new();
+    let mut j = 0;
+    while j < buflen {
+        if buflen - j >= 3 {
+            let x = buf[j] + buf[j + 1] * 45 + buf[j + 2] * 2025;
+            if x > 65535 {
+                return Dec { ok: false, bytes: Vec.new() };
+            }
+            res.push((x / 256) as u8);
+            res.push((x % 256) as u8);
+        } else {
+            let x = buf[j] + buf[j + 1] * 45;
+            if x > 255 {
+                return Dec { ok: false, bytes: Vec.new() };
+            }
+            res.push(x as u8);
+        }
+        j = j + 3;
+    }
+    Dec { ok: true, bytes: res }
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let cs = charset_bytes();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                if f[0] == "enc" {
+                    let buf = parse_hex(f[1].clone());
+                    out.push_str(b45encode(buf, cs));
+                } else if f[0] == "dec" {
+                    let sb = str_bytes(f[1].clone());
+                    let r = b45decode(sb, cs);
+                    if r.ok {
+                        out.push_str(to_hex(r.bytes));
+                    } else {
+                        out.push_str("ERR");
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\t41\n");
+    s.push_str("enc\t4142\n");
+    s.push_str("enc\t48656c6c6f2121\n");
+    s.push_str("enc\t626173652d3435\n");
+    s.push_str("enc\t00\n");
+    s.push_str("enc\tff\n");
+    s.push_str("enc\t0000\n");
+    s.push_str("enc\tffff\n");
+    s.push_str("enc\t00ff\n");
+    s.push_str("enc\tff00\n");
+    s.push_str("enc\t010203\n");
+    s.push_str("enc\tdeadbeef\n");
+    s.push_str("enc\t00010203040506070809\n");
+    s.push_str("enc\t69657466\n");
+    s.push_str("enc\t666f6f626172\n");
+    s.push_str("enc\t7f8081\n");
+    s.push_str("enc\taa55\n");
+    s.push_str("enc\t10\n");
+    s.push_str("enc\t54686520717569636b2062726f776e20666f78\n");
+    s.push_str("enc\t000102030405060708090a0b0c0d0e0f10111213\n");
+    s.push_str("dec\tBB8\n");
+    s.push_str("dec\t%69 VD92EX0\n");
+    s.push_str("dec\tUJCLQE7W581\n");
+    s.push_str("dec\tU5\n");
+    s.push_str("dec\t00\n");
+    s.push_str("dec\t42\n");
+    s.push_str("dec\t0\n");
+    s.push_str("dec\t0000\n");
+    s.push_str("dec\tZZZ\n");
+    s.push_str("dec\t::\n");
+    s.push_str("dec\tab\n");
+    s.push_str("dec\t!!\n");
+    s.push_str("dec\t:0\n");
+    s.push_str("dec\tG6\n");
+    s.push_str("dec\tFGW\n");
+    s.push_str("dec\tQED8WEX0\n");
+    s.push_str("dec\t \n");
+    s.push_str("dec\t000\n");
+    s.push_str("dec\t/:/\n");
+    s.push_str("dec\tGGW\n");
+    s
+}
