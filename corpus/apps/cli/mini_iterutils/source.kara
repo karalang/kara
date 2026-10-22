@@ -1,0 +1,700 @@
+// mini_iterutils — a port of the sequence toolkit of boltons.iterutils 26.2.0
+// (BSD, Mahmoud Hashemi): the small, composable helpers for chopping, grouping,
+// de-duplicating and inspecting sequences that show up all over data and glue
+// code. Modelled over Vec[i64]; each helper follows iterutils.py directly. The
+// nested-structure visitors (remap / get_path / research) and the float ranges
+// (frange / backoff) are out of scope — see README.md. mk.py has the op table.
+
+struct Reg {
+    items: Vec[i64],
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn pred_match(mode: ref String, x: i64) -> bool {
+    if mode == "truthy" {
+        x != 0
+    } else if mode == "even" {
+        x % 2 == 0
+    } else if mode == "gt40" {
+        x > 40
+    } else {
+        false
+    }
+}
+
+// --- formatting ------------------------------------------------------------
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn fmt_list(xs: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(itoa(xs[i]));
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn fmt_tuple(xs: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("(");
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(itoa(xs[i]));
+        i = i + 1;
+    }
+    out.push_str(")");
+    out
+}
+
+fn fmt_ll(xss: ref Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < xss.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(fmt_list(xss[i]));
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn fmt_pairs(xss: ref Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < xss.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(fmt_tuple(xss[i]));
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+// --- the toolkit -----------------------------------------------------------
+
+// split on a single value; sep != None, so a trailing (possibly empty) group
+// is always yielded and separators are never grouped.
+fn iu_split(src: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        if src[i] == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(src[i]);
+        }
+        i = i + 1;
+    }
+    out.push(cur);
+    out
+}
+
+fn iu_lstrip(src: ref Vec[i64], v: i64) -> Vec[i64] {
+    let mut i = 0;
+    while i < src.len() and src[i] == v {
+        i = i + 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while i < src.len() {
+        out.push(src[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn iu_rstrip(src: ref Vec[i64], v: i64) -> Vec[i64] {
+    let mut j = src.len();
+    while j > 0 and src[j - 1] == v {
+        j = j - 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < j {
+        out.push(src[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn iu_strip(src: ref Vec[i64], v: i64) -> Vec[i64] {
+    let l = iu_lstrip(src, v);
+    iu_rstrip(l, v)
+}
+
+fn iu_chunked(src: ref Vec[i64], size: i64, fill: i64, do_fill: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        let mut chunk: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < size and i + j < src.len() {
+            chunk.push(src[i + j]);
+            j = j + 1;
+        }
+        if do_fill {
+            while chunk.len() < size {
+                chunk.push(fill);
+            }
+        }
+        out.push(chunk);
+        i = i + size;
+    }
+    out
+}
+
+fn iu_chunk_ranges(input_size: i64, chunk_size: i64, input_offset: i64,
+                   overlap_size: i64, align: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let input_stop = input_offset + input_size;
+    let step = chunk_size - overlap_size;
+    let mut off = input_offset;
+    if align {
+        let initial = chunk_size - off % step;
+        if initial != overlap_size {
+            let mut r: Vec[i64] = Vec.new();
+            r.push(off);
+            r.push(imin(off + initial, input_stop));
+            out.push(r);
+            if off + initial >= input_stop {
+                return out;
+            }
+            off = off + initial - overlap_size;
+        }
+    }
+    let mut i = off;
+    while i < input_stop {
+        let mut r: Vec[i64] = Vec.new();
+        r.push(i);
+        r.push(imin(i + chunk_size, input_stop));
+        out.push(r);
+        if i + chunk_size >= input_stop {
+            return out;
+        }
+        i = i + step;
+    }
+    out
+}
+
+// sliding windows; without fill, nothing is returned for a too-short source.
+// With fill, one window per element, padding past the end.
+fn iu_windowed(src: ref Vec[i64], size: i64, fill: i64, do_fill: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let n = src.len();
+    if not do_fill {
+        if n < size {
+            return out;
+        }
+        let mut i = 0;
+        while i + size <= n {
+            let mut w: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < size {
+                w.push(src[i + j]);
+                j = j + 1;
+            }
+            out.push(w);
+            i = i + 1;
+        }
+        return out;
+    }
+    let mut i = 0;
+    while i < n {
+        let mut w: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < size {
+            if i + j < n {
+                w.push(src[i + j]);
+            } else {
+                w.push(fill);
+            }
+            j = j + 1;
+        }
+        out.push(w);
+        i = i + 1;
+    }
+    out
+}
+
+fn contains_vec(xs: ref Vec[i64], v: i64) -> bool {
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] == v {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn iu_unique(src: ref Vec[i64]) -> Vec[i64] {
+    let mut seen: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        if not contains_vec(seen, src[i]) {
+            seen.push(src[i]);
+            out.push(src[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// redundant() over identity keys: the first redundant value of each group, in
+// first-redundancy order (groups=false), or the full groups (groups=true).
+fn iu_redundant(src: ref Vec[i64], groups: bool) -> Vec[Vec[i64]] {
+    let mut seen: Vec[i64] = Vec.new();      // distinct values seen once
+    let mut order: Vec[i64] = Vec.new();     // keys with a redundancy, in order
+    let mut gvals: Vec[Vec[i64]] = Vec.new(); // parallel groups
+    let mut i = 0;
+    while i < src.len() {
+        let v = src[i];
+        if not contains_vec(seen, v) {
+            seen.push(v);
+        } else {
+            let gi = index_in(order, v);
+            if gi != -1 {
+                if groups {
+                    gvals[gi].push(v);
+                }
+            } else {
+                order.push(v);
+                let mut g: Vec[i64] = Vec.new();
+                g.push(v);  // seen[k] was v
+                g.push(v);
+                gvals.push(g);
+            }
+        }
+        i = i + 1;
+    }
+    if groups {
+        return gvals;
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0;
+    while k < order.len() {
+        let mut one: Vec[i64] = Vec.new();
+        one.push(gvals[k][1]);
+        out.push(one);
+        k = k + 1;
+    }
+    out
+}
+
+fn index_in(xs: ref Vec[i64], v: i64) -> i64 {
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] == v {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn fmt_redund_flat(groups_of_first: ref Vec[Vec[i64]]) -> String {
+    // groups=false shape is a flat list of the single first-redundant values
+    let mut flat: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < groups_of_first.len() {
+        flat.push(groups_of_first[i][0]);
+        i = i + 1;
+    }
+    fmt_list(flat)
+}
+
+// --- parsing / line scan ---------------------------------------------------
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn reg_line(k: i64, xs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("reg ");
+    s.push_str(itoa(k));
+    s.push_str(" = ");
+    s.push_str(fmt_list(xs));
+    s
+}
+
+fn fmt_bucket(labels: ref Vec[String], buckets: ref Vec[Vec[i64]]) -> String {
+    let mut out = String.new();
+    out.push_str("{");
+    let mut i = 0;
+    while i < labels.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(labels[i].clone());
+        out.push_str(": ");
+        out.push_str(fmt_list(buckets[i]));
+        i = i + 1;
+    }
+    out.push_str("}");
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut regs: Vec[Reg] = Vec.new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "new" {
+                    let mut its: Vec[i64] = Vec.new();
+                    let mut j = 1;
+                    while j < f.len() {
+                        its.push(parse_int(f[j].clone()));
+                        j = j + 1;
+                    }
+                    let k = regs.len();
+                    out.push_str(reg_line(k, its));
+                    regs.push(Reg { items: its });
+                } else if op == "split" {
+                    let r = parse_int(f[1].clone());
+                    let res = iu_split(regs[r].items, parse_int(f[2].clone()));
+                    out.push_str(fmt_ll(res));
+                } else if op == "lstrip" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_list(iu_lstrip(regs[r].items, parse_int(f[2].clone()))));
+                } else if op == "rstrip" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_list(iu_rstrip(regs[r].items, parse_int(f[2].clone()))));
+                } else if op == "strip" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_list(iu_strip(regs[r].items, parse_int(f[2].clone()))));
+                } else if op == "chunked" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_ll(iu_chunked(regs[r].items, parse_int(f[2].clone()), 0, false)));
+                } else if op == "chunkfill" {
+                    let r = parse_int(f[1].clone());
+                    let res = iu_chunked(regs[r].items, parse_int(f[2].clone()), parse_int(f[3].clone()), true);
+                    out.push_str(fmt_ll(res));
+                } else if op == "cranges" {
+                    let isz = parse_int(f[1].clone());
+                    let csz = parse_int(f[2].clone());
+                    let off = parse_int(f[3].clone());
+                    let ovl = parse_int(f[4].clone());
+                    let al = parse_int(f[5].clone()) != 0;
+                    out.push_str(fmt_pairs(iu_chunk_ranges(isz, csz, off, ovl, al)));
+                } else if op == "pairwise" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_pairs(iu_windowed(regs[r].items, 2, 0, false)));
+                } else if op == "pairend" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_pairs(iu_windowed(regs[r].items, 2, parse_int(f[2].clone()), true)));
+                } else if op == "windowed" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_pairs(iu_windowed(regs[r].items, parse_int(f[2].clone()), 0, false)));
+                } else if op == "winfill" {
+                    let r = parse_int(f[1].clone());
+                    let res = iu_windowed(regs[r].items, parse_int(f[2].clone()), parse_int(f[3].clone()), true);
+                    out.push_str(fmt_pairs(res));
+                } else if op == "bucket" {
+                    let r = parse_int(f[1].clone());
+                    let mode = f[2].clone();
+                    let mut labels: Vec[String] = Vec.new();
+                    let mut keys: Vec[i64] = Vec.new();
+                    let mut buckets: Vec[Vec[i64]] = Vec.new();
+                    let mut m0 = 0;
+                    while m0 < regs[r].items.len() {
+                        let x = regs[r].items[m0];
+                        let kv = if mode == "even" {
+                            if x % 2 == 0 { 1 } else { 0 }
+                        } else {
+                            x % 3
+                        };
+                        let gi = index_in(keys, kv);
+                        if gi == -1 {
+                            keys.push(kv);
+                            let lbl = if mode == "even" {
+                                if kv == 1 { "True" } else { "False" }
+                            } else {
+                                itoa(kv)
+                            };
+                            labels.push(lbl);
+                            let mut b: Vec[i64] = Vec.new();
+                            b.push(x);
+                            buckets.push(b);
+                        } else {
+                            buckets[gi].push(x);
+                        }
+                        m0 = m0 + 1;
+                    }
+                    out.push_str(fmt_bucket(labels, buckets));
+                } else if op == "part1" {
+                    let r = parse_int(f[1].clone());
+                    let mode = f[2].clone();
+                    let mut yes: Vec[i64] = Vec.new();
+                    let mut no: Vec[i64] = Vec.new();
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        let x = regs[r].items[j];
+                        if pred_match(mode, x) {
+                            yes.push(x);
+                        } else {
+                            no.push(x);
+                        }
+                        j = j + 1;
+                    }
+                    out.push_str("(");
+                    out.push_str(fmt_list(yes));
+                    out.push_str(", ");
+                    out.push_str(fmt_list(no));
+                    out.push_str(")");
+                } else if op == "part2" {
+                    let r = parse_int(f[1].clone());
+                    let mut pos: Vec[i64] = Vec.new();
+                    let mut neg: Vec[i64] = Vec.new();
+                    let mut rest: Vec[i64] = Vec.new();
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        let x = regs[r].items[j];
+                        if x > 0 {
+                            pos.push(x);
+                        } else if x < 0 {
+                            neg.push(x);
+                        } else {
+                            rest.push(x);
+                        }
+                        j = j + 1;
+                    }
+                    out.push_str("(");
+                    out.push_str(fmt_list(pos));
+                    out.push_str(", ");
+                    out.push_str(fmt_list(neg));
+                    out.push_str(", ");
+                    out.push_str(fmt_list(rest));
+                    out.push_str(")");
+                } else if op == "unique" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_list(iu_unique(regs[r].items)));
+                } else if op == "redund" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_redund_flat(iu_redundant(regs[r].items, false)));
+                } else if op == "redundg" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_ll(iu_redundant(regs[r].items, true)));
+                } else if op == "one" {
+                    let r = parse_int(f[1].clone());
+                    let mode = f[2].clone();
+                    let mut cnt = 0;
+                    let mut val = 0;
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        if pred_match(mode, regs[r].items[j]) {
+                            cnt = cnt + 1;
+                            if cnt == 1 {
+                                val = regs[r].items[j];
+                            }
+                        }
+                        j = j + 1;
+                    }
+                    if cnt == 1 {
+                        out.push_str(itoa(val));
+                    } else {
+                        out.push_str("None");
+                    }
+                } else if op == "first" {
+                    let r = parse_int(f[1].clone());
+                    let mode = f[2].clone();
+                    let mut found = false;
+                    let mut val = 0;
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        if not found and pred_match(mode, regs[r].items[j]) {
+                            found = true;
+                            val = regs[r].items[j];
+                        }
+                        j = j + 1;
+                    }
+                    if found {
+                        out.push_str(itoa(val));
+                    } else {
+                        out.push_str("None");
+                    }
+                } else if op == "same" {
+                    let r = parse_int(f[1].clone());
+                    let mut ok = true;
+                    if regs[r].items.len() > 0 {
+                        let ref0 = regs[r].items[0];
+                        let mut j = 1;
+                        while j < regs[r].items.len() {
+                            if regs[r].items[j] != ref0 {
+                                ok = false;
+                            }
+                            j = j + 1;
+                        }
+                    }
+                    if ok { out.push_str("yes"); } else { out.push_str("no"); }
+                } else if op == "sameref" {
+                    let r = parse_int(f[1].clone());
+                    let refv = parse_int(f[2].clone());
+                    let mut ok = true;
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        if regs[r].items[j] != refv {
+                            ok = false;
+                        }
+                        j = j + 1;
+                    }
+                    if ok { out.push_str("yes"); } else { out.push_str("no"); }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\t1\t2\t0\t0\t3\t0\t4\t5\n");
+    s.push_str("new\t7\t7\t1\t2\t3\t7\t7\n");
+    s.push_str("new\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\n");
+    s.push_str("new\t1\t2\t3\t2\t3\t3\t4\n");
+    s.push_str("new\t-3\t-1\t0\t2\t4\t5\n");
+    s.push_str("new\t5\t5\t5\t5\n");
+    s.push_str("new\t10\t20\t30\t42\n");
+    s.push_str("split\t0\t0\n");
+    s.push_str("lstrip\t1\t7\n");
+    s.push_str("rstrip\t1\t7\n");
+    s.push_str("strip\t1\t7\n");
+    s.push_str("chunked\t2\t3\n");
+    s.push_str("chunkfill\t2\t3\t0\n");
+    s.push_str("chunked\t2\t5\n");
+    s.push_str("cranges\t10\t5\t10\t0\t0\n");
+    s.push_str("cranges\t10\t5\t10\t1\t0\n");
+    s.push_str("cranges\t15\t5\t4\t0\t1\n");
+    s.push_str("cranges\t15\t5\t2\t1\t1\n");
+    s.push_str("pairwise\t2\n");
+    s.push_str("pairend\t2\t-1\n");
+    s.push_str("windowed\t2\t3\n");
+    s.push_str("windowed\t0\t9\n");
+    s.push_str("winfill\t0\t3\t0\n");
+    s.push_str("bucket\t2\tmod3\n");
+    s.push_str("bucket\t2\teven\n");
+    s.push_str("part1\t2\teven\n");
+    s.push_str("part1\t0\ttruthy\n");
+    s.push_str("part2\t4\n");
+    s.push_str("unique\t3\n");
+    s.push_str("redund\t3\n");
+    s.push_str("redundg\t3\n");
+    s.push_str("one\t5\ttruthy\n");
+    s.push_str("one\t4\tgt40\n");
+    s.push_str("one\t6\tgt40\n");
+    s.push_str("first\t0\ttruthy\n");
+    s.push_str("first\t2\teven\n");
+    s.push_str("first\t4\tgt40\n");
+    s.push_str("same\t5\n");
+    s.push_str("same\t2\n");
+    s.push_str("sameref\t5\t5\n");
+    s.push_str("sameref\t5\t9\n");
+    s
+}
