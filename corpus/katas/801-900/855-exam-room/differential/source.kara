@@ -1,0 +1,527 @@
+// LeetCode #855: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on random
+// rooms, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+struct ExamRoomStar {
+    n: i64,
+    taken: SortedSet[i64],
+}
+
+impl ExamRoomStar {
+    fn new(n: i64) -> ExamRoomStar {
+        ExamRoomStar { n: n, taken: SortedSet.new() }
+    }
+
+    fn seat(mut ref self) -> i64 {
+        let mut best = 0;
+        let mut best_seat = 0;
+        let mut prev = -1;
+        for p in self.taken.iter() {
+            let p = *p;
+            if prev == -1 {
+                // the gap before the first taken seat
+                best = p;
+                best_seat = 0;
+            } else if (p - prev) / 2 > best {
+                best = (p - prev) / 2;
+                best_seat = prev + (p - prev) / 2;
+            }
+            prev = p;
+        }
+        if prev == -1 {
+            best_seat = 0;
+        } else if self.n - 1 - prev > best {
+            best_seat = self.n - 1;
+        }
+        self.taken.insert(best_seat);
+        best_seat
+    }
+
+    fn leave(mut ref self, p: i64) {
+        self.taken.remove(p);
+    }
+}
+
+// ---- sorted-vector arm ----------------------------------------------
+
+struct ExamRoomList {
+    n: i64,
+    taken: Vec[i64],
+}
+
+impl ExamRoomList {
+    fn new(n: i64) -> ExamRoomList {
+        ExamRoomList { n: n, taken: Vec.new() }
+    }
+
+    fn seat(mut ref self) -> i64 {
+        if self.taken.is_empty() {
+            self.taken.push(0);
+            return 0;
+        }
+        let first = self.taken[0];
+        let mut best = first;
+        let mut best_seat = 0;
+        for w in self.taken.windows(2) {
+            let half = (w[1] - w[0]) / 2;
+            if half > best {
+                best = half;
+                best_seat = w[0] + half;
+            }
+        }
+        let last = self.taken[self.taken.len() - 1];
+        if self.n - 1 - last > best {
+            best_seat = self.n - 1;
+        }
+        // the first position whose seat is above the new one
+        let mut lo = 0;
+        let mut hi = self.taken.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.taken[mid] < best_seat {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.taken.insert(lo, best_seat);
+        best_seat
+    }
+
+    fn leave(mut ref self, p: i64) {
+        let at = self.taken.binary_search(p).unwrap();
+        self.taken.remove(at);
+    }
+}
+
+// ---- heap arm -------------------------------------------------------
+
+struct ExamRoomHeap {
+    n: i64,
+    gaps: PriorityQueue[(i64, i64, i64, i64)],
+    left: Map[i64, i64],
+    right: Map[i64, i64],
+}
+
+// What the gap between taken seats `a` and `b` is worth, negated so that
+// the widest gap comes first, and the seat it offers.
+fn gap_heap(a: i64, b: i64, n: i64) -> (i64, i64) {
+    if a == -1 {
+        (-b, 0)
+    } else if b == n {
+        (-(n - 1 - a), n - 1)
+    } else {
+        (-((b - a) / 2), a + (b - a) / 2)
+    }
+}
+
+impl ExamRoomHeap {
+    fn new(n: i64) -> ExamRoomHeap {
+        let mut room = ExamRoomHeap { n: n, gaps: PriorityQueue.new(), left: Map.new(), right: Map.new() };
+        room.right.insert(-1, n);
+        room.left.insert(n, -1);
+        room.push_gap(-1, n);
+        room
+    }
+
+    fn push_gap(mut ref self, a: i64, b: i64) {
+        // a gap with no free seat in it is never offered
+        if b - a > 1 {
+            let (worth, at) = gap_heap(a, b, self.n);
+            self.gaps.push((worth, at, a, b));
+        }
+    }
+
+    fn seat(mut ref self) -> i64 {
+        loop {
+            let (_, at, a, b) = self.gaps.pop().unwrap();
+            if self.right.contains_key(a) and self.right[a] == b {
+                self.right.insert(a, at);
+                self.left.insert(at, a);
+                self.right.insert(at, b);
+                self.left.insert(b, at);
+                self.push_gap(a, at);
+                self.push_gap(at, b);
+                return at;
+            }
+        }
+    }
+
+    fn leave(mut ref self, p: i64) {
+        let a = self.left.remove(p).unwrap();
+        let b = self.right.remove(p).unwrap();
+        self.right.insert(a, b);
+        self.left.insert(b, a);
+        self.push_gap(a, b);
+    }
+}
+
+// ---- ordered-gaps arm -----------------------------------------------
+
+struct ExamRoomIntervals {
+    n: i64,
+    gaps: SortedSet[(i64, i64, i64, i64)],
+    left: Map[i64, i64],
+    right: Map[i64, i64],
+}
+
+// The set's key for the gap between taken seats `a` and `b`: what it is
+// worth, negated, the seat it offers, and the gap itself.
+fn key_intervals(a: i64, b: i64, n: i64) -> (i64, i64, i64, i64) {
+    if a == -1 {
+        (-b, 0, a, b)
+    } else if b == n {
+        (-(n - 1 - a), n - 1, a, b)
+    } else {
+        (-((b - a) / 2), a + (b - a) / 2, a, b)
+    }
+}
+
+impl ExamRoomIntervals {
+    fn new(n: i64) -> ExamRoomIntervals {
+        let mut room = ExamRoomIntervals { n: n, gaps: SortedSet.new(), left: Map.new(), right: Map.new() };
+        room.right.insert(-1, n);
+        room.left.insert(n, -1);
+        room.add(-1, n);
+        room
+    }
+
+    fn add(mut ref self, a: i64, b: i64) {
+        if b - a > 1 {
+            self.gaps.insert(key_intervals(a, b, self.n));
+        }
+    }
+
+    fn drop_gap(mut ref self, a: i64, b: i64) {
+        if b - a > 1 {
+            self.gaps.remove(key_intervals(a, b, self.n));
+        }
+    }
+
+    fn seat(mut ref self) -> i64 {
+        let (_, at, a, b) = *self.gaps.min().unwrap();
+        self.drop_gap(a, b);
+        self.right.insert(a, at);
+        self.left.insert(at, a);
+        self.right.insert(at, b);
+        self.left.insert(b, at);
+        self.add(a, at);
+        self.add(at, b);
+        at
+    }
+
+    fn leave(mut ref self, p: i64) {
+        let a = self.left.remove(p).unwrap();
+        let b = self.right.remove(p).unwrap();
+        self.drop_gap(a, p);
+        self.drop_gap(p, b);
+        self.right.insert(a, b);
+        self.left.insert(b, a);
+        self.add(a, b);
+    }
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: each `seat()` tries every free seat,
+// measures the distance to the closest student, and takes the farthest,
+// the lowest seat among equals; the first student sits at seat 0. Calls
+// are `-1` for `seat()` and `p` for `leave(p)`.
+fn statement(n: i64, calls: Vec[i64]) -> Vec[i64] {
+    let mut taken: Vec[bool] = Vec.filled(n, false);
+    let mut out: Vec[i64] = Vec.new();
+    for c in calls.iter() {
+        if *c >= 0 {
+            taken[*c] = false;
+        } else {
+            let s = farthest(taken, n);
+            taken[s] = true;
+            out.push(s);
+        }
+    }
+    out
+}
+
+// The free seat farthest from every student, the lowest among equals.
+fn farthest(taken: Vec[bool], n: i64) -> i64 {
+    let mut best = -1;
+    let mut best_seat = -1;
+    for s in 0..n {
+        if taken[s] {
+            continue;
+        }
+        let mut closest = n;
+        for t in 0..n {
+            if taken[t] and (s - t).abs() < closest {
+                closest = (s - t).abs();
+            }
+        }
+        if closest > best {
+            best = closest;
+            best_seat = s;
+        }
+    }
+    best_seat
+}
+
+// Runs the calls on one arm. `-1` is `seat()`, `p` is `leave(p)`, and
+// `-2` leaves the seat the last `seat()` gave and asks `seat()` again.
+// A leave of a seat the arm never gave is skipped, and so is a seat in a
+// room the arm has filled, which gives -1.
+fn seats_of(arm: i64, n: i64, calls: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    // the seats this arm has given, so that an arm gone wrong is never
+    // asked to free a seat it does not hold
+    let mut mine: Set[i64] = Set.new();
+    if arm == 0 {
+        let mut room = ExamRoomStar.new(n);
+        for c in calls.iter() {
+            if *c == -1 and mine.len() == n {
+                out.push(-1);
+            } else if *c == -1 {
+                out.push(room.seat());
+                mine.insert(out[out.len() - 1]);
+            } else if *c == -2 {
+                let last = out[out.len() - 1];
+                if last == -1 {
+                    out.push(-1);
+                } else {
+                    room.leave(last);
+                    mine.remove(last);
+                    out.push(room.seat());
+                    mine.insert(out[out.len() - 1]);
+                }
+            } else if mine.remove(*c) {
+                room.leave(*c);
+            }
+        }
+    } else if arm == 1 {
+        let mut room = ExamRoomList.new(n);
+        for c in calls.iter() {
+            if *c == -1 and mine.len() == n {
+                out.push(-1);
+            } else if *c == -1 {
+                out.push(room.seat());
+                mine.insert(out[out.len() - 1]);
+            } else if *c == -2 {
+                let last = out[out.len() - 1];
+                if last == -1 {
+                    out.push(-1);
+                } else {
+                    room.leave(last);
+                    mine.remove(last);
+                    out.push(room.seat());
+                    mine.insert(out[out.len() - 1]);
+                }
+            } else if mine.remove(*c) {
+                room.leave(*c);
+            }
+        }
+    } else if arm == 2 {
+        let mut room = ExamRoomHeap.new(n);
+        for c in calls.iter() {
+            if *c == -1 and mine.len() == n {
+                out.push(-1);
+            } else if *c == -1 {
+                out.push(room.seat());
+                mine.insert(out[out.len() - 1]);
+            } else if *c == -2 {
+                let last = out[out.len() - 1];
+                if last == -1 {
+                    out.push(-1);
+                } else {
+                    room.leave(last);
+                    mine.remove(last);
+                    out.push(room.seat());
+                    mine.insert(out[out.len() - 1]);
+                }
+            } else if mine.remove(*c) {
+                room.leave(*c);
+            }
+        }
+    } else {
+        let mut room = ExamRoomIntervals.new(n);
+        for c in calls.iter() {
+            if *c == -1 and mine.len() == n {
+                out.push(-1);
+            } else if *c == -1 {
+                out.push(room.seat());
+                mine.insert(out[out.len() - 1]);
+            } else if *c == -2 {
+                let last = out[out.len() - 1];
+                if last == -1 {
+                    out.push(-1);
+                } else {
+                    room.leave(last);
+                    mine.remove(last);
+                    out.push(room.seat());
+                    mine.insert(out[out.len() - 1]);
+                }
+            } else if mine.remove(*c) {
+                room.leave(*c);
+            }
+        }
+    }
+    out
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Random calls on a room of `n` seats, the statement's answers standing
+// in for the room so that each leave names a taken seat: a seat when the
+// room is empty, a leave when it is full, and otherwise a seat
+// `stay - 1` times in `stay`. With `fill`, the room is first filled.
+fn random_calls(seed: mut ref i64, n: i64, count: i64, stay: i64, fill: bool) -> Vec[i64] {
+    let mut calls: Vec[i64] = Vec.new();
+    let mut seated: Vec[i64] = Vec.new();
+    let mut taken: Vec[bool] = Vec.filled(n, false);
+    if fill {
+        for _ in 0..n {
+            calls.push(-1);
+            let s = farthest(taken, n);
+            taken[s] = true;
+            seated.push(s);
+        }
+    }
+    for _ in 0..count {
+        let full = seated.len() == n;
+        if not full and (seated.is_empty() or next_random(mut seed) % stay != 0) {
+            calls.push(-1);
+            let s = farthest(taken, n);
+            taken[s] = true;
+            seated.push(s);
+        } else {
+            let i = next_random(mut seed) % seated.len();
+            let p = seated.swap_remove(i);
+            taken[p] = false;
+            calls.push(p);
+        }
+    }
+    calls
+}
+
+fn main() {
+    let names = ["star", "list", "heap", "intervals"];
+    let properties = ["answer", "a free seat", "came back", "no wider", "after the first", "arms agree"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(6, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 855;
+    let big = 1000000000;
+    for case in 0..1600 {
+        let kind = case / 400;
+        // small rooms, larger rooms that mostly fill, larger rooms with
+        // as many leaves as seats, and rooms filled before the calls
+        let n = if kind == 0 { 1 + next_random(mut seed) % 6 } else { 7 + next_random(mut seed) % 24 };
+        let count = 1 + next_random(mut seed) % 40;
+        let stay = if kind == 2 { 2 } else { 3 };
+        let calls = random_calls(mut seed, n, count, stay, kind == 3);
+        let want = statement(n, calls.clone());
+        total += want.len();
+        // every seat call followed by a leave of that seat and a seat
+        let mut twice: Vec[i64] = Vec.new();
+        for c in calls.iter() {
+            twice.push(*c);
+            if *c == -1 {
+                twice.push(-2);
+            }
+        }
+        // a room of 10^9 seats, too large for the statement: there the
+        // arms are held to each other
+        let mut big_calls: Vec[i64] = Vec.new();
+        let mut big_seated: Vec[i64] = Vec.new();
+        let mut big_answers: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 30 {
+            big_calls.push(-1);
+        }
+        for arm in 0..4 {
+            big_answers.push(seats_of(arm, big, big_calls.clone()));
+        }
+        for arm in 0..4 {
+            let got = seats_of(arm, n, calls.clone());
+            let again = seats_of(arm, n, twice.clone());
+            // walk the arm's own answers to check each seat
+            let mut taken: Vec[bool] = Vec.filled(n, false);
+            let mut free_ok = true;
+            let mut wider_ok = true;
+            let mut first_ok = true;
+            let mut last_gap = n;
+            let mut k = 0;
+            for c in calls.iter() {
+                if *c >= 0 {
+                    taken[*c] = false;
+                    last_gap = n;
+                    continue;
+                }
+                if k >= got.len() {
+                    free_ok = false;
+                    break;
+                }
+                let p = got[k];
+                k += 1;
+                if p < 0 or p >= n or taken[p] {
+                    free_ok = false;
+                    break;
+                }
+                let mut closest = n;
+                let mut anyone = false;
+                for t in 0..n {
+                    if taken[t] {
+                        anyone = true;
+                        if (p - t).abs() < closest {
+                            closest = (p - t).abs();
+                        }
+                    }
+                }
+                if not anyone and p != 0 {
+                    first_ok = false;
+                }
+                if closest > last_gap {
+                    wider_ok = false;
+                }
+                last_gap = closest;
+                taken[p] = true;
+            }
+            let mut back_ok = again.len() == 2 * got.len();
+            if back_ok {
+                for i in 0..got.len() {
+                    if again[2 * i] != got[i] or again[2 * i + 1] != got[i] {
+                        back_ok = false;
+                    }
+                }
+            }
+            let oks = [
+                got == want,
+                free_ok,
+                back_ok,
+                wider_ok,
+                first_ok,
+                (0..4).filter(|o| o != arm and big_answers[o] == big_answers[arm]).count() >= 2,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {n} seats, {calls} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 rooms and 1600 rooms of 10^9 seats, {total} seat calls, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, list {by_arm[1]}, heap {by_arm[2]}, intervals {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, a free seat {by_property[1]}, came back {by_property[2]}, no wider {by_property[3]}, after the first {by_property[4]}, arms agree {by_property[5]}");
+}

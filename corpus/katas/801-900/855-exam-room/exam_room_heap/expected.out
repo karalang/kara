@@ -1,0 +1,13 @@
+ExamRoom(10): seat, seat, seat, seat, leave 4, seat -> 0 9 4 2 5
+ExamRoom(1): seat -> 0
+ExamRoom(1): seat, leave 0, seat -> 0 0
+ExamRoom(2): seat, seat -> 0 1
+ExamRoom(3): seat, seat, seat -> 0 2 1
+ExamRoom(4): seat, seat, seat, seat -> 0 3 1 2
+ExamRoom(5): seat, seat, seat, seat -> 0 4 2 1
+ExamRoom(10): seat, seat, seat, leave 0, seat -> 0 9 4 0
+ExamRoom(10): seat, seat, seat, seat, leave 9, seat -> 0 9 4 2 9
+ExamRoom(8): seat, seat, seat, leave 0, leave 7, seat, seat -> 0 7 3 7 0
+ExamRoom(1000000000): seat, seat, seat, seat -> 0 999999999 499999999 749999999
+a room of 10^9 seats, 2000 random calls: seats sum to 642920138132, checksum 648036782
+300 random rooms: seats sum to 38864, checksum 423422038

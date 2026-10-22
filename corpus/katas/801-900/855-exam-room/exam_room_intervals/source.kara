@@ -1,0 +1,148 @@
+// LeetCode #855: Exam Room -- an ordered set of the live gaps.
+//
+// The same gaps as the heap arm, keyed the same way, but held in a sorted
+// set and kept exact: seating takes the smallest key, which is the widest
+// gap and the lowest seat among equals, removes it and adds the two gaps
+// on either side of the new student; leaving removes the two gaps around
+// the seat and adds the one that joins its neighbours. Nothing in the set
+// is ever stale.
+
+struct ExamRoom {
+    n: i64,
+    gaps: SortedSet[(i64, i64, i64, i64)],
+    left: Map[i64, i64],
+    right: Map[i64, i64],
+}
+
+// The set's key for the gap between taken seats `a` and `b`: what it is
+// worth, negated, the seat it offers, and the gap itself.
+fn key(a: i64, b: i64, n: i64) -> (i64, i64, i64, i64) {
+    if a == -1 {
+        (-b, 0, a, b)
+    } else if b == n {
+        (-(n - 1 - a), n - 1, a, b)
+    } else {
+        (-((b - a) / 2), a + (b - a) / 2, a, b)
+    }
+}
+
+impl ExamRoom {
+    fn new(n: i64) -> ExamRoom {
+        let mut room = ExamRoom { n: n, gaps: SortedSet.new(), left: Map.new(), right: Map.new() };
+        room.right.insert(-1, n);
+        room.left.insert(n, -1);
+        room.add(-1, n);
+        room
+    }
+
+    fn add(mut ref self, a: i64, b: i64) {
+        if b - a > 1 {
+            self.gaps.insert(key(a, b, self.n));
+        }
+    }
+
+    fn drop_gap(mut ref self, a: i64, b: i64) {
+        if b - a > 1 {
+            self.gaps.remove(key(a, b, self.n));
+        }
+    }
+
+    fn seat(mut ref self) -> i64 {
+        let (_, at, a, b) = *self.gaps.min().unwrap();
+        self.drop_gap(a, b);
+        self.right.insert(a, at);
+        self.left.insert(at, a);
+        self.right.insert(at, b);
+        self.left.insert(b, at);
+        self.add(a, at);
+        self.add(at, b);
+        at
+    }
+
+    fn leave(mut ref self, p: i64) {
+        let a = self.left.remove(p).unwrap();
+        let b = self.right.remove(p).unwrap();
+        self.drop_gap(a, p);
+        self.drop_gap(p, b);
+        self.right.insert(a, b);
+        self.left.insert(b, a);
+        self.add(a, b);
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Runs one room. A call is `-1` for `seat()` and `p` for `leave(p)`; the
+// seats returned are printed in order.
+fn show(n: i64, calls: Vec[i64]) {
+    let mut room = ExamRoom.new(n);
+    let mut said: Vec[String] = Vec.new();
+    let mut got: Vec[String] = Vec.new();
+    for c in calls.iter() {
+        if *c == -1 {
+            said.push("seat");
+            got.push(f"{room.seat()}");
+        } else {
+            said.push(f"leave {*c}");
+            room.leave(*c);
+        }
+    }
+    println(f"ExamRoom({n}): {said.join(", ")} -> {got.join(" ")}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` random calls on a room of `n` seats: a seat when the room is
+// empty, a leave when it is full, and otherwise a seat two times in
+// three. Returns the sum of the seats given and a checksum of them.
+fn random_room(seed: mut ref i64, n: i64, count: i64) -> (i64, i64) {
+    let mut room = ExamRoom.new(n);
+    let mut seated: Vec[i64] = Vec.new();
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..count {
+        let full = seated.len() == n;
+        if not full and (seated.is_empty() or next_random(mut seed) % 3 != 0) {
+            let p = room.seat();
+            seated.push(p);
+            total += p;
+            check = (check * 31 + p) % 1000000007;
+        } else {
+            let i = next_random(mut seed) % seated.len();
+            let p = seated.swap_remove(i);
+            room.leave(p);
+        }
+    }
+    (total, check)
+}
+
+fn main() {
+    let s = -1;
+    show(10, [s, s, s, s, 4, s]);
+    show(1, [s]);
+    show(1, [s, 0, s]);
+    show(2, [s, s]);
+    show(3, [s, s, s]);
+    show(4, [s, s, s, s]);
+    show(5, [s, s, s, s]);
+    show(10, [s, s, s, 0, s]);
+    show(10, [s, s, s, s, 9, s]);
+    show(8, [s, s, s, 0, 7, s, s]);
+    show(1000000000, [s, s, s, s]);
+    let mut seed = 855;
+    let (big_total, big_check) = random_room(mut seed, 1000000000, 2000);
+    println(f"a room of 10^9 seats, 2000 random calls: seats sum to {big_total}, checksum {big_check}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let count = 1 + next_random(mut seed) % 60;
+        let (t, c) = random_room(mut seed, n, count);
+        total += t;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"300 random rooms: seats sum to {total}, checksum {check}");
+}
