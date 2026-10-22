@@ -1,0 +1,364 @@
+// mini_pathvalidate — a port of pathvalidate 3.3.1 (MIT, Tsuyoshi Hombashi):
+// validate and sanitize file names, as file-upload and export pipelines do.
+//
+// Scope: the Windows filename path (the richest and most-used), covering the
+// invalid-character set (control bytes 0..31 / 127, and / \ : * ? " < > |),
+// the reserved names (CON, PRN, AUX, CLOCK$, NUL, COM0..9, LPT0..9), absolute
+// paths, byte length, the "."/".." exempt cases and the null/empty name, plus
+// the trailing-space/period and leading-space rules, in the library's own
+// precedence. validate reports the library's error-reason code and name;
+// sanitize reproduces the default handlers (strip invalid chars, truncate,
+// add a trailing "_" to a reserved name, strip leading/trailing space and a
+// trailing period). POSIX/macOS, the human-readable exception text, and
+// non-ASCII byte-length counting are the boundaries left out.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn is_letter(b: i64) -> bool { (b >= 65 and b <= 90) or (b >= 97 and b <= 122) }
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn hex2(b: i64) -> String {
+    let d = "0123456789abcdef";
+    let hi = b / 16;
+    let lo = b % 16;
+    d.substring(hi, hi + 1) + d.substring(lo, lo + 1)
+}
+
+fn upper_str(s: String) -> String {
+    let b = bytes_of(s.clone());
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c >= 97 and c <= 122 { out.push_str(byte_to_char(c - 32)); }
+        else { out.push_str(s.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    out
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+// A byte that is invalid in a Windows filename.
+fn is_win_invalid(b: i64) -> bool {
+    if b < 32 { return true; }
+    if b == 127 { return true; }
+    // / \ : * ? " < > |
+    if b == 47 or b == 92 or b == 58 or b == 42 or b == 63 { return true; }
+    if b == 34 or b == 60 or b == 62 or b == 124 { return true; }
+    false
+}
+
+fn is_ws(b: i64) -> bool {
+    b == 32 or b == 9 or b == 10 or b == 13 or b == 11 or b == 12
+}
+
+// is_null_string: empty or entirely ASCII whitespace
+fn is_null(s: String) -> bool {
+    let b = bytes_of(s);
+    let mut i = 0;
+    while i < b.len() {
+        if not is_ws(b[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn is_abspath(b: ref Vec[i64]) -> bool {
+    let n = b.len();
+    if n >= 2 and b[0] == 92 and b[1] == 92 { return true; }                 // UNC \\
+    if n >= 3 and is_letter(b[0]) and b[1] == 58 and (b[2] == 92 or b[2] == 47) { return true; } // drive C:\ or C:/
+    if n >= 1 and b[0] == 47 { return true; }                               // posix /
+    false
+}
+
+fn basename(s: String) -> String {
+    let b = bytes_of(s.clone());
+    let n = b.len();
+    let mut cut = 0;
+    let mut i = 0;
+    while i < n { if b[i] == 47 { cut = i + 1; } i = i + 1; }
+    s.substring(cut, n)
+}
+
+// extract_root: part of the basename before the first '.', with the library's
+// special cases ("."/"..", three-or-more leading dots, leading-dot → empty).
+fn extract_root(name: String) -> String {
+    if name == "." or name == ".." { return name.clone(); }
+    let b = bytes_of(name.clone());
+    let n = b.len();
+    let mut lead = 0;
+    while lead < n and b[lead] == 46 { lead = lead + 1; }
+    if lead >= 3 { return name.clone(); }
+    let base = basename(name);
+    let bb = bytes_of(base.clone());
+    if bb.len() == 0 { return String.new(); }
+    if bb[0] == 46 { return String.new(); }
+    let mut i = 0;
+    while i < bb.len() and bb[i] != 46 { i = i + 1; }
+    base.substring(0, i)
+}
+
+fn reserved_list() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("CON"); v.push("PRN"); v.push("AUX"); v.push("CLOCK$"); v.push("NUL");
+    let bases = "0123456789";
+    let mut i = 0;
+    while i < 10 {
+        let d = bases.substring(i, i + 1);
+        v.push("COM" + d.clone());
+        v.push("LPT" + d);
+        i = i + 1;
+    }
+    v
+}
+
+fn in_list(v: ref Vec[String], key: String) -> bool {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].clone() == key { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn is_reserved(name: String) -> bool {
+    let rl = reserved_list();
+    let root_u = upper_str(extract_root(name.clone()));
+    let base_u = upper_str(basename(name));
+    if in_list(rl, root_u) { return true; }
+    in_list(rl, base_u)
+}
+
+// Returns one of: OK NULL ABS LEN RESERVED CHAR
+fn validate_reason(name: String) -> String {
+    if is_null(name.clone()) { return "NULL"; }
+    let b = bytes_of(name.clone());
+    let n = b.len();
+    if is_abspath(b) { return "ABS"; }
+    if n > 255 { return "LEN"; }
+    if is_reserved(name.clone()) { return "RESERVED"; }
+    let mut i = 0;
+    while i < n {
+        if is_win_invalid(b[i]) { return "CHAR"; }
+        i = i + 1;
+    }
+    if not (name == "." or name == "..") {
+        let last = b[n - 1];
+        if last == 32 or last == 46 { return "CHAR"; }
+        if b[0] == 32 { return "CHAR"; }
+    }
+    "OK"
+}
+
+fn reason_display(tag: String) -> String {
+    if tag == "OK" { return "OK"; }
+    if tag == "NULL" { return "PV1001 NULL_NAME"; }
+    if tag == "RESERVED" { return "PV1002 RESERVED_NAME"; }
+    if tag == "CHAR" { return "PV1100 INVALID_CHARACTER"; }
+    if tag == "LEN" { return "PV1101 INVALID_LENGTH"; }
+    if tag == "ABS" { return "PV1200 FOUND_ABS_PATH"; }
+    "?"
+}
+
+fn strip_invalid(name: String) -> String {
+    let b = bytes_of(name.clone());
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        if not is_win_invalid(b[i]) { out.push_str(name.substring(i, i + 1)); }
+        i = i + 1;
+    }
+    out
+}
+
+fn truncate_bytes(s: String, max: i64) -> String {
+    let n = blen(s.clone());
+    if n <= max { return s.clone(); }
+    s.substring(0, max)
+}
+
+fn lstrip_space(s: String) -> String {
+    let b = bytes_of(s.clone());
+    let n = b.len();
+    let mut i = 0;
+    while i < n and b[i] == 32 { i = i + 1; }
+    s.substring(i, n)
+}
+
+fn rstrip_set(s: String, space_and_dot: bool) -> String {
+    let b = bytes_of(s.clone());
+    let mut n = b.len();
+    while n > 0 {
+        let c = b[n - 1];
+        let drop = (c == 32) or (space_and_dot and c == 46);
+        if not drop { break; }
+        n = n - 1;
+    }
+    s.substring(0, n)
+}
+
+fn replace_all(s: String, pat: String, repl: String) -> String {
+    let sb = bytes_of(s.clone());
+    let pb = bytes_of(pat.clone());
+    let n = sb.len();
+    let m = pb.len();
+    if m == 0 { return s.clone(); }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let mut matched = false;
+        if i + m <= n {
+            matched = true;
+            let mut k = 0;
+            while k < m {
+                if sb[i + k] != pb[k] { matched = false; }
+                k = k + 1;
+            }
+        }
+        if matched {
+            out.push_str(repl.clone());
+            i = i + m;
+        } else {
+            out.push_str(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn sanitize(name: String) -> String {
+    if is_null(name.clone()) { return String.new(); }
+    let mut s = strip_invalid(name);
+    s = truncate_bytes(s, 255);
+    let tag = validate_reason(s.clone());
+    if tag == "RESERVED" {
+        let rn = extract_root(s.clone());
+        let repl = rn.clone() + "_";
+        s = replace_all(s, rn, repl);
+    } else if tag == "CHAR" {
+        s = lstrip_space(s);
+        s = rstrip_set(s, false);
+        if not (s == "." or s == "..") {
+            s = rstrip_set(s, true);
+        }
+    } else if tag == "NULL" {
+        s = String.new();
+    }
+    s
+}
+
+fn disp(name: String) -> String {
+    let b = bytes_of(name.clone());
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 32 or c == 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(c));
+        } else {
+            out.push_str(name.substring(i, i + 1));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        if blen(line.clone()) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let mut arg = String.new();
+            if fields.len() > 1 { arg = fields[1].clone(); }
+
+            out.push_str("== ");
+            out.push_str(op.clone());
+            out.push_str(" | ");
+            out.push_str(disp(arg.clone()));
+            out.push_str("\n  ");
+
+            if op == "validate" {
+                out.push_str(reason_display(validate_reason(arg)));
+            } else if op == "sanitize" {
+                out.push_str("[");
+                out.push_str(sanitize(arg));
+                out.push_str("]");
+            } else {
+                out.push_str("?");
+            }
+            out.push_str("\n");
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("validate\treport.txt\n");
+    s.push_str("validate\tCON\n");
+    s.push_str("validate\tcon.txt\n");
+    s.push_str("validate\tCOM1\n");
+    s.push_str("validate\tLPT9.log\n");
+    s.push_str("validate\ta<b>c\n");
+    s.push_str("validate\ta/b\n");
+    s.push_str("validate\ta\\b\n");
+    s.push_str("validate\ta\x01b\n");
+    s.push_str("validate\tname \n");
+    s.push_str("validate\tname.\n");
+    s.push_str("validate\t name\n");
+    s.push_str("validate\tC:\\Windows\n");
+    s.push_str("validate\t/etc/passwd\n");
+    s.push_str("validate\t\n");
+    s.push_str("validate\t   \n");
+    s.push_str("validate\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+    s.push_str("validate\t.\n");
+    s.push_str("validate\t..\n");
+    s.push_str("validate\tok_file-1.2.3\n");
+    s.push_str("sanitize\ta<b>c:d\n");
+    s.push_str("sanitize\tCON\n");
+    s.push_str("sanitize\tcon.txt\n");
+    s.push_str("sanitize\tname \n");
+    s.push_str("sanitize\tname.\n");
+    s.push_str("sanitize\t  spaced  \n");
+    s.push_str("sanitize\ta/b\\c\n");
+    s.push_str("sanitize\ta\x01b\n");
+    s.push_str("sanitize\t\n");
+    s.push_str("sanitize\t???\n");
+    s.push_str("sanitize\treport.final.txt\n");
+    s.push_str("sanitize\t..\n");
+    s
+}
