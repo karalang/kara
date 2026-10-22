@@ -36011,13 +36011,16 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 /// this fixture can assert. `Option[(i64, i64)]` was the original (retired by
 /// B-2026-08-31-10), then `Option[Vector[i64, 4]]` (-18 / -19), then
 /// `Option[Slice[i64]]` (B-2026-08-31-25 / -41). All three build and match the
-/// interpreter now, and all three are asserted below — keeping them is the
+/// interpreter now, and all three are asserted below (with `VecDeque[i64]`,
+/// the non-Display subject until B-2026-10-21-30) — keeping them is the
 /// point, since each is a regression guard for the capability that retired it.
 ///
 /// There is no fourth subject, and that is MEASURED rather than a failure to
 /// think of one: every `E` codegen would decline is now rejected earlier by the
 /// typechecker's `E_MAIN_ERR_NOT_DISPLAY` — probed with `VecDeque[i64]`,
-/// `Fn(i64) -> i64`, `()` and `Option` wrappers of each. The gap the original
+/// `Fn(i64) -> i64`, `()` and `Option` wrappers of each. The subject is now a
+/// struct with no `Display`: `VecDeque[i64]`, the subject until
+/// B-2026-10-21-30 gave it `Display`, is asserted with the retired examples. The gap the original
 /// fail-open exploited was a type that PASSES that check and that codegen then
 /// declines, and no such type is reachable today. (An unsubstituted generic `T`
 /// still declines — see `codegen_declined_option_payload_names_its_shape` — but
@@ -36042,9 +36045,9 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let tmp = scratch_project("mainerr-failclosed");
     write(
         &tmp.join("m.kara"),
-        "fn main() -> Result[(), VecDeque[i64]] {\n\
-         \x20   let d: VecDeque[i64] = VecDeque.new();\n\
-         \x20   return Err(d);\n\
+        "struct Plain { a: i64 }\n\
+         fn main() -> Result[(), Plain] {\n\
+         \x20   return Err(Plain { a: 1 });\n\
          }\n",
     );
     let o = karac_bin()
@@ -36062,13 +36065,13 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
          binary that prints `Error: ` with nothing after it"
     );
     assert!(
-        stderr.contains("E_MAIN_ERR_NOT_DISPLAY") && stderr.contains("VecDeque"),
+        stderr.contains("E_MAIN_ERR_NOT_DISPLAY") && stderr.contains("Plain"),
         "the diagnostic must name the offending error type; got: {stderr}"
     );
 
     // The retired examples, each renderable since the row that retired it: the
-    // tuple payload (B-2026-08-31-10), the vector one (-18 / -19) and the slice
-    // one (-25). The slice case builds its `Vec` in `main` and returns a slice
+    // tuple payload (B-2026-08-31-10), the vector one (-18 / -19), the slice
+    // one (-25) and `VecDeque`, which has `Display` since B-2026-10-21-30. The slice case builds its `Vec` in `main` and returns a slice
     // of it, which DANGLES — the cleanup drain frees the buffer before the error
     // line is rendered (B-2026-08-31-41) — so it uses an ARRAY-backed slice,
     // whose storage is not freed, and is a genuine Display assertion rather than
@@ -36096,6 +36099,17 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
              }\n"
             .to_string(),
             "Error: Some([1, 2])",
+        ),
+        (
+            "r",
+            "fn main() -> Result[(), VecDeque[i64]] {\n\
+             \x20   let mut d: VecDeque[i64] = VecDeque.new();\n\
+             \x20   d.push_back(1);\n\
+             \x20   d.push_back(2);\n\
+             \x20   return Err(d);\n\
+             }\n"
+            .to_string(),
+            "Error: [1, 2]",
         ),
     ] {
         let file = format!("{stem}.kara");
