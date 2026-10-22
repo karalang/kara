@@ -821,6 +821,15 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.store(self.offset(d, 8)?, n.into())?;
                     return self.store(self.offset(d, 16)?, self.i64(0).into());
                 }
+                // `""` is `String.new()`: what `string_from` would write,
+                // without the call.
+                if matches!(args, [Operand::Const(c)] if matches!(&c.kind, ConstKind::Str(t) if t.is_empty()))
+                {
+                    self.builder
+                        .build_memset(d, 1, self.llcx.i8_type().const_zero(), self.i64(24))
+                        .map_err(e)?;
+                    return Ok(());
+                }
                 self.rt("string_from", &[d.into(), s.into(), n.into()])?;
                 self.drop_moved(args)
             }
