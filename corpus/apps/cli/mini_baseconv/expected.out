@@ -1,0 +1,52 @@
+== encode base2 | 1234
+  10011010010
+== decode base2 | 10011010010
+  1234
+== encode base2 | 0
+  0
+== encode base16 | 255
+  FF
+== encode base16 | 4096
+  1000
+== decode base16 | DEADBEEF
+  3735928559
+== encode base36 | 123456789
+  21i3v9
+== decode base36 | zz
+  1295
+== encode base56 | 1000000
+  7gtA
+== encode base58 | 100
+  2j
+== encode base58 | -255
+  -5Q
+== decode base58 | 2TX
+  4902
+== encode base62 | 999999
+  4C91
+== encode base64 | 100000000000000000000000000000000000
+  4q9XSiTDWYk7Z-W00000
+== decode base64 | 4q9XSiTDWYk7Z-W00000
+  100000000000000000000000000000000000
+== encode base64 | -5
+  $5
+== encode myconv | 1234
+  wy1
+== decode myconv | wy1
+  1234
+== encode myconv | -1234
+  -wy1
+== decode myconv | -wy1
+  -1234
+== encode altsign | -1000000
+  $cc-aaaaaa
+== decode altsign | $cc-aaaaaa
+  -1000000
+== encode base56 | 3.14
+  ValueError: invalid digit "."
+== decode base58 | 0IOl
+  ValueError: invalid digit "0"
+== decode base2 | 102
+  ValueError: invalid digit "2"
+== decode base36 | ZZZ
+  ValueError: invalid digit "Z"

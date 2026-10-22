@@ -1,0 +1,255 @@
+// mini_baseconv — a port of python-baseconv 1.2.2 (PSF license, Guilherme
+// Gondim, after Simon Willison and Drew Perttula): the tiny base-N encoder URL
+// shorteners and id-obfuscators reach for (base58/base62 for Bitcoin-style ids,
+// base64 for compact tokens).
+//
+// The library makes one Python big integer out of the input and then peels
+// digits off it with %/// in the target base. Kāra has no arbitrary-precision
+// integer, and the library's own docstring converts 10^35, so the port never
+// materializes the integer: it holds the number as an array of digit values and
+// runs schoolbook long division by the target base, one pass per output digit,
+// using only i64 arithmetic (each step's working value stays under 64*64+64).
+// encode goes decimal -> alphabet, decode goes alphabet -> decimal; a literal
+// leading '-' (encode) or the converter's sign char (decode) is split off first
+// and re-applied, exactly as the library does. A digit outside the source
+// alphabet reproduces the library's `ValueError: invalid digit "X"`.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct ConvRes {
+    ok: bool,
+    bad: i64,
+    val: String,
+}
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn slice_to_str(v: ref Vec[i64], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+fn slice_vec(v: ref Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = a;
+    while i < b { r.push(v[i]); i = i + 1; }
+    r
+}
+
+fn find_byte(v: ref Vec[i64], start: i64, target: i64) -> i64 {
+    let mut i = start;
+    let n = v.len();
+    while i < n { if v[i] == target { return i; } i = i + 1; }
+    -1
+}
+
+fn index_in(a: ref Vec[i64], b: i64) -> i64 {
+    let mut i = 0;
+    let n = a.len();
+    while i < n { if a[i] == b { return i; } i = i + 1; }
+    -1
+}
+
+fn all_zero(v: ref Vec[i64]) -> bool {
+    for x in v { if x != 0 { return false; } }
+    true
+}
+
+fn strip_leading(q: ref Vec[i64]) -> Vec[i64] {
+    let mut start = 0;
+    let m = q.len();
+    while start < m and q[start] == 0 { start = start + 1; }
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < m { r.push(q[i]); i = i + 1; }
+    r
+}
+
+// Convert `num` (digit values spelled in `from_a`) into the base of `to_a`.
+// Faithful to the library: an empty / all-zero number yields to_a[0], and a
+// digit not in `from_a` raises invalid-digit with that byte.
+fn convert(num: ref Vec[i64], from_a: ref Vec[i64], to_a: ref Vec[i64]) -> ConvRes {
+    let from_base = from_a.len();
+    let to_base = to_a.len();
+
+    let mut vals: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let n = num.len();
+    while i < n {
+        let idx = index_in(from_a, num[i]);
+        if idx < 0 {
+            return ConvRes { ok: false, bad: num[i], val: String.new() };
+        }
+        vals.push(idx);
+        i = i + 1;
+    }
+
+    // Long division: each pass divides the whole number by to_base and keeps
+    // the remainder as the next output digit (least-significant first).
+    let mut out_vals: Vec[i64] = Vec.new();
+    while not all_zero(vals) {
+        let mut quotient: Vec[i64] = Vec.new();
+        let mut carry = 0;
+        let mut j = 0;
+        let m = vals.len();
+        while j < m {
+            let cur = carry * from_base + vals[j];
+            quotient.push(cur / to_base);
+            carry = cur % to_base;
+            j = j + 1;
+        }
+        out_vals.push(carry);
+        vals = strip_leading(quotient);
+    }
+
+    let mut res = String.new();
+    if out_vals.len() == 0 {
+        res.push_str(byte_to_char(to_a[0]));
+    } else {
+        let mut k = out_vals.len() - 1;
+        while k >= 0 {
+            res.push_str(byte_to_char(to_a[out_vals[k]]));
+            k = k - 1;
+        }
+    }
+    ConvRes { ok: true, bad: 0, val: res }
+}
+
+fn base_alphabet(name: ref String) -> String {
+    if name == "base2" { return "01"; }
+    if name == "base16" { return "0123456789ABCDEF"; }
+    if name == "base36" { return "0123456789abcdefghijklmnopqrstuvwxyz"; }
+    if name == "base56" { return "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz"; }
+    if name == "base58" { return "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; }
+    if name == "base62" { return "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"; }
+    if name == "base64" { return "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"; }
+    if name == "myconv" { return "MyOwnAlphabet0123456"; }
+    "abcd-"
+}
+
+fn base_sign(name: ref String) -> i64 {
+    if name == "base64" { return 36; } // '$'
+    if name == "altsign" { return 36; } // '$'
+    45 // '-'
+}
+
+fn err_msg(bad: i64) -> String {
+    let mut s = String.new();
+    s.push_str("ValueError: invalid digit \"");
+    s.push_str(byte_to_char(bad));
+    s.push_str("\"");
+    s
+}
+
+fn run_job(op: ref String, base: ref String, value: ref Vec[i64]) -> String {
+    let alpha = base_alphabet(base);
+    let alpha_b = bytes_of(alpha);
+    let decimal = "0123456789";
+    let dec_b = bytes_of(decimal);
+    let sign = base_sign(base);
+
+    if op == "encode" {
+        // encode strips a LITERAL '-' regardless of the converter's sign char.
+        let mut neg = false;
+        let mut start = 0;
+        if value.len() > 0 and value[0] == 45 { neg = true; start = 1; }
+        let num = slice_vec(value, start, value.len());
+        let r = convert(num, dec_b, alpha_b);
+        if not r.ok { return err_msg(r.bad); }
+        let mut s = String.new();
+        if neg { s.push_str(byte_to_char(sign)); }
+        s.push_str(r.val);
+        return s;
+    }
+
+    // decode strips the converter's OWN sign char and re-applies a literal '-'.
+    let mut neg = false;
+    let mut start = 0;
+    if value.len() > 0 and value[0] == sign { neg = true; start = 1; }
+    let num = slice_vec(value, start, value.len());
+    let r = convert(num, alpha_b, dec_b);
+    if not r.ok { return err_msg(r.bad); }
+    let mut s = String.new();
+    if neg { s.push_str("-"); }
+    s.push_str(r.val);
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let t1 = find_byte(db, line_start, 9);
+                let t2 = find_byte(db, t1 + 1, 9);
+                let op = slice_to_str(db, line_start, t1);
+                let base = slice_to_str(db, t1 + 1, t2);
+                let value = slice_vec(db, t2 + 1, i);
+                let value_str = slice_to_str(db, t2 + 1, i);
+                out.push_str("== ");
+                out.push_str(op);
+                out.push_str(" ");
+                out.push_str(base);
+                out.push_str(" | ");
+                out.push_str(value_str);
+                out.push_str("\n  ");
+                out.push_str(run_job(op, base, value));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("encode\tbase2\t1234\n");
+    s.push_str("decode\tbase2\t10011010010\n");
+    s.push_str("encode\tbase2\t0\n");
+    s.push_str("encode\tbase16\t255\n");
+    s.push_str("encode\tbase16\t4096\n");
+    s.push_str("decode\tbase16\tDEADBEEF\n");
+    s.push_str("encode\tbase36\t123456789\n");
+    s.push_str("decode\tbase36\tzz\n");
+    s.push_str("encode\tbase56\t1000000\n");
+    s.push_str("encode\tbase58\t100\n");
+    s.push_str("encode\tbase58\t-255\n");
+    s.push_str("decode\tbase58\t2TX\n");
+    s.push_str("encode\tbase62\t999999\n");
+    s.push_str("encode\tbase64\t100000000000000000000000000000000000\n");
+    s.push_str("decode\tbase64\t4q9XSiTDWYk7Z-W00000\n");
+    s.push_str("encode\tbase64\t-5\n");
+    s.push_str("encode\tmyconv\t1234\n");
+    s.push_str("decode\tmyconv\twy1\n");
+    s.push_str("encode\tmyconv\t-1234\n");
+    s.push_str("decode\tmyconv\t-wy1\n");
+    s.push_str("encode\taltsign\t-1000000\n");
+    s.push_str("decode\taltsign\t$cc-aaaaaa\n");
+    s.push_str("encode\tbase56\t3.14\n");
+    s.push_str("decode\tbase58\t0IOl\n");
+    s.push_str("decode\tbase2\t102\n");
+    s.push_str("decode\tbase36\tZZZ\n");
+    s
+}
