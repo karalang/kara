@@ -78,7 +78,7 @@ Everything else is imported from a `std.*` module:
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
 | `std.pool` | `Pool`, `PooledConnection`, `PoolError` |
 | `std.path` | `parent`, `file_name`, `extension`, `stem`, `join`, `normalize`, `is_absolute`, `components` |
-| `std.encoding` | `base64_encode`, `base64_decode`, `base64url_encode`, `base64url_decode`, `hex_encode`, `hex_decode`, `DecodeError` |
+| `std.encoding` | `base64_encode`, `base64_decode`, `base64url_encode`, `base64url_decode`, `hex_encode`, `hex_decode`, `percent_encode`, `percent_decode`, `DecodeError` |
 | `std.crypto` | `constant_time_eq` |
 | `std.crypto.sha2` | `sha256`, `sha384`, `sha512`, `Sha256`, `Sha384`, `Sha512` |
 | `std.crypto.hmac` | `hmac_sha256`, `hmac_sha384`, `hmac_sha512`, `HmacSha256`, `HmacSha384`, `HmacSha512` |
