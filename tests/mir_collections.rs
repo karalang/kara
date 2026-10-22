@@ -818,3 +818,33 @@ fn main() {
         101,
     );
 }
+
+/// A `chars()` walk over a borrowed text with 2-, 3- and 4-byte chars,
+/// forward and through `rev()`, agrees on both backends now that the
+/// runtime's decode step is marked as reading only its text.
+#[test]
+fn wide_char_walks_over_a_parameter_agree() {
+    agrees(
+        r#"
+fn count(s: ref String, c: char) -> i64 {
+    let mut n = 0;
+    for ch in s.chars() {
+        if ch == c {
+            n = n + 1;
+        }
+    }
+    n
+}
+fn main() {
+    let s: String = "héllo wörld € 𝄞 é";
+    let mut back: String = "";
+    for ch in s.chars().rev() {
+        back.push(ch);
+    }
+    println(f"{count(s, 'é')} {count(s, 'l')} {count(s, '𝄞')} {back}");
+}
+"#,
+        "2 3 1 é 𝄞 € dlröw olléh\n",
+        0,
+    );
+}

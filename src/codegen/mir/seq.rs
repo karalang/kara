@@ -4,6 +4,7 @@
 //! are the interpreter's `string_method`, `view_method` and
 //! `vec_more_method` (`src/mir/interp.rs`).
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
@@ -30,6 +31,33 @@ impl<'ctx> Cx<'ctx, '_> {
             self.int_ty(bits).fn_type(&tys, false),
         );
         let v = self.builder.build_call(f, args, "").map_err(e)?;
+        Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// [`Self::rt_int`] for a runtime function that only reads memory its
+    /// arguments point at (`memory(argmem: read)`, `nounwind`,
+    /// `willreturn`): a loop around it keeps what it loaded and stored
+    /// elsewhere in registers, such as a `chars()` walk's text and cursor.
+    pub(super) fn rt_int_reads_args(
+        &self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        bits: u32,
+    ) -> R<IntValue<'ctx>> {
+        let tys = self.arg_tys(args);
+        let f = self.extern_fn(
+            &format!("karac_mir_{name}"),
+            self.int_ty(bits).fn_type(&tys, false),
+        );
+        let v = self.builder.build_call(f, args, "").map_err(e)?;
+        // `memory`: two bits a location, argmem lowest; 0b01 is read.
+        for (name, val) in [("memory", 0b00_00_01), ("nounwind", 0), ("willreturn", 0)] {
+            v.add_attribute(
+                AttributeLoc::Function,
+                self.llcx
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id(name), val),
+            );
+        }
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 
@@ -253,7 +281,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(slot, c.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
-        let c = self.rt_int("char_at_byte", &[p.into(), n.into(), i.into()], 64)?;
+        let c = self.rt_int_reads_args("char_at_byte", &[p.into(), n.into(), i.into()], 64)?;
         self.store(slot, c.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(done);
@@ -316,7 +344,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(slot, c.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
-        let c = self.rt_int("char_before_byte", &[p.into(), n.into(), i.into()], 64)?;
+        let c = self.rt_int_reads_args("char_before_byte", &[p.into(), n.into(), i.into()], 64)?;
         self.store(slot, c.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(done);

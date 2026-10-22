@@ -383,6 +383,16 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let s = self.load_ptr(p)?;
         let n = self.load_i64(self.offset(p, 8)?)?;
+        // A length is at most `isize::MAX`, so a cursor below it steps
+        // without overflowing (`StrChars.next`'s `pos + 1`).
+        if let Some(load) = n.as_instruction_value() {
+            let i64t = self.llcx.i64_type();
+            let range = self.llcx.metadata_node(&[
+                i64t.const_zero().into(),
+                i64t.const_int(i64::MAX as u64, false).into(),
+            ]);
+            let _ = load.set_metadata(range, self.llcx.get_kind_id("range"));
+        }
         Ok((s, n))
     }
 
