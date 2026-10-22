@@ -1,0 +1,188 @@
+// mini_rfc3339 — a port of rfc3339-validator 0.1.4 (MIT, Nicolas Aimetti):
+// the RFC 3339 date-time validator jsonschema calls for `format: date-time`.
+//
+// The library matches one VERBOSE+ASCII regex and then rejects year 0 and any
+// day past the month's real length (leap Februaries included). This port runs
+// the regex as an explicit fixed-position byte scan — the format is rigid, so
+// each field is a known offset — then applies the same post-checks. Field
+// ranges that the regex writes as alternations ([01]\d|2[0123], 0[1-9]|1[0-2],
+// [0-5]\d) collapse to plain integer-range tests because every in-range value
+// has exactly one two-digit spelling. Only uppercase `T` and `Z` are accepted,
+// as the library's regex demands; leap seconds are not supported.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn is_digit(b: i64) -> bool { b >= 48 and b <= 57 }
+
+fn two_digits(v: ref Vec[i64], i: i64) -> i64 {
+    // caller has checked both are digits
+    (v[i] - 48) * 10 + (v[i + 1] - 48)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0) and ((y % 100 != 0) or (y % 400 == 0))
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 { if is_leap(y) { return 29; } return 28; }
+    if m == 4 or m == 6 or m == 9 or m == 11 { return 30; }
+    31
+}
+
+fn validate(s: ref String) -> bool {
+    let v = bytes_of(s);
+    let n = v.len();
+    // Shortest valid form is "YYYY-MM-DDTHH:MM:SSZ" (20 bytes).
+    if n < 20 { return false; }
+
+    // Year: 4 ASCII digits at 0..3.
+    let mut i = 0;
+    while i < 4 { if not is_digit(v[i]) { return false; } i = i + 1; }
+    let year = ((v[0] - 48) * 1000) + ((v[1] - 48) * 100) + ((v[2] - 48) * 10) + (v[3] - 48);
+
+    if v[4] != 45 { return false; } // '-'
+
+    // Month: 0[1-9] | 1[0-2]  <=>  two digits, value 1..12.
+    if not is_digit(v[5]) or not is_digit(v[6]) { return false; }
+    let month = two_digits(v, 5);
+    if month < 1 or month > 12 { return false; }
+
+    if v[7] != 45 { return false; } // '-'
+
+    // Day: \d{2} (range-checked below against the month length).
+    if not is_digit(v[8]) or not is_digit(v[9]) { return false; }
+    let day = two_digits(v, 8);
+
+    if v[10] != 84 { return false; } // 'T'
+
+    // Hours: [01]\d | 2[0123]  <=>  0..23.
+    if not is_digit(v[11]) or not is_digit(v[12]) { return false; }
+    let hour = two_digits(v, 11);
+    if hour > 23 { return false; }
+
+    if v[13] != 58 { return false; } // ':'
+
+    // Minutes: [0-5]\d  <=>  0..59.
+    if not is_digit(v[14]) or not is_digit(v[15]) { return false; }
+    if two_digits(v, 14) > 59 { return false; }
+
+    if v[16] != 58 { return false; } // ':'
+
+    // Seconds: [0-5]\d  <=>  0..59 (leap seconds not supported).
+    if not is_digit(v[17]) or not is_digit(v[18]) { return false; }
+    if two_digits(v, 17) > 59 { return false; }
+
+    let mut p = 19;
+
+    // Optional secfrac: '.' \d+
+    if p < n and v[p] == 46 {
+        p = p + 1;
+        if not (p < n and is_digit(v[p])) { return false; }
+        while p < n and is_digit(v[p]) { p = p + 1; }
+    }
+
+    // Either 'Z' or [+-](?:[01]\d|2[0123]):[0-5]\d
+    if p < n and v[p] == 90 {
+        p = p + 1;
+    } else {
+        if p < n and (v[p] == 43 or v[p] == 45) {
+            p = p + 1;
+            if p + 5 > n { return false; } // HH:MM
+            if not is_digit(v[p]) or not is_digit(v[p + 1]) { return false; }
+            if two_digits(v, p) > 23 { return false; }
+            if v[p + 2] != 58 { return false; } // ':'
+            if not is_digit(v[p + 3]) or not is_digit(v[p + 4]) { return false; }
+            if two_digits(v, p + 3) > 59 { return false; }
+            p = p + 5;
+        } else {
+            return false;
+        }
+    }
+
+    if p != n { return false; }
+
+    // Post-checks the library applies after the regex match.
+    if year == 0 { return false; }
+    let maxd = days_in_month(year, month);
+    if day < 1 or day > maxd { return false; }
+    true
+}
+
+fn slice_to_str(v: ref Vec[i64], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let mut out = String.new();
+    let n = db.len();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = slice_to_str(db, line_start, i);
+                out.push_str("== validate | ");
+                out.push_str(line);
+                out.push_str("\n  ");
+                if validate(line) { out.push_str("true"); } else { out.push_str("false"); }
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("2020-01-01T00:00:00Z\n");
+    s.push_str("2021-12-31T23:59:59+05:30\n");
+    s.push_str("1996-12-19T16:39:57-08:00\n");
+    s.push_str("1990-12-31T23:59:59.999Z\n");
+    s.push_str("2017-06-01T14:30:00.123456+00:00\n");
+    s.push_str("2023-10-22T09:15:30.5-03:00\n");
+    s.push_str("2020-02-29T00:00:00Z\n");
+    s.push_str("2000-02-29T12:00:00Z\n");
+    s.push_str("2023-12-31T00:00:00Z\n");
+    s.push_str("2021-02-29T00:00:00Z\n");
+    s.push_str("1900-02-29T00:00:00Z\n");
+    s.push_str("2020-04-31T00:00:00Z\n");
+    s.push_str("2023-11-31T00:00:00Z\n");
+    s.push_str("2020-01-00T00:00:00Z\n");
+    s.push_str("0000-01-01T00:00:00Z\n");
+    s.push_str("2020-13-01T00:00:00Z\n");
+    s.push_str("2020-00-01T00:00:00Z\n");
+    s.push_str("2020-01-01T24:00:00Z\n");
+    s.push_str("2020-01-01T00:60:00Z\n");
+    s.push_str("2020-01-01T00:00:60Z\n");
+    s.push_str("2020-01-01t00:00:00z\n");
+    s.push_str("2020-01-01T00:00:00\n");
+    s.push_str("2020-01-01T00:00:00+5:30\n");
+    s.push_str("2020-01-01T00:00:00+24:00\n");
+    s.push_str("2020-01-01 00:00:00Z\n");
+    s.push_str("2020-01-01T00:00:00Zx\n");
+    s.push_str("20-01-01T00:00:00Z\n");
+    s.push_str("2020-1-01T00:00:00Z\n");
+    s
+}
