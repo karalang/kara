@@ -834,3 +834,134 @@ fn main() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Core semantics §11.7: a `return` in a `par` branch is the same early
+/// exit as `?`. It ends its branch, which still runs as a task (so a branch
+/// may wait on one that returns), every branch is joined, and the function
+/// returns the source-earliest early exit's value while the other values
+/// drop. A `return` inside a closure in a branch returns from the closure.
+#[test]
+fn mir_tasks_par_branch_return_ends_the_branch() {
+    let src = r#"
+struct Loud { n: i64 }
+impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn first(k: i64) -> i64 {
+    let (a, b) = par {
+        { let l = Loud { n: 1 }; if k == 0 { return 100; } l.n },
+        { if k < 2 { return 200; } 2 },
+    };
+    a + b
+}
+fn tried(k: i64) -> Result[i64, String] {
+    let (a, b, c) = par {
+        { if k == 1 { return Ok(7); } 1 },
+        { if k == 2 { return Err("two".to_string()); } 2 },
+        { let x: Result[i64, String] = if k == 3 { Err("three".to_string()) } else { Ok(3) }; x? },
+    };
+    Ok(a + b + c)
+}
+fn waits(stop: bool) -> i64 {
+    let (tx, rx) = channel(1);
+    let (a, b) = par {
+        { let v = rx.recv().unwrap(); if stop { return v * 100; } v },
+        { let _ = tx.send(7); 1 },
+    };
+    a + b
+}
+fn earliest(k: i64) -> String {
+    let (a, b) = par {
+        { if k > 0 { return "first".to_string(); } Loud { n: 10 } },
+        { if k > 1 { return "second".to_string(); } Loud { n: 20 } },
+    };
+    f"{a.n} {b.n}"
+}
+fn never() -> i64 {
+    let (_, b) = par { return 5, 3 };
+    b
+}
+fn unit(k: i64) {
+    let (a, b) = par {
+        { if k == 0 { return; } 1 },
+        { let f = |x: i64| { if x > 2 { return 0; } x }; f(k) },
+    };
+    println(f"unit {a} {b}");
+}
+fn nested(k: i64) -> i64 {
+    let (a, b) = par {
+        { let (x, y) = par { { if k == 1 { return 11; } 1 }, 2 }; x + y },
+        { if k == 2 { return 22; } 4 },
+    };
+    a + b
+}
+fn looped() -> i64 {
+    let (a, b) = par {
+        { let mut s = 0; for i in 0..10 { if i == 4 { break; } if i == 1 { continue; } s += i; } s },
+        2,
+    };
+    a + b
+}
+fn main() {
+    for k in 0..3 { println(f"first {k} = {first(k)}"); }
+    for k in 0..4 { println(f"tried {k} = {tried(k)}"); }
+    println(f"waits {waits(false)} {waits(true)}");
+    for k in 0..3 { println(f"earliest {k} = {earliest(k)}"); }
+    println(f"never {never()}");
+    unit(0);
+    unit(5);
+    for k in 0..3 { println(f"nested {k} = {nested(k)}"); }
+    println(f"looped {looped()}");
+}
+"#;
+    assert_eq!(
+        stdout_on_both("par-return", src),
+        "drop 1\nfirst 0 = 100\ndrop 1\nfirst 1 = 200\ndrop 1\nfirst 2 = 3\ntried 0 = Ok(6)\ntried 1 = Ok(7)\ntried 2 = Err(two)\ntried 3 = Err(three)\nwaits 8 700\ndrop 20\ndrop 10\nearliest 0 = 10 20\ndrop 20\nearliest 1 = first\nearliest 2 = first\nnever 5\nunit 1 0\nnested 0 = 7\nnested 1 = 11\nnested 2 = 22\nlooped 7\n"
+    );
+}
+
+/// Core semantics §11.7: `break` and `continue` cannot leave a `par`
+/// branch, labeled or not, while one aimed at a loop inside the branch is
+/// fine (`mir_tasks_par_branch_return_ends_the_branch`'s `looped`).
+#[test]
+fn mir_tasks_par_branch_break_is_refused() {
+    let src = r#"
+fn main() {
+    let mut n = 0;
+    for i in 0..3 {
+        let (a, b) = par {
+            { if i == 1 { continue; } 1 },
+            { if i == 2 { break; } 2 },
+        };
+        n += a + b;
+    }
+    'outer: loop {
+        let (a, b) = par { { if n > 0 { break 'outer; } 1 }, 2 };
+        n += a + b;
+    }
+    println(f"{n}");
+}
+"#;
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("karac-mir-tasks-break-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    for cmd in ["check", "__mir-run", "__mir-llvm-run"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args([cmd, file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).to_string()
+            + &String::from_utf8_lossy(&out.stdout);
+        assert!(!out.status.success(), "{cmd} must refuse: {err}");
+        assert!(
+            err.contains("6:27: `continue` may not leave a `par` branch"),
+            "{cmd}: {err}"
+        );
+        if cmd == "check" {
+            assert!(err.contains("7:27: `break` may not leave"), "{err}");
+            assert!(err.contains("12:41: `break` may not leave"), "{err}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

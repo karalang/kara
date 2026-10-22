@@ -522,6 +522,10 @@ pub(super) struct BreakFrame {
     /// A `par for` body: `break`, `continue` and `return` may not cross
     /// out of it, nor target the `par for` itself (design.md § `par for`).
     pub(super) par_barrier: bool,
+    /// A `par` block's branches: `break` and `continue` may not leave one,
+    /// while `return` and `?` may (core-semantics.md §11.7). Never a
+    /// target itself.
+    pub(super) par_block: bool,
 }
 
 impl BreakFrame {
@@ -533,6 +537,7 @@ impl BreakFrame {
             accepts_value: true,
             values: Vec::new(),
             par_barrier: false,
+            par_block: false,
         }
     }
 
@@ -546,6 +551,19 @@ impl BreakFrame {
             accepts_value: false,
             values: Vec::new(),
             par_barrier: false,
+            par_block: false,
+        }
+    }
+
+    /// The branches of a `par` block, which no `break` or `continue` leaves.
+    pub(super) fn for_par_block() -> Self {
+        Self {
+            label: None,
+            unlabeled_target: false,
+            accepts_value: false,
+            values: Vec::new(),
+            par_barrier: false,
+            par_block: true,
         }
     }
 
@@ -557,6 +575,7 @@ impl BreakFrame {
             accepts_value: true,
             values: Vec::new(),
             par_barrier: false,
+            par_block: false,
         }
     }
 }

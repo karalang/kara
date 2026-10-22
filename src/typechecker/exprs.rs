@@ -249,6 +249,15 @@ impl<'a> super::TypeChecker<'a> {
                 span,
                 TypeErrorKind::TypeMismatch,
             );
+        } else if self.break_value_types[i..].iter().any(|f| f.par_block) {
+            self.type_error(
+                format!(
+                    "`{what}` may not leave a `par` branch: each branch runs as a task \
+                     of its own (core-semantics.md §11.7)"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
     }
 
@@ -2981,10 +2990,17 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(tail) = &block.final_expr {
                 self.core_reject_par_statements(block);
                 self.check_cross_task_safe_par_block(block, &expr.span);
+                let barrier = self.library_methods_from_source;
+                if barrier {
+                    self.break_value_types.push(BreakFrame::for_par_block());
+                }
                 for stmt in &block.stmts {
                     self.check_stmt(stmt);
                 }
                 let ty = self.check_expr(tail, expected);
+                if barrier {
+                    self.break_value_types.pop();
+                }
                 self.record_expr_type(&expr.span, &ty);
                 return ty;
             }
@@ -10176,14 +10192,24 @@ impl<'a> super::TypeChecker<'a> {
                 // auto-parallelizer's enclosing-scope grouped locals
                 // (B-2026-07-11-3). Sibling isolation is already enforced by
                 // the resolver, so branch reads are known-valid here.
+                // On the MIR pipeline each branch is a task, which no
+                // `break` or `continue` leaves (core-semantics.md §11.7).
+                let barrier = self.library_methods_from_source;
+                if barrier {
+                    self.break_value_types.push(BreakFrame::for_par_block());
+                }
                 for stmt in &block.stmts {
                     self.check_stmt(stmt);
                 }
-                if let Some(ref tail) = block.final_expr {
+                let ty = if let Some(ref tail) = block.final_expr {
                     self.infer_expr(tail)
                 } else {
                     Type::Unit
+                };
+                if barrier {
+                    self.break_value_types.pop();
                 }
+                ty
             }
 
             ExprKind::Lock { mutex, alias, body } => {

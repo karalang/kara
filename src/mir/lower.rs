@@ -708,6 +708,10 @@ struct ClosureJob<'a> {
     /// variant its body's value is wrapped in, when the enclosing function
     /// returns a `Result` or `Option` (see `par_tasks`).
     ret: Option<(Ty, Option<u32>)>,
+    /// A `par` branch's task that may leave early: the enclosing
+    /// function's return type, and the variant of the task's result its
+    /// `return` and `?` carry that function's value in (see `par_tasks`).
+    exit: Option<(Ty, u32)>,
 }
 
 /// A method of a resource's bound (core semantics §14.2).
@@ -2084,6 +2088,13 @@ struct Bx<'l, 'a> {
     /// The next closure lowered is a `par` branch's task, with this return
     /// type and wrapping (see `ClosureJob::ret`).
     closure_ret: Option<(Ty, Option<u32>)>,
+    /// The next closure lowered is a `par` branch's task that may leave
+    /// early (see `ClosureJob::exit`).
+    closure_exit: Option<(Ty, u32)>,
+    /// This body is a `par` branch's task that may leave early: a
+    /// `return` or `?` in it ends the task with the function's value in
+    /// this variant of the task's result (see `ClosureJob::exit`).
+    par_exit: Option<(Ty, u32)>,
     /// The next closure literal lowered escapes (it is stored as a
     /// function value), so it captures by move.
     closure_escapes: bool,
@@ -2144,6 +2155,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_key: false,
             closure_task: false,
             closure_ret: None,
+            closure_exit: None,
+            par_exit: None,
             closure_escapes: false,
             escaping_lets: FxHashSet::default(),
             assigned_caps: Default::default(),
@@ -3740,6 +3753,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             StmtKind::ErrDefer { binding, body } => {
+                if self.par_exit.is_some() {
+                    return self
+                        .unsupported(s.span, "an `errdefer` in a `par` branch that returns");
+                }
                 let bound = binding.as_deref().map(|n| (n, s.id));
                 self.schedule(ScopeEntry::ErrDefer(body, bound));
                 Ok(())
@@ -5846,6 +5863,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => self.for_range(e, label, pattern, iterable, body, dest),
             ExprKind::Return(value) => {
                 let ret = Place::local(Local::RETURN_PLACE);
+                // In a `par` branch's task the function's value ends the
+                // task, in its exit variant (core semantics §11.7).
+                if let Some((t, _)) = self.par_exit {
+                    let l = self.temp(t);
+                    match value {
+                        Some(v) => self.expr_into(v, Place::local(l))?,
+                        None => self.assign(l, Rvalue::Use(unit_const(self.unit()))),
+                    }
+                    let v = self.exit_value(Rvalue::Use(Operand::Move(Place::local(l))));
+                    self.assign(ret, v);
+                    return self.return_exit();
+                }
                 // A closure whose every exit is a `return` was typed as
                 // returning `!`; its returns say what it gives back.
                 if let Some(v) = value {
@@ -7927,28 +7956,51 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             None => {
+                let value = self.exit_value(value);
                 self.assign(ret, value);
                 self.return_exit()
             }
         }
     }
 
+    /// The type a `return` or `?` here gives back: the function's, also
+    /// in a `par` branch's task.
+    fn fn_ret_ty(&self) -> Ty {
+        match self.par_exit {
+            Some((t, _)) => t,
+            None => self.b.local_ty(Local::RETURN_PLACE),
+        }
+    }
+
+    /// `value`, of the function's return type, as this body returns it:
+    /// in a `par` branch's task, in the task's exit variant.
+    fn exit_value(&mut self, value: Rvalue) -> Rvalue {
+        let Some((t, xv)) = self.par_exit else {
+            return value;
+        };
+        let l = self.temp(t);
+        self.assign(l, value);
+        let rt = self.b.local_ty(Local::RETURN_PLACE);
+        let kind = self.adt_aggregate(rt, xv);
+        Rvalue::Aggregate(kind, vec![Operand::Move(Place::local(l))])
+    }
+
     /// `par { a, b }`: each expression is a branch and the value is the
     /// tuple of theirs. Each branch runs as a task (`par_tasks`), since
-    /// branches may wait on each other. The older `par { s1; s2; }` has one
-    /// branch per statement, and a branch that `return`s from the function
-    /// cannot run as a task; those run in source order.
+    /// branches may wait on each other, also one that `return`s from the
+    /// function. The older `par { s1; s2; }` has one branch per statement,
+    /// whose bindings outlive the block; those run in source order.
     fn par_block(&mut self, e: &'a Expr, b: &'a Block, dest: Place) -> R<()> {
         let region = self.open_par_region(ParKind::Block, e.span);
         if b.stmts.is_empty() {
             if let Some(ExprKind::Tuple(es)) = b.final_expr.as_deref().map(|x| &x.kind) {
-                if es.len() > 1 && !es.iter().any(returns_from_fn) {
+                if es.len() > 1 {
                     return self.par_tasks(region, es, dest);
                 }
             }
         }
         // Only a function that returns a `Result` or `Option` has a `?`.
-        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        let ret_ty = self.fn_ret_ty();
         if self.error_variant(ret_ty).is_some() {
             return self.par_block_fallible(region, b, dest);
         }
@@ -7998,10 +8050,22 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// its branch's value wrapped in that type, so a `?` in it ends that
     /// branch alone. Once every task is joined, the source-earliest error is
     /// returned and the other results drop (§11.7).
+    ///
+    /// When a branch `return`s, each task instead returns a `Result` whose
+    /// error variant carries the function's whole value, which a `return`
+    /// or `?` in the task builds; the source-earliest one is returned.
     fn par_tasks(&mut self, region: usize, es: &'a [Expr], dest: Place) -> R<()> {
         let span = es[0].span;
-        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
-        let err = self.error_variant(ret_ty);
+        let ret_ty = self.fn_ret_ty();
+        // A branch that `return`s leaves its task with the function's
+        // value, so every task returns a `Result` whose error variant
+        // carries it, and `?` is the `return` of an error (B-2026-10-22-9).
+        let exits = es.iter().any(returns_from_fn);
+        let err = if exits {
+            None
+        } else {
+            self.error_variant(ret_ty)
+        };
         let Some(group_ty) = self.library_struct("TaskGroup", &[]) else {
             return self.unsupported(span, "`par` without the library's `TaskGroup`");
         };
@@ -8010,7 +8074,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut handles = Vec::new();
         for x in es {
             let vt = self.expr_ty(x)?;
+            let mut exit = None;
             let tt = match err {
+                None if exits => {
+                    let t = self.enum_of("Result", &[vt, ret_ty]);
+                    let Some((t, xv)) = t.and_then(|t| Some((t, self.error_variant(t)?))) else {
+                        return self.unsupported(x.span, "this `par` branch's result type");
+                    };
+                    exit = Some((ret_ty, xv));
+                    t
+                }
                 None => vt,
                 Some(ev) => {
                     let wrapped = match self.tys().tcx().adt_of(ret_ty) {
@@ -8032,10 +8105,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             let entry = self.branch_begin();
             let task = self.par_task_expr(x);
             self.closure_task = true;
-            self.closure_ret = Some((tt, err.map(|ev| 1 - ev)));
+            self.closure_ret = Some((tt, err.or(exit.map(|e| e.1)).map(|ev| 1 - ev)));
+            self.closure_exit = exit;
             let made = self.closure_value(task);
             self.closure_task = false;
             self.closure_ret = None;
+            self.closure_exit = None;
             let (c, _) = made?;
             let gr = self.ref_to(Place::local(g), group_ty);
             let h = self.temp(ht);
@@ -8047,6 +8122,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         for &(h, ht, tt) in &handles {
             let o = match err {
                 Some(_) => self.scoped_temp(tt),
+                None if exits => self.scoped_temp(tt),
                 None => self.temp(tt),
             };
             let name = format!("{}.join", self.tys().display(ht));
@@ -8063,7 +8139,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             next,
         );
-        let Some(ev) = err else {
+        let Some(ev) = err.or_else(|| {
+            let (_, tt) = *outs.first()?;
+            exits.then(|| self.error_variant(tt)).flatten()
+        }) else {
             let ops = outs
                 .into_iter()
                 .map(|(o, _)| Operand::Move(Place::local(o)))
@@ -8090,7 +8169,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 },
                 err_bb,
             );
-            // The task's error has the function's error type already.
+            // The task's error has the function's error type already; a
+            // task that left early carries the function's whole value.
             let mut ops = Vec::new();
             if let Some(et) = self.tys().tcx().field_ty(tt, Some(ev), 0) {
                 let fp = p
@@ -8099,8 +8179,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .field(0, et);
                 ops.push(self.use_place(fp, et));
             }
-            let kind = self.adt_aggregate(ret_ty, ev);
-            self.error_exit(ret.clone(), Rvalue::Aggregate(kind, ops))?;
+            let value = match ops.pop() {
+                Some(v) if exits => Rvalue::Use(v),
+                v => Rvalue::Aggregate(self.adt_aggregate(ret_ty, ev), v.into_iter().collect()),
+            };
+            self.error_exit(ret.clone(), value)?;
             self.cur = ok_bb;
         }
         let mut ops = Vec::new();
@@ -8165,7 +8248,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .collect()
             }
         };
-        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        let ret_ty = self.fn_ret_ty();
         let pending = self.temp(ret_ty);
         self.schedule(ScopeEntry::Drop(Place::local(pending)));
         // `after[j]`: the copy of branch `j` that runs after a failure;
@@ -9383,7 +9466,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             err_bb,
         );
         // Error path: rebuild the error in the return type.
-        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        let ret_ty = self.fn_ret_ty();
         let ret = Place::local(Local::RETURN_PLACE);
         let fields: Vec<Ty> = match self.tys().tcx().adt_of(it) {
             Some((adt, _)) => (0..adt.variants[err as usize].fields.len() as u32)
@@ -15146,6 +15229,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let task = std::mem::take(&mut self.closure_task);
         let escapes = std::mem::take(&mut self.closure_escapes);
         let ret = self.closure_ret.take();
+        let exit = self.closure_exit.take();
         let once = match self
             .lcx
             .node_types
@@ -15352,6 +15436,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             ref_params,
             ref_key,
             ret,
+            exit,
         });
         let l = self.scoped_temp(ty);
         self.assign(l, Rvalue::Aggregate(AggregateKind::Closure { ty }, ops));
@@ -15365,6 +15450,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         params: &'a [ast::ClosureParam],
         body: &'a Expr,
     ) -> R<()> {
+        self.par_exit = job.exit;
         self.push_scope();
         let env_ty = match job.env {
             EnvMode::Ref => self.tys().tcx().reference(job.ty, false),
@@ -16719,9 +16805,9 @@ fn process_exit_args(e: &Expr) -> Option<&[CallArg]> {
 }
 
 /// Whether `e` holds a `return`, which leaves the enclosing function: a
-/// `par` branch with one cannot run as a task (`Bx::par_tasks`). A
-/// `return` inside a closure in it is counted too, which only keeps such a
-/// branch in source order.
+/// `par` branch with one leaves its task with the function's value
+/// (`Bx::par_tasks`). A `return` inside a closure in it is counted too,
+/// which only costs that `par` the wrapping.
 fn returns_from_fn(e: &Expr) -> bool {
     let mut found = false;
     crate::span_visitor::for_each_expr(e, &mut |x| {

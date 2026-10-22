@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 326 |
+| missing-feature | 327 |
 | codegen-gap | 288 |
 | false-positive | 281 |
 | other | 194 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3026 |
-| interp | 1036 |
-| typecheck | 561 |
+| codegen | 3027 |
+| interp | 1037 |
+| typecheck | 562 |
 | ownership | 131 |
 | other | 123 |
 | runtime | 86 |
@@ -177,6 +177,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-7 | 2026-10-22 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Null.stringify());` passes `karac check` and stops `__mir-run` and `__mir-llvm-run` with "the builtin `Json.Null.stringify` is not lowered yet"; without the variant it prints `null` | — |
 | B-2026-10-22-8 | 2026-10-22 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No mutable globals"): a `let` should be refused with a machine-applicable `karac fix` to `const NAME: T = e;`, a `let mut` refused with a message to create the value in `main` and pass it down | — |
+| B-2026-10-22-9 | 2026-10-22 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.recv().unwrap(); if stop { return v; } v }, { tx.send(7); 1 } }` deadlocks); and `break`/`continue` aimed at a loop outside the `par` are accepted by `karac check` | — |
 
 ### Relocated
 
