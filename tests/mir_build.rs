@@ -7092,6 +7092,38 @@ fn main() {
 }
 
 #[test]
+fn mir_from_fn_closure_borrows_its_captures() {
+    // B-2026-10-22-1: the closure `Vec.from_fn` / `Array.from_fn` call was
+    // lowered as a stored function value, so it moved what it captured and
+    // a later read of the capture failed the move check.
+    let src = r#"
+struct P { name: String, k: i64 }
+fn main() {
+    let pre = "n".to_string();
+    let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}");
+    let a: Array[String, 2] = Array.from_fn(2, |i| f"{pre}{i}");
+    println(f"{v} {a} {pre}");
+    let p = P { name: "p".to_string(), k: 10 };
+    let mut calls = 0;
+    let w: Vec[i64] = Vec.from_fn(4, |i| { calls += 1; i * p.k + p.name.len() });
+    println(f"{w} {calls} {p.name}");
+    let owned = "own".to_string();
+    let f = |i: i64| f"{owned}{i}";
+    let u: Vec[String] = Vec.from_fn(2, f);
+    println(f"{u} {owned}");
+}
+"#;
+    let want = "[n0, n1, n2] [n0, n1] n\n[1, 11, 21, 31] 4 p\n[own0, own1] own\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[test]
 fn mir_shared_pattern_parts_read_through_deref() {
     // B-2026-10-18-30: a `shared` scrutinee counts as a `ref` scrutinee, so a
     // handle part reads through `*rest` (core semantics §4.6), as `karac

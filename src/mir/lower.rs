@@ -13089,8 +13089,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     ty_name = owner.to_string();
                 }
+                // `Vec.from_fn(n, f)` calls `f` before it returns and keeps
+                // nothing of it, so its closure borrows what it captures, as
+                // a method native's does (B-2026-10-22-1).
+                let calls_in_place = m == "from_fn" && matches!(owner, "Vec" | "Array");
                 let mut ops = Vec::new();
                 for a in args {
+                    if calls_in_place && matches!(a.value.kind, ExprKind::Closure { .. }) {
+                        ops.push(self.fn_value(&a.value)?.0);
+                        continue;
+                    }
                     ops.push(self.expr_operand(&a.value)?);
                 }
                 self.call_native(&format!("{ty_name}.{m}"), ops, dest);
