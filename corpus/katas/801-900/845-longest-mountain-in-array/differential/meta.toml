@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/845-longest-mountain-in-array/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "71cd99048"
+extracted_src = "bfec3196"
+model_rev = "583cfb0d"
+model_src = "bfec3196"

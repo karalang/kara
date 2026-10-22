@@ -1,0 +1,91 @@
+// LeetCode #845: Longest Mountain in Array -- outward from each peak.
+//
+// A peak is higher than both neighbours. From each peak the mountain
+// spreads left while the values keep falling away from it and right
+// while they keep falling, and its width is measured. The scan then
+// jumps to the foot of that mountain's right side, since no other peak
+// can lie on a falling slope, so every element is read a bounded number
+// of times. O(n) time, O(1) space.
+
+fn longest_mountain(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut best = 0;
+    let mut i = 1;
+    while i + 1 < n {
+        if arr[i - 1] < arr[i] and arr[i] > arr[i + 1] {
+            let mut left = i - 1;
+            while left > 0 and arr[left - 1] < arr[left] {
+                left -= 1;
+            }
+            let mut right = i + 1;
+            while right + 1 < n and arr[right + 1] < arr[right] {
+                right += 1;
+            }
+            best = best.max(right - left + 1);
+            i = right;
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(arr: Vec[i64]) {
+    println(f"{arr} -> {longest_mountain(arr)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([2, 1, 4, 7, 3, 2, 5]);
+    show([2, 2, 2]);
+    show([0]);
+    show([0, 1]);
+    show([1, 2, 3]);
+    show([3, 2, 1]);
+    show([1, 3, 2]);
+    show([0, 1, 0, 1, 0]);
+    show([1, 2, 2, 1]);
+    show([1, 2, 3, 2, 1, 2, 3, 4, 3]);
+    show([2, 1, 2, 3, 4, 3, 3, 2, 1]);
+    show([0, 10000, 0]);
+    show([1, 2, 1, 2, 3, 2, 1, 1, 2, 3, 4, 5, 4]);
+    // LeetCode's longest arrays, 10^4 elements
+    let mut one: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        one.push(if i < 5000 { i } else { 10000 - i });
+    }
+    println(f"one mountain of 10000: {longest_mountain(one)}");
+    let mut zigzag: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        zigzag.push(i % 2);
+    }
+    println(f"zigzag of 10000: {longest_mountain(zigzag)}");
+    let flat: Vec[i64] = Vec.filled(10000, 10000);
+    println(f"10000 equal values: {longest_mountain(flat)}");
+    let mut seed = 845;
+    let mut long: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        long.push(next_random(mut seed) % 10001);
+    }
+    println(f"10000 random values: {longest_mountain(long)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 40;
+        let top = 1 + next_random(mut seed) % 6;
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            arr.push(next_random(mut seed) % top);
+        }
+        let m = longest_mountain(arr);
+        total += m;
+        check = (check * 31 + m) % 1000000007;
+    }
+    println(f"500 random arrays: lengths sum to {total}, checksum {check}");
+}
