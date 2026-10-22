@@ -1,0 +1,461 @@
+// mini_titlecase — a port of titlecase 2.4.1 (MIT, Stuart Colville & Patrick
+// Pannuto, after John Gruber's Perl original): the English title-caser CMS and
+// publishing pipelines use to render headlines in New York Times style.
+//
+// The library drives everything with a dozen regexes. This port reimplements
+// each as an explicit byte scan and follows the same per-word decision order:
+// keep dotted all-caps initials; the O'/d'/l' apostrophe form; the Mc/MC
+// prefix (recursively title-casing the rest); Mr/Mrs/Ms/Dr; inline-period and
+// mixed-case words left untouched (so iPhone, AT&T and U.N.C.L.E. survive);
+// the small-word list lowercased mid-title; `/`- and `-`-separated parts
+// recursed into; an all-caps word folded down; an all-consonant acronym
+// upper-cased; otherwise the first letter capitalized. Afterwards the first
+// and last words' small words are capitalized (case-insensitively, which is
+// why "AT&T" becomes "At&T"), and a small word opening a subphrase after
+// `: . ; ? ! -` is capitalized too.
+//
+// ASCII input only, which is where the library's `re`-fallback and `regex`
+// (Unicode-category) branches agree; the Unicode punctuation/quote variants
+// and the callback/abbreviation hook are out of scope.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn str_of_bytes(v: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+fn slice_str(v: ref Vec[i64], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+fn is_upper(b: i64) -> bool { b >= 65 and b <= 90 }
+fn is_lower(b: i64) -> bool { b >= 97 and b <= 122 }
+fn is_letter(b: i64) -> bool { is_upper(b) or is_lower(b) }
+fn is_digit(b: i64) -> bool { b >= 48 and b <= 57 }
+fn is_word(b: i64) -> bool { is_letter(b) or is_digit(b) or b == 95 }
+fn is_vowel(b: i64) -> bool {
+    b == 97 or b == 101 or b == 105 or b == 111 or b == 117
+    or b == 65 or b == 69 or b == 73 or b == 79 or b == 85
+}
+// ASCII subset of the library's PUNCT set.
+fn is_punct(b: i64) -> bool {
+    (b >= 33 and b <= 47 and b != 36 and b != 37 and b != 43 and b != 44) // ! " # & ' ( ) * - . /  plus others below
+    or b == 33 or b == 34 or b == 35 or b == 36 or b == 37 or b == 38 or b == 39
+    or b == 40 or b == 41 or b == 42 or b == 43 or b == 44 or b == 45 or b == 46 or b == 47
+    or b == 58 or b == 59 or b == 63 or b == 64
+    or b == 91 or b == 92 or b == 93 or b == 95 or b == 96
+    or b == 123 or b == 124 or b == 125 or b == 126
+}
+fn is_sub_punct(b: i64) -> bool {
+    b == 58 or b == 46 or b == 59 or b == 63 or b == 33 or b == 45
+}
+fn to_upper(b: i64) -> i64 { if is_lower(b) { b - 32 } else { b } }
+fn to_lower(b: i64) -> i64 { if is_upper(b) { b + 32 } else { b } }
+
+fn lower_str(v: ref Vec[i64], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b { out.push_str(byte_to_char(to_lower(v[i]))); i = i + 1; }
+    out
+}
+
+// SMALL (whole-word, case-insensitive): used by step 7. Caller lowercases.
+fn is_small_whole(ls: ref String) -> bool {
+    ls == "a" or ls == "an" or ls == "and" or ls == "as" or ls == "at"
+    or ls == "but" or ls == "by" or ls == "en" or ls == "for" or ls == "if"
+    or ls == "in" or ls == "of" or ls == "on" or ls == "or" or ls == "the"
+    or ls == "to" or ls == "v" or ls == "v." or ls == "via" or ls == "vs" or ls == "vs."
+}
+
+// SMALL without the dotted v./vs. forms, for first/last/subphrase letter runs.
+fn is_small_letters(ls: ref String) -> bool {
+    ls == "a" or ls == "an" or ls == "and" or ls == "as" or ls == "at"
+    or ls == "but" or ls == "by" or ls == "en" or ls == "for" or ls == "if"
+    or ls == "in" or ls == "of" or ls == "on" or ls == "or" or ls == "the"
+    or ls == "to" or ls == "v" or ls == "via" or ls == "vs"
+}
+
+fn cap_bytes(v: ref Vec[i64], a: i64, b: i64) -> String {
+    // first char upper, the rest lower (str.capitalize over the slice)
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        if i == a { out.push_str(byte_to_char(to_upper(v[i]))); }
+        else { out.push_str(byte_to_char(to_lower(v[i]))); }
+        i = i + 1;
+    }
+    out
+}
+
+// --- the per-word matchers (ASCII) -------------------------------------
+
+fn match_uc_initials_from(v: ref Vec[i64], pos: i64, n: i64) -> bool {
+    if pos == n { return true; }
+    // [A-Z]\.[A-Z]
+    if pos + 3 <= n and is_upper(v[pos]) and v[pos + 1] == 46 and is_upper(v[pos + 2]) {
+        if match_uc_initials_from(v, pos + 3, n) { return true; }
+    }
+    // [A-Z]\.
+    if pos + 2 <= n and is_upper(v[pos]) and v[pos + 1] == 46 {
+        if match_uc_initials_from(v, pos + 2, n) { return true; }
+    }
+    false
+}
+fn match_uc_initials(v: ref Vec[i64], n: i64) -> bool {
+    if n == 0 { return false; }
+    match_uc_initials_from(v, 0, n)
+}
+
+fn match_apos_second(v: ref Vec[i64], n: i64) -> bool {
+    if n < 3 { return false; }
+    let b0 = to_lower(v[0]);
+    if not (b0 == 100 or b0 == 111 or b0 == 108) { return false; } // d o l
+    if v[1] != 39 { return false; }
+    let mut i = 2;
+    while i < n { if not is_word(v[i]) { return false; } i = i + 1; }
+    true
+}
+
+fn match_mac_mc(v: ref Vec[i64], n: i64) -> bool {
+    if n < 4 { return false; }
+    let ok_prefix = (v[0] == 77 or v[0] == 109) and v[1] == 99; // [Mm]c
+    let ok_prefix2 = v[0] == 77 and v[1] == 67;                 // MC
+    if not (ok_prefix or ok_prefix2) { return false; }
+    is_word(v[2])
+}
+
+fn match_mr(ls: ref String) -> bool {
+    ls == "mr" or ls == "mrs" or ls == "ms" or ls == "dr"
+}
+
+fn match_inline_period(v: ref Vec[i64], n: i64) -> bool {
+    let mut i = 1;
+    while i + 1 < n {
+        if v[i] == 46 and is_word(v[i - 1]) and is_word(v[i + 1]) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn match_uc_elsewhere(v: ref Vec[i64], n: i64) -> bool {
+    let mut p = 0;
+    while p < n and is_punct(v[p]) { p = p + 1; }
+    let mut k = p;
+    while k < n and is_letter(v[k]) { k = k + 1; }
+    if k - p < 2 { return false; }
+    let mut i = p + 1;
+    while i < k { if is_upper(v[i]) { return true; } i = i + 1; }
+    false
+}
+
+fn all_consonants(v: ref Vec[i64], n: i64) -> bool {
+    if n == 0 { return false; }
+    let mut i = 0;
+    while i < n {
+        let c = to_lower(v[i]);
+        if not is_letter(c) { return false; }
+        if is_vowel(v[i]) or c == 121 { return false; } // vowel or 'y'
+        i = i + 1;
+    }
+    true
+}
+
+// CAPFIRST: uppercase the first word char after optional leading punct.
+fn capfirst(v: ref Vec[i64], n: i64) -> String {
+    let mut i = 0;
+    while i < n and is_punct(v[i]) { i = i + 1; }
+    let mut out = String.new();
+    let mut j = 0;
+    let mut done = false;
+    while j < n {
+        if j == i and not done and is_word(v[j]) {
+            out.push_str(byte_to_char(to_upper(v[j])));
+            done = true;
+        } else {
+            out.push_str(byte_to_char(v[j]));
+        }
+        j = j + 1;
+    }
+    out
+}
+
+// --- word and line processing (mutually recursive) ---------------------
+
+fn process_word(w: ref String, all_caps: bool) -> String {
+    let v = bytes_of(w);
+    let n = v.len();
+    if n == 0 { return String.new(); }
+
+    if all_caps and match_uc_initials(v, n) { return w.clone(); }
+
+    if match_apos_second(v, n) {
+        // w[0] (lower if non-vowel else upper) + w[1] + w[2].upper() + w[3:]
+        let mut out = String.new();
+        if is_vowel(v[0]) { out.push_str(byte_to_char(to_upper(v[0]))); }
+        else { out.push_str(byte_to_char(to_lower(v[0]))); }
+        out.push_str(byte_to_char(v[1]));
+        out.push_str(byte_to_char(to_upper(v[2])));
+        let mut i = 3;
+        while i < n { out.push_str(byte_to_char(v[i])); i = i + 1; }
+        return out;
+    }
+
+    if match_mac_mc(v, n) {
+        let pref = cap_bytes(v, 0, 2);
+        let rest = slice_str(v, 2, n);
+        let tail = titlecase_line(rest, true);
+        return pref + tail;
+    }
+
+    let lw = lower_str(v, 0, n);
+    if match_mr(lw) {
+        let mut out = String.new();
+        out.push_str(byte_to_char(to_upper(v[0])));
+        let mut i = 1;
+        while i < n { out.push_str(byte_to_char(v[i])); i = i + 1; }
+        return out;
+    }
+
+    if match_inline_period(v, n) or (not all_caps and match_uc_elsewhere(v, n)) {
+        return w.clone();
+    }
+
+    if is_small_whole(lw) { return lw; }
+
+    // "/" present without "//": split and recurse, join "/"
+    if contains_byte(v, n, 47) and not contains_double_slash(v, n) {
+        return split_recurse_join(v, n, 47);
+    }
+    // "-" present: split and recurse, join "-"
+    if contains_byte(v, n, 45) {
+        return split_recurse_join(v, n, 45);
+    }
+
+    // all_caps word folds down before the acronym / capitalize steps
+    let mut vv: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { if all_caps { vv.push(to_lower(v[i])); } else { vv.push(v[i]); } i = i + 1; }
+
+    if all_consonants(vv, n) and n > 2 {
+        let mut out = String.new();
+        let mut j = 0;
+        while j < n { out.push_str(byte_to_char(to_upper(vv[j]))); j = j + 1; }
+        return out;
+    }
+
+    capfirst(vv, n)
+}
+
+fn contains_byte(v: ref Vec[i64], n: i64, b: i64) -> bool {
+    let mut i = 0;
+    while i < n { if v[i] == b { return true; } i = i + 1; }
+    false
+}
+
+fn contains_double_slash(v: ref Vec[i64], n: i64) -> bool {
+    let mut i = 1;
+    while i < n { if v[i] == 47 and v[i - 1] == 47 { return true; } i = i + 1; }
+    false
+}
+
+fn split_recurse_join(v: ref Vec[i64], n: i64, sep: i64) -> String {
+    let mut out = String.new();
+    let mut start = 0;
+    let mut i = 0;
+    let mut first = true;
+    while i <= n {
+        if i == n or v[i] == sep {
+            let part = slice_str(v, start, i);
+            let tc = titlecase_line(part, false);
+            if not first { out.push_str(byte_to_char(sep)); }
+            out.push_str(tc);
+            first = false;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn is_all_caps(v: ref Vec[i64], n: i64) -> bool {
+    let mut i = 0;
+    while i < n { if is_lower(v[i]) { return false; } i = i + 1; }
+    true
+}
+
+fn small_first(w: ref String) -> String {
+    let v = bytes_of(w);
+    let n = v.len();
+    let mut p = 0;
+    while p < n and is_punct(v[p]) { p = p + 1; }
+    let mut k = p;
+    while k < n and is_letter(v[k]) { k = k + 1; }
+    if k > p and (k == n or not is_word(v[k])) {
+        let cand = lower_str(v, p, k);
+        if is_small_letters(cand) {
+            let mut out = slice_str(v, 0, p);
+            out.push_str(cap_bytes(v, p, k));
+            out.push_str(slice_str(v, k, n));
+            return out;
+        }
+    }
+    w.clone()
+}
+
+fn small_last(w: ref String) -> String {
+    let v = bytes_of(w);
+    let n = v.len();
+    if n == 0 { return String.new(); }
+    let mut e = n;
+    if is_punct(v[n - 1]) { e = n - 1; }
+    let mut rs = e;
+    while rs > 0 and is_letter(v[rs - 1]) { rs = rs - 1; }
+    if e > rs and (rs == 0 or not is_word(v[rs - 1])) {
+        let cand = lower_str(v, rs, e);
+        if is_small_letters(cand) {
+            let mut out = slice_str(v, 0, rs);
+            out.push_str(cap_bytes(v, rs, n)); // group0 = small word + trailing punct
+            return out;
+        }
+    }
+    w.clone()
+}
+
+fn subphrase(res: ref String) -> String {
+    let v = bytes_of(res);
+    let n = v.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { out.push(v[i]); i = i + 1; }
+    let mut j = 0;
+    while j + 2 < n {
+        if is_sub_punct(v[j]) and v[j + 1] == 32 and is_letter(v[j + 2]) {
+            let mut k = j + 2;
+            while k < n and is_letter(v[k]) { k = k + 1; }
+            let cand = slice_str(v, j + 2, k);
+            if is_small_letters(cand) {
+                out[j + 2] = to_upper(v[j + 2]);
+            }
+        }
+        j = j + 1;
+    }
+    str_of_bytes(out)
+}
+
+fn titlecase_line(s: ref String, sfl: bool) -> String {
+    let v = bytes_of(s);
+    let n = v.len();
+    let all_caps = is_all_caps(v, n);
+
+    // split on space/tab, keeping empty tokens
+    let mut words: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 32 or v[i] == 9 {
+            words.push(slice_str(v, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+
+    let mut tc: Vec[String] = Vec.new();
+    for w in words { tc.push(process_word(w, all_caps)); }
+
+    let wc = tc.len();
+    let mut outwords: Vec[String] = Vec.new();
+    let mut idx = 0;
+    while idx < wc {
+        let mut e = tc[idx].clone();
+        if sfl and wc > 0 {
+            if idx == 0 { e = small_first(e); }
+            if idx == wc - 1 { e = small_last(e); }
+        }
+        outwords.push(e);
+        idx = idx + 1;
+    }
+
+    let mut res = String.new();
+    let mut first = true;
+    for e in outwords {
+        if not first { res.push_str(" "); }
+        res.push_str(e);
+        first = false;
+    }
+    subphrase(res)
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let mut out = String.new();
+    let n = db.len();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = slice_str(db, line_start, i);
+                out.push_str("== titlecase | ");
+                out.push_str(line);
+                out.push_str("\n  ");
+                out.push_str(titlecase_line(line, true));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("the quick brown fox\n");
+    s.push_str("a tale of two cities\n");
+    s.push_str("gone with the wind\n");
+    s.push_str("to be or not to be\n");
+    s.push_str("THE WINTER OF OUR DISCONTENT\n");
+    s.push_str("x-men: first class\n");
+    s.push_str("the man from U.N.C.L.E.\n");
+    s.push_str("it's a wonderful life\n");
+    s.push_str("O'Brien and O'Malley\n");
+    s.push_str("mcdonald's farm\n");
+    s.push_str("vs the world\n");
+    s.push_str("lord of the rings\n");
+    s.push_str("e.g. this and that\n");
+    s.push_str("a a a\n");
+    s.push_str("HELLO WORLD\n");
+    s.push_str("iPhone and iPad sales\n");
+    s.push_str("the lord of the rings: the two towers\n");
+    s.push_str("step by step\n");
+    s.push_str("mr smith goes to washington\n");
+    s.push_str("www.example.com here\n");
+    s.push_str("AT&T merger\n");
+    s.push_str("a man, a plan, a canal\n");
+    s.push_str("well-known fact\n");
+    s.push_str("http://example.com/path here\n");
+    s.push_str("and now for something\n");
+    s
+}
