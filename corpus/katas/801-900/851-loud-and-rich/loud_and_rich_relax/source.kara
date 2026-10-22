@@ -1,0 +1,123 @@
+// LeetCode #851: Loud and Rich -- relaxing every edge until nothing
+// changes.
+//
+// Every person starts as their own answer, and an edge `a -> b` lets `b`
+// take `a`'s answer when it is quieter. Passing over all the edges again
+// and again until a pass changes nothing settles everyone, as in
+// Bellman-Ford: after `k` passes each person has seen everyone up to `k`
+// edges richer. O(n * e) time.
+
+fn loud_and_rich(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut answer: Vec[i64] = (0..n).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for pair in richer.iter() {
+            let a = pair[0];
+            let b = pair[1];
+            if quiet[answer[a]] < quiet[answer[b]] {
+                answer[b] = answer[a];
+                changed = true;
+            }
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(richer: Vec[Vec[i64]], quiet: Vec[i64]) {
+    println(f"{richer}, {quiet} -> {loud_and_rich(richer, quiet)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random order of `0..n`.
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    order
+}
+
+// `n` people ranked by a random order, with each of the `n * (n - 1) / 2`
+// consistent pairs kept with chance `keep` in 100, the pairs themselves
+// in a random order.
+fn random_case(seed: mut ref i64, n: i64, keep: i64) -> (Vec[Vec[i64]], Vec[i64]) {
+    let rank = shuffled(mut seed, n);
+    let mut richer: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        for j in i + 1..n {
+            if next_random(mut seed) % 100 < keep {
+                richer.push([rank[i], rank[j]]);
+            }
+        }
+    }
+    let m = richer.len();
+    for i in (1..m).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        richer.swap(i, j);
+    }
+    (richer, shuffled(mut seed, n))
+}
+
+fn digest(answer: Vec[i64]) -> i64 {
+    let mut check = 0;
+    for a in answer.iter() {
+        check = (check * 31 + a + 1) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    show([[1, 0], [2, 1], [3, 1], [3, 7], [4, 3], [5, 3], [6, 3]], [3, 2, 5, 4, 6, 1, 7, 0]);
+    show([], [0]);
+    show([[0, 1]], [1, 0]);
+    show([[0, 1]], [0, 1]);
+    show([], [2, 0, 1]);
+    show([[0, 1], [1, 2], [2, 3]], [3, 2, 1, 0]);
+    show([[0, 1], [1, 2], [2, 3]], [0, 1, 2, 3]);
+    show([[0, 3], [1, 3], [2, 3]], [2, 0, 1, 3]);
+    show([[0, 1], [0, 2], [0, 3]], [3, 0, 1, 2]);
+    show([[1, 0], [2, 0], [3, 1], [3, 2]], [3, 2, 1, 0]);
+    show([[0, 2], [1, 2], [2, 3], [2, 4]], [4, 3, 2, 1, 0]);
+    // LeetCode's most people, 500
+    let n = 500;
+    let mut chain: Vec[Vec[i64]] = Vec.new();
+    let mut quiet_up: Vec[i64] = Vec.new();
+    let mut quiet_down: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i > 0 {
+            chain.push([i - 1, i]);
+        }
+        quiet_up.push(i);
+        quiet_down.push(n - 1 - i);
+    }
+    println(f"a chain of 500, quieter going down: digest {digest(loud_and_rich(chain, quiet_down))}");
+    chain.reverse();
+    println(f"the same chain, its pairs reversed, louder going down: digest {digest(loud_and_rich(chain, quiet_up))}");
+    let mut seed = 851;
+    let (dense, dense_quiet) = random_case(mut seed, n, 50);
+    println(f"500 people, {dense.len()} pairs: digest {digest(loud_and_rich(dense, dense_quiet))}");
+    let (sparse, sparse_quiet) = random_case(mut seed, n, 1);
+    println(f"500 people, {sparse.len()} pairs: digest {digest(loud_and_rich(sparse, sparse_quiet))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let size = 1 + next_random(mut seed) % 12;
+        let keep = next_random(mut seed) % 101;
+        let (richer, quiet) = random_case(mut seed, size, keep);
+        let answer = loud_and_rich(richer, quiet);
+        for a in answer.iter() {
+            total += quiet[a];
+        }
+        check = (check * 31 + digest(answer)) % 1000000007;
+    }
+    println(f"300 random cases: the answers' quietness sums to {total}, checksum {check}");
+}

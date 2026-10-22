@@ -1,0 +1,87 @@
+// Benchmark for #851: Loud and Rich -- the ★ arm (memoised search up the
+// richer-than graph).
+//
+// The quietest person at least as rich as `x` is `x` itself or the
+// answer for someone directly richer than `x`, since everyone richer
+// than them is richer than `x` too. The statement promises the
+// richer-than relation has no cycles, so a search that remembers each
+// answer it finds settles every person once. O(n + e) time.
+
+fn answer_for(x: i64, richer_than: Vec[Vec[i64]], quiet: Vec[i64], answer: mut ref Vec[i64]) -> i64 {
+    if answer[x] < 0 {
+        let mut best = x;
+        for y in richer_than[x].iter() {
+            let candidate = answer_for(y, richer_than, quiet, mut answer);
+            if quiet[candidate] < quiet[best] {
+                best = candidate;
+            }
+        }
+        answer[x] = best;
+    }
+    answer[x]
+}
+
+fn loud_and_rich(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut richer_than: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        richer_than.push(Vec.new());
+    }
+    for pair in richer.iter() {
+        richer_than[pair[1]].push(pair[0]);
+    }
+    let mut answer: Vec[i64] = Vec.filled(n, -1);
+    for x in 0..n {
+        let _ = answer_for(x, richer_than, quiet, mut answer);
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 cases drawn once, each of LeetCode's most people, 500, ranked
+    // by a random order: case `g` keeps each of the 124750 consistent
+    // pairs with chance `2 << (g % 8)` in 1000, from about 250 pairs to
+    // about 32000, and its quietness is a random order too. Each round
+    // asks the next case.
+    let count = 64;
+    let rounds = 10000;
+    let n = 500;
+    let mut seed: i64 = 851;
+    let mut cases: Vec[(Vec[Vec[i64]], Vec[i64])] = Vec.new();
+    for g in 0..count {
+        let odds = 2 << (g % 8);
+        let mut rank: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            rank.swap(i, next_random(mut seed) % (i + 1));
+        }
+        let mut richer: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            for j in i + 1..n {
+                if next_random(mut seed) % 1000 < odds {
+                    richer.push([rank[i], rank[j]]);
+                }
+            }
+        }
+        let mut quiet: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            quiet.swap(i, next_random(mut seed) % (i + 1));
+        }
+        cases.push((richer, quiet));
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let (richer, quiet) = ref cases[round % count];
+        let answer = loud_and_rich(richer, quiet);
+        for a in answer.iter() {
+            total += quiet[a];
+            checksum = (checksum * 31 + a) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {count} cases: quietness sums to {total}, checksum {checksum}");
+}

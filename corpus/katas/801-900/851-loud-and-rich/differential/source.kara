@@ -1,0 +1,292 @@
+// LeetCode #851: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random
+// richer-than orders, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn answer_for(x: i64, richer_than: Vec[Vec[i64]], quiet: Vec[i64], answer: mut ref Vec[i64]) -> i64 {
+    if answer[x] < 0 {
+        let mut best = x;
+        for y in richer_than[x].iter() {
+            let candidate = answer_for(y, richer_than, quiet, mut answer);
+            if quiet[candidate] < quiet[best] {
+                best = candidate;
+            }
+        }
+        answer[x] = best;
+    }
+    answer[x]
+}
+
+fn loud_and_rich_star(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut richer_than: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        richer_than.push(Vec.new());
+    }
+    for pair in richer.iter() {
+        richer_than[pair[1]].push(pair[0]);
+    }
+    let mut answer: Vec[i64] = Vec.filled(n, -1);
+    for x in 0..n {
+        let _ = answer_for(x, richer_than, quiet, mut answer);
+    }
+    answer
+}
+
+// ---- topological arm ------------------------------------------------
+
+fn loud_and_rich_topo(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut poorer: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        poorer.push(Vec.new());
+    }
+    let mut above: Vec[i64] = Vec.filled(n, 0);
+    for pair in richer.iter() {
+        poorer[pair[0]].push(pair[1]);
+        above[pair[1]] += 1;
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    let mut ready: Vec[i64] = Vec.new();
+    for x in 0..n {
+        answer.push(x);
+        if above[x] == 0 {
+            ready.push(x);
+        }
+    }
+    while let Some(a) = ready.pop() {
+        for b in poorer[a].iter() {
+            if quiet[answer[a]] < quiet[answer[b]] {
+                answer[b] = answer[a];
+            }
+            above[b] -= 1;
+            if above[b] == 0 {
+                ready.push(b);
+            }
+        }
+    }
+    answer
+}
+
+// ---- quietest-first arm ---------------------------------------------
+
+fn loud_and_rich_quietest(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut poorer: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        poorer.push(Vec.new());
+    }
+    for pair in richer.iter() {
+        poorer[pair[0]].push(pair[1]);
+    }
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|p| quiet[p]);
+    let mut answer: Vec[i64] = Vec.filled(n, -1);
+    for p in order.iter() {
+        if answer[p] < 0 {
+            answer[p] = p;
+            let mut stack: Vec[i64] = [*p];
+            while let Some(a) = stack.pop() {
+                for b in poorer[a].iter() {
+                    if answer[b] < 0 {
+                        answer[b] = p;
+                        stack.push(b);
+                    }
+                }
+            }
+        }
+    }
+    answer
+}
+
+// ---- relaxation arm -------------------------------------------------
+
+fn loud_and_rich_relax(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut answer: Vec[i64] = (0..n).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for pair in richer.iter() {
+            let a = pair[0];
+            let b = pair[1];
+            if quiet[answer[a]] < quiet[answer[b]] {
+                answer[b] = answer[a];
+                changed = true;
+            }
+        }
+    }
+    answer
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: `y` is at least as rich as `x` when
+// `y == x` or a chain of pairs leads from `y` down to `x`, worked out
+// here as the transitive closure of the pairs, and the answer for `x`
+// is the quietest such `y`.
+fn statement(richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    let n = quiet.len();
+    let mut reach: Vec[bool] = Vec.filled(n * n, false);
+    for i in 0..n {
+        reach[i * n + i] = true;
+    }
+    for pair in richer.iter() {
+        reach[pair[0] * n + pair[1]] = true;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if reach[i * n + k] and reach[k * n + j] {
+                    reach[i * n + j] = true;
+                }
+            }
+        }
+    }
+    let mut answer: Vec[i64] = Vec.new();
+    for x in 0..n {
+        let mut best = x;
+        for y in 0..n {
+            if reach[y * n + x] and quiet[y] < quiet[best] {
+                best = y;
+            }
+        }
+        answer.push(best);
+    }
+    answer
+}
+
+fn answers(arm: i64, richer: Vec[Vec[i64]], quiet: Vec[i64]) -> Vec[i64] {
+    if arm == 0 {
+        loud_and_rich_star(richer, quiet)
+    } else if arm == 1 {
+        loud_and_rich_topo(richer, quiet)
+    } else if arm == 2 {
+        loud_and_rich_quietest(richer, quiet)
+    } else {
+        loud_and_rich_relax(richer, quiet)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    order
+}
+
+fn main() {
+    let names = ["star", "topo", "quietest", "relax"];
+    let properties = ["answer", "reordered", "relabelled", "pair added", "richer and settled"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 851;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 10;
+        // `rank[i]` is the `i`-th richest person; a pair always names a
+        // richer person first, so the pairs never make a cycle.
+        let rank = shuffled(mut seed, n);
+        let keep = if kind == 0 {
+            15
+        } else if kind == 1 {
+            60
+        } else if kind == 2 {
+            100
+        } else {
+            next_random(mut seed) % 101
+        };
+        let mut richer: Vec[Vec[i64]] = Vec.new();
+        if kind == 2 {
+            // a chain, every pair beside it implied
+            for i in 1..n {
+                richer.push([rank[i - 1], rank[i]]);
+            }
+        } else {
+            for i in 0..n {
+                for j in i + 1..n {
+                    if next_random(mut seed) % 100 < keep {
+                        richer.push([rank[i], rank[j]]);
+                    }
+                }
+            }
+        }
+        let m = richer.len();
+        for i in (1..m).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            richer.swap(i, j);
+        }
+        let quiet = shuffled(mut seed, n);
+        let want = statement(richer, quiet);
+        for x in 0..n {
+            total += quiet[want[x]];
+        }
+        let mut reordered = richer.clone();
+        reordered.reverse();
+        // people renamed: person `x` becomes `label[x]`
+        let label = shuffled(mut seed, n);
+        let mut relabelled: Vec[Vec[i64]] = Vec.new();
+        for pair in richer.iter() {
+            relabelled.push([label[pair[0]], label[pair[1]]]);
+        }
+        let mut relabelled_quiet: Vec[i64] = Vec.filled(n, 0);
+        for x in 0..n {
+            relabelled_quiet[label[x]] = quiet[x];
+        }
+        let mut more = richer.clone();
+        if n > 1 {
+            let i = next_random(mut seed) % (n - 1);
+            let j = i + 1 + next_random(mut seed) % (n - 1 - i);
+            more.push([rank[i], rank[j]]);
+        }
+        for arm in 0..4 {
+            let got = answers(arm, richer, quiet);
+            let back = answers(arm, reordered, quiet);
+            let renamed = answers(arm, relabelled, relabelled_quiet);
+            let grown = answers(arm, more, quiet);
+            let mut ok_renamed = true;
+            let mut ok_grown = true;
+            let mut ok_settled = true;
+            for x in 0..n {
+                if renamed[label[x]] != label[got[x]] {
+                    ok_renamed = false;
+                }
+                if quiet[grown[x]] > quiet[got[x]] {
+                    ok_grown = false;
+                }
+                if quiet[got[x]] > quiet[x] or got[got[x]] != got[x] {
+                    ok_settled = false;
+                }
+            }
+            let oks = [got == want, back == got, ok_renamed, ok_grown, ok_settled];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {richer}, {quiet} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, the answers' quietness sums to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, topo {by_arm[1]}, quietest {by_arm[2]}, relax {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reordered {by_property[1]}, relabelled {by_property[2]}, pair added {by_property[3]}, richer and settled {by_property[4]}");
+}

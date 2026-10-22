@@ -1,0 +1,103 @@
+// Benchmark for #850: Rectangle Area II -- the segment-tree arm (a sweep
+// line over a segment tree).
+//
+// Sweeping the rectangles' left and right edges in order of x, the
+// area between two edges is their distance times the length of y
+// covered there, which a segment tree over the compressed y values
+// keeps up to date: each node counts the open rectangles that cover its
+// whole range and keeps the length of its range that is covered, its
+// whole length when its count is positive and its children's otherwise.
+// Opening or closing a rectangle touches O(log n) nodes, so O(n log n)
+// time.
+
+struct Cover {
+    ys: Vec[i64],
+    count: Vec[i64],
+    length: Vec[i64],
+}
+
+fn update(t: mut ref Cover, node: i64, lo: i64, hi: i64, a: i64, b: i64, delta: i64) {
+    if b <= lo or hi <= a {
+        return;
+    }
+    if a <= lo and hi <= b {
+        t.count[node] += delta;
+    } else {
+        let mid = (lo + hi) / 2;
+        update(mut t, 2 * node, lo, mid, a, b, delta);
+        update(mut t, 2 * node + 1, mid, hi, a, b, delta);
+    }
+    if t.count[node] > 0 {
+        t.length[node] = t.ys[hi] - t.ys[lo];
+    } else if hi - lo == 1 {
+        t.length[node] = 0;
+    } else {
+        t.length[node] = t.length[2 * node] + t.length[2 * node + 1];
+    }
+}
+
+fn rectangle_area(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut ys: Vec[i64] = Vec.new();
+    let mut events: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for r in rectangles.iter() {
+        ys.push(r[1]);
+        ys.push(r[3]);
+        events.push((r[0], 1, r[1], r[3]));
+        events.push((r[2], -1, r[1], r[3]));
+    }
+    ys.sort();
+    ys.dedup();
+    events.sort();
+    let segments = ys.len() - 1;
+    let mut t = Cover { ys: ys.clone(), count: Vec.filled(4 * ys.len(), 0), length: Vec.filled(4 * ys.len(), 0) };
+    let mut area = 0;
+    let mut prev_x = 0;
+    for (x, delta, y1, y2) in events.iter() {
+        area += t.length[1] * (x - prev_x);
+        prev_x = x;
+        if segments > 0 {
+            let a = ys.binary_search(y1).unwrap();
+            let b = ys.binary_search(y2).unwrap();
+            update(mut t, 1, 0, segments, a, b, delta);
+        }
+    }
+    area % 1000000007
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 sets drawn once, each of LeetCode's most rectangles, 200, with
+    // corners up to 10^9: set `g` keeps its corners within `limit >> (g %
+    // 8)`, from the whole board down to a corner of it, so the later sets
+    // overlap more. Each round asks the next set.
+    let count = 64;
+    let rounds = 8000;
+    let n = 200;
+    let limit = 1000000000;
+    let mut seed: i64 = 850;
+    let mut sets: Vec[Vec[Vec[i64]]] = Vec.new();
+    for g in 0..count {
+        let size = limit >> (g % 8);
+        let mut rectangles: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let a = (next_random(mut seed) * 32768 + next_random(mut seed)) % (size + 1);
+            let b = (next_random(mut seed) * 32768 + next_random(mut seed)) % (size + 1);
+            let c = (next_random(mut seed) * 32768 + next_random(mut seed)) % (size + 1);
+            let d = (next_random(mut seed) * 32768 + next_random(mut seed)) % (size + 1);
+            rectangles.push([a.min(b), c.min(d), a.max(b), c.max(d)]);
+        }
+        sets.push(rectangles);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let a = rectangle_area(sets[round % count]);
+        total += a;
+        checksum = (checksum * 31 + a) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} sets: areas sum to {total}, checksum {checksum}");
+}

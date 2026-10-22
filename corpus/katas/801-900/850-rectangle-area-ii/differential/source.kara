@@ -1,0 +1,327 @@
+// LeetCode #850: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random sets of rectangles,
+// against the statement read literally on a small board.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn rectangle_area_star(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut xs: Vec[i64] = Vec.new();
+    let mut ys: Vec[i64] = Vec.new();
+    for r in rectangles.iter() {
+        xs.push(r[0]);
+        xs.push(r[2]);
+        ys.push(r[1]);
+        ys.push(r[3]);
+    }
+    xs.sort();
+    xs.dedup();
+    ys.sort();
+    ys.dedup();
+    let w = xs.len();
+    let h = ys.len();
+    let mut covered: Vec[bool] = Vec.filled(w * h, false);
+    for r in rectangles.iter() {
+        let x1 = xs.binary_search(r[0]).unwrap();
+        let x2 = xs.binary_search(r[2]).unwrap();
+        let y1 = ys.binary_search(r[1]).unwrap();
+        let y2 = ys.binary_search(r[3]).unwrap();
+        for i in x1..x2 {
+            for j in y1..y2 {
+                covered[i * h + j] = true;
+            }
+        }
+    }
+    let mut area = 0;
+    for i in 0..w - 1 {
+        for j in 0..h - 1 {
+            if covered[i * h + j] {
+                area += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+            }
+        }
+    }
+    area % 1000000007
+}
+
+// ---- sweep arm ------------------------------------------------------
+
+fn rectangle_area_sweep(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut events: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for r in rectangles.iter() {
+        events.push((r[0], 0, r[1], r[3]));
+        events.push((r[2], 1, r[1], r[3]));
+    }
+    events.sort();
+    let mut open: Vec[(i64, i64)] = Vec.new();
+    let mut area = 0;
+    let mut prev_x = 0;
+    for (x, kind, y1, y2) in events.iter() {
+        let mut spans = open.clone();
+        spans.sort();
+        let mut covered = 0;
+        let mut top = -1;
+        for (a, b) in spans.iter() {
+            if b > top {
+                covered += b - a.max(top);
+                top = b;
+            }
+        }
+        area += covered * (x - prev_x);
+        prev_x = x;
+        if kind == 0 {
+            open.push((y1, y2));
+        } else {
+            let mut at = 0;
+            while open[at] != (y1, y2) {
+                at += 1;
+            }
+            let _ = open.swap_remove(at);
+        }
+    }
+    area % 1000000007
+}
+
+// ---- strips arm -----------------------------------------------------
+
+fn rectangle_area_strips(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut xs: Vec[i64] = Vec.new();
+    for r in rectangles.iter() {
+        xs.push(r[0]);
+        xs.push(r[2]);
+    }
+    xs.sort();
+    xs.dedup();
+    let mut area = 0;
+    for k in 1..xs.len() {
+        let mut spans: Vec[(i64, i64)] = rectangles
+            .iter()
+            .filter(|r| r[0] <= xs[k - 1] and xs[k] <= r[2])
+            .map(|r| (r[1], r[3]))
+            .collect();
+        spans.sort();
+        let mut covered = 0;
+        let mut top = -1;
+        for (a, b) in spans.iter() {
+            if b > top {
+                covered += b - a.max(top);
+                top = b;
+            }
+        }
+        area += (xs[k] - xs[k - 1]) * covered;
+    }
+    area % 1000000007
+}
+
+// ---- segment-tree arm -----------------------------------------------
+
+struct Cover {
+    ys: Vec[i64],
+    count: Vec[i64],
+    length: Vec[i64],
+}
+
+fn update(t: mut ref Cover, node: i64, lo: i64, hi: i64, a: i64, b: i64, delta: i64) {
+    if b <= lo or hi <= a {
+        return;
+    }
+    if a <= lo and hi <= b {
+        t.count[node] += delta;
+    } else {
+        let mid = (lo + hi) / 2;
+        update(mut t, 2 * node, lo, mid, a, b, delta);
+        update(mut t, 2 * node + 1, mid, hi, a, b, delta);
+    }
+    if t.count[node] > 0 {
+        t.length[node] = t.ys[hi] - t.ys[lo];
+    } else if hi - lo == 1 {
+        t.length[node] = 0;
+    } else {
+        t.length[node] = t.length[2 * node] + t.length[2 * node + 1];
+    }
+}
+
+fn rectangle_area_segtree(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut ys: Vec[i64] = Vec.new();
+    let mut events: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for r in rectangles.iter() {
+        ys.push(r[1]);
+        ys.push(r[3]);
+        events.push((r[0], 1, r[1], r[3]));
+        events.push((r[2], -1, r[1], r[3]));
+    }
+    ys.sort();
+    ys.dedup();
+    events.sort();
+    let segments = ys.len() - 1;
+    let mut t = Cover { ys: ys.clone(), count: Vec.filled(4 * ys.len(), 0), length: Vec.filled(4 * ys.len(), 0) };
+    let mut area = 0;
+    let mut prev_x = 0;
+    for (x, delta, y1, y2) in events.iter() {
+        area += t.length[1] * (x - prev_x);
+        prev_x = x;
+        if segments > 0 {
+            let a = ys.binary_search(y1).unwrap();
+            let b = ys.binary_search(y2).unwrap();
+            update(mut t, 1, 0, segments, a, b, delta);
+        }
+    }
+    area % 1000000007
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally on a small board: a unit cell `(x, y)` is
+// covered when some rectangle has `x1 <= x < x2` and `y1 <= y < y2`, and
+// the area is the number of covered cells.
+fn statement(rectangles: Vec[Vec[i64]], size: i64) -> i64 {
+    let mut area = 0;
+    for x in 0..size {
+        for y in 0..size {
+            let mut hit = false;
+            for r in rectangles.iter() {
+                if r[0] <= x and x < r[2] and r[1] <= y and y < r[3] {
+                    hit = true;
+                }
+            }
+            if hit {
+                area += 1;
+            }
+        }
+    }
+    area
+}
+
+fn area_of(arm: i64, rectangles: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        rectangle_area_star(rectangles)
+    } else if arm == 1 {
+        rectangle_area_sweep(rectangles)
+    } else if arm == 2 {
+        rectangle_area_strips(rectangles)
+    } else {
+        rectangle_area_segtree(rectangles)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random rectangle with corners in `0..=size`, its sides possibly empty.
+fn random_rectangle(seed: mut ref i64, size: i64) -> Vec[i64] {
+    let a = next_random(mut seed) % (size + 1);
+    let b = next_random(mut seed) % (size + 1);
+    let c = next_random(mut seed) % (size + 1);
+    let d = next_random(mut seed) % (size + 1);
+    [a.min(b), c.min(d), a.max(b), c.max(d)]
+}
+
+fn main() {
+    let names = ["star", "sweep", "strips", "segtree"];
+    let properties = ["answer", "reordered", "turned", "shifted", "grown", "bounds"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(6, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 850;
+    let size = 12;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let mut rectangles: Vec[Vec[i64]] = Vec.new();
+        if kind == 0 {
+            // a few rectangles anywhere
+            let count = 1 + next_random(mut seed) % 4;
+            for _ in 0..count {
+                rectangles.push(random_rectangle(mut seed, size));
+            }
+        } else if kind == 1 {
+            // many rectangles, so most cells are covered more than once
+            let count = 5 + next_random(mut seed) % 6;
+            for _ in 0..count {
+                rectangles.push(random_rectangle(mut seed, size));
+            }
+        } else if kind == 2 {
+            // thin rectangles: width or height one, or none at all
+            let count = 1 + next_random(mut seed) % 6;
+            for _ in 0..count {
+                let x = next_random(mut seed) % size;
+                let y = next_random(mut seed) % size;
+                let along = next_random(mut seed) % (size + 1);
+                let wide = next_random(mut seed) % 3;
+                if next_random(mut seed) % 2 == 0 {
+                    rectangles.push([x.min(along), y, x.max(along), y + wide.min(size - y)]);
+                } else {
+                    rectangles.push([x, y.min(along), x + wide.min(size - x), y.max(along)]);
+                }
+            }
+        } else {
+            // copies, and rectangles sharing edges with one another
+            let first = random_rectangle(mut seed, size);
+            rectangles.push(first.clone());
+            rectangles.push(first.clone());
+            let count = 1 + next_random(mut seed) % 4;
+            for _ in 0..count {
+                let r = random_rectangle(mut seed, size);
+                let side = next_random(mut seed) % 4;
+                if side == 0 {
+                    rectangles.push([first[2], r[1], first[2].max(r[2]), r[3]]);
+                } else if side == 1 {
+                    rectangles.push([r[0], first[3], r[2], first[3].max(r[3])]);
+                } else if side == 2 {
+                    rectangles.push([r[0].min(first[0]), r[1], first[0], r[3]]);
+                } else {
+                    rectangles.push(r);
+                }
+            }
+        }
+        let want = statement(rectangles, size);
+        total += want;
+        let mut reordered = rectangles.clone();
+        reordered.reverse();
+        // turned a quarter about the board's centre
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        let mut shifted: Vec[Vec[i64]] = Vec.new();
+        let dx = (next_random(mut seed) * 32768 + next_random(mut seed)) % (1000000001 - size);
+        let dy = (next_random(mut seed) * 32768 + next_random(mut seed)) % (1000000001 - size);
+        let mut largest = 0;
+        let mut sum = 0;
+        for r in rectangles.iter() {
+            turned.push([r[1], size - r[2], r[3], size - r[0]]);
+            shifted.push([r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+            let a = (r[2] - r[0]) * (r[3] - r[1]);
+            largest = largest.max(a);
+            sum += a;
+        }
+        let mut grown = rectangles.clone();
+        grown.push(random_rectangle(mut seed, size));
+        for arm in 0..4 {
+            let got = area_of(arm, rectangles.clone());
+            let oks = [
+                got == want,
+                area_of(arm, reordered.clone()) == got,
+                area_of(arm, turned.clone()) == got,
+                area_of(arm, shifted.clone()) == got,
+                area_of(arm, grown.clone()) >= got,
+                largest <= got and got <= sum,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {rectangles} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, areas sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, sweep {by_arm[1]}, strips {by_arm[2]}, segtree {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reordered {by_property[1]}, turned {by_property[2]}, shifted {by_property[3]}, grown {by_property[4]}, bounds {by_property[5]}");
+}

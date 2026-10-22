@@ -1,0 +1,130 @@
+// LeetCode #850: Rectangle Area II -- the ★ arm (compressed coordinates
+// and a grid of cells).
+//
+// Every rectangle edge lies on one of at most `2n` distinct x values and
+// `2n` distinct y values. Between neighbouring values they cut the plane
+// into cells that each rectangle either covers whole or misses, so mark
+// the cells each rectangle covers and add up the areas of the marked
+// ones. The union is at most 10^18, which an `i64` holds, so the
+// remainder is taken once at the end. O(n^3) time, O(n^2) space.
+
+fn rectangle_area(rectangles: Vec[Vec[i64]]) -> i64 {
+    let mut xs: Vec[i64] = Vec.new();
+    let mut ys: Vec[i64] = Vec.new();
+    for r in rectangles.iter() {
+        xs.push(r[0]);
+        xs.push(r[2]);
+        ys.push(r[1]);
+        ys.push(r[3]);
+    }
+    xs.sort();
+    xs.dedup();
+    ys.sort();
+    ys.dedup();
+    let w = xs.len();
+    let h = ys.len();
+    let mut covered: Vec[bool] = Vec.filled(w * h, false);
+    for r in rectangles.iter() {
+        let x1 = xs.binary_search(r[0]).unwrap();
+        let x2 = xs.binary_search(r[2]).unwrap();
+        let y1 = ys.binary_search(r[1]).unwrap();
+        let y2 = ys.binary_search(r[3]).unwrap();
+        for i in x1..x2 {
+            for j in y1..y2 {
+                covered[i * h + j] = true;
+            }
+        }
+    }
+    let mut area = 0;
+    for i in 0..w - 1 {
+        for j in 0..h - 1 {
+            if covered[i * h + j] {
+                area += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+            }
+        }
+    }
+    area % 1000000007
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(rectangles: Vec[Vec[i64]]) {
+    println(f"{rectangles} -> {rectangle_area(rectangles)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random rectangle with corners in `0..=size`, its sides possibly empty.
+fn random_rectangle(seed: mut ref i64, size: i64) -> Vec[i64] {
+    let a = next_random(mut seed) % (size + 1);
+    let b = next_random(mut seed) % (size + 1);
+    let c = next_random(mut seed) % (size + 1);
+    let d = next_random(mut seed) % (size + 1);
+    [a.min(b), c.min(d), a.max(b), c.max(d)]
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001
+}
+
+fn main() {
+    show([[0, 0, 2, 2], [1, 0, 2, 3], [1, 0, 3, 1]]);
+    show([[0, 0, 1000000000, 1000000000]]);
+    show([[0, 0, 1, 1]]);
+    show([[0, 0, 0, 5], [3, 3, 4, 3]]);
+    show([[0, 0, 2, 2], [0, 0, 2, 2]]);
+    show([[0, 0, 4, 4], [1, 1, 3, 3]]);
+    show([[0, 0, 1, 1], [1, 0, 2, 1], [0, 1, 1, 2]]);
+    show([[0, 1, 3, 2], [1, 0, 2, 3]]);
+    show([[0, 0, 3, 3], [2, 2, 5, 5], [4, 4, 7, 7]]);
+    show([[0, 0, 1000000000, 1], [0, 0, 1, 1000000000]]);
+    show([[0, 0, 1000000000, 1000000000], [0, 0, 1000000000, 1000000000]]);
+    // LeetCode's most rectangles, 200
+    let mut nested: Vec[Vec[i64]] = Vec.new();
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut strips: Vec[Vec[i64]] = Vec.new();
+    for i in 0..200 {
+        nested.push([i * 1000, i * 1000, 1000000000 - i * 1000, 1000000000 - i * 1000]);
+        grid.push([(i % 20) * 50000000, (i / 20) * 100000000, (i % 20) * 50000000 + 40000000, (i / 20) * 100000000 + 90000000]);
+        if i < 100 {
+            strips.push([i * 10000000, 0, i * 10000000 + 5000000, 1000000000]);
+        } else {
+            strips.push([0, (i - 100) * 10000000, 1000000000, (i - 100) * 10000000 + 5000000]);
+        }
+    }
+    println(f"200 nested squares: {rectangle_area(nested)}");
+    println(f"200 rectangles apart in a grid: {rectangle_area(grid)}");
+    println(f"100 tall strips across 100 wide ones: {rectangle_area(strips)}");
+    let mut seed = 850;
+    let mut wide: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..200 {
+        let a = big(mut seed);
+        let b = big(mut seed);
+        let c = big(mut seed);
+        let d = big(mut seed);
+        wide.push([a.min(b), c.min(d), a.max(b), c.max(d)]);
+    }
+    println(f"200 random rectangles up to 10^9: {rectangle_area(wide)}");
+    let mut small: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..200 {
+        small.push(random_rectangle(mut seed, 60));
+    }
+    println(f"200 random rectangles up to 60: {rectangle_area(small)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 8;
+        let size = 1 + next_random(mut seed) % 12;
+        let mut rectangles: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            rectangles.push(random_rectangle(mut seed, size));
+        }
+        let area = rectangle_area(rectangles);
+        total += area;
+        check = (check * 31 + area) % 1000000007;
+    }
+    println(f"300 random sets: areas sum to {total}, checksum {check}");
+}
