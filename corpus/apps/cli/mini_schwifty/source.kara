@@ -1,0 +1,613 @@
+// mini_schwifty — a port of the IBAN core of schwifty 2026.10.0 (MIT): the
+// IBAN validator fintech and payments code reaches for. It validates an IBAN
+// against the ISO 13616 registry (country, length, BBAN structure, mod-97
+// check digits), formats it in blocks of four, and splits the BBAN into its
+// bank / branch / account components.
+//
+// Each job is `<op>\t<iban>`:
+//   valid <iban>   → VALID <compact> for a well-formed IBAN, else the exact
+//                    schwifty error message;
+//   fmt   <iban>   → the compact IBAN in blocks of four (IBAN.formatted);
+//   parts <iban>   → "bank=<> branch=<> account=<>" from the BBAN components.
+//
+// The input is first cleaned (whitespace stripped, upper-cased), as schwifty's
+// common.clean does. validate() runs the same four checks in the same order:
+//   1. characters — the whole value must match [A-Z]{2}\d{2}[A-Z0-9]+;
+//   2. country    — the two-letter code must be in the registry;
+//   3. length     — must equal the country's iban_length;
+//   4. BBAN form  — the chars after position 4 must match the country's
+//                   bban_spec (each Nnot t segment: n digit, a letter, c alnum);
+//   5. checksum   — the ISO 7064 mod-97-10 check digits must match.
+// The first failing check decides the message, matching schwifty's precedence
+// (the country lookup happens inside the length step, so an unknown country is
+// reported before a wrong length).
+//
+// The mod-97 check avoids big integers: schwifty numerifies BBAN+country (each
+// letter A-Z → 10..35, i.e. two decimal digits) and takes that value * 100
+// modulo 97. The port streams those decimal digits through a running
+// `(acc*10 + d) % 97` accumulator, so it never builds the ~40-digit number.
+//
+// Scope: IBAN validation, formatting and component extraction. The national
+// (country-specific) BBAN checksum (validate_bban=True), BIC lookup, the bank
+// registry, and IBAN generation are out of scope (see README). The country
+// registry is embedded by gen_kara.py as registry_text() and parsed at run
+// time; jobs_text() carries data/jobs.tsv verbatim.
+
+struct Reg {
+    cc: Vec[String],
+    ilen: Vec[i64],
+    spec: Vec[String],
+    bank_s: Vec[i64],
+    bank_e: Vec[i64],
+    branch_s: Vec[i64],
+    branch_e: Vec[i64],
+    acct_s: Vec[i64],
+    acct_e: Vec[i64],
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn is_digit(x: i64) -> bool {
+    x >= 48 and x <= 57
+}
+
+fn is_upper(x: i64) -> bool {
+    x >= 65 and x <= 90
+}
+
+fn int2(v: i64) -> String {
+    // two-digit zero-padded decimal
+    let tbl = "0123456789".to_string();
+    let hi = v / 10;
+    let lo = v % 10;
+    let mut o = String.new();
+    o.push_str(tbl.substring(hi, hi + 1));
+    o.push_str(tbl.substring(lo, lo + 1));
+    o
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+// whitespace-strip + upper-case, like schwifty.common.clean
+fn clean(s: Str) -> String {
+    let b = str_bytes(s);
+    let mut o = String.new();
+    let tbl_lo = "abcdefghijklmnopqrstuvwxyz".to_string();
+    let tbl_up = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == 32 or c == 9 or c == 10 or c == 13 or c == 12 or c == 11 {
+            // whitespace: drop
+        } else if c >= 97 and c <= 122 {
+            let k = c - 97;
+            o.push_str(tbl_up.substring(k, k + 1));
+        } else {
+            let k2 = c;
+            // echo byte verbatim via a one-byte decode
+            let mut one: Vec[u8] = Vec.new();
+            one.push(k2 as u8);
+            o.push_str(String.from_utf8(one).unwrap_or("".to_string()));
+        }
+        i = i + 1;
+    }
+    o
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+// "s:e" -> (s, e)
+fn parse_range(rng: Str) -> Vec[i64] {
+    let parts = split_fields(rng, 58); // ':'
+    let mut o: Vec[i64] = Vec.new();
+    o.push(parse_uint(parts[0].clone()));
+    o.push(parse_uint(parts[1].clone()));
+    o
+}
+
+fn build_reg() -> Reg {
+    let mut r = Reg {
+        cc: Vec.new(),
+        ilen: Vec.new(),
+        spec: Vec.new(),
+        bank_s: Vec.new(),
+        bank_e: Vec.new(),
+        branch_s: Vec.new(),
+        branch_e: Vec.new(),
+        acct_s: Vec.new(),
+        acct_e: Vec.new(),
+    };
+    let data = registry_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9); // tab
+                r.cc.push(f[0].clone());
+                r.ilen.push(parse_uint(f[1].clone()));
+                r.spec.push(f[2].clone());
+                let bk = parse_range(f[3].clone());
+                r.bank_s.push(bk[0]);
+                r.bank_e.push(bk[1]);
+                let br = parse_range(f[4].clone());
+                r.branch_s.push(br[0]);
+                r.branch_e.push(br[1]);
+                let ac = parse_range(f[5].clone());
+                r.acct_s.push(ac[0]);
+                r.acct_e.push(ac[1]);
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    r
+}
+
+fn reg_find(r: Reg, cc: Str) -> i64 {
+    let mut i = 0;
+    while i < r.cc.len() {
+        if r.cc[i] == cc {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// full-match [A-Z]{2}\d{2}[A-Z0-9]+ over the cleaned IBAN
+fn structure_ok(ib: Str) -> bool {
+    let b = str_bytes(ib);
+    let n = b.len();
+    if n < 5 {
+        return false;
+    }
+    if not is_upper(b[0]) or not is_upper(b[1]) {
+        return false;
+    }
+    if not is_digit(b[2]) or not is_digit(b[3]) {
+        return false;
+    }
+    let mut i = 4;
+    while i < n {
+        if not (is_upper(b[i]) or is_digit(b[i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// match a BBAN against a bban_spec of Nnot t segments (n digit, a letter, c alnum)
+fn bban_ok(bban: Str, spec: Str) -> bool {
+    let bb = str_bytes(bban);
+    let sp = str_bytes(spec);
+    let bn = bb.len();
+    let sn = sp.len();
+    let mut si = 0;
+    let mut bi = 0;
+    while si < sn {
+        // read count digits
+        let mut count = 0;
+        while si < sn and is_digit(sp[si]) {
+            count = count * 10 + (sp[si] - 48);
+            si = si + 1;
+        }
+        // expect 'not '
+        if si >= sn or sp[si] != 33 {
+            return false;
+        }
+        si = si + 1;
+        let t = sp[si]; // n=110 a=97 c=99
+        si = si + 1;
+        let mut k = 0;
+        while k < count {
+            if bi >= bn {
+                return false;
+            }
+            let c = bb[bi];
+            let mut ok = false;
+            if t == 110 {
+                ok = is_digit(c);
+            } else if t == 97 {
+                ok = is_upper(c);
+            } else {
+                ok = is_upper(c) or is_digit(c);
+            }
+            if not ok {
+                return false;
+            }
+            bi = bi + 1;
+            k = k + 1;
+        }
+    }
+    bi == bn
+}
+
+// ISO 7064 mod-97-10 check digits for bban+country, as a 2-char string.
+// Streams numerify(bban+country)*100 through a running mod-97 accumulator.
+fn mod97_check(bban: Str, cc: Str) -> String {
+    let mut acc = 0;
+    let seq = bban.clone();
+    let b1 = str_bytes(seq);
+    let b2 = str_bytes(cc);
+    let mut i = 0;
+    while i < b1.len() {
+        acc = feed(acc, b1[i]);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < b2.len() {
+        acc = feed(acc, b2[j]);
+        j = j + 1;
+    }
+    // the *100 : two trailing zero digits
+    acc = (acc * 10) % 97;
+    acc = (acc * 10) % 97;
+    int2(98 - acc)
+}
+
+// feed one IBAN character's numerified decimal digits into the mod-97 acc
+fn feed(acc: i64, c: i64) -> i64 {
+    let mut a = acc;
+    if is_digit(c) {
+        a = (a * 10 + (c - 48)) % 97;
+    } else {
+        // letter A-Z -> 10..35, i.e. two decimal digits
+        let v = 10 + (c - 65);
+        a = (a * 10 + (v / 10)) % 97;
+        a = (a * 10 + (v % 10)) % 97;
+    }
+    a
+}
+
+// returns "" if valid, else the schwifty error message
+fn validate(r: Reg, ib: Str) -> String {
+    if not structure_ok(ib) {
+        let mut o = String.new();
+        o.push_str("Invalid characters in IBAN ");
+        o.push_str(ib.clone());
+        return o;
+    }
+    let cc = ib.substring(0, 2);
+    let idx = reg_find(r, cc.clone());
+    if idx < 0 {
+        let mut o = String.new();
+        o.push_str("Unknown country-code '");
+        o.push_str(cc.clone());
+        o.push_str("'");
+        return o;
+    }
+    let b = str_bytes(ib);
+    if r.ilen[idx] != b.len() {
+        return "Invalid IBAN length".to_string();
+    }
+    let bban = ib.substring(4, b.len());
+    if not bban_ok(bban.clone(), r.spec[idx].clone()) {
+        let mut o = String.new();
+        o.push_str("Invalid BBAN structure: '");
+        o.push_str(bban.clone());
+        o.push_str("' doesn't match '");
+        o.push_str(r.spec[idx].clone());
+        o.push_str("'");
+        return o;
+    }
+    let want = ib.substring(2, 4);
+    let got = mod97_check(bban.clone(), cc.clone());
+    if got != want {
+        return "Invalid checksum digits".to_string();
+    }
+    "".to_string()
+}
+
+fn slice_or_empty(ib: Str, s: i64, e: i64) -> String {
+    let b = str_bytes(ib);
+    if s < b.len() and e <= b.len() {
+        ib.substring(s, e)
+    } else {
+        "".to_string()
+    }
+}
+
+fn run_job(r: Reg, op: Str, raw: Str) -> String {
+    let ib = clean(raw);
+    if op == "valid" {
+        let err = validate(r, ib.clone());
+        if err == "" {
+            let mut o = String.new();
+            o.push_str("VALID ");
+            o.push_str(ib.clone());
+            return o;
+        }
+        return err;
+    }
+    if op == "fmt" {
+        let b = str_bytes(ib);
+        let n = b.len();
+        let mut o = String.new();
+        let mut i = 0;
+        while i < n {
+            if i > 0 {
+                o.push_str(" ");
+            }
+            let mut e = i + 4;
+            if e > n {
+                e = n;
+            }
+            o.push_str(ib.substring(i, e));
+            i = i + 4;
+        }
+        return o;
+    }
+    // parts
+    let cc = ib.substring(0, 2);
+    let idx = reg_find(r, cc.clone());
+    let b = str_bytes(ib);
+    let bban = ib.substring(4, b.len());
+    let bank = slice_or_empty(bban.clone(), r.bank_s[idx], r.bank_e[idx]);
+    let branch = slice_or_empty(bban.clone(), r.branch_s[idx], r.branch_e[idx]);
+    let acct = slice_or_empty(bban.clone(), r.acct_s[idx], r.acct_e[idx]);
+    let mut o = String.new();
+    o.push_str("bank=");
+    o.push_str(bank.clone());
+    o.push_str(" branch=");
+    o.push_str(branch.clone());
+    o.push_str(" account=");
+    o.push_str(acct.clone());
+    o
+}
+
+fn main_run() -> String {
+    let r = build_reg();
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                let payload = f[1].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                out.push_str(" ");
+                out.push_str(payload.clone());
+                out.push_str("\n  ");
+                out.push_str(run_job(r, op, payload));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// iban_registry.tsv (effective ISO 13616 registry dumped from schwifty).
+fn registry_text() -> String {
+    let mut s = String.new();
+    s.push_str("AD\t24\t4!n4!n12!c\t0:4\t4:8\t8:20\n");
+    s.push_str("AE\t23\t3!n16!n\t0:3\t0:0\t3:19\n");
+    s.push_str("AL\t28\t8!n16!c\t0:3\t3:7\t8:24\n");
+    s.push_str("AO\t25\t21!n\t0:0\t0:0\t0:0\n");
+    s.push_str("AT\t20\t5!n11!n\t0:5\t0:0\t5:16\n");
+    s.push_str("AX\t18\t3!n11!n\t0:3\t0:0\t3:13\n");
+    s.push_str("AZ\t28\t4!a20!c\t0:4\t0:0\t4:24\n");
+    s.push_str("BA\t20\t3!n3!n8!n2!n\t0:3\t3:6\t6:14\n");
+    s.push_str("BE\t16\t3!n7!n2!n\t0:3\t0:0\t3:10\n");
+    s.push_str("BF\t28\t2!c22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("BG\t22\t4!a4!n2!n8!c\t0:4\t4:8\t10:18\n");
+    s.push_str("BH\t22\t4!a14!c\t0:4\t0:0\t4:18\n");
+    s.push_str("BI\t27\t5!n5!n11!n2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("BJ\t28\t2!c22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("BL\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("BR\t29\t8!n5!n10!n1!a1!c\t0:8\t8:13\t13:23\n");
+    s.push_str("BY\t28\t4!c4!n16!c\t0:4\t0:0\t4:24\n");
+    s.push_str("CF\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("CG\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("CH\t21\t5!n12!c\t0:5\t0:0\t5:17\n");
+    s.push_str("CI\t28\t2!a22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("CM\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("CR\t22\t4!n14!n\t0:4\t0:0\t4:18\n");
+    s.push_str("CV\t25\t21!n\t0:4\t4:8\t8:19\n");
+    s.push_str("CY\t28\t3!n5!n16!c\t0:3\t3:8\t8:24\n");
+    s.push_str("CZ\t24\t4!n6!n10!n\t0:4\t4:10\t10:20\n");
+    s.push_str("DE\t22\t8!n10!n\t0:8\t0:0\t8:18\n");
+    s.push_str("DJ\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("DK\t18\t4!n9!n1!n\t0:4\t0:0\t4:14\n");
+    s.push_str("DO\t28\t4!c20!n\t0:4\t0:0\t4:24\n");
+    s.push_str("DZ\t26\t22!n\t0:5\t5:10\t10:20\n");
+    s.push_str("EE\t20\t2!n2!n11!n1!n\t0:2\t2:4\t4:15\n");
+    s.push_str("EG\t29\t4!n4!n17!n\t0:4\t4:8\t8:25\n");
+    s.push_str("ES\t24\t4!n4!n1!n1!n10!n\t0:4\t4:8\t10:20\n");
+    s.push_str("FI\t18\t3!n11!n\t0:3\t0:0\t3:13\n");
+    s.push_str("FK\t18\t2!a12!n\t0:2\t0:0\t2:14\n");
+    s.push_str("FO\t18\t4!n9!n1!n\t0:4\t0:0\t4:13\n");
+    s.push_str("FR\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("GA\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("GB\t22\t4!a6!n8!n\t0:4\t4:10\t10:18\n");
+    s.push_str("GE\t22\t2!a16!n\t0:2\t0:0\t2:18\n");
+    s.push_str("GF\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("GG\t22\t4!a6!n8!n\t0:4\t4:10\t10:18\n");
+    s.push_str("GI\t23\t4!a15!c\t0:4\t0:0\t4:19\n");
+    s.push_str("GL\t18\t4!n9!n1!n\t0:4\t0:0\t4:13\n");
+    s.push_str("GP\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("GQ\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("GR\t27\t3!n4!n16!c\t0:3\t3:7\t7:23\n");
+    s.push_str("GT\t28\t4!c20!c\t0:4\t0:0\t8:24\n");
+    s.push_str("GW\t25\t2!c19!n\t0:0\t0:0\t0:0\n");
+    s.push_str("HN\t28\t4!a20!n\t0:0\t0:0\t0:0\n");
+    s.push_str("HR\t21\t7!n10!n\t0:7\t0:0\t7:17\n");
+    s.push_str("HU\t28\t3!n4!n1!n15!n1!n\t0:3\t3:7\t7:23\n");
+    s.push_str("IE\t22\t4!a6!n8!n\t0:4\t4:10\t10:18\n");
+    s.push_str("IL\t23\t3!n3!n13!n\t0:3\t3:6\t6:19\n");
+    s.push_str("IM\t22\t4!a6!n8!n\t0:4\t4:10\t10:18\n");
+    s.push_str("IQ\t23\t4!a3!n12!n\t0:4\t4:7\t7:19\n");
+    s.push_str("IR\t26\t22!n\t0:0\t0:0\t0:0\n");
+    s.push_str("IS\t26\t4!n2!n6!n10!n\t0:2\t2:4\t6:12\n");
+    s.push_str("IT\t27\t1!a5!n5!n12!c\t1:6\t6:11\t11:23\n");
+    s.push_str("JE\t22\t4!a6!n8!n\t0:4\t4:10\t10:18\n");
+    s.push_str("JO\t30\t4!a4!n18!c\t0:4\t4:8\t8:26\n");
+    s.push_str("KM\t27\t23!n\t0:0\t0:0\t0:0\n");
+    s.push_str("KW\t30\t4!a22!c\t0:4\t0:0\t4:26\n");
+    s.push_str("KZ\t20\t3!n13!c\t0:3\t0:0\t3:16\n");
+    s.push_str("LB\t28\t4!n20!c\t0:4\t0:0\t4:24\n");
+    s.push_str("LC\t32\t4!a24!c\t0:4\t0:0\t4:28\n");
+    s.push_str("LI\t21\t5!n12!c\t0:5\t0:0\t5:17\n");
+    s.push_str("LT\t20\t5!n11!n\t0:5\t0:0\t5:16\n");
+    s.push_str("LU\t20\t3!n13!c\t0:3\t0:0\t3:16\n");
+    s.push_str("LV\t21\t4!a13!c\t0:4\t0:0\t4:17\n");
+    s.push_str("LY\t25\t3!n3!n15!n\t0:3\t3:6\t6:21\n");
+    s.push_str("MA\t28\t24!n\t0:5\t5:10\t10:22\n");
+    s.push_str("MC\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("MD\t24\t2!c18!c\t0:2\t0:0\t2:20\n");
+    s.push_str("ME\t22\t3!n13!n2!n\t0:3\t0:0\t3:16\n");
+    s.push_str("MF\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("MG\t27\t23!n\t0:0\t0:0\t0:0\n");
+    s.push_str("MK\t19\t3!n10!c2!n\t0:3\t0:0\t3:13\n");
+    s.push_str("ML\t28\t2!c22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("MN\t20\t4!n12!n\t0:4\t0:0\t4:16\n");
+    s.push_str("MQ\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("MR\t27\t5!n5!n11!n2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("MT\t31\t4!a5!n18!c\t0:4\t4:9\t9:27\n");
+    s.push_str("MU\t30\t4!a2!n2!n12!n3!n3!a\t0:6\t6:8\t8:20\n");
+    s.push_str("MZ\t25\t21!n\t0:0\t0:0\t0:0\n");
+    s.push_str("NC\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("NE\t28\t2!a22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("NI\t28\t4!a20!n\t0:4\t0:0\t4:24\n");
+    s.push_str("NL\t18\t4!a10!n\t0:4\t0:0\t4:14\n");
+    s.push_str("NO\t15\t4!n6!n1!n\t0:4\t0:0\t4:10\n");
+    s.push_str("OM\t23\t3!n16!c\t0:3\t0:0\t3:19\n");
+    s.push_str("PF\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("PK\t24\t4!a16!c\t0:4\t0:0\t4:20\n");
+    s.push_str("PL\t28\t8!n16!n\t0:8\t0:0\t8:24\n");
+    s.push_str("PM\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("PS\t29\t4!a21!c\t0:4\t0:0\t4:25\n");
+    s.push_str("PT\t25\t4!n4!n11!n2!n\t0:4\t4:8\t8:19\n");
+    s.push_str("QA\t29\t4!a21!c\t0:4\t0:0\t4:25\n");
+    s.push_str("RE\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("RO\t24\t4!a16!c\t0:4\t0:0\t4:20\n");
+    s.push_str("RS\t22\t3!n13!n2!n\t0:3\t0:0\t3:16\n");
+    s.push_str("RU\t33\t9!n5!n15!c\t0:9\t9:14\t14:29\n");
+    s.push_str("SA\t24\t2!n18!c\t0:2\t0:0\t2:20\n");
+    s.push_str("SC\t31\t4!a2!n2!n16!n3!a\t0:6\t6:8\t8:24\n");
+    s.push_str("SD\t18\t2!n12!n\t0:2\t0:0\t2:14\n");
+    s.push_str("SE\t24\t3!n16!n1!n\t0:3\t0:0\t3:19\n");
+    s.push_str("SI\t19\t5!n8!n2!n\t0:2\t2:5\t5:13\n");
+    s.push_str("SK\t24\t4!n6!n10!n\t0:4\t4:10\t10:20\n");
+    s.push_str("SM\t27\t1!a5!n5!n12!c\t1:6\t6:11\t11:23\n");
+    s.push_str("SN\t28\t2!a22!n\t0:5\t5:10\t10:22\n");
+    s.push_str("SO\t23\t4!n3!n12!n\t0:4\t4:7\t7:19\n");
+    s.push_str("ST\t25\t4!n4!n11!n2!n\t0:4\t4:8\t8:21\n");
+    s.push_str("SV\t28\t4!a20!n\t0:4\t0:0\t4:24\n");
+    s.push_str("TD\t27\t23!n\t0:5\t5:10\t10:21\n");
+    s.push_str("TF\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("TG\t28\t2!a3!n5!n12!n2!n\t0:5\t5:10\t10:22\n");
+    s.push_str("TL\t23\t3!n14!n2!n\t0:3\t0:0\t3:17\n");
+    s.push_str("TN\t24\t2!n3!n13!n2!n\t0:2\t2:5\t5:18\n");
+    s.push_str("TR\t26\t5!n1!n16!c\t0:5\t0:0\t6:22\n");
+    s.push_str("UA\t29\t6!n19!c\t0:6\t0:0\t6:25\n");
+    s.push_str("VA\t22\t3!n15!n\t0:3\t0:0\t3:18\n");
+    s.push_str("VG\t24\t4!a16!n\t0:4\t0:0\t4:20\n");
+    s.push_str("WF\t27\t5!n5!n11!c2!n\t0:5\t5:10\t10:21\n");
+    s.push_str("XK\t20\t4!n10!n2!n\t0:2\t2:4\t4:16\n");
+    s.push_str("YE\t30\t4!a4!n18!c\t0:4\t4:8\t8:26\n");
+    s.push_str("YT\t27\t5!n5!n11!c2!n\t0:5\t0:0\t5:23\n");
+    s
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("valid\tDE81012345670123456789\n");
+    s.push_str("valid\tGB04ABCD01234501234567\n");
+    s.push_str("valid\tFR640123401234A1C3E5G7I9K01\n");
+    s.push_str("valid\tNL19ABCD0123456789\n");
+    s.push_str("valid\tBE57012012345601\n");
+    s.push_str("valid\tCH7201234A1C3E5G7I9K1\n");
+    s.push_str("valid\tES4201230123000123456789\n");
+    s.push_str("valid\tIT79A0123401234A1C3E5G7I9K1\n");
+    s.push_str("valid\tAT200123401234567890\n");
+    s.push_str("valid\tNO7201230123450\n");
+    s.push_str("valid\tSE6301201234567890123450\n");
+    s.push_str("valid\tPL32012345670123456789012345\n");
+    s.push_str("valid\tAD1401230123A1C3E5G7I9K1\n");
+    s.push_str("valid\tMT16ABCD01234A1C3E5G7I9K1M3O5Q7\n");
+    s.push_str("valid\tDE81 0123 4567 0123 4567 89\n");
+    s.push_str("valid\tgb04abcd01234501234567\n");
+    s.push_str("fmt\tDE81012345670123456789\n");
+    s.push_str("fmt\tGB04ABCD01234501234567\n");
+    s.push_str("fmt\tFR640123401234A1C3E5G7I9K01\n");
+    s.push_str("fmt\tNL19ABCD0123456789\n");
+    s.push_str("fmt\tBE57012012345601\n");
+    s.push_str("fmt\tCH7201234A1C3E5G7I9K1\n");
+    s.push_str("fmt\tES4201230123000123456789\n");
+    s.push_str("fmt\tIT79A0123401234A1C3E5G7I9K1\n");
+    s.push_str("fmt\tAT200123401234567890\n");
+    s.push_str("fmt\tNO7201230123450\n");
+    s.push_str("fmt\tSE6301201234567890123450\n");
+    s.push_str("fmt\tPL32012345670123456789012345\n");
+    s.push_str("fmt\tAD1401230123A1C3E5G7I9K1\n");
+    s.push_str("fmt\tMT16ABCD01234A1C3E5G7I9K1M3O5Q7\n");
+    s.push_str("parts\tDE81012345670123456789\n");
+    s.push_str("parts\tGB04ABCD01234501234567\n");
+    s.push_str("parts\tFR640123401234A1C3E5G7I9K01\n");
+    s.push_str("parts\tNL19ABCD0123456789\n");
+    s.push_str("parts\tBE57012012345601\n");
+    s.push_str("parts\tCH7201234A1C3E5G7I9K1\n");
+    s.push_str("parts\tES4201230123000123456789\n");
+    s.push_str("parts\tIT79A0123401234A1C3E5G7I9K1\n");
+    s.push_str("parts\tAT200123401234567890\n");
+    s.push_str("parts\tNO7201230123450\n");
+    s.push_str("parts\tSE6301201234567890123450\n");
+    s.push_str("parts\tPL32012345670123456789012345\n");
+    s.push_str("parts\tAD1401230123A1C3E5G7I9K1\n");
+    s.push_str("parts\tMT16ABCD01234A1C3E5G7I9K1M3O5Q7\n");
+    s.push_str("valid\tDE81012345670123456781\n");
+    s.push_str("valid\tDE8101234567012345678\n");
+    s.push_str("valid\tZZ81012345670123456789\n");
+    s.push_str("valid\tDE81AB2345670123456789\n");
+    s.push_str("valid\tDEAB012345670123456789\n");
+    s.push_str("valid\tDE-9370400440532013000\n");
+    s.push_str("valid\t\n");
+    s
+}
