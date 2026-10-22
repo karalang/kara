@@ -1,0 +1,39 @@
+reg 0 = OrderedSet([3, 1, 4, 5, 9, 2, 6])
+reg 1 = OrderedSet([1, 3, 5, 7, 9])
+reg 2 = OrderedSet([2, 4, 6, 8])
+7
+0
+9
+OrderedSet([3, 1, 4, 5, 9, 2, 6, 7, 10, 11])
+2
+yes
+no
+OrderedSet([3, 1, 5, 9, 2, 6, 7, 10, 11])
+2
+OrderedSet([3, 1, 5, 9, 2, 6, 7, 10, 11])
+11
+OrderedSet([3, 1, 5, 9, 2, 6, 7, 10])
+8
+[3, 1, 5, 9, 2, 6, 7, 10]
+[10, 7, 6, 2, 9, 5, 1, 3]
+reg 3 = OrderedSet([1, 3, 5, 7, 9, 2, 4, 6, 8])
+reg 4 = OrderedSet([0, 1, 100])
+reg 5 = OrderedSet([1, 3, 5, 7, 9, 2, 4, 6, 8, 0, 100])
+reg 6 = OrderedSet()
+reg 7 = OrderedSet([1, 3, 5, 7, 9])
+reg 8 = OrderedSet([1, 3, 5, 7, 9])
+reg 9 = OrderedSet([1, 3, 5, 7, 9])
+reg 10 = OrderedSet([1, 4, 3, 5, 7])
+reg 11 = OrderedSet([9, 7, 1, 3, 2])
+reg 12 = OrderedSet([4, 5, 9, 2])
+reg 13 = OrderedSet([1, 2])
+reg 14 = OrderedSet([1, 2, 3])
+yes
+no
+yes
+no
+reg 15 = OrderedSet([1, 3, 2])
+reg 16 = OrderedSet([1, 3, 2])
+reg 17 = OrderedSet([1, 2, 3])
+yes
+no

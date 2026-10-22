@@ -1,0 +1,478 @@
+// mini_ordered_set — a port of ordered_set 4.1.0 (MIT, Elia Robyn Lake): the
+// OrderedSet, a set that also remembers insertion order and supports indexing
+// like a list (used wherever you need "unique but ordered" — dedup that keeps
+// first-seen order, stable feature columns, ordered membership). Modelled as an
+// insertion-ordered `items` vector; the library's internal item->index map is
+// an unobservable performance detail, so membership and index are scans here.
+// add / discard / index / the set algebra follow ordered_set/__init__.py. See
+// README.md and mk.py for the op table.
+
+struct OSet {
+    items: Vec[i64],
+}
+
+fn contains_vec(xs: ref Vec[i64], v: i64) -> bool {
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] == v {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn index_vec(xs: ref Vec[i64], v: i64) -> i64 {
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] == v {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn dedup(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        if not contains_vec(out, xs[i]) {
+            out.push(xs[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// --- formatting ------------------------------------------------------------
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn fmt_list(xs: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(itoa(xs[i]));
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn fmt_repr(xs: ref Vec[i64]) -> String {
+    if xs.len() == 0 {
+        return "OrderedSet()";
+    }
+    let mut out = String.new();
+    out.push_str("OrderedSet(");
+    out.push_str(fmt_list(xs));
+    out.push_str(")");
+    out
+}
+
+fn rev_list(xs: ref Vec[i64]) -> String {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = xs.len();
+    while i > 0 {
+        i = i - 1;
+        r.push(xs[i]);
+    }
+    fmt_list(r)
+}
+
+// --- parsing / line scan ---------------------------------------------------
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg {
+        -v
+    } else {
+        v
+    }
+}
+
+fn reg_line(k: i64, xs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("reg ");
+    s.push_str(itoa(k));
+    s.push_str(" = ");
+    s.push_str(fmt_repr(xs));
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut regs: Vec[OSet] = Vec.new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "new" {
+                    let mut raw: Vec[i64] = Vec.new();
+                    let mut j = 1;
+                    while j < f.len() {
+                        raw.push(parse_int(f[j].clone()));
+                        j = j + 1;
+                    }
+                    let its = dedup(raw);
+                    let k = regs.len();
+                    out.push_str(reg_line(k, its));
+                    regs.push(OSet { items: its });
+                } else if op == "add" {
+                    let r = parse_int(f[1].clone());
+                    let v = parse_int(f[2].clone());
+                    let idx = index_vec(regs[r].items, v);
+                    if idx == -1 {
+                        let ni = regs[r].items.len();
+                        regs[r].items.push(v);
+                        out.push_str(itoa(ni));
+                    } else {
+                        out.push_str(itoa(idx));
+                    }
+                } else if op == "upd" {
+                    let r = parse_int(f[1].clone());
+                    let mut last = 0;
+                    let mut j = 2;
+                    while j < f.len() {
+                        let v = parse_int(f[j].clone());
+                        let idx = index_vec(regs[r].items, v);
+                        if idx == -1 {
+                            last = regs[r].items.len();
+                            regs[r].items.push(v);
+                        } else {
+                            last = idx;
+                        }
+                        j = j + 1;
+                    }
+                    out.push_str(itoa(last));
+                } else if op == "disc" {
+                    let r = parse_int(f[1].clone());
+                    let v = parse_int(f[2].clone());
+                    let mut nv: Vec[i64] = Vec.new();
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        if regs[r].items[j] != v {
+                            nv.push(regs[r].items[j]);
+                        }
+                        j = j + 1;
+                    }
+                    regs[r].items = nv;
+                    out.push_str(fmt_repr(regs[r].items));
+                } else if op == "pop" {
+                    let r = parse_int(f[1].clone());
+                    let mut nv: Vec[i64] = Vec.new();
+                    let last = regs[r].items.len() - 1;
+                    let val = regs[r].items[last];
+                    let mut j = 0;
+                    while j < last {
+                        nv.push(regs[r].items[j]);
+                        j = j + 1;
+                    }
+                    regs[r].items = nv;
+                    out.push_str(itoa(val));
+                } else if op == "idx" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(itoa(index_vec(regs[r].items, parse_int(f[2].clone()))));
+                } else if op == "has" {
+                    let r = parse_int(f[1].clone());
+                    if contains_vec(regs[r].items, parse_int(f[2].clone())) {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "len" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(itoa(regs[r].items.len()));
+                } else if op == "repr" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_repr(regs[r].items));
+                } else if op == "list" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(fmt_list(regs[r].items));
+                } else if op == "rev" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(rev_list(regs[r].items));
+                } else if op == "union" {
+                    let r = parse_int(f[1].clone());
+                    let mut res: Vec[i64] = regs[r].items.clone();
+                    let mut j = 2;
+                    while j < f.len() {
+                        let r2 = parse_int(f[j].clone());
+                        let mut m2 = 0;
+                        while m2 < regs[r2].items.len() {
+                            let v = regs[r2].items[m2];
+                            if not contains_vec(res, v) {
+                                res.push(v);
+                            }
+                            m2 = m2 + 1;
+                        }
+                        j = j + 1;
+                    }
+                    let k = regs.len();
+                    out.push_str(reg_line(k, res));
+                    regs.push(OSet { items: res });
+                } else if op == "inter" {
+                    let r = parse_int(f[1].clone());
+                    let mut res: Vec[i64] = Vec.new();
+                    if f.len() <= 2 {
+                        res = regs[r].items.clone();
+                    } else {
+                        let mut m0 = 0;
+                        while m0 < regs[r].items.len() {
+                            let v = regs[r].items[m0];
+                            let mut inall = true;
+                            let mut j = 2;
+                            while j < f.len() {
+                                let r2 = parse_int(f[j].clone());
+                                if not contains_vec(regs[r2].items, v) {
+                                    inall = false;
+                                }
+                                j = j + 1;
+                            }
+                            if inall {
+                                res.push(v);
+                            }
+                            m0 = m0 + 1;
+                        }
+                    }
+                    let k = regs.len();
+                    out.push_str(reg_line(k, res));
+                    regs.push(OSet { items: res });
+                } else if op == "diff" {
+                    let r = parse_int(f[1].clone());
+                    let mut res: Vec[i64] = Vec.new();
+                    if f.len() <= 2 {
+                        res = regs[r].items.clone();
+                    } else {
+                        let mut m0 = 0;
+                        while m0 < regs[r].items.len() {
+                            let v = regs[r].items[m0];
+                            let mut inany = false;
+                            let mut j = 2;
+                            while j < f.len() {
+                                let r2 = parse_int(f[j].clone());
+                                if contains_vec(regs[r2].items, v) {
+                                    inany = true;
+                                }
+                                j = j + 1;
+                            }
+                            if not inany {
+                                res.push(v);
+                            }
+                            m0 = m0 + 1;
+                        }
+                    }
+                    let k = regs.len();
+                    out.push_str(reg_line(k, res));
+                    regs.push(OSet { items: res });
+                } else if op == "symdiff" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let mut res: Vec[i64] = Vec.new();
+                    let mut a0 = 0;
+                    while a0 < regs[r].items.len() {
+                        let v = regs[r].items[a0];
+                        if not contains_vec(regs[r2].items, v) {
+                            res.push(v);
+                        }
+                        a0 = a0 + 1;
+                    }
+                    let mut b0 = 0;
+                    while b0 < regs[r2].items.len() {
+                        let v = regs[r2].items[b0];
+                        if not contains_vec(regs[r].items, v) {
+                            res.push(v);
+                        }
+                        b0 = b0 + 1;
+                    }
+                    let k = regs.len();
+                    out.push_str(reg_line(k, res));
+                    regs.push(OSet { items: res });
+                } else if op == "sub" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let mut ok = regs[r].items.len() <= regs[r2].items.len();
+                    let mut j = 0;
+                    while j < regs[r].items.len() {
+                        if not contains_vec(regs[r2].items, regs[r].items[j]) {
+                            ok = false;
+                        }
+                        j = j + 1;
+                    }
+                    if ok {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "super" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let mut ok = regs[r].items.len() >= regs[r2].items.len();
+                    let mut j = 0;
+                    while j < regs[r2].items.len() {
+                        if not contains_vec(regs[r].items, regs[r2].items[j]) {
+                            ok = false;
+                        }
+                        j = j + 1;
+                    }
+                    if ok {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "eq" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let mut ok = regs[r].items.len() == regs[r2].items.len();
+                    if ok {
+                        let mut j = 0;
+                        while j < regs[r].items.len() {
+                            if regs[r].items[j] != regs[r2].items[j] {
+                                ok = false;
+                            }
+                            j = j + 1;
+                        }
+                    }
+                    if ok {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\t3\t1\t4\t1\t5\t9\t2\t6\n");
+    s.push_str("new\t1\t3\t5\t7\t9\n");
+    s.push_str("new\t2\t4\t6\t8\n");
+    s.push_str("add\t0\t7\n");
+    s.push_str("add\t0\t3\n");
+    s.push_str("upd\t0\t10\t1\t11\n");
+    s.push_str("repr\t0\n");
+    s.push_str("idx\t0\t4\n");
+    s.push_str("has\t0\t9\n");
+    s.push_str("has\t0\t99\n");
+    s.push_str("disc\t0\t4\n");
+    s.push_str("idx\t0\t5\n");
+    s.push_str("disc\t0\t999\n");
+    s.push_str("pop\t0\n");
+    s.push_str("repr\t0\n");
+    s.push_str("len\t0\n");
+    s.push_str("list\t0\n");
+    s.push_str("rev\t0\n");
+    s.push_str("union\t1\t2\n");
+    s.push_str("new\t0\t1\t100\n");
+    s.push_str("union\t1\t2\t4\n");
+    s.push_str("inter\t1\t2\n");
+    s.push_str("inter\t1\n");
+    s.push_str("diff\t1\t2\n");
+    s.push_str("diff\t1\n");
+    s.push_str("new\t1\t4\t3\t5\t7\n");
+    s.push_str("new\t9\t7\t1\t3\t2\n");
+    s.push_str("symdiff\t10\t11\n");
+    s.push_str("new\t1\t2\n");
+    s.push_str("new\t1\t2\t3\n");
+    s.push_str("sub\t13\t14\n");
+    s.push_str("sub\t14\t13\n");
+    s.push_str("super\t14\t13\n");
+    s.push_str("super\t13\t14\n");
+    s.push_str("new\t1\t3\t2\n");
+    s.push_str("new\t1\t3\t2\n");
+    s.push_str("new\t1\t2\t3\n");
+    s.push_str("eq\t15\t16\n");
+    s.push_str("eq\t15\t17\n");
+    s
+}
