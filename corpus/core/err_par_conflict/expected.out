@@ -1,1 +1,1 @@
-ERROR at line 4-5: both branches of `par` write `v`
+ERROR at line 3: branches 1 and 2 of `par` both write `v`
