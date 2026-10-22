@@ -1,5 +1,5 @@
 
-const NM: Array[String, 2] = ["ab", "cde"];
+const NM: Array[Str, 2] = ["ab", "cde"];
 const NUMS: Array[i64, 2] = [-3, 4];
 const NAMES: Array[Str, 2] = ["x", "yz"];
 fn main() {

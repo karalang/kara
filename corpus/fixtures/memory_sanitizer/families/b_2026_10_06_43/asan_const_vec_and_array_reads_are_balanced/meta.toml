@@ -1,4 +1,5 @@
 source = "tests/memory_sanitizer/families/b_2026_10_06_43.rs::asan_const_vec_and_array_reads_are_balanced"
+v2_reject = "design.md § Constants: a constant cannot have a heap-allocated type (`Vec`) or a call in its initializer (Thread A, 2026-10-22, B-2026-10-22-19)"
 dedup_of = []
 expect = "stdout"
 exit = 0

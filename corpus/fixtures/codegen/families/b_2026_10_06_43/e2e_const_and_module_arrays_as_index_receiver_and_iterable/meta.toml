@@ -1,4 +1,5 @@
 source = "tests/codegen/families/b_2026_10_06_43.rs::e2e_const_and_module_arrays_as_index_receiver_and_iterable"
+v2_reject = "design.md § Constants: a constant cannot have a heap-allocated type (`Vec`) or a call in its initializer (Thread A, 2026-10-22, B-2026-10-22-19)"
 dedup_of = []
 expect = "stdout"
 exit = 0

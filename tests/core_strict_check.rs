@@ -11513,3 +11513,159 @@ fn a_module_let_mut_or_cell_is_refused_without_a_fix() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// B-2026-10-22-19: a `const` initializer is a compile-time constant
+/// (design.md § Constants, "Forbidden initializers"). A call, a method call
+/// or a collection constructor is refused with the `main`-and-context help
+/// and no fix; it used to be accepted by `karac check`.
+#[test]
+fn a_const_initializer_that_runs_code_is_refused_without_a_fix() {
+    for (tag, src) in [
+        (
+            "const-init-call",
+            "fn compute() -> i64 { 6 * 7 }\n\
+             const ANSWER: i64 = compute();\n\
+             fn main() { println(f\"{ANSWER}\") }\n",
+        ),
+        (
+            "const-init-vec-new",
+            "const ITEMS: Vec[i64] = Vec.new();\n\
+             fn main() { println(f\"{ITEMS.len()}\") }\n",
+        ),
+        (
+            "const-init-map-new",
+            "const SEEN: Map[i64, i64] = Map.new();\n\
+             fn main() { println(f\"{SEEN.len()}\") }\n",
+        ),
+        (
+            "const-init-method",
+            "const SIZE: i64 = \"abc\".len();\n\
+             fn main() { println(f\"{SIZE}\") }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(
+            err.contains("must be a compile-time constant"),
+            "{tag}: {err}"
+        );
+        assert!(err.contains("build the value in `main`"), "{tag}: {err}");
+        karac().arg("fix").arg(&path).output().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            src,
+            "{tag}: no fix for a run-time initializer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// B-2026-10-22-19: a constant cannot have a heap type ("String is
+/// heap-allocated, so it cannot be a constant's type; use Str"). A bare
+/// `String`, one nested in an `Array` / tuple / `Option`, and a `Vec` built
+/// from a literal are each refused, and `karac fix` writes the `Str` or
+/// `Array` form.
+#[test]
+fn a_const_of_a_heap_type_is_fixed_to_str_or_array() {
+    for (tag, src, edit) in [
+        (
+            "const-string",
+            "const HOST: String = \"localhost\";\nfn main() { println(HOST) }\n",
+            "const HOST: Str = \"localhost\";",
+        ),
+        (
+            "const-vec-literal",
+            "const NUMS: Vec[i64] = [1, 2];\nfn main() { println(f\"{NUMS[1]}\") }\n",
+            "const NUMS: Array[i64, 2] = [1, 2];",
+        ),
+        (
+            "const-array-of-string",
+            "const WORDS: Array[String, 2] = [\"a\", \"bb\"];\n\
+             fn main() { println(f\"{WORDS[1].len()}\") }\n",
+            "const WORDS: Array[Str, 2] = [\"a\", \"bb\"];",
+        ),
+        (
+            "const-tuple-with-string",
+            "const PAIR: (i64, String) = (1, \"x\");\n\
+             fn main() { let p = PAIR; println(f\"{p.0} {p.1}\") }\n",
+            "const PAIR: (i64, Str) = (1, \"x\");",
+        ),
+        (
+            "const-option-string",
+            "const MAYBE: Option[String] = Some(\"m\");\n\
+             fn main() { match MAYBE { Some(s) => println(s), None => {} } }\n",
+            "const MAYBE: Option[Str] = Some(\"m\");",
+        ),
+    ] {
+        rejected_then_fixed_by(tag, src, "E_MODULE_BINDING_HEAP_TYPE", edit);
+    }
+}
+
+/// B-2026-10-22-19: every "Allowed initializers" form of design.md
+/// § Constants passes, a bare variant constructor (`Some(42)`) included.
+#[test]
+fn a_const_accepts_every_allowed_initializer_form() {
+    accepted(
+        "const-allowed-forms",
+        "enum Color { Red, Rgb(i64, i64, i64) }\n\
+         struct Point { x: i64, y: i64 }\n\
+         const MAX_RETRIES: i64 = 5;\n\
+         const TIMEOUT_MS: i64 = 60 * 1000;\n\
+         const RETRY_PLUS: i64 = MAX_RETRIES + 1;\n\
+         const DEBUG: bool = TIMEOUT_MS > 0 and true;\n\
+         const APP_NAME: Str = \"karac\";\n\
+         const ANSWER: Option[i64] = Some(42);\n\
+         const SHADE: Color = Color.Rgb(1, 2, 3);\n\
+         const BARE: Color = Rgb(4, 5, 6);\n\
+         const ORIGIN: Point = Point { x: 0, y: 0 };\n\
+         const TRIPLE: (i64, i64, i64) = (1, 2, 3);\n\
+         const TABLE: Array[i64, 3] = [1, 2, 3];\n\
+         const ZEROS: Array[u8, 4] = [0; 4];\n\
+         fn main() {\n\
+             let o = ORIGIN;\n\
+             let t = TRIPLE;\n\
+             match BARE { Rgb(r, _, _) => println(f\"{r}\"), Color.Red => {} }\n\
+             match SHADE { Rgb(r, _, _) => println(f\"{r}\"), Color.Red => {} }\n\
+             println(f\"{RETRY_PLUS} {DEBUG} {APP_NAME} {ANSWER} {o.x} {t.2} {TABLE[2]} {ZEROS.len()}\")\n\
+         }\n",
+    );
+}
+
+/// B-2026-10-22-19: a `const` of a cell type is mutable global state, so it
+/// gets the module-cell answer a module `let` of one gets (E_MODULE_LET,
+/// cells deferred, `main`-and-context help), not a constness error about its
+/// constructor, and no fix.
+#[test]
+fn a_const_of_a_cell_type_gets_the_module_cell_refusal() {
+    for (tag, src) in [
+        (
+            "const-lazy-lock",
+            "fn build() -> i64 { 3 }\n\
+             const TABLE: LazyLock[i64] = LazyLock.new(|| build());\n\
+             fn main() { let w = TABLE.get(); println(f\"{w}\") }\n",
+        ),
+        (
+            "const-atomic",
+            "const HITS: Atomic[i64] = Atomic.new(0);\n\
+             fn main() { HITS.store(1); println(HITS.load()) }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains("E_MODULE_LET"), "{tag}: {err}");
+        assert!(err.contains("module cells are deferred"), "{tag}: {err}");
+        assert!(err.contains("create the value in `main`"), "{tag}: {err}");
+        assert!(!err.contains("compile-time constant"), "{tag}: {err}");
+        karac().arg("fix").arg(&path).output().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            src,
+            "{tag}: no fix for a cell"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -58,7 +58,7 @@ enum RouteResult {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Middleware { RequestId, Logger, Auth }
-const AUTH_TOKEN: String = "Bearer s3cret";
+const AUTH_TOKEN: Str = "Bearer s3cret";
 
 fn join(items: ref Vec[String], sep: String) -> String {
     let mut out = String.new();
@@ -370,7 +370,7 @@ fn build_app() -> App {
 
 fn main() {
     let mut app = build_app();
-    let ok_auth = ("Authorization", AUTH_TOKEN);
+    let ok_auth = ("Authorization", AUTH_TOKEN.to_string());
     let requests = [
         req("GET", "/health", [], ""),
         req("GET", "/users", [], ""),

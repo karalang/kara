@@ -3536,7 +3536,7 @@ fn mir_method_on_a_const_element_at_a_computed_index() {
     // type-qualified call `Type[Args].method()`, and `NAMES[k as i64]` was a
     // parse error. A Const-class name is never a type, so it indexes.
     let src = r#"
-const NM: Array[String, 2] = ["ab", "cde"];
+const NM: Array[Str, 2] = ["ab", "cde"];
 const NUMS: Array[i64, 2] = [-3, 4];
 const NAMES: Array[Str, 2] = ["x", "yz"];
 fn main() {

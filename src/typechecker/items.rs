@@ -4428,6 +4428,108 @@ impl<'a> super::TypeChecker<'a> {
         // "expected 'Array[i64, 3]', found 'Vec[i64]'" -- the form a local
         // `let` and a module-level `let` both accept.
         self.check_expr(&c.value, &declared_ty);
+        // B-2026-10-22-19: the initializer must be a compile-time constant
+        // (design.md § Constants, "Allowed initializers"). The module-binding
+        // walker checks the shape; the flag turns off its special forms,
+        // which are calls the spec does not admit.
+        if self.cli_lint_overrides.strict_core {
+            // A cell is mutable global state, and a `const` would build a fresh
+            // one at every use, so it gets the answer a module `let` of a cell
+            // gets rather than a constness error about its constructor.
+            let ty_text = crate::formatter::render_type_expr(&c.ty);
+            let cell = ty_text
+                .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .any(|w| MODULE_CELL_TYPES.contains(&w));
+            if cell {
+                self.type_error(
+                    format!(
+                        "error[E_MODULE_LET]: module-level `const {}` (a `{ty_text}`) is a \
+                         cell, which is mutable global state, and Kāra has no mutable \
+                         globals; module cells are deferred to the systems track \
+                         (design.md § Constants, \"No mutable globals\"), and a `const` \
+                         would build a fresh one at every use\nhelp: create the value \
+                         in `main` and pass it down to the functions that use it, \
+                         gathering several into a context struct",
+                        c.name,
+                    ),
+                    c.ty.span,
+                    TypeErrorKind::ModuleLet,
+                );
+                return;
+            }
+            if self.refuse_heap_typed_binding(&c.name, &c.ty, &c.value, &declared_ty, false, true) {
+                return;
+            }
+            let before = self.errors.len();
+            self.const_init_strict = true;
+            self.check_module_binding_init(&c.value, &c.name);
+            self.const_init_strict = false;
+            // A `String` nested in an `Array`, tuple or `Option` allocates
+            // as surely as a bare one. The edit swaps each for `Str`, offered
+            // once the initializer is known to be constant (literals then
+            // take the `Str` the new annotation expects).
+            if Self::const_type_nests_string(&declared_ty) {
+                let fixed = super::types::type_display(&Self::const_type_with_str(&declared_ty));
+                let message = format!(
+                    "error[E_MODULE_BINDING_HEAP_TYPE]: constant '{}' is declared \
+                     with type '{}', which holds a heap-allocated 'String'; a \
+                     constant lives in the binary as data (design.md § Constants) \
+                     — use 'Str' for constant text: '{}'",
+                    c.name,
+                    super::types::type_display(&declared_ty),
+                    fixed,
+                );
+                if self.errors.len() == before {
+                    self.type_error_with_fix_it(
+                        message,
+                        c.ty.span,
+                        TypeErrorKind::ModuleBindingHeapType,
+                        crate::typechecker::FixIt {
+                            span: c.ty.span,
+                            replacement: fixed,
+                        },
+                    );
+                } else {
+                    self.type_error(message, c.ty.span, TypeErrorKind::ModuleBindingHeapType);
+                }
+            }
+        }
+    }
+
+    /// True when `ty` holds a `String` inside an `Array`, tuple or `Option`
+    /// (B-2026-10-22-19). A bare `String` is reported by
+    /// `refuse_heap_typed_binding`; a struct's fields are not walked.
+    fn const_type_nests_string(ty: &Type) -> bool {
+        fn holds(ty: &Type) -> bool {
+            match ty {
+                Type::Str => true,
+                Type::Array { element, .. } => holds(element),
+                Type::Tuple(ts) => ts.iter().any(holds),
+                Type::Named { name, args } if name == "Option" => args.iter().any(holds),
+                _ => false,
+            }
+        }
+        !matches!(ty, Type::Str) && holds(ty)
+    }
+
+    /// `ty` with each `String` reached by `const_type_nests_string` made `Str`.
+    fn const_type_with_str(ty: &Type) -> Type {
+        match ty {
+            Type::Str => Type::Named {
+                name: "Str".to_string(),
+                args: vec![],
+            },
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(Self::const_type_with_str(element)),
+                size: size.clone(),
+            },
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(Self::const_type_with_str).collect()),
+            Type::Named { name, args } if name == "Option" => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(Self::const_type_with_str).collect(),
+            },
+            other => other.clone(),
+        }
     }
 
     /// Slice 4 + 5 of design.md § Module-Level Bindings (§1280-1297,
@@ -4622,107 +4724,10 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
             let declared = self.lower_type_expr(ty_expr, &[]);
-            if matches!(declared, Type::Str) {
-                let message = format!(
-                    "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
-                     is declared with type 'String' which is heap-allocated; \
-                     module bindings live in the binary as constant data — \
-                     use 'StringSlice' for static string data",
-                    b.name,
-                );
-                // B-2026-07-31-31 — the diagnostic already names the exact
-                // replacement, so hand `karac fix` the edit: rewrite the
-                // annotation span to `StringSlice`.
-                //
-                // Gated on a bare string-literal initializer, which is exactly
-                // the condition the §1284 coercion carve-out below accepts for
-                // a `StringSlice`-declared binding. That gate is what makes the
-                // fix SAFE rather than merely plausible: applying it yields a
-                // program that typechecks. A non-literal initializer (whose
-                // `String` came from somewhere else) keeps the descriptive-only
-                // diagnostic rather than getting an edit that trades one error
-                // for another.
-                if matches!(b.value.kind, ExprKind::StringLit(_)) {
-                    self.type_error_with_fix_it(
-                        message,
-                        ty_expr.span,
-                        TypeErrorKind::ModuleBindingHeapType,
-                        crate::typechecker::FixIt {
-                            span: ty_expr.span,
-                            replacement: "StringSlice".to_string(),
-                        },
-                    );
-                } else {
-                    self.type_error(message, ty_expr.span, TypeErrorKind::ModuleBindingHeapType);
-                }
+            if self
+                .refuse_heap_typed_binding(&b.name, ty_expr, &b.value, &declared, b.is_mut, false)
+            {
                 return;
-            }
-            // B-2026-10-06-42: a NON-EMPTY `Vec` / `VecDeque` literal is
-            // heap data, which § Module-Level Bindings forbids for the same
-            // reason it forbids `String` ("Anything requiring runtime heap
-            // allocation"). It used to be accepted, and the two backends then
-            // disagreed: the interpreter built a real Vec, while codegen's
-            // constant-initializer path emitted the literal as an LLVM ARRAY
-            // and read it back through a Vec header, so `V[2]` panicked out of
-            // bounds and `for x in V` segfaulted. `Vec.new()` and an empty
-            // `[]` allocate nothing and stay legal; a fixed table is an
-            // `Array[T, N]`, which the module-scope path already lowers.
-            if let Type::Named { name, args } = &declared {
-                let n_elems = match &b.value.kind {
-                    ExprKind::ArrayLiteral(elems) => Some(elems.len()),
-                    ExprKind::RepeatLiteral { .. } => None,
-                    _ => Some(0),
-                };
-                let is_heap_literal = matches!(b.value.kind, ExprKind::RepeatLiteral { .. })
-                    || n_elems.is_some_and(|n| n > 0);
-                if (name == "Vec" || name == "VecDeque") && args.len() == 1 && is_heap_literal {
-                    let elem = &args[0];
-                    let elem_src = super::types::type_display(elem);
-                    let suggestion = match n_elems {
-                        Some(n) => format!("Array[{elem_src}, {n}]"),
-                        None => format!("Array[{elem_src}, N]"),
-                    };
-                    let message = format!(
-                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
-                         is declared with type '{}' and a non-empty literal, whose \
-                         elements are heap-allocated; module bindings live in the \
-                         binary as constant data — declare a fixed table as '{}', or \
-                         initialise the binding with `{}.new()` and fill it at startup",
-                        b.name,
-                        super::types::type_display(&declared),
-                        suggestion,
-                        name,
-                    );
-                    // The edit is offered only where applying it is known to
-                    // typecheck: an immutable binding (a `let mut` table is
-                    // there to be pushed to, which an `Array` cannot do) of a
-                    // plain array literal of primitive elements, where the
-                    // length is the literal's own and the element type is
-                    // constant data. A repeat literal's count may be a named
-                    // constant, so it keeps the descriptive diagnostic.
-                    let primitive_elem = matches!(
-                        elem,
-                        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-                    );
-                    if !b.is_mut && n_elems.is_some() && primitive_elem {
-                        self.type_error_with_fix_it(
-                            message,
-                            ty_expr.span,
-                            TypeErrorKind::ModuleBindingHeapType,
-                            crate::typechecker::FixIt {
-                                span: ty_expr.span,
-                                replacement: suggestion,
-                            },
-                        );
-                    } else {
-                        self.type_error(
-                            message,
-                            ty_expr.span,
-                            TypeErrorKind::ModuleBindingHeapType,
-                        );
-                    }
-                    return;
-                }
             }
             // §1284: at module scope, string literals have type
             // `StringSlice` rather than the function-body default of
@@ -4814,6 +4819,144 @@ impl<'a> super::TypeChecker<'a> {
                 self.env.constants.insert(b.name.clone(), inferred);
             }
         }
+    }
+
+    /// The heap-type half of the module-binding rules (design.md § Constants,
+    /// "Anything that allocates"), shared by a module `let` and, under strict
+    /// check, a `const` (B-2026-10-22-19): a `String`-typed value, or a `Vec` /
+    /// `VecDeque` built from a non-empty literal, is refused, with a fix-it
+    /// where applying it is known to typecheck. True when it reported.
+    fn refuse_heap_typed_binding(
+        &mut self,
+        binding: &str,
+        ty_expr: &TypeExpr,
+        value: &Expr,
+        declared: &Type,
+        is_mut: bool,
+        is_const: bool,
+    ) -> bool {
+        if matches!(declared, Type::Str) {
+            let message = if is_const {
+                format!(
+                    "error[E_MODULE_BINDING_HEAP_TYPE]: constant '{binding}' is \
+                     declared with type 'String', which is heap-allocated; a \
+                     constant lives in the binary as data (design.md § Constants) \
+                     — use 'Str' for constant text",
+                )
+            } else {
+                format!(
+                    "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                     is declared with type 'String' which is heap-allocated; \
+                     module bindings live in the binary as constant data — \
+                     use 'StringSlice' for static string data",
+                    binding,
+                )
+            };
+            // B-2026-07-31-31 — the diagnostic already names the exact
+            // replacement, so hand `karac fix` the edit: rewrite the
+            // annotation span to `StringSlice`.
+            //
+            // Gated on a bare string-literal initializer, which is exactly
+            // the condition the §1284 coercion carve-out below accepts for
+            // a `StringSlice`-declared binding. That gate is what makes the
+            // fix SAFE rather than merely plausible: applying it yields a
+            // program that typechecks. A non-literal initializer (whose
+            // `String` came from somewhere else) keeps the descriptive-only
+            // diagnostic rather than getting an edit that trades one error
+            // for another.
+            if matches!(value.kind, ExprKind::StringLit(_)) {
+                self.type_error_with_fix_it(
+                    message,
+                    ty_expr.span,
+                    TypeErrorKind::ModuleBindingHeapType,
+                    crate::typechecker::FixIt {
+                        span: ty_expr.span,
+                        replacement: if is_const { "Str" } else { "StringSlice" }.to_string(),
+                    },
+                );
+            } else {
+                self.type_error(message, ty_expr.span, TypeErrorKind::ModuleBindingHeapType);
+            }
+            return true;
+        }
+        // B-2026-10-06-42: a NON-EMPTY `Vec` / `VecDeque` literal is
+        // heap data, which § Module-Level Bindings forbids for the same
+        // reason it forbids `String` ("Anything requiring runtime heap
+        // allocation"). It used to be accepted, and the two backends then
+        // disagreed: the interpreter built a real Vec, while codegen's
+        // constant-initializer path emitted the literal as an LLVM ARRAY
+        // and read it back through a Vec header, so `V[2]` panicked out of
+        // bounds and `for x in V` segfaulted. `Vec.new()` and an empty
+        // `[]` allocate nothing and stay legal; a fixed table is an
+        // `Array[T, N]`, which the module-scope path already lowers.
+        if let Type::Named { name, args } = declared {
+            let n_elems = match &value.kind {
+                ExprKind::ArrayLiteral(elems) => Some(elems.len()),
+                ExprKind::RepeatLiteral { .. } => None,
+                _ => Some(0),
+            };
+            let is_heap_literal = matches!(value.kind, ExprKind::RepeatLiteral { .. })
+                || n_elems.is_some_and(|n| n > 0);
+            if (name == "Vec" || name == "VecDeque") && args.len() == 1 && is_heap_literal {
+                let elem = &args[0];
+                let elem_src = super::types::type_display(elem);
+                let suggestion = match n_elems {
+                    Some(n) => format!("Array[{elem_src}, {n}]"),
+                    None => format!("Array[{elem_src}, N]"),
+                };
+                let message = if is_const {
+                    format!(
+                        "error[E_MODULE_BINDING_HEAP_TYPE]: constant '{}' is \
+                         declared with type '{}' and a non-empty literal, whose \
+                         elements are heap-allocated; a constant lives in the \
+                         binary as data (design.md § Constants) — declare a fixed \
+                         table as '{}', or build the `{}` in `main` and pass it down",
+                        binding,
+                        super::types::type_display(declared),
+                        suggestion,
+                        name,
+                    )
+                } else {
+                    format!(
+                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                         is declared with type '{}' and a non-empty literal, whose \
+                         elements are heap-allocated; module bindings live in the \
+                         binary as constant data — declare a fixed table as '{}', or \
+                         initialise the binding with `{}.new()` and fill it at startup",
+                        binding,
+                        super::types::type_display(declared),
+                        suggestion,
+                        name,
+                    )
+                };
+                // The edit is offered only where applying it is known to
+                // typecheck: an immutable binding (a `let mut` table is
+                // there to be pushed to, which an `Array` cannot do) of a
+                // plain array literal of primitive elements, where the
+                // length is the literal's own and the element type is
+                // constant data. A repeat literal's count may be a named
+                // constant, so it keeps the descriptive diagnostic.
+                let primitive_elem = matches!(
+                    elem,
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+                );
+                if !is_mut && n_elems.is_some() && primitive_elem {
+                    self.type_error_with_fix_it(
+                        message,
+                        ty_expr.span,
+                        TypeErrorKind::ModuleBindingHeapType,
+                        crate::typechecker::FixIt {
+                            span: ty_expr.span,
+                            replacement: suggestion,
+                        },
+                    );
+                } else {
+                    self.type_error(message, ty_expr.span, TypeErrorKind::ModuleBindingHeapType);
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// `Type::Named { name: "StringSlice", args: [] }` predicate used
@@ -5292,6 +5435,9 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Pipe { .. } | ExprKind::PipePlaceholder => {
                 self.reject_module_binding_init(e, binding_name, "pipe expression");
             }
+            // A `const` may be computed by a `comptime` block, which folds
+            // to a literal before anything runs.
+            ExprKind::Comptime(_) if self.const_init_strict => {}
             ExprKind::Block(_)
             | ExprKind::Comptime(_)
             | ExprKind::If { .. }
@@ -5343,6 +5489,25 @@ impl<'a> super::TypeChecker<'a> {
     /// — purely structural recognition isn't safe because the same
     /// shape is also used by associated-fn calls like `Foo.bar()`.
     fn module_binding_call_is_enum_variant(&self, callee: &Expr) -> bool {
+        // A constant's initializer may also name a variant bare, `Some(42)`
+        // being the spec's own example (design.md § Constants;
+        // B-2026-10-22-19). A real binding of the name wins, as it does in
+        // expression position. Gated to the strict `const` walk so the legacy
+        // module-binding path keeps the shapes its codegen lowers.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if !self.const_init_strict {
+                return false;
+            }
+            if Self::builtin_variant_owner(name).is_some() {
+                return true;
+            }
+            return !self.name_shadows_variant(name)
+                && self
+                    .env
+                    .enums
+                    .values()
+                    .any(|info| info.variants.iter().any(|(v, _)| v == name));
+        }
         let ExprKind::Path { segments, .. } = &callee.kind else {
             return false;
         };
@@ -5367,6 +5532,9 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         binding_name: &str,
     ) -> bool {
+        if self.const_init_strict {
+            return false;
+        }
         let ExprKind::Path { segments, .. } = &callee.kind else {
             return false;
         };
@@ -5415,6 +5583,22 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn reject_module_binding_init(&mut self, e: &Expr, binding_name: &str, what: &str) {
+        if self.const_init_strict {
+            self.type_error(
+                format!(
+                    "error[E_MODULE_BINDING_EFFECTFUL_INIT]: constant '{binding_name}' \
+                     initializer must be a compile-time constant; {what} requires run-time \
+                     evaluation (design.md § Constants). Permitted forms: literals, \
+                     arithmetic / boolean / comparison operations over constants, enum \
+                     variants, struct and tuple literals of constants, list and repeat \
+                     literals at an 'Array' type, and other constants\nhelp: build the \
+                     value in `main`, or a function it calls, and pass it down"
+                ),
+                e.span,
+                TypeErrorKind::ModuleBindingEffectfulInit,
+            );
+            return;
+        }
         self.type_error(
             format!(
                 "error[E_MODULE_BINDING_EFFECTFUL_INIT]: module-level binding '{}' \

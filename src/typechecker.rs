@@ -2792,6 +2792,11 @@ pub struct TypeChecker<'a> {
     /// with the set above. Read only by the `par` cross-task check, which
     /// lets a `frozen` handle into a branch (B-2026-10-19-46).
     pub(super) current_fn_frozen_lets: FxHashSet<String>,
+    /// Set while the constant-initializer walker checks a `const` under
+    /// strict check (B-2026-10-22-19). design.md § Constants admits no calls,
+    /// so the module-binding special forms (`Vec.new()`, `LazyLock.new`, ...)
+    /// are refused, and the diagnostic speaks of a constant.
+    pub(super) const_init_strict: bool,
     /// This function's BORROWED parameter names — every `ref T` / `mut ref T`
     /// parameter, plus `self` under `ref self` / `mut ref self`. B-2026-09-01-4.
     ///
@@ -3479,6 +3484,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_frozen_lets: FxHashSet::default(),
+            const_init_strict: false,
             current_fn_ref_params: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,

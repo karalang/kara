@@ -8,7 +8,7 @@ const BURST_WINDOW: i64 = 3;
 const BURST_THRESHOLD: i64 = 4;
 const PENALTY_STRIKES: i64 = 3;
 const PENALTY_TICKS: i64 = 8;
-const LOG_PATH: String = "requests.log";
+const LOG_PATH: Str = "requests.log";
 
 #[derive(Clone)]
 enum Policy {

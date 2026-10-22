@@ -520,7 +520,7 @@ impl<'a> super::TypeChecker<'a> {
     /// then functions, then constants, and only then the variant scan. Both the
     /// ambiguity diagnostic and the type-directed resolution consult this, so
     /// neither can start disagreeing with that order.
-    fn name_shadows_variant(&self, name: &str) -> bool {
+    pub(super) fn name_shadows_variant(&self, name: &str) -> bool {
         self.local_scope.lookup(name).is_some()
             || self.env.functions.contains_key(name)
             || self.env.constants.contains_key(name)
