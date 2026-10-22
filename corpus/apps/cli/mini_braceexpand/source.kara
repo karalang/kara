@@ -1,0 +1,433 @@
+// mini_braceexpand — a port of braceexpand 0.1.7 (MIT, Stanis Trendelenburg):
+// Bash-style brace expansion, as snakemake and glob tooling use it.
+//
+// The reference builds lazy generators (itertools.product / chain); this port
+// computes the same lists eagerly. parse_pattern returns the full expansion of
+// a (sub)pattern as a Vec[String] — the cartesian product of its parts — and
+// recurses through parse_expression / parse_sequence exactly as the library
+// does: integer ranges (padding, step, direction, negatives), character ranges
+// (step, mixed-case skip), comma sequences, nested braces, the literal-brace
+// fallback for {} and {a}, backslash escapes, and the unbalanced-braces error.
+// escape=True (the library default) throughout.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn is_digit(b: i64) -> bool { b >= 48 and b <= 57 }
+fn is_letter(b: i64) -> bool { (b >= 65 and b <= 90) or (b >= 97 and b <= 122) }
+
+fn index_of_byte(v: ref Vec[i64], ch: i64) -> i64 {
+    let mut i = 0;
+    while i < v.len() { if v[i] == ch { return i; } i = i + 1; }
+    0 - 1
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut out = String.new();
+    let digits = "0123456789";
+    while m > 0 {
+        let d = m % 10;
+        out = digits.substring(d, d + 1) + out;
+        m = m / 10;
+    }
+    out
+}
+
+fn parse_int_signed(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == 45 { neg = true; i = 1; }
+    let mut v = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    if neg { 0 - v } else { v }
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn strip_escapes(s: String) -> String {
+    let b = bytes_of(s.clone());
+    let n = b.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        if b[i] == 92 and i + 1 < n {
+            out.push_str(s.substring(i + 1, i + 2));
+            i = i + 2;
+        } else {
+            out.push_str(s.substring(i, i + 1));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// --- expansion result ---
+
+struct Expansion {
+    ok: bool,       // false => unbalanced braces (msg holds the error text)
+    is_expr: bool,  // true => a real range/sequence; false => the None signal
+    vals: Vec[String],
+    msg: String,
+}
+
+// cartesian product of the parts, concatenating one choice from each in order
+fn cartesian(items: Vec[Vec[String]]) -> Vec[String] {
+    let mut acc: Vec[String] = Vec.new();
+    acc.push(String.new());
+    for col in items {
+        let mut next: Vec[String] = Vec.new();
+        let mut a = 0;
+        while a < acc.len() {
+            let prefix = acc[a].clone();
+            let mut b = 0;
+            while b < col.len() {
+                next.push(prefix.clone() + col[b].clone());
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        acc = next;
+    }
+    acc
+}
+
+fn flatten_concat(parts: Vec[Vec[String]]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in parts {
+        for s in p { out.push(s.clone()); }
+    }
+    out
+}
+
+// --- range matchers (replace the library's two anchored regexes) ---
+
+struct IntMatch { ok: bool, a_str: String, b_str: String, step_str: String }
+
+fn match_int_range(expr: String) -> IntMatch {
+    let b = bytes_of(expr.clone());
+    let n = b.len();
+    let mut i = 0;
+    let a0 = i;
+    if i < n and b[i] == 45 { i = i + 1; }
+    let da = i;
+    while i < n and is_digit(b[i]) { i = i + 1; }
+    if i == da { return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() }; }
+    let a_str = expr.substring(a0, i);
+    if not (i + 1 < n and b[i] == 46 and b[i + 1] == 46) {
+        return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() };
+    }
+    i = i + 2;
+    let b0 = i;
+    if i < n and b[i] == 45 { i = i + 1; }
+    let db = i;
+    while i < n and is_digit(b[i]) { i = i + 1; }
+    if i == db { return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() }; }
+    let b_str = expr.substring(b0, i);
+    let mut step_str = String.new();
+    if i < n {
+        if not (i + 1 < n and b[i] == 46 and b[i + 1] == 46) {
+            return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() };
+        }
+        i = i + 2;
+        if i < n and b[i] == 45 { i = i + 1; }
+        let ds = i;
+        while i < n and is_digit(b[i]) { i = i + 1; }
+        if i == ds { return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() }; }
+        step_str = expr.substring(ds, i);
+    }
+    if i != n { return IntMatch { ok: false, a_str: String.new(), b_str: String.new(), step_str: String.new() }; }
+    IntMatch { ok: true, a_str: a_str, b_str: b_str, step_str: step_str }
+}
+
+struct CharMatch { ok: bool, a_ch: i64, b_ch: i64, step_str: String }
+
+fn match_char_range(expr: String) -> CharMatch {
+    let b = bytes_of(expr.clone());
+    let n = b.len();
+    if n < 4 { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+    if not is_letter(b[0]) { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+    let a_ch = b[0];
+    if not (b[1] == 46 and b[2] == 46) { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+    if not is_letter(b[3]) { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+    let b_ch = b[3];
+    let mut i = 4;
+    let mut step_str = String.new();
+    if i < n {
+        if not (i + 1 < n and b[i] == 46 and b[i + 1] == 46) {
+            return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() };
+        }
+        i = i + 2;
+        if i < n and b[i] == 45 { i = i + 1; }
+        let ds = i;
+        while i < n and is_digit(b[i]) { i = i + 1; }
+        if i == ds { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+        step_str = expr.substring(ds, i);
+    }
+    if i != n { return CharMatch { ok: false, a_ch: 0, b_ch: 0, step_str: String.new() }; }
+    CharMatch { ok: true, a_ch: a_ch, b_ch: b_ch, step_str: step_str }
+}
+
+fn needs_pad(s: String) -> bool {
+    if s == "0" or s == "-0" { return false; }
+    let b = bytes_of(s.clone());
+    if b.len() >= 1 and b[0] == 48 { return true; }
+    if b.len() >= 2 and b[0] == 45 and b[1] == 48 { return true; }
+    false
+}
+
+fn fmt_pad(i: i64, width: i64) -> String {
+    let neg = i < 0;
+    let mut mag = i;
+    if neg { mag = 0 - i; }
+    let mut body = int_to_str(mag);
+    if neg {
+        while 1 + blen(body.clone()) < width { body = "0" + body; }
+        return "-" + body;
+    }
+    while blen(body.clone()) < width { body = "0" + body; }
+    body
+}
+
+fn make_int_range(a_str: String, b_str: String, step_str: String) -> Vec[String] {
+    let mut padding = 0;
+    if needs_pad(a_str.clone()) or needs_pad(b_str.clone()) {
+        let la = blen(a_str.clone());
+        let lb = blen(b_str.clone());
+        if la > lb { padding = la; } else { padding = lb; }
+    }
+    let mut step = 1;
+    if blen(step_str.clone()) > 0 {
+        let v = parse_int_signed(step_str);
+        if v != 0 { step = v; }
+    }
+    let a = parse_int_signed(a_str);
+    let c = parse_int_signed(b_str);
+    let mut out: Vec[String] = Vec.new();
+    if a < c {
+        let mut i = a;
+        while i <= c { out.push(fmt_pad(i, padding)); i = i + step; }
+    } else {
+        let mut i = a;
+        while i >= c { out.push(fmt_pad(i, padding)); i = i - step; }
+    }
+    out
+}
+
+fn make_char_range(a_ch: i64, b_ch: i64, step_str: String) -> Vec[String] {
+    let ab = bytes_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+    let s = index_of_byte(ab, a_ch);
+    let e = index_of_byte(ab, b_ch);
+    let mut step = 1;
+    if blen(step_str.clone()) > 0 {
+        let v = parse_int_signed(step_str);
+        if v != 0 { step = v; }
+    }
+    let mut out: Vec[String] = Vec.new();
+    if s < e {
+        let mut i = s;
+        while i <= e { out.push(byte_to_char(ab[i])); i = i + step; }
+    } else {
+        let mut i = s;
+        while i >= e { out.push(byte_to_char(ab[i])); i = i - step; }
+    }
+    out
+}
+
+// --- the three mutually-recursive parsers ---
+
+fn parse_sequence(seq: String) -> Expansion {
+    let b = bytes_of(seq.clone());
+    let n = b.len();
+    let mut parts: Vec[Vec[String]] = Vec.new();
+    let mut start = 0;
+    let mut pos = 0;
+    let mut depth = 0;
+    let mut found_comma = false;
+    while pos < n {
+        let c = b[pos];
+        if c == 92 {
+            pos = pos + 2;
+        } else if c == 123 {
+            depth = depth + 1;
+            pos = pos + 1;
+        } else if c == 125 {
+            depth = depth - 1;
+            pos = pos + 1;
+        } else if c == 44 and depth == 0 {
+            let pe = parse_pattern(seq.substring(start, pos));
+            if not pe.ok { return pe; }
+            parts.push(pe.vals);
+            found_comma = true;
+            start = pos + 1;
+            pos = pos + 1;
+        } else {
+            pos = pos + 1;
+        }
+    }
+    if depth != 0 or not found_comma {
+        return Expansion { ok: true, is_expr: false, vals: Vec.new(), msg: String.new() };
+    }
+    let pe = parse_pattern(seq.substring(start, n));
+    if not pe.ok { return pe; }
+    parts.push(pe.vals);
+    Expansion { ok: true, is_expr: true, vals: flatten_concat(parts), msg: String.new() }
+}
+
+fn parse_expression(expr: String) -> Expansion {
+    let im = match_int_range(expr.clone());
+    if im.ok {
+        return Expansion { ok: true, is_expr: true, vals: make_int_range(im.a_str, im.b_str, im.step_str), msg: String.new() };
+    }
+    let cm = match_char_range(expr.clone());
+    if cm.ok {
+        return Expansion { ok: true, is_expr: true, vals: make_char_range(cm.a_ch, cm.b_ch, cm.step_str), msg: String.new() };
+    }
+    parse_sequence(expr)
+}
+
+fn parse_pattern(pattern: String) -> Expansion {
+    let b = bytes_of(pattern.clone());
+    let n = b.len();
+    let mut items: Vec[Vec[String]] = Vec.new();
+    let mut start = 0;
+    let mut pos = 0;
+    let mut depth = 0;
+    while pos < n {
+        let c = b[pos];
+        if c == 92 {
+            pos = pos + 2;
+        } else if c == 123 {
+            if depth == 0 and pos > start {
+                let mut lit: Vec[String] = Vec.new();
+                lit.push(pattern.substring(start, pos));
+                items.push(lit);
+                start = pos;
+            }
+            depth = depth + 1;
+            pos = pos + 1;
+        } else if c == 125 {
+            depth = depth - 1;
+            if depth == 0 {
+                let expr = pattern.substring(start + 1, pos);
+                let pe = parse_expression(expr.clone());
+                if not pe.ok { return pe; }
+                if pe.is_expr {
+                    items.push(pe.vals);
+                } else {
+                    let mut lb: Vec[String] = Vec.new();
+                    lb.push("{");
+                    items.push(lb);
+                    let inner = parse_pattern(expr.clone());
+                    if not inner.ok { return inner; }
+                    items.push(inner.vals);
+                    let mut rb: Vec[String] = Vec.new();
+                    rb.push("}");
+                    items.push(rb);
+                }
+                start = pos + 1;
+            }
+            pos = pos + 1;
+        } else {
+            pos = pos + 1;
+        }
+    }
+    if depth != 0 {
+        return Expansion { ok: false, is_expr: false, vals: Vec.new(), msg: "Unbalanced braces: '" + pattern + "'" };
+    }
+    if start < n {
+        let mut lit: Vec[String] = Vec.new();
+        lit.push(pattern.substring(start, n));
+        items.push(lit);
+    }
+    Expansion { ok: true, is_expr: true, vals: cartesian(items), msg: String.new() }
+}
+
+fn main() {
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let pat = lines[li].clone();
+        if blen(pat.clone()) > 0 {
+            let res = parse_pattern(pat.clone());
+            if not res.ok {
+                out.push_str("== ");
+                out.push_str(pat.clone());
+                out.push_str("\n  !ERROR ");
+                out.push_str(res.msg);
+                out.push_str("\n");
+            } else {
+                out.push_str("== ");
+                out.push_str(pat.clone());
+                out.push_str("  (");
+                out.push_str(int_to_str(res.vals.len()));
+                out.push_str(")\n");
+                let vals = res.vals;
+                let mut i = 0;
+                while i < vals.len() {
+                    out.push_str("  ");
+                    out.push_str(strip_escapes(vals[i].clone()));
+                    out.push_str("\n");
+                    i = i + 1;
+                }
+            }
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("item{1..3}\n");
+    s.push_str("{a..c}\n");
+    s.push_str("index.html{,.backup}\n");
+    s.push_str("python{2.{5..7},3.{2,3}}\n");
+    s.push_str("{07..10}\n");
+    s.push_str("{a..g..2}\n");
+    s.push_str("{4..1}\n");
+    s.push_str("{2..-1}\n");
+    s.push_str("{1\\{2,3}\n");
+    s.push_str("file{A..E..2}.txt\n");
+    s.push_str("{x,y,z}\n");
+    s.push_str("a{b,c}d{e,f}\n");
+    s.push_str("{}\n");
+    s.push_str("{a}\n");
+    s.push_str("host{1..3}.example.com\n");
+    s.push_str("{Z..a}\n");
+    s.push_str("img{001..003}.png\n");
+    s.push_str("{10..4..3}\n");
+    s.push_str("pre{1..2}mid{A..B}post\n");
+    s.push_str("{1{2,3}\n");
+    s
+}
