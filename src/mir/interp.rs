@@ -11796,9 +11796,11 @@ impl<'a> Interp<'a> {
                         method = "GET".to_string();
                         body = None;
                     }
-                    // `ureq`'s rule, which this client kept: the caller's
-                    // credentials are not sent on to where a redirect points.
-                    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+                    // The caller's credentials go no further once a hop
+                    // leaves the first request's origin (docs/library/io.md).
+                    if !crate::http_proxy::redirect_keeps_credentials(&req.url, &url) {
+                        headers.retain(|(k, _)| !crate::http_proxy::is_credential_header(k));
+                    }
                     continue;
                 }
             }

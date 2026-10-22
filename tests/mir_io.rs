@@ -2260,6 +2260,108 @@ fn http_client_goes_through_the_environment_proxy_on_both_backends() {
     assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), before);
 }
 
+const REDIRECT_CREDENTIALS: &str = r#"
+fn fetch(url: own String) {
+    let c = Client.new();
+    let req = c.request("GET", url).header("Authorization", "Bearer t").header("Cookie", "c=1");
+    match req.send() {
+        Ok(r) => println(r.body()),
+        Err(e) => println(f"error: {e.message()}"),
+    }
+}
+
+fn main() {
+    fetch("FIRST/same");
+    fetch("FIRST/port");
+    fetch("FIRST/host");
+    fetch("FIRST/away");
+}
+"#;
+
+/// A loopback origin whose redirects are named by path: `/same` to `/final`
+/// on itself, `/port` to `other`'s `/final`, `/host` to `/final` at
+/// `localhost` on this port, `/away` to `other`'s `/back`, and `/back` to
+/// `/final` on `home`. `/final` answers the credentials it was sent.
+fn redirecting_origin(listener: std::net::TcpListener, home: u16, other: u16) {
+    use std::io::{Read, Write};
+    std::thread::spawn(move || {
+        let port = listener.local_addr().unwrap().port();
+        for tcp in listener.incoming() {
+            let Ok(mut tcp) = tcp else { return };
+            let (mut head, mut byte) = (Vec::new(), [0u8; 1]);
+            while !head.ends_with(b"\r\n\r\n") {
+                match tcp.read(&mut byte) {
+                    Ok(1) => head.push(byte[0]),
+                    _ => break,
+                }
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let header = |name: &str| {
+                head.lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+                    })
+                    .unwrap_or_else(|| "none".to_string())
+            };
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            let location = match path {
+                "/same" => Some("/final".to_string()),
+                "/port" => Some(format!("http://127.0.0.1:{other}/final")),
+                "/host" => Some(format!("http://localhost:{port}/final")),
+                "/away" => Some(format!("http://127.0.0.1:{other}/back")),
+                "/back" => Some(format!("http://127.0.0.1:{home}/final")),
+                _ => None,
+            };
+            let reply = match location {
+                Some(to) => format!(
+                    "HTTP/1.1 302 Found\r\nlocation: {to}\r\ncontent-length: 0\r\n\
+                     connection: close\r\n\r\n"
+                ),
+                None => {
+                    let body = format!(
+                        "authorization={} cookie={}",
+                        header("authorization"),
+                        header("cookie")
+                    );
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                }
+            };
+            let _ = tcp.write_all(reply.as_bytes());
+        }
+    });
+}
+
+/// A redirect keeps the caller's `Authorization` and `Cookie` while it stays
+/// on the first request's origin and drops both, for the rest of the chain,
+/// once a hop changes the port or the host, on both MIR backends
+/// (docs/library/io.md § HTTP client).
+#[test]
+fn redirects_keep_credentials_only_on_the_first_origin_on_both_backends() {
+    let home = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (home_port, other_port) = (
+        home.local_addr().unwrap().port(),
+        other.local_addr().unwrap().port(),
+    );
+    redirecting_origin(home, home_port, other_port);
+    redirecting_origin(other, home_port, other_port);
+    let dir = Scratch::new("redirect_credentials");
+    let src = REDIRECT_CREDENTIALS.replace("FIRST", &format!("http://127.0.0.1:{home_port}"));
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    let dropped = "authorization=none cookie=none\n";
+    assert_eq!(
+        interp,
+        format!("authorization=Bearer t cookie=c=1\n{dropped}{dropped}{dropped}")
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
 /// A call on a program-rooted resource outside any `with_provider` goes to
 /// its default provider (core-semantics §14.7): `Env.var` and `env.var` are
 /// `OsEnv.var` on a fresh `OsEnv {}`, and so on, with the ambient output.

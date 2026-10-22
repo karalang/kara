@@ -275,7 +275,7 @@ impl HttpError {
 }
 ```
 
-A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. `header` compares names without case.
+A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. A redirect keeps the request's `Authorization` and `Cookie` headers only while it stays on the original request's origin (scheme, host and port); the first hop anywhere else drops both for the rest of the chain, an `https://` to `http://` downgrade included. `header` compares names without case.
 
 **HTTPS.** An `https://` URL is fetched over TLS, and the server's certificate must chain to a trusted root. The trusted roots are the Mozilla bundle, built into every program so it needs no system CA store, plus the PEM certificates in the file that the environment variable `KARAC_HTTP_EXTRA_CA` names, for a private CA or a test's own. A certificate that does not verify is an `Err` naming the failure; there is no way to turn verification off.
 

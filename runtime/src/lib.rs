@@ -6969,7 +6969,8 @@ fn http_fetch_blocking(
 
 /// Follow up to 5 redirects (ureq's default), demoting to GET and
 /// dropping the body on 301/302/303 for non-GET/HEAD methods (307/308
-/// preserve both). A final `status >= 400` maps to `Err` with ureq's
+/// preserve both), and dropping the caller's `Authorization` and `Cookie`
+/// headers once a hop leaves the first request's origin. A final `status >= 400` maps to `Err` with ureq's
 /// exact message shape so the codegen path and the interpreter's ureq
 /// path stay message-compatible on the deterministic error class.
 #[cfg(feature = "tls")]
@@ -6982,8 +6983,10 @@ async fn http_fetch_redirects(
     let mut method = method.to_string();
     let mut url = url.to_string();
     let mut body = body.to_vec();
+    let mut headers = headers.to_vec();
+    let first = url.clone();
     for _hop in 0..=5 {
-        let fetched = http_fetch_once(&method, &url, &body, headers).await?;
+        let fetched = http_fetch_once(&method, &url, &body, &headers).await?;
         if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
             let loc = fetched
                 .headers
@@ -6999,6 +7002,11 @@ async fn http_fetch_redirects(
                 if demote {
                     method = "GET".to_string();
                     body.clear();
+                }
+                // The caller's credentials go no further once a hop leaves
+                // the first request's origin (docs/library/io.md).
+                if !http_proxy::redirect_keeps_credentials(&first, &url) {
+                    headers.retain(|(k, _)| !http_proxy::is_credential_header(k));
                 }
                 continue;
             }
@@ -7044,7 +7052,7 @@ fn http_resolve_location(current: &str, loc: &str) -> Result<String, String> {
 // shared with the MIR interpreter (`src/http_proxy.rs`, by `#[path]`).
 #[cfg(feature = "tls")]
 #[path = "../../src/http_proxy.rs"]
-// The URL helpers serve the interpreter, which has no `hyper::Uri`.
+// Some URL helpers serve only the interpreter, which has no `hyper::Uri`.
 #[allow(dead_code)]
 mod http_proxy;
 

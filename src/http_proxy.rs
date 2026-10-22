@@ -217,6 +217,27 @@ pub fn url_port(url: &str, scheme: &str) -> Option<u16> {
     }
 }
 
+/// The origin of `url`: its scheme and host, lower-cased, and its port, the
+/// scheme's default when it names none.
+pub fn url_origin(url: &str) -> Option<(String, String, u16)> {
+    let (scheme, host) = url_scheme_host(url)?;
+    let port = url_port(url, &scheme)?;
+    Some((scheme, host.to_ascii_lowercase(), port))
+}
+
+/// Whether a redirect from the request for `first` to `next` keeps the
+/// caller's credentials: only while it stays on `first`'s origin (the Fetch
+/// standard's rule, which curl follows too).
+pub fn redirect_keeps_credentials(first: &str, next: &str) -> bool {
+    let origin = url_origin(first);
+    origin.is_some() && origin == url_origin(next)
+}
+
+/// Whether `name` is a header a redirect off the origin drops.
+pub fn is_credential_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
+}
+
 /// The CONNECT request that opens a tunnel to `host:port` through `route`.
 pub fn connect_request(route: &ProxyRoute, host: &str, port: u16) -> String {
     let target = authority(host.trim_start_matches('[').trim_end_matches(']'), port);
@@ -387,6 +408,29 @@ mod tests {
         assert!(!e.contains("secret"), "{e}");
         let e = route("https", "a.com", &[("all_proxy", "http://p:notaport")]).unwrap_err();
         assert!(e.starts_with("all_proxy is not a proxy URL"), "{e}");
+    }
+
+    #[test]
+    fn credentials_stay_on_the_origin() {
+        let first = "https://Api.example.com/v1";
+        assert!(redirect_keeps_credentials(
+            first,
+            "https://api.example.com:443/v1/"
+        ));
+        assert!(!redirect_keeps_credentials(
+            first,
+            "http://api.example.com/v1"
+        ));
+        assert!(!redirect_keeps_credentials(
+            first,
+            "https://api.example.com:8443/v1"
+        ));
+        assert!(!redirect_keeps_credentials(
+            first,
+            "https://cdn.example.com/v1"
+        ));
+        assert!(is_credential_header("Cookie") && is_credential_header("AUTHORIZATION"));
+        assert!(!is_credential_header("Accept"));
     }
 
     #[test]
