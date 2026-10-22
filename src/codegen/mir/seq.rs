@@ -1988,6 +1988,62 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_float_value())
     }
 
+    /// The UTF-8 width of char `c`, as an `i64`. ASCII takes a branch of
+    /// its own, weighted as the likely one, rather than joining the
+    /// select chain: `StrChars.next` steps `pos` by this width, and as
+    /// selects the chain runs on every char of a loop over `chars()` even
+    /// when the char came from the in-line ASCII path. The weights keep
+    /// SimplifyCFG from folding the branch back into selects.
+    fn len_utf8(&mut self, c: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+        let f = self.cur_fn()?;
+        let from = self
+            .builder
+            .get_insert_block()
+            .ok_or("the builder is not in a block")?;
+        let (wide, done) = (
+            self.llcx.append_basic_block(f, "utf8.wide"),
+            self.llcx.append_basic_block(f, "utf8.done"),
+        );
+        let ct = c.get_type();
+        let ascii = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, c, ct.const_int(0x80, false), "")
+            .map_err(e)?;
+        let br = self
+            .builder
+            .build_conditional_branch(ascii, done, wide)
+            .map_err(e)?;
+        let i32t = self.llcx.i32_type();
+        let weights = self.llcx.metadata_node(&[
+            self.llcx.metadata_string("branch_weights").into(),
+            i32t.const_int(2000, false).into(),
+            i32t.const_int(1, false).into(),
+        ]);
+        br.set_metadata(weights, self.llcx.get_kind_id("prof"))
+            .map_err(|_| "branch weights".to_string())?;
+        self.builder.position_at_end(wide);
+        let mut n = self.i64(4);
+        for (lim, k) in [(0x10000u64, 3u64), (0x800, 2)] {
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, c, ct.const_int(lim, false), "")
+                .map_err(e)?;
+            n = self
+                .builder
+                .build_select(lt, self.i64(k), n, "")
+                .map_err(e)?
+                .into_int_value();
+        }
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self
+            .builder
+            .build_phi(self.llcx.i64_type(), "utf8.len")
+            .map_err(e)?;
+        phi.add_incoming(&[(&self.i64(1), from), (&n, wide)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
     /// The methods of a number or a char by value (`abs`, `max`, `min`,
     /// `signum`, the wrapping operations, the float roundings, and
     /// `len_utf8`), or `None` for one not lowered here.
@@ -2046,20 +2102,10 @@ impl<'ctx> Cx<'ctx, '_> {
         let b = &self.builder;
         let v: inkwell::values::BasicValueEnum = match (self.tys.kind(t), method, vals.as_slice()) {
             (TyKind::Char, "len_utf8", [c]) => {
-                let c = c.into_int_value();
-                let ct = c.get_type();
-                let mut n = self.i64(4);
-                for (lim, k) in [(0x10000u64, 3u64), (0x800, 2), (0x80, 1)] {
-                    let lt = b
-                        .build_int_compare(IntPredicate::ULT, c, ct.const_int(lim, false), "")
-                        .map_err(e)?;
-                    n = b
-                        .build_select(lt, self.i64(k), n, "")
-                        .map_err(e)?
-                        .into_int_value();
-                }
+                let n = self.len_utf8(c.into_int_value())?;
                 let it = self.llvm_ty(self.place_type(dest)?)?.into_int_type();
-                b.build_int_cast_sign_flag(n, it, false, "")
+                self.builder
+                    .build_int_cast_sign_flag(n, it, false, "")
                     .map_err(e)?
                     .into()
             }
