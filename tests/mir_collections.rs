@@ -312,13 +312,18 @@ fn jit_ir_has_its_stack_slots_replaced() {
 
 /// B-2026-10-21-67: `cbrt` and the inverse hyperbolic functions lower on
 /// compiled MIR, at either float width, as the interpreter computes them.
+/// The inexact values are checked to a tolerance: hosts' libms differ in
+/// the last digit (x86 CI's newer glibc gives acosh(2) and atanh(0.5) one
+/// ulp off the values first pinned here).
 #[test]
 fn cube_root_and_inverse_hyperbolics_agree() {
     agrees(
         "fn main() {\n    let x: f64 = 27.0;\n    let y: f32 = 8.0;\n    \
          println(f\"{x.cbrt()} {y.cbrt()} {(0.0).asinh()} {(1.0).acosh()} {(0.0).atanh()}\");\n    \
-         println(f\"{(0.5).asinh()} {(2.0).acosh()} {(0.5).atanh()}\");\n}\n",
-        "3.0 2.0 0.0 0.0 0.0\n0.48121182505960347 1.3169578969248166 0.5493061443340548\n",
+         println(f\"{((0.5).asinh() - 0.48121182505960347).abs() < 0.000000000001} \
+         {((2.0).acosh() - 1.3169578969248166).abs() < 0.000000000001} \
+         {((0.5).atanh() - 0.5493061443340548).abs() < 0.000000000001}\");\n}\n",
+        "3.0 2.0 0.0 0.0 0.0\ntrue true true\n",
         0,
     );
 }
