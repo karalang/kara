@@ -1,0 +1,114 @@
+// LeetCode #844: Backspace String Compare -- typed out on a stack.
+//
+// Each string is typed as written: a letter is pushed, and a '#' pops
+// the last letter if there is one. The strings are equal when the two
+// stacks are. O(n + m) time and space.
+
+fn typed(s: String) -> Vec[char] {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == '#' {
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    stack
+}
+
+fn backspace_compare(s: String, t: String) -> bool {
+    typed(s) == typed(t)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: String, t: String) {
+    println(f"\"{s}\" vs \"{t}\" -> {backspace_compare(s, t)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` characters, each '#' with chance `hashes` in 10 and otherwise one
+// of the first `k` letters
+fn random_text(seed: mut ref i64, n: i64, k: i64, hashes: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        if next_random(mut seed) % 10 < hashes {
+            s.push('#');
+        } else {
+            s.push((97 + next_random(mut seed) % k) as u8 as char);
+        }
+    }
+    s
+}
+
+// `s` with `extra` letters each followed by a '#' put in at random
+// places, which leaves its text as it was, and then, once in three,
+// one character changed
+fn padded(seed: mut ref i64, s: String, k: i64, extra: i64) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    for _ in 0..extra {
+        let at = next_random(mut seed) % (cs.len() + 1);
+        cs.insert(at, '#');
+        cs.insert(at, (97 + next_random(mut seed) % k) as u8 as char);
+    }
+    if next_random(mut seed) % 3 == 0 {
+        let at = next_random(mut seed) % cs.len();
+        cs[at] = if next_random(mut seed) % 2 == 0 { '#' } else { (97 + next_random(mut seed) % k) as u8 as char };
+    }
+    let mut out = String.new();
+    for c in cs {
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    show("ab#c", "ad#c");
+    show("ab##", "c#d#");
+    show("a#c", "b");
+    show("a", "a");
+    show("#", "##");
+    show("###a", "a");
+    show("a##b", "#b");
+    show("abc", "ab");
+    show("ab", "abc##c");
+    show("bxj##tw", "bxo#j##tw");
+    show("bxj##tw", "bxj###tw");
+    show("nzp#o#g", "b#nzp#o#g");
+    show("y#fo##f", "y#f#o##f");
+    // LeetCode's longest strings, 200 characters
+    let mut long_s = String.new();
+    let mut long_t = String.new();
+    for i in 0..100 {
+        long_s.push((97 + i % 26) as u8 as char);
+        long_s.push('#');
+        long_t.push('#');
+        long_t.push((97 + i % 26) as u8 as char);
+    }
+    show(long_s.substring(0, 20), long_t.substring(0, 20));
+    println(f"200 characters, letters each undone vs each undone before: {backspace_compare(long_s, long_t)}");
+    let mut seed = 844;
+    let mut equal = 0;
+    let mut check = 0;
+    for r in 0..2000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 3;
+        let hashes = next_random(mut seed) % 6;
+        let s = random_text(mut seed, n, k, hashes);
+        let t = if r % 2 == 0 {
+            random_text(mut seed, 1 + next_random(mut seed) % 30, k, hashes)
+        } else {
+            padded(mut seed, s, k, next_random(mut seed) % 5)
+        };
+        let same = backspace_compare(s, t);
+        if same {
+            equal += 1;
+        }
+        check = (check * 31 + if same { r } else { 1 }) % 1000000007;
+    }
+    println(f"2000 random pairs: {equal} equal, checksum {check}");
+}

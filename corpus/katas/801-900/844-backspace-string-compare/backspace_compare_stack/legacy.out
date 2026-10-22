@@ -1,0 +1,16 @@
+"ab#c" vs "ad#c" -> true
+"ab##" vs "c#d#" -> true
+"a#c" vs "b" -> false
+"a" vs "a" -> true
+"#" vs "##" -> true
+"###a" vs "a" -> true
+"a##b" vs "#b" -> true
+"abc" vs "ab" -> false
+"ab" vs "abc##c" -> false
+"bxj##tw" vs "bxo#j##tw" -> true
+"bxj##tw" vs "bxj###tw" -> false
+"nzp#o#g" vs "b#nzp#o#g" -> true
+"y#fo##f" vs "y#f#o##f" -> true
+"a#b#c#d#e#f#g#h#i#j#" vs "#a#b#c#d#e#f#g#h#i#j" -> false
+200 characters, letters each undone vs each undone before: false
+2000 random pairs: 865 equal, checksum 183259678

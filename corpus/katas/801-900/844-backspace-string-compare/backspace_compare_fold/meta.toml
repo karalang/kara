@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/844-backspace-string-compare/backspace_compare_fold.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "37ad37301"
+extracted_src = "5c0a3764"
+model_rev = "583cfb0d"
+model_src = "5c0a3764"

@@ -1,0 +1,3 @@
+1600 cases, 935 equal, 32000 checks over 4 arms: 0 failures
+by arm: star 0, stack 0, fold 0, reversed 0
+by property: answer 0, swapped 0, padded 0, hashes first 0, letter after 0

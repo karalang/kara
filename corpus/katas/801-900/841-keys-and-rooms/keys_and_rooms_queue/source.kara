@@ -78,10 +78,7 @@ fn main() {
     let mut seed = 841;
     let mut chain: Vec[Vec[i64]] = Vec.new();
     for i in 0..1000 {
-        // B-2026-10-21-82: the natural form is
-        // `chain.push(if i < 999 { [i + 1] } else { [] });`
-        let room: Vec[i64] = if i < 999 { [i + 1] } else { [] };
-        chain.push(room);
+        chain.push(if i < 999 { [i + 1] } else { [] });
     }
     println(f"1000 rooms in a chain: {can_visit_all_rooms(chain)}");
     let mut backward: Vec[Vec[i64]] = [[999]];
