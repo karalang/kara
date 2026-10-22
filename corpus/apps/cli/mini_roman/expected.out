@@ -1,0 +1,74 @@
+== toroman | 0
+  N
+== toroman | 1
+  I
+== toroman | 4
+  IV
+== toroman | 9
+  IX
+== toroman | 14
+  XIV
+== toroman | 40
+  XL
+== toroman | 90
+  XC
+== toroman | 400
+  CD
+== toroman | 944
+  CMXLIV
+== toroman | 1990
+  MCMXC
+== toroman | 2024
+  MMXXIV
+== toroman | 3888
+  MMMDCCCLXXXVIII
+== toroman | 4999
+  MMMMCMXCIX
+== toroman | -1
+  error: OutOfRangeError: number out of range (must be 0..4999)
+== toroman | 5000
+  error: OutOfRangeError: number out of range (must be 0..4999)
+== toroman | 5001
+  error: OutOfRangeError: number out of range (must be 0..4999)
+== tromanf | 3.5
+  error: NotIntegerError: decimals cannot be converted
+== fromroman | 
+  error: InvalidRomanNumeralError: Input cannot be blank
+== fromroman | N
+  0
+== fromroman | n
+  0
+== fromroman | I
+  1
+== fromroman | iv
+  4
+== fromroman | MCMXC
+  1990
+== fromroman | MMXXIV
+  2024
+== fromroman | MMMM
+  4000
+== fromroman | MMMMCMXCIX
+  4999
+== fromroman | DCCC
+  800
+== fromroman | mcmxciv
+  1994
+== fromroman | IIII
+  error: InvalidRomanNumeralError: Invalid Roman numeral: IIII
+== fromroman | VV
+  error: InvalidRomanNumeralError: Invalid Roman numeral: VV
+== fromroman | IC
+  error: InvalidRomanNumeralError: Invalid Roman numeral: IC
+== fromroman | MMMMM
+  error: InvalidRomanNumeralError: Invalid Roman numeral: MMMMM
+== fromroman | DCCCC
+  error: InvalidRomanNumeralError: Invalid Roman numeral: DCCCC
+== fromroman | abc
+  error: InvalidRomanNumeralError: Invalid Roman numeral: ABC
+== fromromanns | N
+  error: InvalidRomanNumeralError: Invalid Roman numeral: N
+== fromromanns | MMXXIV
+  2024
+== fromromanns | n
+  error: InvalidRomanNumeralError: Invalid Roman numeral: N

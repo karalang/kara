@@ -1,0 +1,239 @@
+// mini_roman — a port of roman 5.2 (ZPL-2.1, Mark Pilgrim): convert to and
+// from Roman numerals, with the special case N=0 and the exact error texts.
+//
+// fromRoman's validity test is a VERBOSE regex,
+//   ^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$
+// ported here as a structural matcher: the alternatives in each subtractive
+// group share no prefix, so the match is deterministic and needs no engine.
+//
+// jobs_text() (data/jobs.tsv) is appended by gen_kara.py.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn byte_to_char(b: i64) -> String {
+    let print = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    print.substring(b - 32, b - 32 + 1)
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut out = String.new();
+    while m > 0 {
+        let d = m % 10;
+        out = byte_to_char(48 + d) + out;
+        m = m / 10;
+    }
+    out
+}
+
+fn parse_int_signed(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut neg = false;
+    let mut i = 0;
+    if b.len() > 0 and b[0] == 45 { neg = true; i = 1; }
+    let mut v = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    if neg { return 0 - v; }
+    v
+}
+
+fn ascii_upper(s: String) -> String {
+    let b = bytes_of(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let mut c = b[i];
+        if c >= 97 and c <= 122 { c = c - 32; }
+        out.push_str(byte_to_char(c));
+        i = i + 1;
+    }
+    out
+}
+
+fn map_syms() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("M"); v.push("CM"); v.push("D"); v.push("CD"); v.push("C");
+    v.push("XC"); v.push("L"); v.push("XL"); v.push("X"); v.push("IX");
+    v.push("V"); v.push("IV"); v.push("I");
+    v
+}
+
+fn map_vals() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1000); v.push(900); v.push(500); v.push(400); v.push(100);
+    v.push(90); v.push(50); v.push(40); v.push(10); v.push(9);
+    v.push(5); v.push(4); v.push(1);
+    v
+}
+
+fn to_roman(n: i64) -> String {
+    if n == 0 { return "N"; }
+    let syms = map_syms();
+    let vals = map_vals();
+    let mut result = String.new();
+    let mut m = n;
+    let mut i = 0;
+    while i < 13 {
+        while m >= vals[i] {
+            result.push_str(syms[i].clone());
+            m = m - vals[i];
+        }
+        i = i + 1;
+    }
+    result
+}
+
+// One subtractive group: (unit ten | unit five | five? unit{0,3}). Returns the
+// new index after consuming as much as the regex alternative would.
+fn group(b: ref Vec[i64], at: i64, n: i64, unit: i64, five: i64, ten: i64) -> i64 {
+    let mut i = at;
+    if i + 1 < n and b[i] == unit and b[i + 1] == ten { return i + 2; }
+    if i + 1 < n and b[i] == unit and b[i + 1] == five { return i + 2; }
+    if i < n and b[i] == five { i = i + 1; }
+    let mut c = 0;
+    while i < n and b[i] == unit and c < 3 { i = i + 1; c = c + 1; }
+    i
+}
+
+// ^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$
+fn valid_roman(s: String) -> bool {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut c = 0;
+    while i < n and b[i] == 77 and c < 4 { i = i + 1; c = c + 1; }
+    i = group(b, i, n, 67, 68, 77);
+    i = group(b, i, n, 88, 76, 67);
+    i = group(b, i, n, 73, 86, 88);
+    i == n
+}
+
+fn from_roman(s: String) -> i64 {
+    let syms = map_syms();
+    let vals = map_vals();
+    let n = blen(s.clone());
+    let mut result = 0;
+    let mut idx = 0;
+    let mut i = 0;
+    while i < 13 {
+        let sym = syms[i].clone();
+        let sl = blen(sym.clone());
+        while idx + sl <= n and s.substring(idx, idx + sl) == sym {
+            result = result + vals[i];
+            idx = idx + sl;
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "toroman" {
+        let n = parse_int_signed(arg);
+        if n < 0 or n >= 5000 {
+            return "error: OutOfRangeError: number out of range (must be 0..4999)";
+        }
+        return to_roman(n);
+    }
+    if op == "tromanf" {
+        return "error: NotIntegerError: decimals cannot be converted";
+    }
+    let special = op == "fromroman";
+    if blen(arg.clone()) == 0 {
+        return "error: InvalidRomanNumeralError: Input cannot be blank";
+    }
+    let su = ascii_upper(arg);
+    if special and su == "N" { return "0"; }
+    if valid_roman(su.clone()) { return int_to_str(from_roman(su)); }
+    return "error: InvalidRomanNumeralError: Invalid Roman numeral: " + su;
+}
+
+fn main() {
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        if blen(line.clone()) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let mut arg = String.new();
+            if fields.len() > 1 { arg = fields[1].clone(); }
+            out.push_str("== ");
+            out.push_str(op.clone());
+            out.push_str(" | ");
+            out.push_str(arg.clone());
+            out.push_str("\n  ");
+            out.push_str(run(op, arg));
+            out.push_str("\n");
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("toroman\t0\n");
+    s.push_str("toroman\t1\n");
+    s.push_str("toroman\t4\n");
+    s.push_str("toroman\t9\n");
+    s.push_str("toroman\t14\n");
+    s.push_str("toroman\t40\n");
+    s.push_str("toroman\t90\n");
+    s.push_str("toroman\t400\n");
+    s.push_str("toroman\t944\n");
+    s.push_str("toroman\t1990\n");
+    s.push_str("toroman\t2024\n");
+    s.push_str("toroman\t3888\n");
+    s.push_str("toroman\t4999\n");
+    s.push_str("toroman\t-1\n");
+    s.push_str("toroman\t5000\n");
+    s.push_str("toroman\t5001\n");
+    s.push_str("tromanf\t3.5\n");
+    s.push_str("fromroman\t\n");
+    s.push_str("fromroman\tN\n");
+    s.push_str("fromroman\tn\n");
+    s.push_str("fromroman\tI\n");
+    s.push_str("fromroman\tiv\n");
+    s.push_str("fromroman\tMCMXC\n");
+    s.push_str("fromroman\tMMXXIV\n");
+    s.push_str("fromroman\tMMMM\n");
+    s.push_str("fromroman\tMMMMCMXCIX\n");
+    s.push_str("fromroman\tDCCC\n");
+    s.push_str("fromroman\tmcmxciv\n");
+    s.push_str("fromroman\tIIII\n");
+    s.push_str("fromroman\tVV\n");
+    s.push_str("fromroman\tIC\n");
+    s.push_str("fromroman\tMMMMM\n");
+    s.push_str("fromroman\tDCCCC\n");
+    s.push_str("fromroman\tabc\n");
+    s.push_str("fromromanns\tN\n");
+    s.push_str("fromromanns\tMMXXIV\n");
+    s.push_str("fromromanns\tn\n");
+    s
+}
