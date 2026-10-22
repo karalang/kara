@@ -117,10 +117,14 @@ pub(super) fn is_bare_collect(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
 }
 
-/// Is `e`, or the tail its blocks end in, a bare `collect()`?
-pub(super) fn tail_is_bare_collect(e: &Expr) -> bool {
+/// Does `e`'s value take its type from a sibling branch on the MIR pipeline? A
+/// bare `collect()` (B-2026-10-19-25) or an empty `[]` (B-2026-10-21-82), each
+/// through any block tail: neither names an element type of its own, so it is
+/// checked against the other branch's type, whichever branch it is in.
+pub(super) fn tail_waits_for_sibling(e: &Expr) -> bool {
     match &e.kind {
-        ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(tail_is_bare_collect),
+        ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(tail_waits_for_sibling),
+        ExprKind::ArrayLiteral(es) => es.is_empty(),
         _ => is_bare_collect(e),
     }
 }
@@ -9094,9 +9098,10 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
-                // B-2026-10-19-25: on the MIR pipeline a bare `collect()` tail
-                // takes its target from the sibling branch, whichever branch
-                // it is in, so the `then` side waits for the `else` side.
+                // B-2026-10-19-25, B-2026-10-21-82: on the MIR pipeline a bare
+                // `collect()` or empty `[]` tail takes its type from the sibling
+                // branch, whichever branch it is in, so the `then` side waits
+                // for the `else` side.
                 let mir = self.library_methods_from_source;
                 let early_else = match else_branch.as_deref() {
                     Some(els)
@@ -9104,8 +9109,8 @@ impl<'a> super::TypeChecker<'a> {
                             && then_block
                                 .final_expr
                                 .as_deref()
-                                .is_some_and(tail_is_bare_collect)
-                            && !tail_is_bare_collect(els) =>
+                                .is_some_and(tail_waits_for_sibling)
+                            && !tail_waits_for_sibling(els) =>
                     {
                         Some(self.infer_expr(els))
                     }
@@ -9124,7 +9129,7 @@ impl<'a> super::TypeChecker<'a> {
                         (None, Some(expected)) => self.check_expr(else_expr, &expected),
                         (None, None)
                             if mir
-                                && tail_is_bare_collect(else_expr)
+                                && tail_waits_for_sibling(else_expr)
                                 && then_ty != Type::Never
                                 && expectation_is_concrete(&then_ty) =>
                         {

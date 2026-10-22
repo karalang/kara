@@ -7054,6 +7054,44 @@ fn main() {
 }
 
 #[test]
+fn mir_empty_list_in_one_branch_takes_the_sibling_type() {
+    // B-2026-10-21-82: an empty `[]` as one branch's value of an un-annotated
+    // `if` or `match`, whose element type only a SIBLING branch names, kept
+    // `Vec[<error>]` and both MIR lanes refused it, whichever branch it was in.
+    let src = r#"
+fn pick(n: i64) -> Vec[String] {
+    if n == 0 { [] } else if n == 1 { ["one".to_string()] } else { let s = f"{n}"; [s.clone(), s] }
+}
+fn twice(n: i64) -> Vec[i64] {
+    let r = match n % 3 { 0 => { let k = n * 2; [k] }, 1 => [], _ => [n, n] };
+    r
+}
+fn z() -> u8 { 9 }
+fn main() {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    for i in 0..4 { v.push(if i < 2 { [i] } else { [] }); }
+    println(f"{v}");
+    let x = if true { [5] } else { [] };
+    let y = match v.len() { 0 => [], _ => [7, 8] };
+    let a = if x.len() > 1 { [z()] } else { [] };
+    println(f"{x} {y} {a.len()}");
+    for n in 0..3 { println(f"{pick(n).len()} {twice(n)}"); }
+    let mut w: Vec[Vec[f64]] = Vec.new();
+    for i in 0..3 { w.push(match i { 0 => [], 1 => [1.5], _ => [] }); }
+    println(f"{w}");
+}
+"#;
+    let want = "[[0], [1], [], []]\n[5] [7, 8] 0\n0 [0]\n1 []\n2 [2, 2]\n[[], [1.5], []]\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[test]
 fn mir_shared_pattern_parts_read_through_deref() {
     // B-2026-10-18-30: a `shared` scrutinee counts as a `ref` scrutinee, so a
     // handle part reads through `*rest` (core semantics §4.6), as `karac

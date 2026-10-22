@@ -643,13 +643,13 @@ impl<'a> super::TypeChecker<'a> {
             self.index_read_names_a_borrowed_element(scrutinee, &dispatch_ty);
         let mut scrutinee_mismatch = false;
 
-        // B-2026-10-19-25: on the MIR pipeline an arm whose value is a bare
-        // `collect()` takes its target from a sibling arm, so it is checked
-        // after the others.
+        // B-2026-10-19-25, B-2026-10-21-82: on the MIR pipeline an arm whose
+        // value is a bare `collect()` or an empty `[]` takes its type from a
+        // sibling arm, so it is checked after the others.
         let mir = self.library_methods_from_source;
         let mut order: Vec<usize> = (0..arms.len()).collect();
         if mir {
-            order.sort_by_key(|&i| super::exprs::tail_is_bare_collect(&arms[i].body));
+            order.sort_by_key(|&i| super::exprs::tail_waits_for_sibling(&arms[i].body));
         }
         let mut typed: Vec<Option<Type>> = vec![None; arms.len()];
         let mut materializes = false;
@@ -702,7 +702,7 @@ impl<'a> super::TypeChecker<'a> {
                 .flatten()
                 .find_map(|t| super::exprs::sibling_array_expectation(&arm.body, t))
                 .or_else(|| {
-                    if !(mir && super::exprs::tail_is_bare_collect(&arm.body)) {
+                    if !(mir && super::exprs::tail_waits_for_sibling(&arm.body)) {
                         return None;
                     }
                     typed
