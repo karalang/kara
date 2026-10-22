@@ -1,0 +1,392 @@
+// mini_astar — a port of the `astar` library (Julien Rialland, BSD-3): a
+// generic A* shortest-path search, specialised here to a 4-connected grid
+// maze with a Manhattan heuristic and unit step cost.
+//
+// The library drives A* with a binary heap (CPython's heapq) whose nodes order
+// by fscore only, so among several equally short paths the one returned depends
+// on neighbour order and the heap's pop sequence. This port reproduces heapq
+// exactly — heappush / heappop / siftup / siftdown and the decrease-key remove
+// — over a flat i64 node heap, so it matches the library byte-for-byte.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn fill(n: i64, v: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(v);
+        i = i + 1;
+    }
+    out
+}
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { -x } else { x }
+}
+
+fn manhattan(a: i64, b: i64, w: i64) -> i64 {
+    let ar = a / w;
+    let ac = a % w;
+    let br = b / w;
+    let bc = b % w;
+    iabs(ar - br) + iabs(ac - bc)
+}
+
+// --- heapq (CPython-exact), heap holds node ids, ordered by fs[id] ----------
+
+fn siftdown(heap: mut ref Vec[i64], startpos: i64, pos: i64, fs: ref Vec[i64]) {
+    let newitem = heap[pos];
+    let mut p = pos;
+    let mut go = true;
+    while go and p > startpos {
+        let parentpos = (p - 1) / 2;
+        let parent = heap[parentpos];
+        if fs[newitem] < fs[parent] {
+            heap[p] = parent;
+            p = parentpos;
+        } else {
+            go = false;
+        }
+    }
+    heap[p] = newitem;
+}
+
+fn siftup(heap: mut ref Vec[i64], pos: i64, fs: ref Vec[i64]) {
+    let endpos = heap.len();
+    let startpos = pos;
+    let newitem = heap[pos];
+    let mut p = pos;
+    let mut childpos = 2 * p + 1;
+    while childpos < endpos {
+        let rightpos = childpos + 1;
+        if rightpos < endpos and (fs[heap[childpos]] < fs[heap[rightpos]]) == false {
+            childpos = rightpos;
+        }
+        heap[p] = heap[childpos];
+        p = childpos;
+        childpos = 2 * p + 1;
+    }
+    heap[p] = newitem;
+    siftdown(mut heap, startpos, p, fs);
+}
+
+fn hpush(heap: mut ref Vec[i64], item: i64, fs: ref Vec[i64]) {
+    heap.push(item);
+    siftdown(mut heap, 0, heap.len() - 1, fs);
+}
+
+fn hpop(heap: mut ref Vec[i64], fs: ref Vec[i64]) -> i64 {
+    let lastelt = heap.pop().unwrap();
+    if heap.len() > 0 {
+        let returnitem = heap[0];
+        heap[0] = lastelt;
+        siftup(mut heap, 0, fs);
+        return returnitem;
+    }
+    lastelt
+}
+
+fn hindex(heap: ref Vec[i64], item: i64) -> i64 {
+    let mut i = 0;
+    while i < heap.len() {
+        if heap[i] == item {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn hremove(heap: mut ref Vec[i64], item: i64, fs: ref Vec[i64]) {
+    let idx = hindex(heap, item);
+    let last = heap.pop().unwrap();
+    if idx < heap.len() {
+        heap[idx] = last;
+        siftup(mut heap, idx, fs);
+        siftdown(mut heap, 0, idx, fs);
+    }
+}
+
+// --- A* over the grid; returns path node ids (empty = no path) --------------
+
+fn astar(grid: ref Vec[i64], w: i64, h: i64, start: i64, goal: i64) -> Vec[i64] {
+    let mut path: Vec[i64] = Vec.new();
+    if grid[start] == 1 or grid[goal] == 1 {
+        return path;
+    }
+    if start == goal {
+        path.push(start);
+        return path;
+    }
+    let n = w * h;
+    let big = 1152921504606846976;
+    let mut gscore = fill(n, big);
+    let mut fscore = fill(n, big);
+    let mut closed = fill(n, 0);
+    let mut inopen = fill(n, 0);
+    let mut came = fill(n, -1);
+    gscore[start] = 0;
+    fscore[start] = manhattan(start, goal, w);
+    let mut heap: Vec[i64] = Vec.new();
+    hpush(mut heap, start, fscore);
+    inopen[start] = 1;
+
+    let mut found = false;
+    while heap.len() > 0 and found == false {
+        let current = hpop(mut heap, fscore);
+        inopen[current] = 0;
+        if current == goal {
+            let mut cur = current;
+            while cur != -1 {
+                path.push(cur);
+                cur = came[cur];
+            }
+            // reverse in place
+            let mut i = 0;
+            let mut j = path.len() - 1;
+            while i < j {
+                let t = path[i];
+                path[i] = path[j];
+                path[j] = t;
+                i = i + 1;
+                j = j - 1;
+            }
+            found = true;
+        } else {
+            closed[current] = 1;
+            let r = current / w;
+            let c = current % w;
+            // neighbours in order: up, left, right, down
+            let mut nbs: Vec[i64] = Vec.new();
+            if r - 1 >= 0 and grid[(r - 1) * w + c] == 0 {
+                nbs.push((r - 1) * w + c);
+            }
+            if c - 1 >= 0 and grid[r * w + (c - 1)] == 0 {
+                nbs.push(r * w + (c - 1));
+            }
+            if c + 1 < w and grid[r * w + (c + 1)] == 0 {
+                nbs.push(r * w + (c + 1));
+            }
+            if r + 1 < h and grid[(r + 1) * w + c] == 0 {
+                nbs.push((r + 1) * w + c);
+            }
+            let mut k = 0;
+            while k < nbs.len() {
+                let nb = nbs[k];
+                k = k + 1;
+                if closed[nb] == 1 {
+                    continue;
+                }
+                let g = gscore[current] + 1;
+                if g >= gscore[nb] {
+                    continue;
+                }
+                let f = g + manhattan(nb, goal, w);
+                if inopen[nb] == 1 {
+                    if fscore[nb] < f {
+                        continue;
+                    }
+                    hremove(mut heap, nb, fscore);
+                    inopen[nb] = 0;
+                }
+                came[nb] = current;
+                gscore[nb] = g;
+                fscore[nb] = f;
+                hpush(mut heap, nb, fscore);
+                inopen[nb] = 1;
+            }
+        }
+    }
+    path
+}
+
+fn cells_to_grid(cells: String) -> Vec[i64] {
+    let mut g: Vec[i64] = Vec.new();
+    for b in cells.bytes() {
+        if b == 35 {
+            g.push(1);
+        } else {
+            g.push(0);
+        }
+    }
+    g
+}
+
+fn fmt_path(path: ref Vec[i64], w: i64) -> String {
+    if path.len() == 0 {
+        return "no path";
+    }
+    let mut s = String.new();
+    let mut i = 0;
+    while i < path.len() {
+        if i > 0 {
+            s.push_str("->");
+        }
+        s.push_str(itoa(path[i] / w));
+        s.push_str(",");
+        s.push_str(itoa(path[i] % w));
+        i = i + 1;
+    }
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut grid: Vec[i64] = Vec.new();
+    let mut w: i64 = 0;
+    let mut h: i64 = 0;
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "grid" {
+                    let a = split_fields(f[1].clone(), 32);
+                    w = parse_int(a[0].clone());
+                    h = parse_int(a[1].clone());
+                    grid = cells_to_grid(a[2].clone());
+                } else if op == "path" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let sr = parse_int(a[0].clone());
+                    let sc = parse_int(a[1].clone());
+                    let gr = parse_int(a[2].clone());
+                    let gc = parse_int(a[3].clone());
+                    let start = sr * w + sc;
+                    let goal = gr * w + gc;
+                    let path = astar(grid, w, h, start, goal);
+                    out.push_str(fmt_path(path, w));
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("grid\t5 5 .........................\n");
+    s.push_str("path\t0 0 4 4\n");
+    s.push_str("path\t0 4 4 0\n");
+    s.push_str("path\t2 2 2 2\n");
+    s.push_str("path\t0 0 0 4\n");
+    s.push_str("path\t4 4 0 0\n");
+    s.push_str("grid\t7 5 ########.....######.##.....##.#####\n");
+    s.push_str("path\t1 1 3 1\n");
+    s.push_str("path\t1 1 3 5\n");
+    s.push_str("path\t3 1 1 5\n");
+    s.push_str("grid\t7 7 .....................###.###.....................\n");
+    s.push_str("path\t0 0 6 6\n");
+    s.push_str("path\t0 6 6 0\n");
+    s.push_str("path\t2 0 4 6\n");
+    s.push_str("grid\t5 5 ......###..#.#..###......\n");
+    s.push_str("path\t0 0 2 2\n");
+    s.push_str("path\t2 2 0 0\n");
+    s.push_str("path\t0 0 4 4\n");
+    s.push_str("grid\t4 4 .....##..##.....\n");
+    s.push_str("path\t1 1 0 0\n");
+    s.push_str("path\t0 0 1 1\n");
+    s.push_str("path\t3 3 3 3\n");
+    s.push_str("path\t0 0 3 3\n");
+    s.push_str("grid\t5 1 ..#..\n");
+    s.push_str("path\t0 0 0 1\n");
+    s.push_str("path\t0 0 0 4\n");
+    s.push_str("path\t0 1 0 0\n");
+    s.push_str("grid\t1 5 ..#..\n");
+    s.push_str("path\t0 0 1 0\n");
+    s.push_str("path\t0 0 4 0\n");
+    s.push_str("path\t3 0 4 0\n");
+    s.push_str("grid\t8 8 .........######..#....#..#.##.#..#.#..#..#.####..#.......#######\n");
+    s.push_str("path\t0 0 4 4\n");
+    s.push_str("path\t0 0 6 7\n");
+    s.push_str("path\t4 4 0 0\n");
+    s.push_str("path\t0 7 6 2\n");
+    s
+}
