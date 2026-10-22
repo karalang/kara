@@ -1,0 +1,114 @@
+== g2h | 1924-08-02
+  hijri_iso=1343-01-02
+  hijri_dmy=02/01/1343
+  hijri_dmy2=2-1-1343
+  month_en=Muharram
+  month_ar=محرم
+  month_bn=মুহাররম
+  day_en=Saturday
+  weekday=5
+  isoweekday=6
+  length=30
+  notation=AH
+== g2h | 2023-10-22
+  hijri_iso=1445-04-07
+  hijri_dmy=07/04/1445
+  hijri_dmy2=7-4-1445
+  month_en=Rabi’ al-Thani
+  month_ar=ربيع الثاني
+  month_bn=রবিউস সানী
+  day_en=Sunday
+  weekday=6
+  isoweekday=7
+  length=30
+  notation=AH
+== g2h | 2000-01-01
+  hijri_iso=1420-09-24
+  hijri_dmy=24/09/1420
+  hijri_dmy2=24-9-1420
+  month_en=Ramadhan
+  month_ar=رمضان
+  month_bn=রমজান
+  day_en=Saturday
+  weekday=5
+  isoweekday=6
+  length=30
+  notation=AH
+== g2h | 1990-05-20
+  hijri_iso=1410-10-25
+  hijri_dmy=25/10/1410
+  hijri_dmy2=25-10-1410
+  month_en=Shawwal
+  month_ar=شوال
+  month_bn=শাওয়াল
+  day_en=Sunday
+  weekday=6
+  isoweekday=7
+  length=29
+  notation=AH
+== g2h | 2077-11-16
+  hijri_iso=1500-12-30
+  hijri_dmy=30/12/1500
+  hijri_dmy2=30-12-1500
+  month_en=Dhu al-Hijjah
+  month_ar=ذو الحجة
+  month_bn=জিলহজ
+  day_en=Tuesday
+  weekday=1
+  isoweekday=2
+  length=30
+  notation=AH
+== g2h | 1924-07-31
+  error=date out of range
+== g2h | 2077-11-17
+  error=date out of range
+== h2g | 1445-04-07
+  greg_iso=2023-10-22
+  greg_dmy=22/10/2023
+  month_en=October
+  month_ar=أكتوبر
+  day_en=Sunday
+  notation=CE
+== h2g | 1343-01-01
+  greg_iso=1924-08-01
+  greg_dmy=01/08/1924
+  month_en=August
+  month_ar=أغسطس
+  day_en=Friday
+  notation=CE
+== h2g | 1500-12-30
+  greg_iso=2077-11-16
+  greg_dmy=16/11/2077
+  month_en=November
+  month_ar=نوفمبر
+  day_en=Tuesday
+  notation=CE
+== h2g | 1446-09-01
+  greg_iso=2025-03-01
+  greg_dmy=01/03/2025
+  month_en=March
+  month_ar=مارس
+  day_en=Saturday
+  notation=CE
+== h2g | 1411-06-05
+  greg_iso=1990-12-22
+  greg_dmy=22/12/1990
+  month_en=December
+  month_ar=ديسمبر
+  day_en=Saturday
+  notation=CE
+== h2g | 1342-12-30
+  error=date out of range
+== h2g | 1501-01-01
+  error=date out of range
+== h2g | 1445-13-01
+  error=month must be in 1..12
+== h2g | 1445-01-40
+  error=day must be in 1..29 for month
+== h2g | 1445-12-29
+  greg_iso=2024-07-05
+  greg_dmy=05/07/2024
+  month_en=July
+  month_ar=يوليو
+  day_en=Friday
+  notation=CE

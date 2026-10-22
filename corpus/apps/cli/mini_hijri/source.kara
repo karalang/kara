@@ -1,0 +1,448 @@
+// mini_hijri — the converter core of hijri-converter 2.3.2 (MIT, Mohammed
+// Alshehri), the library that converts between the Gregorian calendar and the
+// Umm al-Qura lunar Hijri calendar used across the Islamic world.
+//
+// Ports hijri_converter.convert (the Hijri and Gregorian date objects),
+// helpers (the Julian-day conversions) and the Umm al-Qura MONTH_STARTS table
+// from ummalqura, plus the en/ar/bn name tables from locales. The arithmetic
+// is exactly the library's — a proleptic-Gregorian ordinal (ported from
+// CPython's date.toordinal / fromordinal), the reduced Julian day, and a
+// bisect into MONTH_STARTS — so every conversion, weekday, month length and
+// range/validation error matches the library. All integer; no float anywhere.
+//
+// MONTH_STARTS is stored as one digit per month-length delta (delta-28) and
+// rebuilt at run time; the name tables are the library's verbatim.
+
+fn to_bytes(s: String) -> Vec[i64] {
+    let mut v = Vec.new();
+    for c in s.bytes() {
+        v.push(c as i64);
+    }
+    v
+}
+
+fn parse_u(s: String) -> i64 {
+    let v = to_bytes(s);
+    let mut t = 0;
+    let mut k = 0;
+    while k < v.len() {
+        if v[k] >= 48 and v[k] <= 57 {
+            t = t * 10 + (v[k] - 48);
+        }
+        k = k + 1;
+    }
+    t
+}
+
+fn int_str(n: i64) -> String {
+    f"{n}"
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = int_str(n);
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn isleap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+// Cumulative days before month m (1..12), non-leap.
+fn dbm(m: i64) -> i64 {
+    let mut v = Vec.new();
+    v.push(0);
+    v.push(0);
+    v.push(31);
+    v.push(59);
+    v.push(90);
+    v.push(120);
+    v.push(151);
+    v.push(181);
+    v.push(212);
+    v.push(243);
+    v.push(273);
+    v.push(304);
+    v.push(334);
+    v[m]
+}
+
+fn dim(m: i64) -> i64 {
+    let mut v = Vec.new();
+    v.push(0);
+    v.push(31);
+    v.push(28);
+    v.push(31);
+    v.push(30);
+    v.push(31);
+    v.push(30);
+    v.push(31);
+    v.push(31);
+    v.push(30);
+    v.push(31);
+    v.push(30);
+    v.push(31);
+    v[m]
+}
+
+fn ymd2ord(y: i64, m: i64, d: i64) -> i64 {
+    let yy = y - 1;
+    let dby = yy * 365 + yy / 4 - yy / 100 + yy / 400;
+    let mut extra = 0;
+    if m > 2 and isleap(y) {
+        extra = 1;
+    }
+    dby + dbm(m) + extra + d
+}
+
+#[derive(Clone)]
+struct Ymd {
+    y: i64,
+    m: i64,
+    d: i64,
+}
+
+fn ord2ymd(n0: i64) -> Ymd {
+    let mut n = n0 - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year = year + n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return Ymd { y: year - 1, m: 12, d: 31 };
+    }
+    let leap = n1 == 3 and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) / 32;
+    let mut extra = 0;
+    if month > 2 and leap {
+        extra = 1;
+    }
+    let mut preceding = dbm(month) + extra;
+    if preceding > n {
+        month = month - 1;
+        let mut sub = dim(month);
+        if month == 2 and leap {
+            sub = sub + 1;
+        }
+        preceding = preceding - sub;
+    }
+    n = n - preceding;
+    Ymd { y: year, m: month, d: n + 1 }
+}
+
+fn month_starts() -> Vec[i64] {
+    let mut v = Vec.new();
+    let mut acc = ms_base();
+    v.push(acc);
+    let db = to_bytes(ms_deltas());
+    let n = db.len();
+    let mut i = 0;
+    while i < n {
+        acc = acc + 28 + (db[i] - 48);
+        v.push(acc);
+        i = i + 1;
+    }
+    v
+}
+
+// bisect.bisect (== bisect_right): insertion point to the right of x.
+fn bisect_right(v: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if x < v[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// Constants from ummalqura.
+fn hijri_offset() -> i64 {
+    16104
+}
+
+fn hmin_year() -> i64 {
+    1343
+}
+
+fn hmax_year() -> i64 {
+    1500
+}
+
+// Lexicographic (y,m,d) compare: -1, 0, 1.
+fn cmp_ymd(ay: i64, am: i64, ad: i64, by: i64, bm: i64, bd: i64) -> i64 {
+    if ay != by {
+        if ay < by { -1 } else { 1 }
+    } else if am != bm {
+        if am < bm { -1 } else { 1 }
+    } else if ad != bd {
+        if ad < bd { -1 } else { 1 }
+    } else {
+        0
+    }
+}
+
+fn name_at(names: Vec[String], i: i64) -> String {
+    names[i].clone()
+}
+
+// Gregorian (y,m,d) -> Hijri, with the library's range check. Returns the
+// output block, or an `error=` line.
+fn g2h(y: i64, m: i64, d: i64) -> String {
+    // _check_range: (y,m,d) within ((1924,8,1),(2077,11,16))
+    if cmp_ymd(y, m, d, 1924, 8, 1) < 0 or cmp_ymd(y, m, d, 2077, 11, 16) > 0 {
+        return "  error=date out of range".to_string();
+    }
+    let ord = ymd2ord(y, m, d);
+    let jdn = ord + 1721425;
+    let rjd = jdn - 2400000;
+    let ms = month_starts();
+    let index = bisect_right(ms, rjd) - 1;
+    let months = index + hijri_offset();
+    let years = months / 12;
+    let hy = years + 1;
+    let hm = months - years * 12 + 1;
+    let hd = rjd - ms[index] + 1;
+    let length = ms[index + 1] - ms[index];
+    let weekday = jdn % 7;
+    let mut out = String.new();
+    out.push_str(f"  hijri_iso={pad(hy, 4)}-{pad(hm, 2)}-{pad(hd, 2)}\n");
+    out.push_str(f"  hijri_dmy={pad(hd, 2)}/{pad(hm, 2)}/{int_str(hy)}\n");
+    out.push_str(f"  hijri_dmy2={int_str(hd)}-{int_str(hm)}-{int_str(hy)}\n");
+    out.push_str(f"  month_en={name_at(hmon_en(), hm - 1)}\n");
+    out.push_str(f"  month_ar={name_at(hmon_ar(), hm - 1)}\n");
+    out.push_str(f"  month_bn={name_at(hmon_bn(), hm - 1)}\n");
+    out.push_str(f"  day_en={name_at(day_en(), weekday)}\n");
+    out.push_str(f"  weekday={int_str(weekday)}\n");
+    out.push_str(f"  isoweekday={int_str(weekday + 1)}\n");
+    out.push_str(f"  length={int_str(length)}\n");
+    out.push_str("  notation=AH");
+    out
+}
+
+// Hijri (y,m,d) -> Gregorian, with the library's validation.
+fn h2g(y: i64, m: i64, d: i64) -> String {
+    if y < hmin_year() or y > hmax_year() {
+        return "  error=date out of range".to_string();
+    }
+    if m < 1 or m > 12 {
+        return "  error=month must be in 1..12".to_string();
+    }
+    let ms = month_starts();
+    let index = (y - 1) * 12 + m - 1 - hijri_offset();
+    let length = ms[index + 1] - ms[index];
+    if d < 1 or d > length {
+        return f"  error=day must be in 1..{int_str(length)} for month";
+    }
+    let rjd = ms[index] + d - 1;
+    let jdn = rjd + 2400000;
+    let don = jdn - 1721425;
+    let g = ord2ymd(don);
+    let weekday = jdn % 7;
+    let mut out = String.new();
+    out.push_str(f"  greg_iso={pad(g.y, 4)}-{pad(g.m, 2)}-{pad(g.d, 2)}\n");
+    out.push_str(f"  greg_dmy={pad(g.d, 2)}/{pad(g.m, 2)}/{int_str(g.y)}\n");
+    out.push_str(f"  month_en={name_at(gmon_en(), g.m - 1)}\n");
+    out.push_str(f"  month_ar={name_at(gmon_ar(), g.m - 1)}\n");
+    out.push_str(f"  day_en={name_at(day_en(), weekday)}\n");
+    out.push_str("  notation=CE");
+    out
+}
+
+fn run_job(fields: Vec[String]) -> String {
+    let dir = fields[0].clone();
+    let s = fields[1].clone();
+    let y = parse_u(s.substring(0, 4));
+    let m = parse_u(s.substring(5, 7));
+    let d = parse_u(s.substring(8, 10));
+    if dir == "g2h" {
+        g2h(y, m, d)
+    } else {
+        h2g(y, m, d)
+    }
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let fields: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        out.push_str("== ");
+        out.push_str(fields.join(" | "));
+        out.push_str("\n");
+        out.push_str(run_job(fields));
+        out.push_str("\n");
+    }
+    print(out);
+}
+fn ms_base() -> i64 { 23999 }
+
+fn ms_deltas() -> String {
+    let mut s = String.new();
+    s.push_str("212212220222112121212121212131202212112212211221112212212211212121221130212121222032121211212212212121112212212121212121");
+    s.push_str("212212122112121212212121212121212212112121221121212121212122221211211221222121121121212121212122212121212121212121212121");
+    s.push_str("212121212122212121202221212121212122212121212121212121212121212121212122212121221221212121212121212112121222121212112122");
+    s.push_str("121212121212212121221122212121211221121122212121211212122122212121212121121212121212212121212121212212112121212212211212");
+    s.push_str("121221212121212121212121212211212221221121212122112121212122122121212121212121212122212121221211212121212122112121212122");
+    s.push_str("212111212122212121211221212212112121212221211212121221212121212121221212121212121221221211212122121212112121222121211212");
+    s.push_str("122212121121122122212112112212212121212121212212121212121212212121211212212212121121212221212112121221221211211221222121");
+    s.push_str("121122122122112112122212121211212212212121211212212122121211212122212121121212212212121121222212112111222212211211122212");
+    s.push_str("212121121212212212112121212212122121121212212212112121221221211211222122121121122122122112121212122121212112122212121211");
+    s.push_str("212212212121121212212211212121212212121212121212212211212112212221121121212221212112121222121211212122122121121212122121");
+    s.push_str("212121212122121221121212122212112112122212211211212221212121121221221212112121221221212112121221221211212121222121121212");
+    s.push_str("122211212121122212121212112212122121211212122212121121122122212112112212221211211221221212121122121221212121212121212212");
+    s.push_str("121121221221212112121222121211211222212121121212212212112121212212121212112212212211211221212221121121221221212121121221");
+    s.push_str("212212112121221221211212121222121121121222122112112122122211211212212212121121212212122112121212122122121121212212212112");
+    s.push_str("112212221211211221221221121122121222112121212122121212112122122121211212122212121121212212212112121212212122112121212212");
+    s.push_str("211212112212221121121212221212112121222121211212122122112121212122121212121212121221221121121222");
+    s
+}
+
+fn hmon_en() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("Muharram".to_string());
+    v.push("Safar".to_string());
+    v.push("Rabi’ al-Awwal".to_string());
+    v.push("Rabi’ al-Thani".to_string());
+    v.push("Jumada al-Ula".to_string());
+    v.push("Jumada al-Akhirah".to_string());
+    v.push("Rajab".to_string());
+    v.push("Sha’ban".to_string());
+    v.push("Ramadhan".to_string());
+    v.push("Shawwal".to_string());
+    v.push("Dhu al-Qi’dah".to_string());
+    v.push("Dhu al-Hijjah".to_string());
+    v
+}
+
+fn hmon_ar() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("محرم".to_string());
+    v.push("صفر".to_string());
+    v.push("ربيع الأول".to_string());
+    v.push("ربيع الثاني".to_string());
+    v.push("جمادى الأولى".to_string());
+    v.push("جمادى الآخرة".to_string());
+    v.push("رجب".to_string());
+    v.push("شعبان".to_string());
+    v.push("رمضان".to_string());
+    v.push("شوال".to_string());
+    v.push("ذو القعدة".to_string());
+    v.push("ذو الحجة".to_string());
+    v
+}
+
+fn hmon_bn() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("মুহাররম".to_string());
+    v.push("সফর".to_string());
+    v.push("রবিউল আউয়াল".to_string());
+    v.push("রবিউস সানী".to_string());
+    v.push("জুমাদাল উলা".to_string());
+    v.push("জুমাদাস সানী".to_string());
+    v.push("রজব".to_string());
+    v.push("শাবান".to_string());
+    v.push("রমজান".to_string());
+    v.push("শাওয়াল".to_string());
+    v.push("জিলক্বদ".to_string());
+    v.push("জিলহজ".to_string());
+    v
+}
+
+fn gmon_en() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("January".to_string());
+    v.push("February".to_string());
+    v.push("March".to_string());
+    v.push("April".to_string());
+    v.push("May".to_string());
+    v.push("June".to_string());
+    v.push("July".to_string());
+    v.push("August".to_string());
+    v.push("September".to_string());
+    v.push("October".to_string());
+    v.push("November".to_string());
+    v.push("December".to_string());
+    v
+}
+
+fn gmon_ar() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("يناير".to_string());
+    v.push("فبراير".to_string());
+    v.push("مارس".to_string());
+    v.push("أبريل".to_string());
+    v.push("مايو".to_string());
+    v.push("يونيو".to_string());
+    v.push("يوليو".to_string());
+    v.push("أغسطس".to_string());
+    v.push("سبتمبر".to_string());
+    v.push("أكتوبر".to_string());
+    v.push("نوفمبر".to_string());
+    v.push("ديسمبر".to_string());
+    v
+}
+
+fn day_en() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("Monday".to_string());
+    v.push("Tuesday".to_string());
+    v.push("Wednesday".to_string());
+    v.push("Thursday".to_string());
+    v.push("Friday".to_string());
+    v.push("Saturday".to_string());
+    v.push("Sunday".to_string());
+    v
+}
+
+fn day_ar() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("الإثنين".to_string());
+    v.push("الثلاثاء".to_string());
+    v.push("الأربعاء".to_string());
+    v.push("الخميس".to_string());
+    v.push("الجمعة".to_string());
+    v.push("السبت".to_string());
+    v.push("الأحد".to_string());
+    v
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("g2h\t1924-08-02\n");
+    s.push_str("g2h\t2023-10-22\n");
+    s.push_str("g2h\t2000-01-01\n");
+    s.push_str("g2h\t1990-05-20\n");
+    s.push_str("g2h\t2077-11-16\n");
+    s.push_str("g2h\t1924-07-31\n");
+    s.push_str("g2h\t2077-11-17\n");
+    s.push_str("h2g\t1445-04-07\n");
+    s.push_str("h2g\t1343-01-01\n");
+    s.push_str("h2g\t1500-12-30\n");
+    s.push_str("h2g\t1446-09-01\n");
+    s.push_str("h2g\t1411-06-05\n");
+    s.push_str("h2g\t1342-12-30\n");
+    s.push_str("h2g\t1501-01-01\n");
+    s.push_str("h2g\t1445-13-01\n");
+    s.push_str("h2g\t1445-01-40\n");
+    s.push_str("h2g\t1445-12-29\n");
+    s
+}
