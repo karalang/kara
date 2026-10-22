@@ -1,0 +1,672 @@
+// mini_genson — a port of the inference core of the `genson` library (Jon
+// Wolverton, MIT): given one or more JSON sample documents, build a JSON Schema
+// that validates them. This is genson's `SchemaBuilder().add_object(...)` path
+// — the one that turns example payloads into a draft schema for an API or a
+// data pipeline.
+//
+// A builder node keeps the set of "strategies" (null / boolean / number /
+// string / array / object) seen at that position, in first-seen order; arrays
+// merge every element into one item node, objects union their keys and
+// intersect their required sets. `to_schema` turns each node into a schema
+// fragment, folding several scalar types into a sorted `type` list and
+// anything richer into `anyOf` — exactly as genson does. The output is
+// serialized to match the library's `to_json()` (Python's json.dumps defaults)
+// byte for byte.
+//
+// Only the add_object inference path is ported; the add_schema merge path and
+// the Enum strategy (reached only through an input schema) are out of scope.
+// Float JSON numbers are inferred as "number" (as the library does); their
+// values never appear in a schema, so no float formatting is involved.
+
+// ---- JSON value tree ----
+// kind: 0 null, 1 bool, 2 int, 3 float, 4 str, 5 arr, 6 obj
+struct JVal {
+    kind: i64,
+    keys: Vec[String],
+    kids: Vec[i64],
+}
+
+struct P {
+    b: Vec[u8],
+    pos: i64,
+    arena: Vec[JVal],
+}
+
+struct JDoc {
+    arena: Vec[JVal],
+    root: i64,
+}
+
+// ---- schema builder node ----
+// strategy codes: 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
+#[derive(Clone)]
+struct SNode {
+    order: Vec[i64],
+    num_float: bool,
+    arr_items: i64,
+    prop_names: Vec[String],
+    prop_nodes: Vec[i64],
+    req: Vec[String],
+    req_init: bool,
+}
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn char1(code: i64) -> String {
+    let mut one: Vec[u8] = Vec.new();
+    one.push(code as u8);
+    String.from_utf8(one).unwrap_or("")
+}
+
+fn is_ws(c: u8) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn new_jval(p: mut ref P, kind: i64) -> i64 {
+    p.arena.push(JVal { kind: kind, keys: Vec.new(), kids: Vec.new() });
+    p.arena.len() - 1
+}
+
+fn skip_ws(p: mut ref P) {
+    while p.pos < p.b.len() and is_ws(p.b[p.pos]) {
+        p.pos = p.pos + 1;
+    }
+}
+
+// parse a JSON string starting at a quote; return the decoded string
+fn parse_string(p: mut ref P) -> String {
+    p.pos = p.pos + 1; // skip opening quote
+    let mut out: Vec[u8] = Vec.new();
+    let mut go = true;
+    while go and p.pos < p.b.len() {
+        let c = p.b[p.pos];
+        if c == 34 {
+            p.pos = p.pos + 1;
+            go = false;
+        } else if c == 92 {
+            p.pos = p.pos + 1;
+            let e = p.b[p.pos];
+            if e == 110 {
+                out.push(10);
+            } else if e == 116 {
+                out.push(9);
+            } else if e == 114 {
+                out.push(13);
+            } else if e == 98 {
+                out.push(8);
+            } else if e == 102 {
+                out.push(12);
+            } else if e == 47 {
+                out.push(47);
+            } else if e == 34 {
+                out.push(34);
+            } else if e == 92 {
+                out.push(92);
+            } else if e == 117 {
+                // \uXXXX: read 4 hex, push as a byte if < 128 (ASCII inputs)
+                let mut cp = 0;
+                let mut j = 0;
+                while j < 4 {
+                    p.pos = p.pos + 1;
+                    let h = p.b[p.pos];
+                    let mut d = 0;
+                    if h >= 48 and h <= 57 {
+                        d = (h - 48) as i64;
+                    } else if h >= 97 and h <= 102 {
+                        d = (h - 97 + 10) as i64;
+                    } else if h >= 65 and h <= 70 {
+                        d = (h - 65 + 10) as i64;
+                    }
+                    cp = cp * 16 + d;
+                    j = j + 1;
+                }
+                if cp < 128 {
+                    out.push(cp as u8);
+                } else {
+                    out.push(63);
+                }
+            } else {
+                out.push(e);
+            }
+            p.pos = p.pos + 1;
+        } else {
+            out.push(c);
+            p.pos = p.pos + 1;
+        }
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn parse_value(p: mut ref P) -> i64 {
+    skip_ws(mut p);
+    let c = p.b[p.pos];
+    if c == 123 {
+        // object
+        let idx = new_jval(mut p, 6);
+        p.pos = p.pos + 1;
+        skip_ws(mut p);
+        let mut keys: Vec[String] = Vec.new();
+        let mut kids: Vec[i64] = Vec.new();
+        if p.pos < p.b.len() and p.b[p.pos] == 125 {
+            p.pos = p.pos + 1;
+        } else {
+            let mut go = true;
+            while go {
+                skip_ws(mut p);
+                let k = parse_string(mut p);
+                skip_ws(mut p);
+                p.pos = p.pos + 1; // skip ':'
+                let v = parse_value(mut p);
+                keys.push(k);
+                kids.push(v);
+                skip_ws(mut p);
+                let ch = p.b[p.pos];
+                p.pos = p.pos + 1; // consume ',' or '}'
+                if ch == 125 {
+                    go = false;
+                }
+            }
+        }
+        p.arena[idx] = JVal { kind: 6, keys: keys, kids: kids };
+        return idx;
+    } else if c == 91 {
+        // array
+        let idx = new_jval(mut p, 5);
+        p.pos = p.pos + 1;
+        skip_ws(mut p);
+        let mut kids: Vec[i64] = Vec.new();
+        if p.pos < p.b.len() and p.b[p.pos] == 93 {
+            p.pos = p.pos + 1;
+        } else {
+            let mut go = true;
+            while go {
+                let v = parse_value(mut p);
+                kids.push(v);
+                skip_ws(mut p);
+                let ch = p.b[p.pos];
+                p.pos = p.pos + 1; // consume ',' or ']'
+                if ch == 93 {
+                    go = false;
+                }
+            }
+        }
+        p.arena[idx] = JVal { kind: 5, keys: Vec.new(), kids: kids };
+        return idx;
+    } else if c == 34 {
+        // string content is unused for schema inference; parse_string still
+        // advances the cursor past the closing quote
+        let _s = parse_string(mut p);
+        return new_jval(mut p, 4);
+    } else if c == 116 {
+        p.pos = p.pos + 4; // true
+        return new_jval(mut p, 1);
+    } else if c == 102 {
+        p.pos = p.pos + 5; // false
+        return new_jval(mut p, 1);
+    } else if c == 110 {
+        p.pos = p.pos + 4; // null
+        return new_jval(mut p, 0);
+    }
+    // number: scan digits/sign/./e; detect float
+    let mut is_float = false;
+    let mut go = true;
+    while go and p.pos < p.b.len() {
+        let d = p.b[p.pos];
+        if (d >= 48 and d <= 57) or d == 45 or d == 43 {
+            p.pos = p.pos + 1;
+        } else if d == 46 or d == 101 or d == 69 {
+            is_float = true;
+            p.pos = p.pos + 1;
+        } else {
+            go = false;
+        }
+    }
+    if is_float {
+        return new_jval(mut p, 3);
+    }
+    new_jval(mut p, 2)
+}
+
+fn json_parse(s: String) -> JDoc {
+    let mut p = P { b: str_bytes(s), pos: 0, arena: Vec.new() };
+    let root = parse_value(mut p);
+    JDoc { arena: p.arena, root: root }
+}
+
+// ---- schema builder ----
+fn new_snode(sa: mut ref Vec[SNode]) -> i64 {
+    sa.push(SNode {
+        order: Vec.new(),
+        num_float: false,
+        arr_items: -1,
+        prop_names: Vec.new(),
+        prop_nodes: Vec.new(),
+        req: Vec.new(),
+        req_init: false,
+    });
+    sa.len() - 1
+}
+
+fn contains_i64(v: ref Vec[i64], x: i64) -> bool {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == x {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn index_of_str(v: ref Vec[String], s: String) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == s {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn contains_str(v: ref Vec[String], s: String) -> bool {
+    index_of_str(v, s) >= 0
+}
+
+fn intersect(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < a.len() {
+        if contains_str(b, a[i].clone()) {
+            out.push(a[i].clone());
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn add_object(sa: mut ref Vec[SNode], va: ref Vec[JVal], nodeidx: i64, validx: i64) {
+    let kind = va[validx].kind;
+    let mut node = sa[nodeidx].clone();
+    if kind == 2 or kind == 3 {
+        if contains_i64(node.order, 2) == false {
+            node.order.push(2);
+        }
+        if kind == 3 {
+            node.num_float = true;
+        }
+    } else if kind == 0 {
+        if contains_i64(node.order, 0) == false {
+            node.order.push(0);
+        }
+    } else if kind == 1 {
+        if contains_i64(node.order, 1) == false {
+            node.order.push(1);
+        }
+    } else if kind == 4 {
+        if contains_i64(node.order, 3) == false {
+            node.order.push(3);
+        }
+    } else if kind == 5 {
+        if contains_i64(node.order, 4) == false {
+            node.order.push(4);
+        }
+        if node.arr_items < 0 {
+            node.arr_items = new_snode(mut sa);
+        }
+        let items = node.arr_items;
+        let kids = va[validx].kids.clone();
+        let mut i = 0;
+        while i < kids.len() {
+            add_object(mut sa, va, items, kids[i]);
+            i = i + 1;
+        }
+    } else {
+        // object
+        if contains_i64(node.order, 5) == false {
+            node.order.push(5);
+        }
+        let keys = va[validx].keys.clone();
+        let kids = va[validx].kids.clone();
+        let mut present: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < keys.len() {
+            let k = keys[i].clone();
+            let mut ci = index_of_str(node.prop_names, k.clone());
+            if ci < 0 {
+                let nn = new_snode(mut sa);
+                node.prop_names.push(k.clone());
+                node.prop_nodes.push(nn);
+                ci = node.prop_nodes.len() - 1;
+            }
+            let child = node.prop_nodes[ci];
+            add_object(mut sa, va, child, kids[i]);
+            present.push(k.clone());
+            i = i + 1;
+        }
+        if node.req_init == false {
+            node.req = present;
+            node.req_init = true;
+        } else {
+            node.req = intersect(node.req, present);
+        }
+    }
+    sa[nodeidx] = node;
+}
+
+// ---- JSON string escaping (matches json.dumps default, ASCII) ----
+fn json_str(s: String) -> String {
+    let b = str_bytes(s);
+    let mut out = String.new();
+    out.push_str("\"");
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == 34 {
+            out.push_str("\\\"");
+        } else if c == 92 {
+            out.push_str("\\\\");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c == 8 {
+            out.push_str("\\b");
+        } else if c == 12 {
+            out.push_str("\\f");
+        } else if c < 32 {
+            out.push_str("\\u00");
+            let hi = (c / 16) as i64;
+            let lo = (c % 16) as i64;
+            let digits = str_bytes("0123456789abcdef");
+            out.push_str(char1(digits[hi] as i64));
+            out.push_str(char1(digits[lo] as i64));
+        } else {
+            out.push_str(char1(c as i64));
+        }
+        i = i + 1;
+    }
+    out.push_str("\"");
+    out
+}
+
+fn str_lt(a: String, b: String) -> bool {
+    let ab = str_bytes(a);
+    let bb = str_bytes(b);
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] < bb[i] {
+            return true;
+        }
+        if ab[i] > bb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+fn sort_strs(v: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        out.push(v[i].clone());
+        i = i + 1;
+    }
+    let mut n = out.len();
+    let mut a = 0;
+    while a < n {
+        let mut b = 0;
+        while b + 1 < n - a {
+            if str_lt(out[b + 1].clone(), out[b].clone()) {
+                let tmp = out[b].clone();
+                out[b] = out[b + 1].clone();
+                out[b + 1] = tmp;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    out
+}
+
+fn type_word(code: i64, num_float: bool) -> String {
+    if code == 0 {
+        return "null";
+    }
+    if code == 1 {
+        return "boolean";
+    }
+    if code == 2 {
+        if num_float {
+            return "number";
+        }
+        return "integer";
+    }
+    if code == 3 {
+        return "string";
+    }
+    if code == 4 {
+        return "array";
+    }
+    "object"
+}
+
+fn to_schema(sa: ref Vec[SNode], idx: i64) -> String {
+    let node = sa[idx].clone();
+    let mut types: Vec[String] = Vec.new();
+    let mut generated: Vec[String] = Vec.new();
+    let mut oi = 0;
+    while oi < node.order.len() {
+        let code = node.order[oi];
+        if code == 4 {
+            // array
+            let has_items = node.arr_items >= 0 and sa[node.arr_items].order.len() > 0;
+            if has_items {
+                let mut f = String.new();
+                f.push_str("{\"type\": \"array\", \"items\": ");
+                f.push_str(to_schema(sa, node.arr_items));
+                f.push_str("}");
+                generated.push(f);
+            } else {
+                if contains_str(types, "array") == false {
+                    types.push("array");
+                }
+            }
+        } else if code == 5 {
+            // object
+            let rich = node.prop_names.len() > 0 or node.req.len() > 0;
+            if rich {
+                let mut f = String.new();
+                f.push_str("{\"type\": \"object\"");
+                if node.prop_names.len() > 0 {
+                    f.push_str(", \"properties\": {");
+                    let mut pi = 0;
+                    while pi < node.prop_names.len() {
+                        if pi > 0 {
+                            f.push_str(", ");
+                        }
+                        f.push_str(json_str(node.prop_names[pi].clone()));
+                        f.push_str(": ");
+                        f.push_str(to_schema(sa, node.prop_nodes[pi]));
+                        pi = pi + 1;
+                    }
+                    f.push_str("}");
+                }
+                if node.req.len() > 0 {
+                    f.push_str(", \"required\": [");
+                    let sorted = sort_strs(node.req);
+                    let mut ri = 0;
+                    while ri < sorted.len() {
+                        if ri > 0 {
+                            f.push_str(", ");
+                        }
+                        f.push_str(json_str(sorted[ri].clone()));
+                        ri = ri + 1;
+                    }
+                    f.push_str("]");
+                }
+                f.push_str("}");
+                generated.push(f);
+            } else {
+                if contains_str(types, "object") == false {
+                    types.push("object");
+                }
+            }
+        } else {
+            let w = type_word(code, node.num_float);
+            if contains_str(types, w.clone()) == false {
+                types.push(w);
+            }
+        }
+        oi = oi + 1;
+    }
+
+    let mut all: Vec[String] = Vec.new();
+    if types.len() > 0 {
+        let mut tfrag = String.new();
+        tfrag.push_str("{\"type\": ");
+        if types.len() == 1 {
+            tfrag.push_str(json_str(types[0].clone()));
+        } else {
+            let sorted = sort_strs(types);
+            tfrag.push_str("[");
+            let mut ti = 0;
+            while ti < sorted.len() {
+                if ti > 0 {
+                    tfrag.push_str(", ");
+                }
+                tfrag.push_str(json_str(sorted[ti].clone()));
+                ti = ti + 1;
+            }
+            tfrag.push_str("]");
+        }
+        tfrag.push_str("}");
+        all.push(tfrag);
+    }
+    let mut gi = 0;
+    while gi < generated.len() {
+        all.push(generated[gi].clone());
+        gi = gi + 1;
+    }
+
+    if all.len() == 1 {
+        return all[0].clone();
+    }
+    if all.len() > 1 {
+        let mut r = String.new();
+        r.push_str("{\"anyOf\": [");
+        let mut i = 0;
+        while i < all.len() {
+            if i > 0 {
+                r.push_str(", ");
+            }
+            r.push_str(all[i].clone());
+            i = i + 1;
+        }
+        r.push_str("]}");
+        return r;
+    }
+    "{}"
+}
+
+fn run_job(line: String) -> String {
+    // split the line into tab-separated JSON docs
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut docs: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == 9 {
+            docs.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+
+    let mut sa: Vec[SNode] = Vec.new();
+    let root = new_snode(mut sa);
+    let mut di = 0;
+    while di < docs.len() {
+        let doc = json_parse(docs[di].clone());
+        add_object(mut sa, doc.arena, root, doc.root);
+        di = di + 1;
+    }
+
+    let inner = to_schema(sa, root);
+    let mut out = String.new();
+    out.push_str("{\"$schema\": \"http://json-schema.org/schema#\"");
+    let ib = str_bytes(inner.clone());
+    if ib.len() > 2 {
+        out.push_str(", ");
+        out.push_str(inner.substring(1, ib.len() - 1));
+    }
+    out.push_str("}");
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("42\n");
+    s.push_str("\"hi\"\n");
+    s.push_str("true\n");
+    s.push_str("null\n");
+    s.push_str("3.14\n");
+    s.push_str("[]\n");
+    s.push_str("[1, 2, 3]\n");
+    s.push_str("[1, \"a\", true]\n");
+    s.push_str("[1, 2.5]\n");
+    s.push_str("[[1, 2], [3]]\n");
+    s.push_str("{}\n");
+    s.push_str("{\"a\": 1, \"b\": \"x\"}\n");
+    s.push_str("{\"a\": 1, \"b\": 2}\t{\"a\": 3}\n");
+    s.push_str("{\"a\": 1, \"b\": 2, \"c\": 3}\t{\"a\": 9, \"c\": 8}\t{\"a\": 7}\n");
+    s.push_str("{\"user\": {\"id\": 1, \"name\": \"x\"}, \"tags\": [\"a\", \"b\"]}\n");
+    s.push_str("[{\"a\": 1}, {\"a\": 2, \"b\": 3}]\n");
+    s.push_str("{\"v\": 1}\t{\"v\": \"x\"}\n");
+    s.push_str("{\"v\": 1}\t{\"v\": null}\n");
+    s.push_str("{\"v\": 1}\t{\"v\": {\"k\": 2}}\n");
+    s.push_str("[1, {\"k\": \"v\"}]\n");
+    s.push_str("{\"x\": 1}\t{\"x\": 2.0}\n");
+    s.push_str("{\"a\": {\"b\": {\"c\": [1, 2]}}}\t{\"a\": {\"b\": {\"c\": [3], \"d\": true}}}\n");
+    s.push_str("1\t\"s\"\ttrue\n");
+    s.push_str("{\"a\": 1}\t[1, 2]\n");
+    s.push_str("{\"a\\\"b\": \"line1\\nline2\\ttab\"}\n");
+    s.push_str("{\"items\": [], \"meta\": {}}\n");
+    s
+}

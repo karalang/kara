@@ -1,0 +1,26 @@
+{"$schema": "http://json-schema.org/schema#", "type": "integer"}
+{"$schema": "http://json-schema.org/schema#", "type": "string"}
+{"$schema": "http://json-schema.org/schema#", "type": "boolean"}
+{"$schema": "http://json-schema.org/schema#", "type": "null"}
+{"$schema": "http://json-schema.org/schema#", "type": "number"}
+{"$schema": "http://json-schema.org/schema#", "type": "array"}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"type": "integer"}}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"type": ["boolean", "integer", "string"]}}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"type": "number"}}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"type": "array", "items": {"type": "integer"}}}
+{"$schema": "http://json-schema.org/schema#", "type": "object"}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "required": ["a", "b"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}, "c": {"type": "integer"}}, "required": ["a"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"user": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}, "required": ["id", "name"]}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["tags", "user"]}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a"]}}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"v": {"type": ["integer", "string"]}}, "required": ["v"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"v": {"type": ["integer", "null"]}}, "required": ["v"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"v": {"anyOf": [{"type": "integer"}, {"type": "object", "properties": {"k": {"type": "integer"}}, "required": ["k"]}]}}, "required": ["v"]}
+{"$schema": "http://json-schema.org/schema#", "type": "array", "items": {"anyOf": [{"type": "integer"}, {"type": "object", "properties": {"k": {"type": "string"}}, "required": ["k"]}]}}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"a": {"type": "object", "properties": {"b": {"type": "object", "properties": {"c": {"type": "array", "items": {"type": "integer"}}, "d": {"type": "boolean"}}, "required": ["c"]}}, "required": ["b"]}}, "required": ["a"]}
+{"$schema": "http://json-schema.org/schema#", "type": ["boolean", "integer", "string"]}
+{"$schema": "http://json-schema.org/schema#", "anyOf": [{"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}, {"type": "array", "items": {"type": "integer"}}]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"a\"b": {"type": "string"}}, "required": ["a\"b"]}
+{"$schema": "http://json-schema.org/schema#", "type": "object", "properties": {"items": {"type": "array"}, "meta": {"type": "object"}}, "required": ["items", "meta"]}
