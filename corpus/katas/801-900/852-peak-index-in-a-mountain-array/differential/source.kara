@@ -1,0 +1,176 @@
+// LeetCode #852: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random
+// mountains, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn peak_index_in_mountain_array_star(arr: Vec[i64]) -> i64 {
+    let mut lo = 0;
+    let mut hi = arr.len() - 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if arr[mid] < arr[mid + 1] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- walking arm ----------------------------------------------------
+
+fn peak_index_in_mountain_array_walk(arr: Vec[i64]) -> i64 {
+    (0..arr.len() - 1).position(|i| arr[i] > arr[i + 1]).unwrap()
+}
+
+// ---- ternary-search arm ---------------------------------------------
+
+fn peak_index_in_mountain_array_ternary(arr: Vec[i64]) -> i64 {
+    let mut lo = 0;
+    let mut hi = arr.len() - 1;
+    while hi - lo > 2 {
+        let m1 = lo + (hi - lo) / 3;
+        let m2 = hi - (hi - lo) / 3;
+        if arr[m1] < arr[m2] {
+            lo = m1 + 1;
+        } else {
+            hi = m2 - 1;
+        }
+    }
+    let mut best = lo;
+    for i in lo + 1..hi + 1 {
+        if arr[i] > arr[best] {
+            best = i;
+        }
+    }
+    best
+}
+
+// ---- largest-value arm ----------------------------------------------
+
+fn peak_index_in_mountain_array_largest(arr: Vec[i64]) -> i64 {
+    (0..arr.len()).max_by_key(|i| arr[i]).unwrap()
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: the peak is the `i` with `arr[0] < arr[1]
+// < ... < arr[i]` and `arr[i] > arr[i + 1] > ... > arr[n - 1]`, checked
+// for every `i` in turn.
+fn statement(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut found = -1;
+    for i in 0..n {
+        let mut ok = true;
+        for j in 0..n - 1 {
+            if j < i and arr[j] >= arr[j + 1] {
+                ok = false;
+            }
+            if j >= i and arr[j] <= arr[j + 1] {
+                ok = false;
+            }
+        }
+        if ok {
+            found = i;
+        }
+    }
+    found
+}
+
+fn peak(arm: i64, arr: Vec[i64]) -> i64 {
+    if arm == 0 {
+        peak_index_in_mountain_array_star(arr)
+    } else if arm == 1 {
+        peak_index_in_mountain_array_walk(arr)
+    } else if arm == 2 {
+        peak_index_in_mountain_array_ternary(arr)
+    } else {
+        peak_index_in_mountain_array_largest(arr)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "walk", "ternary", "largest"];
+    let properties = ["answer", "reversed", "raised", "foot in front", "foot behind"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 852;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 3 + next_random(mut seed) % 30;
+        // where the peak goes: anywhere, next to an end, or in the middle
+        let top = if kind == 0 {
+            1 + next_random(mut seed) % (n - 2)
+        } else if kind == 1 {
+            if next_random(mut seed) % 2 == 0 { 1 } else { n - 2 }
+        } else if kind == 2 {
+            ((n - 1) / 2 + next_random(mut seed) % 2).min(n - 2)
+        } else {
+            1 + next_random(mut seed) % (n - 2)
+        };
+        // steps of 1 to 3, or for the last kind steps of 1 with the two
+        // sides of the peak often level with each other
+        let step = if kind == 3 { 1 } else { 3 };
+        let mut arr: Vec[i64] = Vec.new();
+        let mut v = 0;
+        for i in 0..n {
+            if i > 0 {
+                if i <= top {
+                    v += 1 + next_random(mut seed) % step;
+                } else {
+                    v -= 1 + next_random(mut seed) % step;
+                }
+            }
+            arr.push(v);
+        }
+        let low = arr.iter().min().unwrap();
+        let arr: Vec[i64] = arr.iter().map(|x| x - low).collect();
+        let want = statement(arr);
+        total += want;
+        let mut reversed = arr.clone();
+        reversed.reverse();
+        let lift = next_random(mut seed) % 1000;
+        let raised: Vec[i64] = arr.iter().map(|x| x + lift).collect();
+        // a lower value added at either end lengthens a slope
+        let mut behind: Vec[i64] = arr.iter().map(|x| x + 1).collect();
+        let mut in_front: Vec[i64] = [0];
+        in_front.extend(behind.clone());
+        behind.push(0);
+        for arm in 0..4 {
+            let got = peak(arm, arr);
+            let oks = [
+                got == want,
+                peak(arm, reversed) == n - 1 - got,
+                peak(arm, raised) == got,
+                peak(arm, in_front) == got + 1,
+                peak(arm, behind) == got,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {arr} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, peaks sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, walk {by_arm[1]}, ternary {by_arm[2]}, largest {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reversed {by_property[1]}, raised {by_property[2]}, foot in front {by_property[3]}, foot behind {by_property[4]}");
+}

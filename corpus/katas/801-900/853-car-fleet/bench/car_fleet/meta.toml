@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/853-car-fleet/bench/car_fleet.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "c72fb3d21"
+extracted_src = "f8a3dee3"
+model_rev = "583cfb0d"
+model_src = "f8a3dee3"

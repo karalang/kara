@@ -1,0 +1,91 @@
+// LeetCode #852: Peak Index in a Mountain Array -- the ★ arm (binary
+// search on the slope).
+//
+// Left of the peak each value is smaller than the next, and from the
+// peak on each is larger, so whether `arr[mid] < arr[mid + 1]` says
+// which side of the peak `mid` is on. Halve the range around the peak
+// until it holds one index. O(log n) time.
+
+fn peak_index_in_mountain_array(arr: Vec[i64]) -> i64 {
+    let mut lo = 0;
+    let mut hi = arr.len() - 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if arr[mid] < arr[mid + 1] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(arr: Vec[i64]) {
+    println(f"{arr} -> {peak_index_in_mountain_array(arr)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random mountain of `n` values with its peak at `peak`: rises of 1 to
+// `step` up to it and falls of 1 to `step` after it, moved up so that
+// its lowest value is 0.
+fn mountain(seed: mut ref i64, n: i64, peak: i64, step: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    let mut v = 0;
+    for i in 0..n {
+        if i > 0 {
+            if i <= peak {
+                v += 1 + next_random(mut seed) % step;
+            } else {
+                v -= 1 + next_random(mut seed) % step;
+            }
+        }
+        arr.push(v);
+    }
+    let low = arr.iter().min().unwrap();
+    arr.iter().map(|x| x - low).collect()
+}
+
+fn main() {
+    show([0, 1, 0]);
+    show([0, 2, 1, 0]);
+    show([0, 10, 5, 2]);
+    show([3, 5, 3, 2, 0]);
+    show([1, 2, 3, 4, 5, 6, 0]);
+    show([0, 9, 8, 7, 6, 5, 4]);
+    show([24, 69, 100, 99, 79, 78, 67, 36, 26, 19]);
+    show([1, 1000000, 0]);
+    show([0, 1, 2, 3, 2, 1, 0]);
+    show([5, 6, 7, 8, 9, 10, 4]);
+    // LeetCode's longest mountains, 10^5 values up to 10^6
+    let n = 100000;
+    let mut up: Vec[i64] = Vec.new();
+    let mut down: Vec[i64] = Vec.new();
+    let mut middle: Vec[i64] = Vec.new();
+    for i in 0..n {
+        up.push(if i < n - 1 { i } else { 0 });
+        down.push(if i == 0 { 0 } else { n - i });
+        middle.push(if i <= n / 2 { i * 10 } else { (n - i) * 10 });
+    }
+    println(f"rising to the second last: {peak_index_in_mountain_array(up)}");
+    println(f"falling from the second: {peak_index_in_mountain_array(down)}");
+    println(f"peaked in the middle: {peak_index_in_mountain_array(middle)}");
+    let mut seed = 852;
+    let peak = 1 + next_random(mut seed) % (n - 2);
+    println(f"a random mountain peaked at {peak}: {peak_index_in_mountain_array(mountain(mut seed, n, peak, 10))}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..600 {
+        let n = 3 + next_random(mut seed) % 40;
+        let peak = 1 + next_random(mut seed) % (n - 2);
+        let got = peak_index_in_mountain_array(mountain(mut seed, n, peak, 1 + next_random(mut seed) % 5));
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"600 random mountains: peaks sum to {total}, checksum {check}");
+}

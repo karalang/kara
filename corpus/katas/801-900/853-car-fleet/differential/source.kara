@@ -1,0 +1,221 @@
+// LeetCode #853: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random
+// roads, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn car_fleet_star(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut cars: Vec[(i64, i64)] = Vec.new();
+    for i in 0..position.len() {
+        cars.push((position[i], speed[i]));
+    }
+    cars.sort();
+    let mut fleets = 0;
+    // the fleet ahead's distance and speed: it arrives at `far / fast`
+    let mut far = 0;
+    let mut fast = 1;
+    for (p, s) in cars.iter().rev() {
+        if (target - p) * fast > far * s {
+            fleets += 1;
+            far = target - p;
+            fast = s;
+        }
+    }
+    fleets
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn car_fleet_stack(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut order: Vec[i64] = (0..position.len()).collect();
+    order.sort_by_key(|i| position[i]);
+    // each fleet as the distance and speed of its leader
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for i in order.iter() {
+        let far = target - position[i];
+        let fast = speed[i];
+        while let Some((top_far, top_fast)) = stack.last() {
+            if top_far * fast <= far * top_fast {
+                let _ = stack.pop();
+            } else {
+                break;
+            }
+        }
+        stack.push((far, fast));
+    }
+    stack.len()
+}
+
+// ---- slots arm ------------------------------------------------------
+
+fn car_fleet_slots(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut slot: Vec[i64] = Vec.filled(target, 0);
+    for i in 0..position.len() {
+        slot[position[i]] = speed[i];
+    }
+    let mut fleets = 0;
+    let mut far = 0;
+    let mut fast = 1;
+    for p in (0..target).rev() {
+        let s = slot[p];
+        if s > 0 and (target - p) * fast > far * s {
+            fleets += 1;
+            far = target - p;
+            fast = s;
+        }
+    }
+    fleets
+}
+
+// ---- fold arm -------------------------------------------------------
+
+fn car_fleet_fold(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut cars: Vec[(i64, i64)] = position.iter().zip(speed.iter()).map(|(p, s)| (target - p, s)).collect();
+    cars.sort();
+    let (fleets, _, _) = cars.iter().fold((0, 0, 1), |(fleets, far, fast), (d, s)| {
+        if d * fast > far * s {
+            (fleets + 1, d, s)
+        } else {
+            (fleets, far, fast)
+        }
+    });
+    fleets
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally, as a simulation: time runs in steps of
+// 1/60, so that every car with a speed of 1 to 6 moves a whole number of
+// sixtieths of a mile each step, and a car is never ahead of the car in
+// front of it, so a faster car closes up and then moves with it. A car
+// reaching the target stops counting; cars arriving at the same step
+// arrive together, as one fleet.
+fn statement(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let n = position.len();
+    let scale = 60;
+    // the cars from the closest to the target back
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| -position[i]);
+    let mut at: Vec[i64] = order.iter().map(|i| position[i] * scale).collect();
+    let end = target * scale;
+    let mut arrived: Vec[bool] = Vec.filled(n, false);
+    let mut fleets = 0;
+    let mut left = n;
+    while left > 0 {
+        let mut any = false;
+        for k in 0..n {
+            if not arrived[k] {
+                let mut next = at[k] + speed[order[k]];
+                if k > 0 and not arrived[k - 1] {
+                    next = next.min(at[k - 1]);
+                }
+                at[k] = next.min(end);
+            }
+        }
+        for k in 0..n {
+            if not arrived[k] and at[k] == end {
+                arrived[k] = true;
+                left -= 1;
+                any = true;
+            }
+        }
+        if any {
+            fleets += 1;
+        }
+    }
+    fleets
+}
+
+fn fleets_of(arm: i64, target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    if arm == 0 {
+        car_fleet_star(target, position, speed)
+    } else if arm == 1 {
+        car_fleet_stack(target, position, speed)
+    } else if arm == 2 {
+        car_fleet_slots(target, position, speed)
+    } else {
+        car_fleet_fold(target, position, speed)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "stack", "slots", "fold"];
+    let properties = ["answer", "reordered", "road stretched", "cars faster", "car added behind"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 853;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let target = 2 + next_random(mut seed) % 24;
+        let want_cars = 1 + next_random(mut seed) % (target - 1).min(9);
+        // distinct positions below the target
+        let mut free: Vec[i64] = (0..target).collect();
+        for i in (1..target).rev() {
+            free.swap(i, next_random(mut seed) % (i + 1));
+        }
+        let position: Vec[i64] = (0..want_cars).map(|i| free[i]).collect();
+        let speed: Vec[i64] = if kind == 0 {
+            // any speeds
+            (0..want_cars).map(|_| 1 + next_random(mut seed) % 6).collect()
+        } else if kind == 1 {
+            // two speeds, so many cars arrive together
+            (0..want_cars).map(|_| 1 + 2 * (next_random(mut seed) % 2)).collect()
+        } else if kind == 2 {
+            // faster further back, so most cars close up
+            position.iter().map(|p| 6 - p * 6 / target).collect()
+        } else {
+            // slower further back, so few cars meet
+            position.iter().map(|p| 1 + p * 6 / target).collect()
+        };
+        let want = statement(target, position, speed);
+        total += want;
+        let mut reordered_position = position.clone();
+        let mut reordered_speed = speed.clone();
+        reordered_position.reverse();
+        reordered_speed.reverse();
+        let k = 1 + next_random(mut seed) % 5;
+        let stretched: Vec[i64] = position.iter().map(|p| p * k).collect();
+        let faster: Vec[i64] = speed.iter().map(|s| s * k).collect();
+        // the road one mile longer at the back, with a car added there
+        let mut more_position: Vec[i64] = position.iter().map(|p| p + 1).collect();
+        let mut more_speed = speed.clone();
+        more_position.push(0);
+        more_speed.push(1 + next_random(mut seed) % 6);
+        for arm in 0..4 {
+            let got = fleets_of(arm, target, position, speed);
+            let added = fleets_of(arm, target + 1, more_position, more_speed);
+            let oks = [
+                got == want,
+                fleets_of(arm, target, reordered_position, reordered_speed) == got,
+                fleets_of(arm, target * k, stretched, speed) == got,
+                fleets_of(arm, target, position, faster) == got,
+                added == got or added == got + 1,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {target}, {position}, {speed} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, fleets sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, stack {by_arm[1]}, slots {by_arm[2]}, fold {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, reordered {by_property[1]}, road stretched {by_property[2]}, cars faster {by_property[3]}, car added behind {by_property[4]}");
+}

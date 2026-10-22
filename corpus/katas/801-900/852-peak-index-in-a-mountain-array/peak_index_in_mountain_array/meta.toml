@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/852-peak-index-in-a-mountain-array/peak_index_in_mountain_array.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c72fb3d21"
+extracted_src = "d7fa9ca4"
+model_rev = "583cfb0d"
+model_src = "d7fa9ca4"

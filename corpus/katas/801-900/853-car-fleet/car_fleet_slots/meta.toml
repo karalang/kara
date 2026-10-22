@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/853-car-fleet/car_fleet_slots.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c72fb3d21"
+extracted_src = "51e50be5"
+model_rev = "583cfb0d"
+model_src = "51e50be5"

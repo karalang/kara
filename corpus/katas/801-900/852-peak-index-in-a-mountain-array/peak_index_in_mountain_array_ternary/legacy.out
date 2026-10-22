@@ -1,0 +1,15 @@
+[0, 1, 0] -> 1
+[0, 2, 1, 0] -> 1
+[0, 10, 5, 2] -> 1
+[3, 5, 3, 2, 0] -> 1
+[1, 2, 3, 4, 5, 6, 0] -> 5
+[0, 9, 8, 7, 6, 5, 4] -> 1
+[24, 69, 100, 99, 79, 78, 67, 36, 26, 19] -> 2
+[1, 1000000, 0] -> 1
+[0, 1, 2, 3, 2, 1, 0] -> 3
+[5, 6, 7, 8, 9, 10, 4] -> 5
+rising to the second last: 99998
+falling from the second: 1
+peaked in the middle: 50000
+a random mountain peaked at 26622: 26622
+600 random mountains: peaks sum to 6669, checksum 923887475

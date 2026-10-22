@@ -1,0 +1,96 @@
+// LeetCode #853: Car Fleet -- a stack of fleets, from the back.
+//
+// Taking the cars from the farthest from the target forward, keep a
+// stack of fleets, each slower to arrive than the one above it. A car
+// that arrives no earlier than the fleets on top of the stack would
+// catch them, but they are behind it and cannot pass, so it leads them:
+// pop every fleet that would arrive no later than it, and push it. What
+// is left is one entry a fleet. Times are compared as fractions. O(n log
+// n) time.
+
+fn car_fleet(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut order: Vec[i64] = (0..position.len()).collect();
+    order.sort_by_key(|i| position[i]);
+    // each fleet as the distance and speed of its leader
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for i in order.iter() {
+        let far = target - position[i];
+        let fast = speed[i];
+        while let Some((top_far, top_fast)) = stack.last() {
+            if top_far * fast <= far * top_fast {
+                let _ = stack.pop();
+            } else {
+                break;
+            }
+        }
+        stack.push((far, fast));
+    }
+    stack.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(target: i64, position: Vec[i64], speed: Vec[i64]) {
+    println(f"{target}, {position}, {speed} -> {car_fleet(target, position, speed)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct positions below `target`, in a random order.
+fn positions(seed: mut ref i64, n: i64, target: i64) -> Vec[i64] {
+    let mut all: Vec[i64] = Vec.new();
+    let mut taken: Vec[bool] = Vec.filled(target, false);
+    while all.len() < n {
+        let p = (next_random(mut seed) * 32768 + next_random(mut seed)) % target;
+        if not taken[p] {
+            taken[p] = true;
+            all.push(p);
+        }
+    }
+    all
+}
+
+fn main() {
+    show(12, [10, 8, 0, 5, 3], [2, 4, 1, 1, 3]);
+    show(10, [3], [3]);
+    show(100, [0, 2, 4], [4, 2, 1]);
+    show(10, [0, 4, 2], [2, 1, 3]);
+    show(10, [6, 8], [3, 2]);
+    show(10, [0, 5], [2, 1]);
+    show(10, [0, 5], [1, 2]);
+    show(10, [9, 8, 7, 6], [1, 1, 1, 1]);
+    show(10, [9, 8, 7, 6], [1, 2, 3, 4]);
+    show(20, [6, 2, 17], [3, 9, 2]);
+    show(1000000, [0, 999999], [1000000, 1]);
+    // LeetCode's most cars, 10^5, with a target of 10^6
+    let n = 100000;
+    let target = 1000000;
+    let mut seed = 853;
+    let mut same: Vec[i64] = Vec.new();
+    let mut slower: Vec[i64] = Vec.new();
+    let mut lined: Vec[i64] = Vec.new();
+    for i in 0..n {
+        same.push(7);
+        slower.push(n - i);
+        lined.push(i * 10);
+    }
+    println(f"10^5 cars at one speed: {car_fleet(target, lined, same)}");
+    println(f"10^5 cars, each faster than the one ahead: {car_fleet(target, lined, slower)}");
+    let random_speed: Vec[i64] = (0..n).map(|_| 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000).collect();
+    println(f"10^5 cars at random places and speeds: {car_fleet(target, positions(mut seed, n, target), random_speed)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..600 {
+        let target = 1 + next_random(mut seed) % 30;
+        let n = 1 + next_random(mut seed) % target;
+        let place = positions(mut seed, n.min(12), target);
+        let speed: Vec[i64] = (0..place.len()).map(|_| 1 + next_random(mut seed) % 6).collect();
+        let fleets = car_fleet(target, place, speed);
+        total += fleets;
+        check = (check * 31 + fleets) % 1000000007;
+    }
+    println(f"600 random roads: fleets sum to {total}, checksum {check}");
+}

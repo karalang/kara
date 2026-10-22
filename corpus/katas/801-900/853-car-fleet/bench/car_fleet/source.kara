@@ -1,0 +1,77 @@
+// Benchmark for #853: Car Fleet -- the ★ arm (closest to the target
+// first).
+//
+// A car can only be held up by the cars ahead of it. Taking the cars from
+// the closest to the target back, each would arrive at `(target - p) /
+// s` on its own; one that would arrive no later than the fleet ahead of
+// it catches that fleet and joins it, and one that would arrive later
+// leads a new fleet. The times are compared as fractions,
+// `(target - p1) * s2` against `(target - p2) * s1`, so no rounding can
+// merge or split two fleets. O(n log n) time.
+
+fn car_fleet(target: i64, position: Vec[i64], speed: Vec[i64]) -> i64 {
+    let mut cars: Vec[(i64, i64)] = Vec.new();
+    for i in 0..position.len() {
+        cars.push((position[i], speed[i]));
+    }
+    cars.sort();
+    let mut fleets = 0;
+    // the fleet ahead's distance and speed: it arrives at `far / fast`
+    let mut far = 0;
+    let mut fast = 1;
+    for (p, s) in cars.iter().rev() {
+        if (target - p) * fast > far * s {
+            fleets += 1;
+            far = target - p;
+            fast = s;
+        }
+    }
+    fleets
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 roads drawn once, each of LeetCode's most cars, 10^5, at
+    // distinct random places below a target of 10^6: road `g` draws its
+    // speeds from 1 to `1 + (g % 8) * 142857`, from all cars at speed 1,
+    // each its own fleet, to speeds up to 10^6. Each round asks the next
+    // road.
+    let count = 64;
+    let rounds = 150;
+    let n = 100000;
+    let target = 1000000;
+    let mut seed: i64 = 853;
+    let mut positions: Vec[Vec[i64]] = Vec.new();
+    let mut speeds: Vec[Vec[i64]] = Vec.new();
+    for g in 0..count {
+        let top = 1 + (g % 8) * 142857;
+        let mut taken: Vec[bool] = Vec.filled(target, false);
+        let mut position: Vec[i64] = Vec.new();
+        while position.len() < n {
+            let p = (next_random(mut seed) * 32768 + next_random(mut seed)) % target;
+            if not taken[p] {
+                taken[p] = true;
+                position.push(p);
+            }
+        }
+        let mut speed: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            speed.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top);
+        }
+        positions.push(position);
+        speeds.push(speed);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let f = car_fleet(target, positions[g], speeds[g]);
+        total += f;
+        checksum = (checksum * 31 + f) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} roads: fleets sum to {total}, checksum {checksum}");
+}
